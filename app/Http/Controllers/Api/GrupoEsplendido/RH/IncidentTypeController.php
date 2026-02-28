@@ -39,7 +39,7 @@ class IncidentTypeController extends Controller
         $types = $query->get();
 
         // Agregar accessors
-        $types->each(function ($type) {
+        $types->each(function (IncidentType $type) {
             $type->append('category_label');
         });
 
@@ -160,7 +160,7 @@ class IncidentTypeController extends Controller
             ->orderBy('name')
             ->get();
 
-        $types->each(function ($type) {
+        $types->each(function (IncidentType $type) {
             $type->append('category_label');
         });
 

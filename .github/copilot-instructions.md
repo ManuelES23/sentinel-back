@@ -18,6 +18,7 @@ API REST multi-tenant con Laravel 12 + Sanctum. Jerarquía: **Empresa → Aplica
 app/Http/Controllers/Api/
 ├── AuthController.php                    # Login, logout, registro
 ├── ProfileController.php                 # Perfil usuario + vacaciones
+├── PendingApprovalController.php         # Pendientes por aprobar del usuario
 ├── NotificationController.php            # Notificaciones del sistema
 ├── EnterpriseController.php              # CRUD empresas
 ├── ApplicationController.php             # CRUD aplicaciones
@@ -28,7 +29,8 @@ app/Http/Controllers/Api/
 ├── UserPermissionController.php          # Permisos legacy
 ├── Admin/
 │   ├── ActivityLogController.php         # Logs de actividad
-│   └── ScheduleController.php            # Horarios globales (CRUD + asignación)
+│   ├── ScheduleController.php            # Horarios globales (CRUD + asignación)
+│   └── ApprovalConfigController.php      # Configuración de procesos de aprobación
 ├── GrupoEsplendido/
 │   └── RH/
 │       ├── DepartmentController.php      # Departamentos (jerárquico)
@@ -133,6 +135,40 @@ $history = VacationBalanceHistory::forEmployee($id)->get();
 // Tipos: accrual, used, adjustment, expired
 ```
 
+### Procesos de Aprobación
+
+```php
+// ApprovalProcess.php - Catálogo de procesos
+ApprovalProcess::active()              // Activos
+    ->requiresApproval()               // Requieren aprobación
+    ->byCode('vacation_requests')      // Por código
+    ->byModule('grupoesplendido/rh')   // Por módulo
+    ->get();
+
+// Códigos: VACATION_REQUESTS, PURCHASE_ORDERS, INCIDENTS, INVENTORY_MOVEMENTS
+
+// Verificar si un empleado puede aprobar
+$process->canBeApprovedBy($employee, $enterpriseId); // bool
+$process->getApprovers($enterpriseId);               // array de position_ids
+
+// ApprovalFlowStep.php - Reglas de aprobación
+// approver_type: 'hierarchy_level' | 'position'
+// approval_scope: 'own_department' | 'child_departments' | 'enterprise'
+$step->matchesEmployee($employee, $position);        // bool
+```
+
+### Pendientes por Aprobar
+
+```php
+// PendingApprovalController.php
+// GET /api/pending-approvals/summary  → { total_pending, processes[], can_approve }
+// GET /api/pending-approvals          → { total_pending, processes[].items[] }
+// Filtra automáticamente según:
+// - approval_flow_steps del empleado (hierarchy_level o position)
+// - approval_scope (own_department, child_departments, enterprise)
+// - Excluye solicitudes propias del aprobador
+```
+
 ### Horarios de Trabajo (Global)
 
 Los horarios son **globales** y se asignan a empresas mediante tabla pivot:
@@ -201,6 +237,11 @@ Route::prefix('profile')->group(function () {
     Route::post('/vacation-request', [ProfileController::class, 'requestVacation']);
     Route::delete('/vacation-request/{id}', [ProfileController::class, 'cancelVacationRequest']);
     Route::get('/vacation-history', [ProfileController::class, 'vacationHistory']);
+});
+
+Route::prefix('pending-approvals')->group(function () {
+    Route::get('/', [PendingApprovalController::class, 'index']);
+    Route::get('/summary', [PendingApprovalController::class, 'summary']);
 });
 
 Route::prefix('notifications')->group(function () {

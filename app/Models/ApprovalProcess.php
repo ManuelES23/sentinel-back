@@ -100,6 +100,7 @@ class ApprovalProcess extends Model
             })
             ->get();
 
+        /** @var \App\Models\ApprovalFlowStep $step */
         foreach ($steps as $step) {
             if ($step->matchesEmployee($employee, $position)) {
                 return true;

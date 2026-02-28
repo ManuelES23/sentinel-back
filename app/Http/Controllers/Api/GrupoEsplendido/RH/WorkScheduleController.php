@@ -41,11 +41,13 @@ class WorkScheduleController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $query = WorkSchedule::with(['enterprise']);
+        $query = WorkSchedule::with(['enterprises']);
 
-        // Filtrar por empresa
+        // Filtrar por empresa (via tabla pivot)
         if ($request->has('enterprise_id')) {
-            $query->where('enterprise_id', $request->enterprise_id);
+            $query->whereHas('enterprises', function ($q) use ($request) {
+                $q->where('enterprises.id', $request->enterprise_id);
+            });
         }
 
         // Solo activos
@@ -53,7 +55,7 @@ class WorkScheduleController extends Controller
             $query->active();
         }
 
-        $query->orderBy('enterprise_id')->orderBy('name');
+        $query->orderBy('name');
 
         $schedules = $query->get();
 
@@ -98,14 +100,25 @@ class WorkScheduleController extends Controller
             'is_default' => 'boolean',
         ])->validate();
 
+        $enterpriseId = $validated['enterprise_id'];
+        $isDefault = $validated['is_default'] ?? false;
+
+        // Quitar enterprise_id e is_default de los datos del modelo (no son columnas directas)
+        unset($validated['enterprise_id'], $validated['is_default']);
+
         // Si es default, quitar el default de otros horarios de la misma empresa
-        if (isset($validated['is_default']) && $validated['is_default']) {
-            WorkSchedule::where('enterprise_id', $validated['enterprise_id'])
+        if ($isDefault) {
+            \DB::table('enterprise_work_schedule')
+                ->where('enterprise_id', $enterpriseId)
                 ->update(['is_default' => false]);
         }
 
         $schedule = WorkSchedule::create($validated);
-        $schedule->load('enterprise');
+
+        // Asignar a la empresa via pivot
+        $schedule->enterprises()->attach($enterpriseId, ['is_default' => $isDefault]);
+
+        $schedule->load('enterprises');
 
         return response()->json([
             'success' => true,
@@ -119,7 +132,7 @@ class WorkScheduleController extends Controller
      */
     public function show(WorkSchedule $workSchedule): JsonResponse
     {
-        $workSchedule->load(['enterprise', 'employees']);
+        $workSchedule->load(['enterprises', 'employees']);
         $workSchedule->append('schedule_summary');
 
         return response()->json([
@@ -157,15 +170,26 @@ class WorkScheduleController extends Controller
             'is_default' => 'boolean',
         ])->validate();
 
-        // Si es default, quitar el default de otros
+        // Si es default, quitar el default de otros horarios de la misma empresa
         if (isset($validated['is_default']) && $validated['is_default']) {
-            WorkSchedule::where('enterprise_id', $workSchedule->enterprise_id)
-                ->where('id', '!=', $workSchedule->id)
-                ->update(['is_default' => false]);
+            // Obtener la primera empresa asociada para manejar el default
+            $enterprise = $workSchedule->enterprises->first();
+            if ($enterprise) {
+                \DB::table('enterprise_work_schedule')
+                    ->where('enterprise_id', $enterprise->id)
+                    ->where('work_schedule_id', '!=', $workSchedule->id)
+                    ->update(['is_default' => false]);
+
+                \DB::table('enterprise_work_schedule')
+                    ->where('enterprise_id', $enterprise->id)
+                    ->where('work_schedule_id', $workSchedule->id)
+                    ->update(['is_default' => true]);
+            }
+            unset($validated['is_default']);
         }
 
         $workSchedule->update($validated);
-        $workSchedule->load('enterprise');
+        $workSchedule->load('enterprises');
 
         return response()->json([
             'success' => true,

@@ -339,7 +339,7 @@ class NotificationService
             $query->unreadBy($user);
         }
 
-        return $query->limit($limit)->get()->map(function ($notification) use ($user) {
+        return $query->limit($limit)->get()->map(function (SystemNotification $notification) use ($user) {
             $notification->is_read = $notification->isReadBy($user);
             return $notification;
         });
@@ -367,6 +367,7 @@ class NotificationService
             ->unreadBy($user)
             ->get();
 
+        /** @var SystemNotification $notification */
         foreach ($notifications as $notification) {
             $notification->markAsReadBy($user);
         }

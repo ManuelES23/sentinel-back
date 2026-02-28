@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\EmployeeIncident;
 use App\Models\IncidentType;
 use App\Models\Employee;
+use App\Services\ApprovalNotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -142,6 +143,21 @@ class IncidentController extends Controller
 
         $incident->load(['employee.enterprise', 'employee.position', 'incidentType']);
         $incident->append(['status_label', 'status_color', 'document_url']);
+
+        // Notificar a aprobadores si la incidencia requiere aprobación
+        if ($status === 'pending') {
+            $employee->load('position', 'department');
+            ApprovalNotificationService::notifyApprovers(
+                'incidents',
+                $employee,
+                'Nueva incidencia registrada',
+                $employee->full_name . ' - ' . ($incidentType->name ?? 'Incidencia') .
+                    ' (' . $days . ' día(s)) del ' .
+                    $startDate->format('d/m/Y') . ' al ' . $endDate->format('d/m/Y'),
+                '/profile?tab=approvals',
+                'rh'
+            );
+        }
 
         return response()->json([
             'success' => true,

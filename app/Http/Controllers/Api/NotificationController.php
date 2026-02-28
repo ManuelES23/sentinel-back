@@ -42,7 +42,7 @@ class NotificationController extends Controller
             $query->category($request->input('category'));
         }
 
-        $notifications = $query->limit($limit)->get()->map(function ($notification) use ($user) {
+        $notifications = $query->limit($limit)->get()->map(function (SystemNotification $notification) use ($user) {
             return $this->formatNotification($notification, $user);
         });
 

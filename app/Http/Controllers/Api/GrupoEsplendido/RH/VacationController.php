@@ -9,6 +9,7 @@ use App\Models\VacationBalance;
 use App\Models\Employee;
 use App\Services\VacationCalculatorService;
 use App\Services\NotificationService;
+use App\Services\ApprovalNotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -149,6 +150,18 @@ class VacationController extends Controller
 
             $vacation->load(['employee.enterprise', 'employee.position']);
             $vacation->append(['status_label', 'status_color']);
+
+            // Notificar a los aprobadores del departamento correspondiente
+            $employee->load('position', 'department');
+            ApprovalNotificationService::notifyApprovers(
+                'vacation_requests',
+                $employee,
+                'Nueva solicitud de vacaciones',
+                $employee->full_name . ' ha solicitado ' . $daysRequested . ' día(s) de vacaciones del ' .
+                    $startDate->format('d/m/Y') . ' al ' . $endDate->format('d/m/Y'),
+                '/profile?tab=approvals',
+                'vacation'
+            );
 
             return response()->json([
                 'success' => true,
@@ -621,7 +634,7 @@ class VacationController extends Controller
             ->orderBy('year', 'desc')
             ->get();
 
-        $balances->each(function ($balance) {
+        $balances->each(function (VacationBalance $balance) {
             $balance->append(['available_days', 'total_days']);
         });
 

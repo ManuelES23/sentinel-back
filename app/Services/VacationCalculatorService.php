@@ -290,6 +290,7 @@ class VacationCalculatorService
 
         $employees = Employee::active()->whereNotNull('hire_date')->get();
 
+        /** @var Employee $employee */
         foreach ($employees as $employee) {
             try {
                 $balance = VacationBalance::initializeForEmployee($employee, $year);

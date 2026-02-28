@@ -53,6 +53,16 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/vacation-history', [App\Http\Controllers\Api\ProfileController::class, 'vacationHistory']);
     });
     
+    // Rutas de pendientes por aprobar
+    Route::prefix('pending-approvals')->group(function () {
+        Route::get('/', [App\Http\Controllers\Api\PendingApprovalController::class, 'index']);
+        Route::get('/summary', [App\Http\Controllers\Api\PendingApprovalController::class, 'summary']);
+        Route::get('/history', [App\Http\Controllers\Api\PendingApprovalController::class, 'history']);
+        Route::get('/{type}/{id}', [App\Http\Controllers\Api\PendingApprovalController::class, 'show']);
+        Route::post('/{type}/{id}/approve', [App\Http\Controllers\Api\PendingApprovalController::class, 'approve']);
+        Route::post('/{type}/{id}/reject', [App\Http\Controllers\Api\PendingApprovalController::class, 'reject']);
+    });
+    
     // Rutas de notificaciones del sistema
     Route::prefix('notifications')->group(function () {
         Route::get('/', [App\Http\Controllers\Api\NotificationController::class, 'index']);

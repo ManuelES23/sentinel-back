@@ -63,7 +63,7 @@ class ScheduleController extends Controller
         $schedules = $query->get();
 
         // Agregar resumen de horario al JSON
-        $schedules->each(function ($schedule) {
+        $schedules->each(function (WorkSchedule $schedule) {
             $schedule->append('schedule_summary');
         });
 
@@ -271,7 +271,7 @@ class ScheduleController extends Controller
             ->orderBy('name')
             ->get();
 
-        $schedules->each(function ($schedule) {
+        $schedules->each(function (WorkSchedule $schedule) {
             $schedule->append('schedule_summary');
         });
 
@@ -290,7 +290,7 @@ class ScheduleController extends Controller
             ->orderBy('name')
             ->get();
 
-        $schedules->each(function ($schedule) {
+        $schedules->each(function (WorkSchedule $schedule) {
             $schedule->append('schedule_summary');
             // Incluir info del pivot
             $schedule->is_default_for_enterprise = $schedule->pivot->is_default ?? false;

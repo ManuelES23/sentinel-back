@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Events\VacationRequestUpdated;
 use App\Models\VacationRequest;
 use App\Models\VacationBalance;
+use App\Services\ApprovalNotificationService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Hash;
@@ -368,6 +369,18 @@ class ProfileController extends Controller
             'administration',
             'rh'
         ))->toOthers();
+
+        // Notificar a los aprobadores del departamento correspondiente
+        $employee->load('position', 'department');
+        ApprovalNotificationService::notifyApprovers(
+            'vacation_requests',
+            $employee,
+            'Nueva solicitud de vacaciones',
+            $employee->full_name . ' ha solicitado ' . $daysRequested . ' día(s) de vacaciones del ' .
+                $startDate->format('d/m/Y') . ' al ' . $endDate->format('d/m/Y'),
+            '/profile?tab=approvals',
+            'vacation'
+        );
 
         return response()->json([
             'status' => 'success',
