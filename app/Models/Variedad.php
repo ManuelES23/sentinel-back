@@ -40,4 +40,12 @@ class Variedad extends Model
     {
         return $this->belongsTo(User::class, 'user_id');
     }
+
+    /**
+     * Relación con Tipos de Variedad
+     */
+    public function tiposVariedad()
+    {
+        return $this->hasMany(TipoVariedad::class);
+    }
 }

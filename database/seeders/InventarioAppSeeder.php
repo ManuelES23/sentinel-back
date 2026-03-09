@@ -65,7 +65,12 @@ class InventarioAppSeeder extends Seeder
             ['name' => 'Artículos', 'icon' => 'Package', 'order' => 2, 'is_active' => true]
         );
 
-        $this->command->info('  ✓ Módulo Catálogos: Categorías, Artículos');
+        $recetas = Submodule::firstOrCreate(
+            ['slug' => 'recetas', 'module_id' => $catalogos->id],
+            ['name' => 'Recetas', 'icon' => 'ChefHat', 'order' => 3, 'is_active' => true]
+        );
+
+        $this->command->info('  ✓ Módulo Catálogos: Categorías, Artículos, Recetas');
 
         // ===== MÓDULO OPERACIONES =====
         $operaciones = Module::firstOrCreate(
@@ -151,7 +156,7 @@ class InventarioAppSeeder extends Seeder
         $users = User::whereIn('email', ['admin@sentinel.com', 'demo@sentinel.com'])->get();
         $modules = [$catalogos, $operaciones, $reportes];
         $submodules = [
-            $categorias, $articulos,
+            $categorias, $articulos, $recetas,
             $entradas, $salidas, $transferencias, $ajustes,
             $stock, $movimientos, $valorizado
         ];

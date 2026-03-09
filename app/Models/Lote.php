@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Lote extends Model
 {
@@ -108,6 +109,14 @@ class Lote extends Model
         return $this->belongsToMany(Temporada::class, 'temporada_lote')
             ->withPivot('cultivo_id', 'superficie_sembrada', 'fecha_siembra', 'fecha_cosecha_estimada', 'notas', 'is_active')
             ->withTimestamps();
+    }
+
+    /**
+     * Etapas del lote (subdivisiones con hectareaje topado)
+     */
+    public function etapas(): HasMany
+    {
+        return $this->hasMany(Etapa::class)->orderBy('orden');
     }
 
     /**

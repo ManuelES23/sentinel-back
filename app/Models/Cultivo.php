@@ -56,4 +56,12 @@ class Cultivo extends Model
     {
         return $this->hasMany(Variedad::class);
     }
+
+    /**
+     * Etapas fenológicas de este cultivo
+     */
+    public function etapasFenologicas()
+    {
+        return $this->hasMany(EtapaFenologica::class);
+    }
 }

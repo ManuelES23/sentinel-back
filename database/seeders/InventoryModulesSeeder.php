@@ -49,6 +49,11 @@ class InventoryModulesSeeder extends Seeder
             ['name' => 'Artículos', 'icon' => 'Package', 'order' => 2, 'is_active' => true]
         );
 
+        $recetas = Submodule::firstOrCreate(
+            ['slug' => 'recetas', 'module_id' => $catalogos->id],
+            ['name' => 'Recetas', 'icon' => 'ChefHat', 'order' => 3, 'is_active' => true]
+        );
+
         $this->command->info('✓ Módulo Catálogos creado');
 
         // ===== MÓDULO OPERACIONES =====
@@ -118,7 +123,7 @@ class InventoryModulesSeeder extends Seeder
         if ($admin) {
             $modules = [$catalogos, $operaciones, $reportes];
             $submodules = [
-                $categorias, $articulos,
+                $categorias, $articulos, $recetas,
                 $entradas, $salidas, $transferencias, $ajustes,
                 $stock, $movimientos, $valorizado
             ];
@@ -159,7 +164,7 @@ class InventoryModulesSeeder extends Seeder
         if ($demo) {
             $modules = [$catalogos, $operaciones, $reportes];
             $submodules = [
-                $categorias, $articulos,
+                $categorias, $articulos, $recetas,
                 $entradas, $salidas, $transferencias, $ajustes,
                 $stock, $movimientos, $valorizado
             ];

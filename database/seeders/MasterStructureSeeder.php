@@ -335,7 +335,11 @@ class MasterStructureSeeder extends Seeder
             ['slug' => 'articulos', 'module_id' => $invCatalogos->id],
             ['name' => 'Artículos', 'icon' => 'Package', 'order' => 2, 'is_active' => true]
         );
-        $this->command->info("    → Catálogos: Categorías, Artículos");
+        Submodule::firstOrCreate(
+            ['slug' => 'recetas', 'module_id' => $invCatalogos->id],
+            ['name' => 'Recetas', 'icon' => 'ChefHat', 'order' => 3, 'is_active' => true]
+        );
+        $this->command->info("    → Catálogos: Categorías, Artículos, Recetas");
 
         // Módulo: Operaciones
         $operaciones = Module::firstOrCreate(
@@ -395,37 +399,6 @@ class MasterStructureSeeder extends Seeder
         $this->command->info("    → Compras: Órdenes de Compra, Recepciones");
 
         // ========================================
-        // APLICACIÓN: GESTIÓN AGRÍCOLA
-        // ========================================
-        $agricultural = Application::firstOrCreate(
-            ['slug' => 'agricultural', 'enterprise_id' => $enterprise->id],
-            [
-                'name' => 'Gestión Agrícola',
-                'description' => 'Manejo de cultivos, siembras y cosechas',
-                'icon' => 'Leaf',
-                'path' => '/splendidfarms/agricultural',
-                'is_active' => true,
-            ]
-        );
-        $this->command->info("  ✓ Gestión Agrícola");
-
-        // Módulo: Agrícola (operativo)
-        $agriOp = Module::firstOrCreate(
-            ['slug' => 'agricola', 'application_id' => $agricultural->id],
-            ['name' => 'Producción', 'icon' => 'Tractor', 'order' => 1, 'is_active' => true]
-        );
-
-        Submodule::firstOrCreate(
-            ['slug' => 'siembras', 'module_id' => $agriOp->id],
-            ['name' => 'Siembras', 'icon' => 'Sprout', 'order' => 1, 'is_active' => true]
-        );
-        Submodule::firstOrCreate(
-            ['slug' => 'cosechas', 'module_id' => $agriOp->id],
-            ['name' => 'Cosechas', 'icon' => 'Apple', 'order' => 2, 'is_active' => true]
-        );
-        $this->command->info("    → Producción: Siembras, Cosechas");
-
-        // ========================================
         // APLICACIÓN: CONTABILIDAD
         // ========================================
         $accounting = Application::firstOrCreate(
@@ -451,6 +424,47 @@ class MasterStructureSeeder extends Seeder
             ['name' => 'Documentos', 'icon' => 'FileText', 'order' => 1, 'is_active' => true]
         );
         $this->command->info("    → Cuentas por Pagar: Documentos");
+
+        // ========================================
+        // APLICACIÓN: OPERACIÓN AGRÍCOLA
+        // ========================================
+        $operacionAgricola = Application::firstOrCreate(
+            ['slug' => 'operacion-agricola', 'enterprise_id' => $enterprise->id],
+            [
+                'name' => 'Operación Agrícola',
+                'description' => 'Gestión de operaciones agrícolas, siembra, visitas y aplicaciones',
+                'icon' => 'Tractor',
+                'path' => '/splendidfarms/operacion-agricola',
+                'is_active' => true,
+            ]
+        );
+        $this->command->info("  ✓ Operación Agrícola");
+
+        // Módulo: Agrícola
+        $oaAgricola = Module::firstOrCreate(
+            ['slug' => 'agricola', 'application_id' => $operacionAgricola->id],
+            ['name' => 'Agrícola', 'icon' => 'Sprout', 'order' => 1, 'is_active' => true]
+        );
+
+        $oaSubmodules = [
+            ['slug' => 'productores', 'name' => 'Productores', 'icon' => 'Users', 'order' => 1],
+            ['slug' => 'zonas-cultivo', 'name' => 'Zonas de Cultivo', 'icon' => 'Map', 'order' => 2],
+            ['slug' => 'lotes', 'name' => 'Lotes', 'icon' => 'LandPlot', 'order' => 3],
+            ['slug' => 'etapas', 'name' => 'Etapas', 'icon' => 'Layers', 'order' => 4],
+            ['slug' => 'plan-siembra', 'name' => 'Plan de Siembra', 'icon' => 'Calendar', 'order' => 5],
+            ['slug' => 'visitas-campo', 'name' => 'Visitas de Campo', 'icon' => 'ClipboardCheck', 'order' => 6],
+            ['slug' => 'aplicaciones', 'name' => 'Aplicaciones', 'icon' => 'Beaker', 'order' => 7],
+            ['slug' => 'requisiciones', 'name' => 'Requisiciones', 'icon' => 'ShoppingCart', 'order' => 8],
+            ['slug' => 'costeo-agricola', 'name' => 'Costeo Agrícola', 'icon' => 'Calculator', 'order' => 9],
+        ];
+
+        foreach ($oaSubmodules as $sub) {
+            Submodule::firstOrCreate(
+                ['slug' => $sub['slug'], 'module_id' => $oaAgricola->id],
+                ['name' => $sub['name'], 'icon' => $sub['icon'], 'order' => $sub['order'], 'is_active' => true]
+            );
+        }
+        $this->command->info("    → Agrícola: Productores, Zonas, Lotes, Etapas, Plan Siembra, Visitas, Aplicaciones, Requisiciones, Costeo");
     }
 
     /**

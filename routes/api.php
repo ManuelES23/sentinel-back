@@ -168,23 +168,6 @@ Route::middleware('auth:sanctum')->group(function () {
     // Rutas específicas de Splendid Farms
     Route::prefix('splendidfarms')->group(function () {
         
-        // Gestión Agrícola
-        Route::prefix('agricultural')->group(function () {
-            Route::get('/crops', [App\Http\Controllers\Api\SplendidFarms\CropController::class, 'index']);
-            Route::post('/crops', [App\Http\Controllers\Api\SplendidFarms\CropController::class, 'store']);
-            // Más rutas de gestión agrícola...
-        });
-        
-        // Administración (placeholder para rutas futuras)
-        Route::prefix('administration-legacy')->group(function () {
-            // Rutas de administración legacy...
-        });
-        
-        // Contabilidad
-        Route::prefix('accounting')->group(function () {
-            // Rutas de contabilidad...
-        });
-        
         // =====================================================
         // APLICACIÓN ADMINISTRACIÓN - Rutas específicas
         // =====================================================
@@ -294,6 +277,14 @@ Route::middleware('auth:sanctum')->group(function () {
                 // Tipos de movimiento
                 Route::apiResource('tipos-movimiento', App\Http\Controllers\Api\SplendidFarms\Inventory\MovementTypeController::class)
                     ->parameters(['tipos-movimiento' => 'type']);
+                
+                // Recetas (BOM - Bill of Materials)
+                Route::post('recetas/{recipe}/items', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'addItem']);
+                Route::put('recetas/{recipe}/items/{item}', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'updateItem']);
+                Route::delete('recetas/{recipe}/items/{item}', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'deleteItem']);
+                Route::post('recetas/{recipe}/recalculate-cost', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'recalculateCost']);
+                Route::apiResource('recetas', App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class)
+                    ->parameters(['recetas' => 'recipe']);
             });
             
             // Módulo Operaciones (Movimientos)
@@ -375,6 +366,84 @@ Route::middleware('auth:sanctum')->group(function () {
                 // CRUD de documentos (index, store, show, update, destroy)
                 Route::apiResource('documentos', App\Http\Controllers\Api\SplendidFarms\Accounting\AccountPayableController::class)
                     ->parameters(['documentos' => 'accountPayable']);
+            });
+        });
+        
+        // =====================================================
+        // APLICACIÓN OPERACIÓN AGRÍCOLA
+        // =====================================================
+        Route::prefix('operacion-agricola')->group(function () {
+            
+            // Temporadas (selector de temporada al entrar a la app)
+            Route::get('temporadas', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\TemporadaOAController::class, 'index']);
+            Route::get('temporadas/{temporada}', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\TemporadaOAController::class, 'show']);
+            
+            // Módulo Agrícola
+            Route::prefix('agricola')->group(function () {
+                
+                // Productores (alta sencilla)
+                Route::apiResource('productores', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\ProductorSimpleController::class)
+                    ->parameters(['productores' => 'productor']);
+                
+                // Zonas de Cultivo (alta sencilla)
+                Route::apiResource('zonas-cultivo', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\ZonaCultivoSimpleController::class)
+                    ->parameters(['zonas-cultivo' => 'zona']);
+                
+                // Lotes (alta sencilla)
+                Route::apiResource('lotes', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\LoteSimpleController::class)
+                    ->parameters(['lotes' => 'lote']);
+                
+                // Etapas (subdivisiones de lote con hectareaje topado)
+                Route::get('etapas/superficie-disponible', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\EtapaController::class, 'superficieDisponible']);
+                Route::apiResource('etapas', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\EtapaController::class)
+                    ->parameters(['etapas' => 'etapa']);
+
+                // Etapas fenológicas (catálogo por cultivo)
+                Route::apiResource('etapas-fenologicas', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\EtapaFenologicaController::class)
+                    ->parameters(['etapas-fenologicas' => 'etapasFenologica']);
+
+                // Plagas (catálogo)
+                Route::apiResource('plagas', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\PlagaController::class)
+                    ->parameters(['plagas' => 'plaga']);
+
+                // Visitas de campo (bitácora)
+                Route::post('visitas-campo/{visita}/completar', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\VisitaCampoController::class, 'complete']);
+                Route::post('visitas-campo/{visita}/detalles/{detalle}/fotos', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\VisitaCampoController::class, 'uploadFotos']);
+                Route::delete('visitas-campo/{visita}/fotos/{foto}', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\VisitaCampoController::class, 'deleteFoto']);
+                Route::apiResource('visitas-campo', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\VisitaCampoController::class)
+                    ->parameters(['visitas-campo' => 'visitasCampo']);
+
+                // Diagnóstico IA (Asistente de campo)
+                Route::post('diagnostico-ia/analizar', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\DiagnosticoIAController::class, 'analizar']);
+                Route::get('diagnostico-ia/historial', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\DiagnosticoIAController::class, 'historial']);
+                Route::get('diagnostico-ia/{diagnostico}', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\DiagnosticoIAController::class, 'show']);
+
+                // Requisiciones de campo (Fase 2)
+                Route::post('requisiciones/{requisicion}/enviar', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCampoController::class, 'submit']);
+                Route::post('requisiciones/{requisicion}/aprobar', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCampoController::class, 'approve']);
+                Route::post('requisiciones/{requisicion}/rechazar', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCampoController::class, 'reject']);
+                Route::post('requisiciones/{requisicion}/cancelar', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCampoController::class, 'cancel']);
+                Route::post('requisiciones/{requisicion}/generar-orden', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCampoController::class, 'generarOrden']);
+                Route::get('requisiciones/proveedores', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCampoController::class, 'suppliers']);
+                Route::apiResource('requisiciones', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCampoController::class)
+                    ->parameters(['requisiciones' => 'requisicion']);
+
+                // Costeo agrícola (Fase 2)
+                Route::get('costeo/dashboard', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\CosteoAgricolaController::class, 'dashboard']);
+                Route::get('costeo/por-lote', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\CosteoAgricolaController::class, 'porLote']);
+                Route::get('costeo/categorias', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\CosteoAgricolaController::class, 'categorias']);
+                Route::apiResource('costeo', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\CosteoAgricolaController::class)
+                    ->parameters(['costeo' => 'costeo']);
+
+                // Catálogos para cascada (variedades y tipos de variedad del cultivo)
+                Route::prefix('catalogos')->group(function () {
+                    Route::get('variedades', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\CatalogoOAController::class, 'variedades']);
+                    Route::get('tipos-variedad', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\CatalogoOAController::class, 'tiposVariedad']);
+                    Route::get('etapas-fenologicas', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\CatalogoOAController::class, 'etapasFenologicas']);
+                    Route::get('plagas', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\CatalogoOAController::class, 'plagasCatalogo']);
+                    Route::get('productos', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\CatalogoOAController::class, 'productos']);
+                    Route::get('unidades', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\CatalogoOAController::class, 'unidades']);
+                });
             });
         });
     });
