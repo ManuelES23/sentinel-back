@@ -26,6 +26,7 @@ return [
         'http://127.0.0.1:5174',
         'http://sentinel.localhost',
         'http://sentinel.localhost:5173',
+        'https://sentinelneo.netlify.app',
     ],
 
     'allowed_origins_patterns' => [],
