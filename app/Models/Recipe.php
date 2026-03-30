@@ -16,9 +16,12 @@ class Recipe extends Model
     protected $fillable = [
         'code',
         'name',
+        'recipe_type',
         'slug',
         'description',
         'category_id',
+        'cultivo_id',
+        'variedad_id',
         'output_product_id',
         'output_quantity',
         'output_unit_id',
@@ -45,6 +48,30 @@ class Recipe extends Model
     public function category(): BelongsTo
     {
         return $this->belongsTo(ProductCategory::class, 'category_id');
+    }
+
+    /**
+     * Cultivo asociado a la receta
+     */
+    public function cultivo(): BelongsTo
+    {
+        return $this->belongsTo(Cultivo::class, 'cultivo_id');
+    }
+
+    /**
+     * Variedad asociada a la receta
+     */
+    public function variedad(): BelongsTo
+    {
+        return $this->belongsTo(Variedad::class, 'variedad_id');
+    }
+
+    /**
+     * Calibres asociados a la receta
+     */
+    public function recipeCalibres(): HasMany
+    {
+        return $this->hasMany(RecipeCalibre::class);
     }
 
     /**
@@ -106,11 +133,36 @@ class Recipe extends Model
 
     /**
      * Recalcular y guardar el costo estimado
+     * Solo suma items que son default (para grupos intercambiables)
      */
     public function recalculateCost(): self
     {
         $this->estimated_cost = $this->calculateEstimatedCost();
         $this->save();
         return $this;
+    }
+
+    /**
+     * Agrupar items por group_key.
+     * Items sin group_key son ingredientes fijos.
+     * Items con group_key son alternativas intercambiables.
+     */
+    public function getGroups(): array
+    {
+        $fixed = [];
+        $groups = [];
+
+        foreach ($this->items as $item) {
+            if (empty($item->group_key)) {
+                $fixed[] = $item;
+            } else {
+                $groups[$item->group_key][] = $item;
+            }
+        }
+
+        return [
+            'fixed' => $fixed,
+            'groups' => $groups,
+        ];
     }
 }

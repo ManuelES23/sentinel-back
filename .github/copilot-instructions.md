@@ -12,6 +12,15 @@ API REST multi-tenant con Laravel 12 + Sanctum. Jerarquía: **Empresa → Aplica
 | WebSockets | Laravel Reverb          |
 | Logs       | Pail (tiempo real)      |
 
+### Estadísticas del Proyecto
+
+| Recurso     | Cantidad |
+| ----------- | -------- |
+| Controllers | 48       |
+| Modelos     | 87       |
+| Events      | 13       |
+| Servicios   | 4        |
+
 ## Estructura de Controllers
 
 ```
@@ -42,32 +51,61 @@ app/Http/Controllers/Api/
 │       ├── VacationController.php        # Vacaciones LFT México
 │       ├── IncidentController.php        # Incidencias
 │       └── IncidentTypeController.php    # Tipos de incidencia
-└── SplendidFarms/                        # Controllers Splendid Farms
-    ├── CropController.php
-    ├── AgricultureCycleController.php
-    ├── TemporadaController.php
-    ├── VariedadController.php
-    ├── TipoVariedadController.php
-    ├── ProductorController.php
-    ├── ZonaCultivoController.php
-    ├── LoteController.php
+└── SplendidFarms/
+    ├── CropController.php                # Cultivos
+    ├── AgricultureCycleController.php    # Ciclos agrícolas
+    ├── TemporadaController.php           # Temporadas
+    ├── VariedadController.php            # Variedades
+    ├── TipoVariedadController.php        # Tipos de variedad
+    ├── ProductorController.php           # Productores
+    ├── ZonaCultivoController.php         # Zonas de cultivo
+    ├── LoteController.php                # Lotes
     ├── Administration/
-    │   ├── BranchController.php
-    │   ├── EntityTypeController.php
-    │   ├── EntityController.php
-    │   ├── AreaController.php
-    │   └── SupplierController.php
+    │   ├── BranchController.php          # Sucursales
+    │   ├── EntityTypeController.php      # Tipos de entidad
+    │   ├── EntityController.php          # Entidades
+    │   ├── AreaController.php            # Áreas
+    │   └── SupplierController.php        # Proveedores
     ├── Inventory/
-    │   ├── ProductCategoryController.php
-    │   ├── UnitOfMeasureController.php
-    │   ├── ProductController.php
-    │   ├── MovementTypeController.php
-    │   ├── InventoryMovementController.php
-    │   ├── PurchaseOrderController.php
-    │   ├── PurchaseReceiptController.php
-    │   └── InventoryReportController.php
-    └── Accounting/
-        └── AccountPayableController.php
+    │   ├── BrandController.php           # Catálogo de marcas (CRUD + list)
+    │   ├── ProductCategoryController.php # Categorías (tree jerárquico)
+    │   ├── UnitOfMeasureController.php   # Unidades de medida
+    │   ├── ProductController.php         # Artículos (brand_id FK, FormData img)
+    │   ├── MovementTypeController.php    # Tipos de movimiento
+    │   ├── InventoryMovementController.php # Movimientos de inventario
+    │   ├── PurchaseOrderController.php   # Órdenes de compra (flujo estados)
+    │   ├── PurchaseReceiptController.php # Recepciones de compra
+    │   ├── InventoryReportController.php # Reportes (stock, movimientos, valorizado)
+    │   ├── RecipeController.php          # Recetas / BOM (Bill of Materials)
+    │   └── TipoCargaController.php       # Tipos de carga por cultivo
+    ├── Accounting/
+    │   └── AccountPayableController.php  # Cuentas por pagar
+    └── OperacionAgricola/
+        ├── TemporadaOAController.php     # Temporadas OA
+        ├── CatalogoOAController.php      # Catálogos OA
+        ├── CosteoAgricolaController.php  # Costeo agrícola
+        ├── DiagnosticoIAController.php   # Diagnóstico IA
+        ├── EtapaController.php           # Etapas
+        ├── EtapaFenologicaController.php # Etapas fenológicas
+        ├── PlagaController.php           # Plagas
+        ├── VisitaCampoController.php     # Visitas de campo (fotos, plagas, recom.)
+        ├── RequisicionCampoController.php # Requisiciones de insumos
+        ├── ProductorSimpleController.php # Productores (vista simplificada OA)
+        ├── ZonaCultivoSimpleController.php
+        ├── LoteSimpleController.php
+        ├── Cosecha/
+        │   ├── SalidaCampoCosechaController.php  # Salidas de cosecha
+        │   ├── CierreCosechaController.php       # Cierres de cosecha
+        │   ├── VentaCosechaController.php        # Ventas de cosecha
+        │   └── CalidadCosechaController.php      # Calidad de cosecha
+        └── Empaque/                               # ⭐ Módulo Empaque (7 fases)
+            ├── RecepcionEmpaqueController.php     # Recepciones de cosecha
+            ├── ProcesoEmpaqueController.php       # Proceso (piso)
+            ├── ProduccionEmpaqueController.php    # Producción (cajas/pallets)
+            ├── RezagaEmpaqueController.php        # Rezaga (mermas)
+            ├── EmbarqueEmpaqueController.php      # Embarques + detalles
+            ├── VentaRezagaEmpaqueController.php   # Venta de rezaga + detalles
+            └── CalidadEmpaqueController.php       # Calidad
 ```
 
 ## Servicios
@@ -96,7 +134,82 @@ NotificationService::vacation($user, 'Tu solicitud fue aprobada', '/profile');
 NotificationService::alert($user, 'Alerta importante');
 ```
 
+### Otros Servicios
+
+```php
+// ApprovalNotificationService - Notificaciones de procesos de aprobación
+// VacationCalculatorService - Cálculo vacaciones LFT México
+// DiagnosticoIAService - Servicio de diagnóstico con IA
+```
+
 ## Modelos Principales
+
+### Modelos del Sistema Base (7)
+
+```
+User, Enterprise, Application, Module, Submodule, SystemNotification, ActivityLog
+```
+
+### Permisos Jerárquicos (10)
+
+```
+UserEnterprise, UserEnterpriseAccess, UserApplication, UserApplicationAccess,
+UserModuleAccess, UserSubmoduleAccess, UserSubmodulePermission,
+SubmodulePermissionType, ApprovalProcess, ApprovalFlowStep
+```
+
+### Módulo RH - Grupo Espléndido (10)
+
+```
+Department, Position, Employee, AttendanceRecord, VacationRequest,
+VacationBalance, WorkSchedule, EmployeeIncident, IncidentType
+```
+
+### Administración Splendid Farms (6)
+
+```
+Branch, EntityType, Entity, Area, Supplier, SupplierContact
+```
+
+### Agrícola Splendid Farms (15+)
+
+```
+Cultivo, CicloAgricola, Temporada, Variedad, TipoVariedad,
+Productor, ZonaCultivo, Lote, Etapa, EtapaFenologica, Plaga,
+VisitaCampo, VisitaCampoDetalle, VisitaCampoFoto, VisitaCampoPlaga,
+VisitaCampoRecomendacion, RequisicionCampo, RequisicionCampoDetalle,
+CosteoAgricola, DiagnosticoIA
+```
+
+### Cosecha Splendid Farms (4)
+
+```
+SalidaCampoCosecha, CierreCosecha, VentaCosecha, CalidadCosecha
+```
+
+### Empaque Splendid Farms (8+)
+
+```
+RecepcionEmpaque, ProcesoEmpaque, ProduccionEmpaque, RezagaEmpaque,
+EmbarqueEmpaque, EmbarqueEmpaqueDetalle, VentaRezagaEmpaque,
+VentaRezagaEmpaqueDetalle, CalidadEmpaque
+```
+
+### Inventario Splendid Farms (18)
+
+```
+Brand, ProductCategory, Product, UnitOfMeasure,
+InventoryMovement, InventoryMovementDetail, InventoryMovementType,
+InventoryItem, InventoryStock, InventoryKardex,
+PurchaseOrder, PurchaseOrderDetail, PurchaseReceipt, PurchaseReceiptDetail,
+Recipe, RecipeItem, MovementType, TipoCarga
+```
+
+### Contabilidad Splendid Farms (2)
+
+```
+AccountPayable, AccountPayablePayment
+```
 
 ### Notificaciones
 
@@ -108,119 +221,53 @@ SystemNotification::active()           // No expiradas
     ->notDismissedBy($userId)         // No descartadas
     ->ordered()                        // Por prioridad y fecha
     ->get();
-
-// Relaciones
-$notification->readers;               // Usuarios que leyeron
-$notification->dismissers;            // Usuarios que descartaron
 ```
 
 ### Vacaciones (LFT México)
 
 ```php
 // Vacation.php - Solicitudes de vacaciones
-Vacation::pending()                    // status = pending
-    ->approved()                       // status = approved
-    ->forEmployee($employeeId)
-    ->inDateRange($start, $end)
-    ->get();
+Vacation::pending()->approved()->forEmployee($employeeId)->inDateRange($start, $end)->get();
 
 // VacationBalance.php - Saldos acumulados
-$balance = VacationBalance::where('employee_id', $id)->first();
-$balance->total_days;                  // Días totales según antigüedad
-$balance->used_days;                   // Días usados
-$balance->available_days;              // Calculado: total - used - pending
+$balance->total_days;      // Días totales según antigüedad
+$balance->used_days;       // Días usados
+$balance->available_days;  // Calculado: total - used - pending
+```
 
-// VacationBalanceHistory.php - Historial de movimientos
-$history = VacationBalanceHistory::forEmployee($id)->get();
-// Tipos: accrual, used, adjustment, expired
+### Marcas (Catálogo)
+
+```php
+// Brand.php - Catálogo de marcas
+Brand::active()->get();      // Marcas activas
+$brand->products;            // Productos con esta marca
+$brand->code;                // Auto-generado: MRC-001
+// Usa: HasFactory, Loggable, SoftDeletes
+// Fillable: code, name, is_active
+```
+
+### Productos
+
+```php
+// Product.php - Artículos
+$product->category;     // BelongsTo ProductCategory
+$product->unit;         // BelongsTo UnitOfMeasure
+$product->brand;        // BelongsTo Brand (nullable)
+$product->stock;        // HasMany InventoryStock
+$product->kardex;       // HasMany InventoryKardex
+// brand_id es FK nullable (nullOnDelete)
+// Soporta: imagen (storage), is_for_sale, track_inventory/lots/serials/expiry
 ```
 
 ### Procesos de Aprobación
 
 ```php
 // ApprovalProcess.php - Catálogo de procesos
-ApprovalProcess::active()              // Activos
-    ->requiresApproval()               // Requieren aprobación
-    ->byCode('vacation_requests')      // Por código
-    ->byModule('grupoesplendido/rh')   // Por módulo
-    ->get();
-
+ApprovalProcess::active()->requiresApproval()->byCode('vacation_requests')->get();
 // Códigos: VACATION_REQUESTS, PURCHASE_ORDERS, INCIDENTS, INVENTORY_MOVEMENTS
 
-// Verificar si un empleado puede aprobar
 $process->canBeApprovedBy($employee, $enterpriseId); // bool
-$process->getApprovers($enterpriseId);               // array de position_ids
-
-// ApprovalFlowStep.php - Reglas de aprobación
-// approver_type: 'hierarchy_level' | 'position'
-// approval_scope: 'own_department' | 'child_departments' | 'enterprise'
-$step->matchesEmployee($employee, $position);        // bool
-```
-
-### Pendientes por Aprobar
-
-```php
-// PendingApprovalController.php
-// GET /api/pending-approvals/summary  → { total_pending, processes[], can_approve }
-// GET /api/pending-approvals          → { total_pending, processes[].items[] }
-// Filtra automáticamente según:
-// - approval_flow_steps del empleado (hierarchy_level o position)
-// - approval_scope (own_department, child_departments, enterprise)
-// - Excluye solicitudes propias del aprobador
-```
-
-### Horarios de Trabajo (Global)
-
-Los horarios son **globales** y se asignan a empresas mediante tabla pivot:
-
-```php
-// WorkSchedule.php - Relación muchos a muchos
-public function enterprises()
-{
-    return $this->belongsToMany(Enterprise::class, 'enterprise_work_schedule')
-        ->withPivot('is_default')
-        ->withTimestamps();
-}
-```
-
-### Módulo RH - Modelos
-
-```
-Employee (employees)
-├── department_id     → Department
-├── position_id       → Position
-├── work_schedule_id  → WorkSchedule
-├── hire_date         → Fecha contratación (para cálculo vacaciones)
-├── qr_code           → Código QR único
-├── pin_code          → PIN 4 dígitos
-└── enterprise_id     → Enterprise (via department)
-
-Department (departments)
-├── enterprise_id     → Enterprise
-└── parent_id         → Department (jerárquico)
-
-Position (positions)
-└── department_id     → Department
-
-Attendance (attendances)
-├── employee_id       → Employee
-├── check_in          → timestamp
-├── check_out         → timestamp
-└── check_type        → qr, pin, manual
-
-Vacation (vacations)
-├── employee_id       → Employee
-├── start_date / end_date
-├── days_requested
-├── status            → pending, approved, rejected, cancelled
-├── approved_by       → User (nullable)
-└── notes / rejection_reason
-
-Incident (incidents)
-├── employee_id       → Employee
-├── incident_type_id  → IncidentType
-├── status            → pending, approved, rejected
-└── start_date / end_date
+$process->getApprovers($enterpriseId);               // position_ids
 ```
 
 ## Patrones Críticos
@@ -229,31 +276,11 @@ Incident (incidents)
 
 ```php
 // Rutas globales (autenticadas)
-Route::prefix('profile')->group(function () {
-    Route::get('/', [ProfileController::class, 'show']);
-    Route::put('/', [ProfileController::class, 'update']);
-    Route::post('/', [ProfileController::class, 'update']); // FormData
-    Route::put('/password', [ProfileController::class, 'changePassword']);
-    Route::post('/vacation-request', [ProfileController::class, 'requestVacation']);
-    Route::delete('/vacation-request/{id}', [ProfileController::class, 'cancelVacationRequest']);
-    Route::get('/vacation-history', [ProfileController::class, 'vacationHistory']);
-});
+Route::prefix('profile')->group(...);
+Route::prefix('pending-approvals')->group(...);
+Route::prefix('notifications')->group(...);
 
-Route::prefix('pending-approvals')->group(function () {
-    Route::get('/', [PendingApprovalController::class, 'index']);
-    Route::get('/summary', [PendingApprovalController::class, 'summary']);
-});
-
-Route::prefix('notifications')->group(function () {
-    Route::get('/', [NotificationController::class, 'index']);
-    Route::get('/count', [NotificationController::class, 'count']);
-    Route::post('/read-all', [NotificationController::class, 'markAllAsRead']);
-    Route::post('/dismiss-read', [NotificationController::class, 'dismissAllRead']);
-    Route::post('/{id}/read', [NotificationController::class, 'markAsRead']);
-    Route::post('/{id}/dismiss', [NotificationController::class, 'dismiss']);
-});
-
-// Rutas RH
+// Rutas RH - Grupo Espléndido
 Route::prefix('grupoesplendido/rh')->group(function () {
     Route::apiResource('departamentos', DepartmentController::class);
     Route::apiResource('puestos', PositionController::class);
@@ -263,30 +290,63 @@ Route::prefix('grupoesplendido/rh')->group(function () {
     Route::apiResource('vacaciones', VacationController::class);
     Route::apiResource('incidencias', IncidentController::class);
     Route::apiResource('tipos-incidencia', IncidentTypeController::class);
+});
 
-    // Vacaciones específicas
-    Route::get('vacaciones/tabla-lft', [VacationController::class, 'getVacationTable']);
-    Route::get('vacaciones/empleado/{employee}/info', [VacationController::class, 'getEmployeeVacationInfo']);
-    Route::post('vacaciones/{vacation}/aprobar', [VacationController::class, 'approve']);
-    Route::post('vacaciones/{vacation}/rechazar', [VacationController::class, 'reject']);
+// Rutas Splendid Farms
+Route::prefix('splendidfarms')->group(function () {
+    // Administración
+    Route::prefix('administration')->group(function () {
+        Route::prefix('organizacion')->group(...);  // sucursales, entidades, áreas
+        Route::prefix('agricola')->group(...);       // cultivos, temporadas, productores, lotes
+        Route::prefix('catalogos')->group(...);      // proveedores
+    });
+
+    // Inventario
+    Route::prefix('inventario')->group(function () {
+        Route::prefix('catalogos')->group(function () {
+            Route::apiResource('categorias', ProductCategoryController::class);
+            Route::get('marcas/list', [BrandController::class, 'list']);
+            Route::apiResource('marcas', BrandController::class);
+            Route::apiResource('articulos', ProductController::class);
+            Route::apiResource('recetas', RecipeController::class);
+            Route::apiResource('tipos-carga', TipoCargaController::class);
+            Route::apiResource('tipos-movimiento', MovementTypeController::class);
+        });
+        Route::prefix('operaciones')->group(...);   // movimientos
+        Route::prefix('compras')->group(...);        // OC, recepciones
+        Route::prefix('reportes')->group(...);       // stock, movimientos, valorizado
+    });
+
+    // Contabilidad
+    Route::prefix('contabilidad')->group(...);       // cuentas-por-pagar
+
+    // Operación Agrícola
+    Route::prefix('operacion-agricola')->group(function () {
+        Route::prefix('agricola')->group(...);       // productores, zonas, lotes, etapas, visitas, requisiciones
+        Route::prefix('cosecha')->group(...);        // salidas, cierres, ventas, calidad
+        Route::prefix('empaque')->group(function () { // ⭐ Módulo empaque
+            Route::apiResource('recepciones', RecepcionEmpaqueController::class);
+            Route::apiResource('proceso', ProcesoEmpaqueController::class);
+            Route::apiResource('produccion', ProduccionEmpaqueController::class);
+            Route::apiResource('rezaga', RezagaEmpaqueController::class);
+            Route::apiResource('embarques', EmbarqueEmpaqueController::class);
+            Route::apiResource('venta-rezaga', VentaRezagaEmpaqueController::class);
+            Route::apiResource('calidad', CalidadEmpaqueController::class);
+        });
+    });
 });
 
 // Checador público (SIN AUTH)
-Route::prefix('checador')->group(function () {
-    Route::post('qr', [TimeClockController::class, 'checkByQR']);
-    Route::post('pin', [TimeClockController::class, 'checkByPIN']);
-    Route::get('status', [TimeClockController::class, 'getStatus']);
-    Route::get('server-time', [TimeClockController::class, 'serverTime']);
-});
+Route::prefix('checador')->group(...);  // qr, pin, status, server-time
 ```
 
 ### 2. Headers de Contexto (Obligatorios para logging)
 
 ```php
-$request->header('X-Enterprise-Slug');    // 'grupoesplendido'
-$request->header('X-Application-Slug');   // 'rh'
-$request->header('X-Module-Slug');        // 'gestion'
-$request->header('X-Submodule-Slug');     // 'vacaciones'
+$request->header('X-Enterprise-Slug');    // 'splendidfarms'
+$request->header('X-Application-Slug');   // 'inventario'
+$request->header('X-Module-Slug');        // 'catalogos'
+$request->header('X-Submodule-Slug');     // 'articulos'
 ```
 
 ### 3. Trait Loggable para Auditoría
@@ -298,6 +358,7 @@ class Employee extends Model
 {
     use HasFactory, Loggable;
 }
+// Todos los modelos importantes usan Loggable para auditoría automática
 ```
 
 ### 4. Formato de Respuesta JSON
@@ -317,48 +378,95 @@ return response()->json([
 ], 404);
 ```
 
+### 5. Auto-generación de Códigos
+
+Patrón usado en BrandController, ProductController, etc.:
+
+```php
+// Generar código único incremental (incluyendo soft-deleted)
+$lastCode = Brand::withTrashed()
+    ->where('code', 'like', 'MRC-%')
+    ->orderByDesc('code')
+    ->value('code');
+$nextNumber = $lastCode ? (int)substr($lastCode, 4) + 1 : 1;
+$code = 'MRC-' . str_pad($nextNumber, 3, '0', STR_PAD_LEFT);
+
+// Prefijos por entidad:
+// PROD-XXXXX (productos), MRC-XXX (marcas), CAT-XXXX (categorías)
+// OC-XXXXX (órdenes compra), REC-XXXXX (recepciones)
+```
+
+### 6. Productos con FormData (imagen)
+
+```php
+// ProductController usa FormData en lugar de JSON por upload de imagen
+// Validación de brand_id como FK:
+'brand_id' => 'nullable|exists:brands,id',
+// Eager loading incluye brand:
+Product::with(['category:id,name,code', 'unit:id,name,abbreviation', 'brand:id,name,code']);
+```
+
+### 7. Endpoint `list` para Selects
+
+Patrón para catálogos que necesitan dropdown en frontend:
+
+```php
+// GET /marcas/list → Solo campos mínimos, activos, sin paginación
+public function list() {
+    $brands = Brand::where('is_active', true)
+        ->select('id', 'code', 'name')
+        ->orderBy('name')->get();
+    return response()->json(['success' => true, 'data' => $brands]);
+}
+```
+
 ## Eventos de Broadcast
 
-### VacationRequestUpdated
+### Eventos Disponibles (13)
 
 ```php
-use App\Events\VacationRequestUpdated;
+// Modelos con broadcast automático
+AreaUpdated, BranchUpdated, CultivoUpdated, EntityTypeUpdated,
+EntityUpdated, LoteUpdated, ProductorUpdated, SalidaCampoUpdated,
+ZonaCultivoUpdated
 
-// Después de aprobar/rechazar vacaciones
-broadcast(new VacationRequestUpdated($vacation, 'approved'))->toOthers();
+// Notificaciones y vacaciones
+UserNotification, VacationRequestUpdated, NotificationCreated
 
-// El evento envía a:
-// - Canal privado del usuario: App.Models.User.{userId}
-// - Canal de empresa: vacation.{enterpriseSlug}.updated
+// Evento genérico
+ModelBroadcastEvent
 ```
 
-### Notificaciones Personales
+### Canales
 
 ```php
-use App\Events\NotificationCreated;
-
-// Se dispara automáticamente desde NotificationService
-// Canal: App.Models.User.{userId}
+'App.Models.User.{id}'                          // Notificaciones personales
+'vacation.{enterpriseSlug}.updated'              // Cambios vacaciones
+'enterprise.{id}'                                // Eventos de empresa
+'module.{enterprise}.{app}.{module}'             // Eventos de módulo
+'presence.enterprise.{id}'                       // Usuarios conectados
 ```
+
+## Módulo Empaque (Operación Agrícola)
+
+Flujo de 7 fases: **Recepciones → Proceso → Producción → Rezaga → Embarques → Venta Rezaga → Calidad**
+
+- Cada fase tiene su propio controller y modelo
+- EmbarqueEmpaque tiene detalle (EmbarqueEmpaqueDetalle)
+- VentaRezagaEmpaque tiene detalle (VentaRezagaEmpaqueDetalle)
+- Filtrado por `entity_id` (planta empacadora seleccionada en frontend)
+- Requiere seleccionar entidad (planta) antes de operar
 
 ## Cálculo de Vacaciones LFT México
 
 ```php
-// En VacationController::getVacationTable()
 // Tabla según Ley Federal del Trabajo:
 $tabla = [
     1 => 12,   // Primer año: 12 días
-    2 => 14,   // Segundo año: 14 días
-    3 => 16,   // Tercer año: 16 días
-    4 => 18,   // Cuarto año: 18 días
-    5 => 20,   // Quinto año: 20 días
-    // 6-10: 22 días
-    // 11-15: 24 días
-    // etc. (+2 días cada 5 años)
+    2 => 14, 3 => 16, 4 => 18, 5 => 20,
+    // 6-10: 22 días, 11-15: 24 días, etc. (+2 días cada 5 años)
 ];
-
 // Días acumulados = suma de todos los años trabajados
-// Ejemplo: 3 años = 12 + 14 + 16 = 42 días totales
 ```
 
 ## Comandos de Desarrollo
@@ -374,45 +482,14 @@ php artisan pail          # Ver logs en tiempo real
 php artisan reverb:start  # WebSocket server
 ```
 
-## Tiempo Real con Laravel Reverb
+## Credenciales BD (Desarrollo)
 
-### Canales Disponibles
-
-- `App.Models.User.{id}` - Notificaciones y vacaciones personales
-- `vacation.{enterpriseSlug}.updated` - Cambios en vacaciones (para RH)
-- `enterprise.{id}` - Eventos de empresa
-- `module.{enterprise}.{app}.{module}` - Eventos de módulo
-- `presence.enterprise.{id}` - Usuarios conectados
-
-### Crear Evento de Broadcast
-
-```php
-class MiEvento implements ShouldBroadcast
-{
-    use Dispatchable, InteractsWithSockets, SerializesModels;
-
-    public function broadcastOn(): array
-    {
-        return [new PrivateChannel("App.Models.User.{$this->userId}")];
-    }
-
-    public function broadcastAs(): string
-    {
-        return 'mi-evento';
-    }
-}
 ```
-
-## Checklist para Nuevos Recursos
-
-1. [ ] Crear migración: `php artisan make:migration create_recursos_table`
-2. [ ] Crear modelo con `Loggable` trait
-3. [ ] Crear controller en carpeta de empresa correspondiente
-4. [ ] Agregar rutas en `routes/api.php` bajo el prefijo correcto
-5. [ ] Definir `$fillable` y `$casts` en el modelo
-6. [ ] Crear evento de broadcast si requiere tiempo real
-7. [ ] Usar `NotificationService` para notificar cambios importantes
-8. [ ] Agregar `broadcast(new Evento(...))->toOthers()` en controller
+DB_HOST=localhost
+DB_DATABASE=sentinel
+DB_USERNAME=root
+DB_PASSWORD=MasterKey
+```
 
 ## Backup y Restauración de Base de Datos
 
@@ -425,11 +502,15 @@ $timestamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
 & "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe" -u root -pMasterKey sentinel < "backups/sentinel_backup_YYYY-MM-DD_HH-mm-ss.sql"
 ```
 
-## Credenciales BD (Desarrollo)
+## Checklist para Nuevos Recursos
 
-```
-DB_HOST=localhost
-DB_DATABASE=sentinel
-DB_USERNAME=root
-DB_PASSWORD=MasterKey
-```
+1. [ ] Crear migración: `php artisan make:migration create_recursos_table`
+2. [ ] Crear modelo con `Loggable` trait y `SoftDeletes` si aplica
+3. [ ] Crear controller en carpeta de empresa correspondiente
+4. [ ] Agregar rutas en `routes/api.php` bajo el prefijo correcto
+5. [ ] Definir `$fillable` y `$casts` en el modelo
+6. [ ] Auto-generar código con `withTrashed()` si tiene campo `code`
+7. [ ] Endpoint `list` para selects si es catálogo
+8. [ ] Crear evento de broadcast si requiere tiempo real
+9. [ ] Usar `NotificationService` para notificar cambios importantes
+10. [ ] Validar FK con `exists:tabla,id` en store/update

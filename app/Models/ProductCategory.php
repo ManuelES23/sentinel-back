@@ -52,7 +52,7 @@ class ProductCategory extends Model
      */
     public function allChildren(): HasMany
     {
-        return $this->children()->with('allChildren');
+        return $this->children()->with('allChildren')->withCount('products');
     }
 
     /**

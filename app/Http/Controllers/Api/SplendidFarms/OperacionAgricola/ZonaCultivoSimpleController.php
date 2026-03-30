@@ -17,14 +17,15 @@ class ZonaCultivoSimpleController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
-        $query = ZonaCultivo::with('lotes:id,zona_cultivo_id,nombre,codigo,superficie');
-
-        // Filtrar por temporada si se proporciona
-        if ($request->filled('temporada_id')) {
-            $temporada = Temporada::findOrFail($request->temporada_id);
-            $zonaIds = $temporada->zonasCultivoActivas()->pluck('zonas_cultivo.id');
-            $query->whereIn('id', $zonaIds);
+        // Temporada obligatoria para context OA
+        if (!$request->filled('temporada_id')) {
+            return response()->json(['success' => true, 'data' => []]);
         }
+
+        $temporada = Temporada::findOrFail($request->temporada_id);
+        $zonaIds = $temporada->zonasCultivoActivas()->pluck('zonas_cultivo.id');
+        $query = ZonaCultivo::with('lotes:id,zona_cultivo_id,nombre,codigo,superficie')
+            ->whereIn('id', $zonaIds);
 
         if ($request->filled('search')) {
             $query->where('nombre', 'like', '%' . $request->search . '%');

@@ -17,14 +17,14 @@ class ProductorSimpleController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
-        $query = Productor::query();
-
-        // Filtrar por temporada si se proporciona
-        if ($request->filled('temporada_id')) {
-            $temporada = Temporada::findOrFail($request->temporada_id);
-            $productorIds = $temporada->productoresActivos()->pluck('productores.id');
-            $query->whereIn('id', $productorIds);
+        // Temporada obligatoria para context OA
+        if (!$request->filled('temporada_id')) {
+            return response()->json(['success' => true, 'data' => []]);
         }
+
+        $temporada = Temporada::findOrFail($request->temporada_id);
+        $productorIds = $temporada->productoresActivos()->pluck('productores.id');
+        $query = Productor::whereIn('id', $productorIds);
 
         if ($request->filled('search')) {
             $search = $request->search;

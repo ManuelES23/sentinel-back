@@ -249,6 +249,29 @@ Route::middleware('auth:sanctum')->group(function () {
                 // Lotes
                 Route::apiResource('lotes', App\Http\Controllers\Api\SplendidFarms\LoteController::class);
                 Route::get('lotes/siguiente-numero', [App\Http\Controllers\Api\SplendidFarms\LoteController::class, 'siguienteNumero']);
+                // Calibres
+                Route::get('calibres/list', [App\Http\Controllers\Api\SplendidFarms\CalibreController::class, 'list']);
+                Route::apiResource('calibres', App\Http\Controllers\Api\SplendidFarms\CalibreController::class);
+            });
+
+            // ─── Módulo: Compras Agrícolas ───────────────────────
+            Route::prefix('compras-agricolas')->group(function () {
+                // Convenios de Compra
+                Route::get('convenios-compra/list', [App\Http\Controllers\Api\SplendidFarms\Administration\ConvenioCompraController::class, 'list']);
+                Route::get('convenios-compra/{convenio}/precio-vigente', [App\Http\Controllers\Api\SplendidFarms\Administration\ConvenioCompraController::class, 'precioVigente']);
+                Route::post('convenios-compra/{convenio}/precios', [App\Http\Controllers\Api\SplendidFarms\Administration\ConvenioCompraController::class, 'agregarPrecio']);
+                Route::put('convenios-compra/{convenio}/precios/{precio}', [App\Http\Controllers\Api\SplendidFarms\Administration\ConvenioCompraController::class, 'actualizarPrecio']);
+                Route::delete('convenios-compra/{convenio}/precios/{precio}', [App\Http\Controllers\Api\SplendidFarms\Administration\ConvenioCompraController::class, 'eliminarPrecio']);
+                Route::apiResource('convenios-compra', App\Http\Controllers\Api\SplendidFarms\Administration\ConvenioCompraController::class)
+                    ->parameters(['convenios-compra' => 'convenio']);
+                // Liquidaciones de Consignación
+                Route::get('liquidaciones/list', [App\Http\Controllers\Api\SplendidFarms\Administration\LiquidacionConsignacionController::class, 'list']);
+                Route::post('liquidaciones/{liquidacion}/recalcular', [App\Http\Controllers\Api\SplendidFarms\Administration\LiquidacionConsignacionController::class, 'recalcular']);
+                Route::apiResource('liquidaciones', App\Http\Controllers\Api\SplendidFarms\Administration\LiquidacionConsignacionController::class)
+                    ->parameters(['liquidaciones' => 'liquidacion']);
+                // Tablero de Productores
+                Route::get('tablero-productores', [App\Http\Controllers\Api\SplendidFarms\Administration\TableroProductoresController::class, 'index']);
+                Route::get('tablero-productores/{productor}', [App\Http\Controllers\Api\SplendidFarms\Administration\TableroProductoresController::class, 'show']);
             });
         });
         
@@ -273,6 +296,15 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::get('articulos/{product}/stock', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'stock']);
                 Route::apiResource('articulos', App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class)
                     ->parameters(['articulos' => 'product']);
+                
+                // Marcas
+                Route::get('marcas/list', [App\Http\Controllers\Api\SplendidFarms\Inventory\BrandController::class, 'list']);
+                Route::apiResource('marcas', App\Http\Controllers\Api\SplendidFarms\Inventory\BrandController::class)
+                    ->parameters(['marcas' => 'brand']);
+                
+                // Tipos de carga (por cultivo)
+                Route::apiResource('tipos-carga', App\Http\Controllers\Api\SplendidFarms\Inventory\TipoCargaController::class)
+                    ->parameters(['tipos-carga' => 'tipoCarga']);
                 
                 // Tipos de movimiento
                 Route::apiResource('tipos-movimiento', App\Http\Controllers\Api\SplendidFarms\Inventory\MovementTypeController::class)
@@ -444,6 +476,68 @@ Route::middleware('auth:sanctum')->group(function () {
                     Route::get('productos', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\CatalogoOAController::class, 'productos']);
                     Route::get('unidades', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\CatalogoOAController::class, 'unidades']);
                 });
+            });
+
+            // Módulo Cosecha
+            Route::prefix('cosecha')->group(function () {
+
+                // Salidas de Campo
+                Route::apiResource('salidas-campo', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Cosecha\SalidaCampoCosechaController::class)
+                    ->parameters(['salidas-campo' => 'salida']);
+
+                // Cierres de Cosecha
+                Route::post('cierres/generar', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Cosecha\CierreCosechaController::class, 'generarCierre']);
+                Route::get('cierres/resumen', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Cosecha\CierreCosechaController::class, 'resumen']);
+                Route::apiResource('cierres', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Cosecha\CierreCosechaController::class)
+                    ->parameters(['cierres' => 'cierre']);
+
+                // Ventas de Cosecha
+                Route::apiResource('ventas', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Cosecha\VentaCosechaController::class)
+                    ->parameters(['ventas' => 'venta']);
+
+                // Calidad
+                Route::apiResource('calidad', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Cosecha\CalidadCosechaController::class)
+                    ->parameters(['calidad' => 'calidad']);
+            });
+
+            // =====================================================
+            // Módulo Empaque
+            // Recepciones, Proceso, Producción, Rezaga, Embarques,
+            // Venta de Rezaga, Calidad
+            // =====================================================
+            Route::prefix('empaque')->group(function () {
+
+                // Recepciones
+                Route::get('recepciones/salidas-disponibles', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\RecepcionEmpaqueController::class, 'salidasDisponibles']);
+                Route::apiResource('recepciones', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\RecepcionEmpaqueController::class)
+                    ->parameters(['recepciones' => 'recepcion']);
+
+                // Proceso (piso = recepciones disponibles / procesando)
+                Route::get('proceso/piso', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProcesoEmpaqueController::class, 'piso']);
+                Route::get('proceso/en-proceso', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProcesoEmpaqueController::class, 'enProceso']);
+                Route::post('proceso/{proceso}/cerrar', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProcesoEmpaqueController::class, 'cerrar']);
+                Route::apiResource('proceso', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProcesoEmpaqueController::class)
+                    ->parameters(['proceso' => 'proceso']);
+
+                // Producción (cajas / pallets)
+                Route::apiResource('produccion', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class)
+                    ->parameters(['produccion' => 'produccion']);
+
+                // Rezaga (mermas / descarte)
+                Route::apiResource('rezaga', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\RezagaEmpaqueController::class)
+                    ->parameters(['rezaga' => 'rezaga']);
+
+                // Embarques
+                Route::apiResource('embarques', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\EmbarqueEmpaqueController::class)
+                    ->parameters(['embarques' => 'embarque']);
+
+                // Venta de Rezaga
+                Route::apiResource('venta-rezaga', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\VentaRezagaEmpaqueController::class)
+                    ->parameters(['venta-rezaga' => 'ventaRezaga']);
+
+                // Calidad
+                Route::apiResource('calidad', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\CalidadEmpaqueController::class)
+                    ->parameters(['calidad' => 'calidad']);
             });
         });
     });

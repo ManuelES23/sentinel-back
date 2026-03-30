@@ -21,6 +21,9 @@ class RecipeItem extends Model
         'is_optional',
         'notes',
         'sort_order',
+        'group_key',
+        'is_default',
+        'calibre_id',
     ];
 
     protected $casts = [
@@ -29,6 +32,7 @@ class RecipeItem extends Model
         'cost_per_unit' => 'decimal:4',
         'is_optional' => 'boolean',
         'sort_order' => 'integer',
+        'is_default' => 'boolean',
     ];
 
     // ── Relaciones ──────────────────────────────────────────────
@@ -55,6 +59,14 @@ class RecipeItem extends Model
     public function unit(): BelongsTo
     {
         return $this->belongsTo(UnitOfMeasure::class, 'unit_id');
+    }
+
+    /**
+     * Calibre asociado (para ingredientes intercambiables)
+     */
+    public function calibre(): BelongsTo
+    {
+        return $this->belongsTo(\App\Models\Calibre::class);
     }
 
     // ── Accessors ───────────────────────────────────────────────

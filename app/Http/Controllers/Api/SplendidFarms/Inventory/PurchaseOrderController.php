@@ -92,7 +92,7 @@ class PurchaseOrderController extends Controller
             // Detalles
             'details' => 'required|array|min:1',
             'details.*.product_id' => 'required|exists:products,id',
-            'details.*.quantity_ordered' => 'required|numeric|min:0.0001',
+            'details.*.quantity_ordered' => 'required|numeric|min:0.01',
             'details.*.unit_id' => 'nullable|exists:units_of_measure,id',
             'details.*.unit_price' => 'required|numeric|min:0',
             'details.*.discount_percent' => 'nullable|numeric|min:0|max:100',
@@ -249,7 +249,7 @@ class PurchaseOrderController extends Controller
 
         $validated = $request->validate([
             'product_id' => 'required|exists:products,id',
-            'quantity_ordered' => 'required|numeric|min:0.0001',
+            'quantity_ordered' => 'required|numeric|min:0.01',
             'unit_id' => 'nullable|exists:units_of_measure,id',
             'unit_price' => 'required|numeric|min:0',
             'discount_percent' => 'nullable|numeric|min:0|max:100',
@@ -292,7 +292,7 @@ class PurchaseOrderController extends Controller
 
         $validated = $request->validate([
             'product_id' => 'sometimes|required|exists:products,id',
-            'quantity_ordered' => 'sometimes|required|numeric|min:0.0001',
+            'quantity_ordered' => 'sometimes|required|numeric|min:0.01',
             'unit_id' => 'nullable|exists:units_of_measure,id',
             'unit_price' => 'sometimes|required|numeric|min:0',
             'discount_percent' => 'nullable|numeric|min:0|max:100',

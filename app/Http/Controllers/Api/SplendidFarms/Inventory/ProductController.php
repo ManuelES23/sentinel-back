@@ -15,7 +15,7 @@ class ProductController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $query = Product::with(['category:id,name,code', 'unit:id,name,abbreviation']);
+        $query = Product::with(['category:id,name,code', 'unit:id,name,abbreviation', 'brand:id,name,code']);
 
         // Filtrar solo activos
         if ($request->boolean('active_only')) {
@@ -44,7 +44,10 @@ class ProductController extends Controller
                 $q->where('name', 'like', "%{$search}%")
                   ->orWhere('code', 'like', "%{$search}%")
                   ->orWhere('sku', 'like', "%{$search}%")
-                  ->orWhere('barcode', 'like', "%{$search}%");
+                  ->orWhere('barcode', 'like', "%{$search}%")
+                  ->orWhereHas('brand', function ($bq) use ($search) {
+                      $bq->where('name', 'like', "%{$search}%");
+                  });
             });
         }
 
@@ -76,6 +79,7 @@ class ProductController extends Controller
             'sku' => 'nullable|string|max:100|unique:products,sku',
             'barcode' => 'nullable|string|max:100',
             'name' => 'required|string|max:255',
+            'brand_id' => 'nullable|exists:brands,id',
             'slug' => 'nullable|string|max:255|unique:products,slug',
             'description' => 'nullable|string',
             'category_id' => 'nullable|exists:product_categories,id',
@@ -92,6 +96,7 @@ class ProductController extends Controller
             'cost_price' => 'nullable|numeric|min:0',
             'sale_price' => 'nullable|numeric|min:0',
             'cost_method' => 'nullable|in:average,fifo,lifo,specific',
+            'is_for_sale' => 'boolean',
             'image' => 'nullable|image|mimes:jpeg,jpg,png,gif,webp|max:2048',
             'is_active' => 'boolean',
             'metadata' => 'nullable|array',
@@ -101,7 +106,8 @@ class ProductController extends Controller
         if (empty($validated['code'])) {
             $prefix = 'PROD';
             
-            $lastProduct = Product::where('code', 'like', $prefix . '-%')
+            $lastProduct = Product::withTrashed()
+                ->where('code', 'like', $prefix . '-%')
                 ->orderByRaw('CAST(SUBSTRING(code, ' . (strlen($prefix) + 2) . ') AS UNSIGNED) DESC')
                 ->first();
             
@@ -121,7 +127,7 @@ class ProductController extends Controller
         }
 
         $product = Product::create($validated);
-        $product->load(['category:id,name,code', 'unit:id,name,abbreviation']);
+        $product->load(['category:id,name,code', 'unit:id,name,abbreviation', 'brand:id,name,code']);
 
         return response()->json([
             'success' => true,
@@ -135,7 +141,7 @@ class ProductController extends Controller
      */
     public function show(Product $product): JsonResponse
     {
-        $product->load(['category', 'unit', 'stock']);
+        $product->load(['category', 'unit', 'stock', 'brand']);
 
         return response()->json([
             'success' => true,
@@ -152,6 +158,7 @@ class ProductController extends Controller
             'sku' => 'nullable|string|max:100|unique:products,sku,' . $product->id,
             'barcode' => 'nullable|string|max:100',
             'name' => 'sometimes|string|max:255',
+            'brand_id' => 'nullable|exists:brands,id',
             'slug' => 'nullable|string|max:255|unique:products,slug,' . $product->id,
             'description' => 'nullable|string',
             'category_id' => 'nullable|exists:product_categories,id',
@@ -168,6 +175,7 @@ class ProductController extends Controller
             'cost_price' => 'nullable|numeric|min:0',
             'sale_price' => 'nullable|numeric|min:0',
             'cost_method' => 'nullable|in:average,fifo,lifo,specific',
+            'is_for_sale' => 'boolean',
             'image' => 'nullable|image|mimes:jpeg,jpg,png,gif,webp|max:2048',
             'is_active' => 'boolean',
             'metadata' => 'nullable|array',
@@ -184,7 +192,7 @@ class ProductController extends Controller
 
         $product->update($validated);
         
-        $product = $product->fresh(['category:id,name,code', 'unit:id,name,abbreviation']);
+        $product = $product->fresh(['category:id,name,code', 'unit:id,name,abbreviation', 'brand:id,name,code']);
 
         return response()->json([
             'success' => true,

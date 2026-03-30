@@ -94,7 +94,7 @@ class PurchaseReceiptController extends Controller
             'details.*.purchase_order_detail_id' => 'nullable|exists:purchase_order_details,id',
             'details.*.product_id' => 'required|exists:products,id',
             'details.*.quantity_ordered' => 'nullable|numeric|min:0',
-            'details.*.quantity_received' => 'required|numeric|min:0.0001',
+            'details.*.quantity_received' => 'required|numeric|min:0.01',
             'details.*.quantity_accepted' => 'nullable|numeric|min:0',
             'details.*.quantity_rejected' => 'nullable|numeric|min:0',
             'details.*.unit_id' => 'nullable|exists:units_of_measure,id',
@@ -251,7 +251,7 @@ class PurchaseReceiptController extends Controller
             'purchase_order_detail_id' => 'nullable|exists:purchase_order_details,id',
             'product_id' => 'required|exists:products,id',
             'quantity_ordered' => 'nullable|numeric|min:0',
-            'quantity_received' => 'required|numeric|min:0.0001',
+            'quantity_received' => 'required|numeric|min:0.01',
             'quantity_accepted' => 'nullable|numeric|min:0',
             'quantity_rejected' => 'nullable|numeric|min:0',
             'unit_id' => 'nullable|exists:units_of_measure,id',
@@ -295,7 +295,7 @@ class PurchaseReceiptController extends Controller
         }
 
         $validated = $request->validate([
-            'quantity_received' => 'sometimes|required|numeric|min:0.0001',
+            'quantity_received' => 'sometimes|required|numeric|min:0.01',
             'quantity_accepted' => 'nullable|numeric|min:0',
             'quantity_rejected' => 'nullable|numeric|min:0',
             'unit_cost' => 'sometimes|required|numeric|min:0',

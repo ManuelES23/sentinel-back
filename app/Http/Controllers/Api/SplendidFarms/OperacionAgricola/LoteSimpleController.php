@@ -17,18 +17,18 @@ class LoteSimpleController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
+        // Temporada obligatoria para context OA
+        if (!$request->filled('temporada_id')) {
+            return response()->json(['success' => true, 'data' => []]);
+        }
+
+        $temporada = Temporada::findOrFail($request->temporada_id);
+        $loteIds = $temporada->lotesActivos()->pluck('lotes.id');
         $query = Lote::with([
             'productor:id,nombre,apellido,tipo',
             'zonaCultivo:id,nombre',
             'etapas:id,lote_id,nombre,codigo,superficie,orden,is_active',
-        ]);
-
-        // Filtrar por temporada si se proporciona
-        if ($request->filled('temporada_id')) {
-            $temporada = Temporada::findOrFail($request->temporada_id);
-            $loteIds = $temporada->lotesActivos()->pluck('lotes.id');
-            $query->whereIn('id', $loteIds);
-        }
+        ])->whereIn('id', $loteIds);
 
         if ($request->filled('productor_id')) {
             $query->where('productor_id', $request->productor_id);

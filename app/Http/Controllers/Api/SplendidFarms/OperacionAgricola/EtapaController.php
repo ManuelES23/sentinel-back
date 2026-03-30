@@ -18,14 +18,15 @@ class EtapaController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $query = Etapa::with(['lote:id,nombre,codigo,superficie,numero_lote,zona_cultivo_id,productor_id', 'lote.productor:id,nombre,apellido', 'lote.zonaCultivo:id,nombre', 'variedad:id,nombre,cultivo_id', 'tipoVariedad:id,nombre,variedad_id']);
-
-        // Filtrar por temporada: solo etapas de lotes asignados a la temporada
-        if ($request->filled('temporada_id')) {
-            $temporada = Temporada::findOrFail($request->temporada_id);
-            $loteIds = $temporada->lotesActivos()->pluck('lotes.id');
-            $query->whereIn('lote_id', $loteIds);
+        // Temporada obligatoria para context OA
+        if (!$request->filled('temporada_id')) {
+            return response()->json(['success' => true, 'data' => []]);
         }
+
+        $temporada = Temporada::findOrFail($request->temporada_id);
+        $loteIds = $temporada->lotesActivos()->pluck('lotes.id');
+        $query = Etapa::with(['lote:id,nombre,codigo,superficie,numero_lote,zona_cultivo_id,productor_id', 'lote.productor:id,nombre,apellido', 'lote.zonaCultivo:id,nombre', 'variedad:id,nombre,cultivo_id', 'tipoVariedad:id,nombre,variedad_id'])
+            ->whereIn('lote_id', $loteIds);
 
         if ($request->filled('lote_id')) {
             $query->where('lote_id', $request->lote_id);
@@ -56,7 +57,7 @@ class EtapaController extends Controller
             'lote_id' => 'required|exists:lotes,id',
             'nombre' => 'required|string|max:255',
             'codigo' => 'nullable|string|max:50',
-            'superficie' => 'required|numeric|min:0.0001',
+            'superficie' => 'required|numeric|min:0.01',
             'variedad_id' => 'nullable|exists:variedades,id',
             'tipo_variedad_id' => 'nullable|exists:tipos_variedad,id',
             'fecha_siembra_estimada' => 'nullable|date',
@@ -164,7 +165,7 @@ class EtapaController extends Controller
             'lote_id' => 'sometimes|required|exists:lotes,id',
             'nombre' => 'sometimes|required|string|max:255',
             'codigo' => 'nullable|string|max:50',
-            'superficie' => 'sometimes|required|numeric|min:0.0001',
+            'superficie' => 'sometimes|required|numeric|min:0.01',
             'variedad_id' => 'nullable|exists:variedades,id',
             'tipo_variedad_id' => 'nullable|exists:tipos_variedad,id',
             'fecha_siembra_estimada' => 'nullable|date',

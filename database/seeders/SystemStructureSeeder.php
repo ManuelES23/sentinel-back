@@ -120,6 +120,15 @@ class SystemStructureSeeder extends Seeder
             ]
         );
 
+        Submodule::firstOrCreate(
+            ['slug' => 'calibres', 'module_id' => $agricolaModule->id],
+            [
+                'name' => 'Calibres',
+                'icon' => 'Ruler',
+                'order' => 9,
+            ]
+        );
+
         $this->command->info('Estructura del sistema creada exitosamente!');
         $this->command->info('Empresa: Splendid Farms');
         $this->command->info('Aplicación: Administration');

@@ -366,7 +366,7 @@ class RequisicionCampoController extends Controller
             'notes' => 'nullable|string',
             'detalles_override' => 'nullable|array',
             'detalles_override.*.product_id' => 'required|exists:products,id',
-            'detalles_override.*.quantity_ordered' => 'required|numeric|min:0.0001',
+            'detalles_override.*.quantity_ordered' => 'required|numeric|min:0.01',
             'detalles_override.*.unit_id' => 'nullable|exists:units_of_measure,id',
             'detalles_override.*.unit_price' => 'required|numeric|min:0',
             'detalles_override.*.tax_rate' => 'nullable|numeric|min:0|max:100',

@@ -263,6 +263,7 @@ class MasterStructureSeeder extends Seeder
             ['slug' => 'productores', 'name' => 'Productores', 'icon' => 'Tractor', 'order' => 6],
             ['slug' => 'zonas-cultivo', 'name' => 'Zonas de Cultivo', 'icon' => 'MapPin', 'order' => 7],
             ['slug' => 'lotes', 'name' => 'Lotes', 'icon' => 'Map', 'order' => 8],
+            ['slug' => 'calibres', 'name' => 'Calibres', 'icon' => 'Ruler', 'order' => 9],
         ];
 
         foreach ($agricolaSubmodules as $sub) {
@@ -271,7 +272,27 @@ class MasterStructureSeeder extends Seeder
                 ['name' => $sub['name'], 'icon' => $sub['icon'], 'order' => $sub['order'], 'is_active' => true]
             );
         }
-        $this->command->info("    → Agrícola: Cultivos, Ciclos, Temporadas, Variedades, Productores, Zonas, Lotes");
+        $this->command->info("    → Agrícola: Cultivos, Ciclos, Temporadas, Variedades, Productores, Zonas, Lotes, Calibres");
+
+        // Módulo: Compras Agrícolas
+        $comprasAgricolas = Module::firstOrCreate(
+            ['slug' => 'compras-agricolas', 'application_id' => $administration->id],
+            ['name' => 'Compras Agrícolas', 'icon' => 'HandCoins', 'order' => 4, 'is_active' => true]
+        );
+
+        $comprasAgricolasSubmodules = [
+            ['slug' => 'convenios-compra', 'name' => 'Convenios de Compra', 'icon' => 'Handshake', 'order' => 1],
+            ['slug' => 'liquidaciones', 'name' => 'Liquidaciones', 'icon' => 'Receipt', 'order' => 2],
+            ['slug' => 'tablero-productores', 'name' => 'Tablero de Productores', 'icon' => 'BarChart3', 'order' => 3],
+        ];
+
+        foreach ($comprasAgricolasSubmodules as $sub) {
+            Submodule::firstOrCreate(
+                ['slug' => $sub['slug'], 'module_id' => $comprasAgricolas->id],
+                ['name' => $sub['name'], 'icon' => $sub['icon'], 'order' => $sub['order'], 'is_active' => true]
+            );
+        }
+        $this->command->info("    → Compras Agrícolas: Convenios, Liquidaciones, Tablero Productores");
 
         // Módulo: Organización
         $organizacion = Module::firstOrCreate(
@@ -339,7 +360,11 @@ class MasterStructureSeeder extends Seeder
             ['slug' => 'recetas', 'module_id' => $invCatalogos->id],
             ['name' => 'Recetas', 'icon' => 'ChefHat', 'order' => 3, 'is_active' => true]
         );
-        $this->command->info("    → Catálogos: Categorías, Artículos, Recetas");
+        Submodule::firstOrCreate(
+            ['slug' => 'tipos-carga', 'module_id' => $invCatalogos->id],
+            ['name' => 'Tipos de Carga', 'icon' => 'BoxSelect', 'order' => 4, 'is_active' => true]
+        );
+        $this->command->info("    → Catálogos: Categorías, Artículos, Recetas, Tipos de Carga");
 
         // Módulo: Operaciones
         $operaciones = Module::firstOrCreate(
@@ -465,6 +490,51 @@ class MasterStructureSeeder extends Seeder
             );
         }
         $this->command->info("    → Agrícola: Productores, Zonas, Lotes, Etapas, Plan Siembra, Visitas, Aplicaciones, Requisiciones, Costeo");
+
+        // Módulo: Cosecha
+        $oaCosecha = Module::firstOrCreate(
+            ['slug' => 'cosecha', 'application_id' => $operacionAgricola->id],
+            ['name' => 'Cosecha', 'icon' => 'Wheat', 'order' => 2, 'is_active' => true]
+        );
+
+        $cosechaSubmodules = [
+            ['slug' => 'salidas-campo', 'name' => 'Salidas de Campo', 'icon' => 'Truck', 'order' => 1],
+            ['slug' => 'cierres-cosecha', 'name' => 'Cierres de Cosecha', 'icon' => 'ClipboardCheck', 'order' => 2],
+            ['slug' => 'ventas-cosecha', 'name' => 'Ventas de Cosecha', 'icon' => 'DollarSign', 'order' => 3],
+            ['slug' => 'calidad', 'name' => 'Calidad', 'icon' => 'Award', 'order' => 4],
+        ];
+
+        foreach ($cosechaSubmodules as $sub) {
+            Submodule::firstOrCreate(
+                ['slug' => $sub['slug'], 'module_id' => $oaCosecha->id],
+                ['name' => $sub['name'], 'icon' => $sub['icon'], 'order' => $sub['order'], 'is_active' => true]
+            );
+        }
+        $this->command->info("    → Cosecha: Salidas de Campo, Cierres, Ventas, Calidad");
+
+        // Módulo: Empaque
+        $oaEmpaque = Module::firstOrCreate(
+            ['slug' => 'empaque', 'application_id' => $operacionAgricola->id],
+            ['name' => 'Empaque', 'icon' => 'Package', 'order' => 3, 'is_active' => true]
+        );
+
+        $empaqueSubmodules = [
+            ['slug' => 'recepciones',  'name' => 'Recepciones',      'icon' => 'Download',       'order' => 1],
+            ['slug' => 'proceso',      'name' => 'Proceso',          'icon' => 'Layers',         'order' => 2],
+            ['slug' => 'produccion',   'name' => 'Producción',       'icon' => 'Package',        'order' => 3],
+            ['slug' => 'rezaga',       'name' => 'Rezaga',           'icon' => 'Trash2',         'order' => 4],
+            ['slug' => 'embarques',    'name' => 'Embarques',        'icon' => 'Truck',          'order' => 5],
+            ['slug' => 'venta-rezaga', 'name' => 'Venta de Rezaga',  'icon' => 'ShoppingCart',   'order' => 6],
+            ['slug' => 'calidad',      'name' => 'Calidad',          'icon' => 'ClipboardCheck', 'order' => 7],
+        ];
+
+        foreach ($empaqueSubmodules as $sub) {
+            Submodule::firstOrCreate(
+                ['slug' => $sub['slug'], 'module_id' => $oaEmpaque->id],
+                ['name' => $sub['name'], 'icon' => $sub['icon'], 'order' => $sub['order'], 'is_active' => true]
+            );
+        }
+        $this->command->info("    → Empaque: Recepciones, Proceso, Producción, Rezaga, Embarques, Venta Rezaga, Calidad");
     }
 
     /**

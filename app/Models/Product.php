@@ -17,7 +17,9 @@ class Product extends Model
         'code',
         'sku',
         'barcode',
+        'plu_number',
         'name',
+        'brand_id',
         'slug',
         'description',
         'category_id',
@@ -34,6 +36,7 @@ class Product extends Model
         'cost_price',
         'sale_price',
         'cost_method',
+        'is_for_sale',
         'image',
         'is_active',
         'metadata',
@@ -51,6 +54,7 @@ class Product extends Model
         'reorder_quantity' => 'decimal:4',
         'cost_price' => 'decimal:4',
         'sale_price' => 'decimal:4',
+        'is_for_sale' => 'boolean',
         'metadata' => 'array',
     ];
 
@@ -60,6 +64,14 @@ class Product extends Model
     public function category(): BelongsTo
     {
         return $this->belongsTo(ProductCategory::class, 'category_id');
+    }
+
+    /**
+     * Marca del producto
+     */
+    public function brand(): BelongsTo
+    {
+        return $this->belongsTo(Brand::class);
     }
 
     /**

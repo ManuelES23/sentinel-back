@@ -51,6 +51,7 @@ class ProductCategoryController extends Controller
     public function tree(): JsonResponse
     {
         $categories = ProductCategory::with('allChildren')
+            ->withCount('products')
             ->whereNull('parent_id')
             ->active()
             ->orderBy('order')
