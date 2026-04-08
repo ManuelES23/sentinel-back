@@ -68,6 +68,9 @@ class ProcesoEmpaqueController extends Controller
             'lote.zonaCultivo:id,nombre',
             'etapa:id,nombre,variedad_id',
             'etapa.variedad:id,nombre',
+            'recepcion:id,salida_campo_id',
+            'recepcion.salidaCampo:id,variedad_id',
+            'recepcion.salidaCampo.variedad:id,nombre',
             'tipoCarga:id,nombre,peso_estimado_kg',
         ])->where('status', 'en_proceso');
 

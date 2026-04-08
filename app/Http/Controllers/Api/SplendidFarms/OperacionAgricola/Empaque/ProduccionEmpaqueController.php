@@ -3,19 +3,26 @@
 namespace App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque;
 
 use App\Http\Controllers\Controller;
+use App\Models\Entity;
+use App\Models\ProcesoEmpaque;
 use App\Models\ProduccionEmpaque;
+use App\Models\Recipe;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Str;
 
 class ProduccionEmpaqueController extends Controller
 {
     private array $eagerLoad = [
-        'entity:id,name,code',
-        'proceso:id,folio_proceso,productor_id,lote_id',
+        'entity:id,name,code,abbreviation',
+        'proceso:id,folio_proceso,productor_id,lote_id,recepcion_id',
         'proceso.productor:id,nombre,apellido',
         'proceso.lote:id,nombre,numero_lote',
+        'proceso.recepcion:id,salida_campo_id',
+        'proceso.recepcion.salidaCampo:id,variedad_id',
+        'proceso.recepcion.salidaCampo.variedad:id,nombre',
         'variedad:id,nombre',
-        'recipe:id,name,code,recipe_type',
+        'recipe:id,name,code,recipe_type,peso_pieza,output_quantity',
         'creador:id,name',
     ];
 
@@ -59,6 +66,7 @@ class ProduccionEmpaqueController extends Controller
             'variedad_id' => 'nullable|exists:variedades,id',
             'linea_empaque' => 'nullable|string|max:100',
             'numero_pallet' => 'nullable|string|max:100',
+            'pallet_qr_id' => 'nullable|string|max:36',
             'total_cajas' => 'required|integer|min:1',
             'peso_neto_kg' => 'nullable|numeric|min:0',
             'tipo_empaque' => 'nullable|string|max:100',
@@ -66,12 +74,43 @@ class ProduccionEmpaqueController extends Controller
             'calibre' => 'nullable|string|max:50',
             'categoria' => 'nullable|string|max:50',
             'status' => 'nullable|in:empacado,en_almacen,embarcado',
+            'is_cola' => 'nullable|boolean',
             'observaciones' => 'nullable|string',
         ]);
 
         $validated['status'] = $validated['status'] ?? 'empacado';
+        $validated['is_cola'] = $validated['is_cola'] ?? false;
         $validated['created_by'] = $request->user()->id;
         $validated['folio_produccion'] = $this->generarFolio($validated);
+
+        // Auto-resolver variedad_id desde el proceso si no viene
+        if (empty($validated['variedad_id']) && !empty($validated['proceso_id'])) {
+            $proceso = ProcesoEmpaque::with([
+                'etapa:id,variedad_id',
+                'recepcion:id,salida_campo_id',
+                'recepcion.salidaCampo:id,variedad_id',
+            ])->find($validated['proceso_id']);
+
+            $variedadId = $proceso?->etapa?->variedad_id
+                ?? $proceso?->recepcion?->salidaCampo?->variedad_id;
+
+            if ($variedadId) {
+                $validated['variedad_id'] = $variedadId;
+            }
+        }
+
+        // Generar UUID para QR del pallet si no viene (pallet nuevo)
+        if (empty($validated['pallet_qr_id'])) {
+            $validated['pallet_qr_id'] = (string) Str::uuid();
+        }
+
+        // Auto-calcular peso neto si hay receta con peso_pieza y no se envió peso manual
+        if (!empty($validated['recipe_id']) && empty($validated['peso_neto_kg'])) {
+            $recipe = Recipe::find($validated['recipe_id']);
+            if ($recipe && $recipe->peso_pieza > 0) {
+                $validated['peso_neto_kg'] = round($validated['total_cajas'] * (float) $recipe->peso_pieza, 2);
+            }
+        }
 
         $produccion = ProduccionEmpaque::create($validated);
         $produccion->load($this->eagerLoad);
@@ -108,6 +147,7 @@ class ProduccionEmpaqueController extends Controller
             'calibre' => 'nullable|string|max:50',
             'categoria' => 'nullable|string|max:50',
             'status' => 'nullable|in:empacado,en_almacen,embarcado',
+            'is_cola' => 'nullable|boolean',
             'observaciones' => 'nullable|string',
         ]);
 
@@ -128,12 +168,74 @@ class ProduccionEmpaqueController extends Controller
         return response()->json(['success' => true, 'message' => 'Producción eliminada']);
     }
 
+    /**
+     * Obtener el siguiente número de pallet consecutivo para una entidad.
+     */
+    public function nextPalletNumber(Request $request): JsonResponse
+    {
+        $request->validate(['entity_id' => 'required|exists:entities,id']);
+
+        $entity = Entity::find($request->entity_id);
+        $abbreviation = $entity->abbreviation ?: 'PLT';
+
+        $lastPallet = ProduccionEmpaque::where('entity_id', $entity->id)
+            ->where('numero_pallet', 'like', $abbreviation . '-%')
+            ->selectRaw("MAX(CAST(SUBSTRING(numero_pallet, ?) AS UNSIGNED)) as max_num", [strlen($abbreviation) + 2])
+            ->value('max_num');
+
+        $nextNum = ($lastPallet ?? 0) + 1;
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'abbreviation' => $abbreviation,
+                'next_number' => str_pad($nextNum, 4, '0', STR_PAD_LEFT),
+                'full_pallet' => $abbreviation . '-' . str_pad($nextNum, 4, '0', STR_PAD_LEFT),
+            ],
+        ]);
+    }
+
+    /**
+     * Listar pallets cola (incompletos) para poder continuar al día siguiente.
+     */
+    public function colaPallets(Request $request): JsonResponse
+    {
+        $query = ProduccionEmpaque::where('is_cola', true)
+            ->with([
+                'entity:id,name,code,abbreviation',
+                'proceso:id,folio_proceso,productor_id,lote_id',
+                'proceso.productor:id,nombre,apellido',
+                'recipe:id,name,code',
+            ]);
+
+        if ($request->filled('entity_id')) {
+            $query->where('entity_id', $request->entity_id);
+        }
+        if ($request->filled('temporada_id')) {
+            $query->where('temporada_id', $request->temporada_id);
+        }
+
+        $pallets = $query->orderByDesc('fecha_produccion')->orderByDesc('id')->get();
+
+        return response()->json(['success' => true, 'data' => $pallets]);
+    }
+
     private function generarFolio(array $data): string
     {
-        $count = ProduccionEmpaque::where('temporada_id', $data['temporada_id'])
-            ->where('entity_id', $data['entity_id'])
-            ->count() + 1;
         $entityId = str_pad($data['entity_id'], 2, '0', STR_PAD_LEFT);
-        return "PROD-{$entityId}-" . str_pad($count, 4, '0', STR_PAD_LEFT);
+        $prefix = "PROD-{$entityId}-";
+
+        $lastFolio = ProduccionEmpaque::withTrashed()
+            ->where('temporada_id', $data['temporada_id'])
+            ->where('entity_id', $data['entity_id'])
+            ->where('folio_produccion', 'like', $prefix . '%')
+            ->orderByDesc('folio_produccion')
+            ->value('folio_produccion');
+
+        $nextNumber = $lastFolio
+            ? (int) substr($lastFolio, strlen($prefix)) + 1
+            : 1;
+
+        return $prefix . str_pad($nextNumber, 4, '0', STR_PAD_LEFT);
     }
 }

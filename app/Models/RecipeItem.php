@@ -23,6 +23,7 @@ class RecipeItem extends Model
         'sort_order',
         'group_key',
         'is_default',
+        'solo_interno',
         'calibre_id',
     ];
 
@@ -33,6 +34,7 @@ class RecipeItem extends Model
         'is_optional' => 'boolean',
         'sort_order' => 'integer',
         'is_default' => 'boolean',
+        'solo_interno' => 'boolean',
     ];
 
     // ── Relaciones ──────────────────────────────────────────────

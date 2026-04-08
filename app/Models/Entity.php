@@ -16,6 +16,7 @@ class Entity extends Model
         'branch_id',
         'entity_type_id',
         'code',
+        'abbreviation',
         'name',
         'slug',
         'description',

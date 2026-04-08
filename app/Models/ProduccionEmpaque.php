@@ -16,14 +16,15 @@ class ProduccionEmpaque extends Model
     protected $fillable = [
         'temporada_id', 'entity_id', 'proceso_id', 'recipe_id', 'folio_produccion',
         'fecha_produccion', 'turno', 'variedad_id', 'linea_empaque',
-        'numero_pallet', 'total_cajas', 'peso_neto_kg', 'tipo_empaque',
-        'etiqueta', 'calibre', 'categoria', 'status', 'observaciones', 'created_by',
+        'numero_pallet', 'pallet_qr_id', 'total_cajas', 'peso_neto_kg', 'tipo_empaque',
+        'etiqueta', 'calibre', 'categoria', 'status', 'is_cola', 'observaciones', 'created_by',
     ];
 
     protected $casts = [
         'total_cajas' => 'integer',
         'peso_neto_kg' => 'decimal:2',
         'fecha_produccion' => 'date:Y-m-d',
+        'is_cola' => 'boolean',
     ];
 
     public function temporada() { return $this->belongsTo(Temporada::class); }

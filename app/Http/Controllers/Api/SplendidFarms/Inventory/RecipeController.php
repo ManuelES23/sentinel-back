@@ -90,6 +90,7 @@ class RecipeController extends Controller
             'category_id' => 'nullable|exists:product_categories,id',
             'output_quantity' => 'nullable|numeric|min:0.01',
             'output_unit_id' => 'nullable|exists:units_of_measure,id',
+            'peso_pieza' => 'nullable|numeric|min:0',
             'status' => 'nullable|in:draft,active,inactive,archived',
             'version' => 'nullable|string|max:20',
             'notes' => 'nullable|string',
@@ -107,6 +108,7 @@ class RecipeController extends Controller
             'items.*.sort_order' => 'nullable|integer|min:0',
             'items.*.group_key' => 'nullable|string|max:50',
             'items.*.is_default' => 'nullable|boolean',
+            'items.*.solo_interno' => 'nullable|boolean',
             'items.*.calibre_id' => 'nullable|exists:calibres,id',
             // Variedad
             'variedad_id' => 'nullable|exists:variedades,id',
@@ -263,6 +265,7 @@ class RecipeController extends Controller
             'recipe_type' => 'nullable|string|max:50',
             'output_quantity' => 'nullable|numeric|min:0.01',
             'output_unit_id' => 'nullable|exists:units_of_measure,id',
+            'peso_pieza' => 'nullable|numeric|min:0',
             'estimated_cost' => 'nullable|numeric|min:0',
             'status' => 'nullable|in:draft,active,inactive,archived',
             'version' => 'nullable|string|max:20',
@@ -281,6 +284,7 @@ class RecipeController extends Controller
             'items.*.sort_order' => 'nullable|integer|min:0',
             'items.*.group_key' => 'nullable|string|max:50',
             'items.*.is_default' => 'nullable|boolean',
+            'items.*.solo_interno' => 'nullable|boolean',
             'items.*.calibre_id' => 'nullable|exists:calibres,id',
             // Variedad
             'variedad_id' => 'nullable|exists:variedades,id',
@@ -430,6 +434,7 @@ class RecipeController extends Controller
             'sort_order' => 'nullable|integer|min:0',
             'group_key' => 'nullable|string|max:50',
             'is_default' => 'nullable|boolean',
+            'solo_interno' => 'nullable|boolean',
             'calibre_id' => 'nullable|exists:calibres,id',
         ]);
 
@@ -494,6 +499,7 @@ class RecipeController extends Controller
             'sort_order' => 'nullable|integer|min:0',
             'group_key' => 'nullable|string|max:50',
             'is_default' => 'nullable|boolean',
+            'solo_interno' => 'nullable|boolean',
             'calibre_id' => 'nullable|exists:calibres,id',
         ]);
 

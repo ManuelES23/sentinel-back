@@ -25,6 +25,7 @@ class Recipe extends Model
         'output_product_id',
         'output_quantity',
         'output_unit_id',
+        'peso_pieza',
         'estimated_cost',
         'status',
         'version',
@@ -36,6 +37,7 @@ class Recipe extends Model
     protected $casts = [
         'is_active' => 'boolean',
         'output_quantity' => 'decimal:4',
+        'peso_pieza' => 'decimal:4',
         'estimated_cost' => 'decimal:4',
         'metadata' => 'array',
     ];
