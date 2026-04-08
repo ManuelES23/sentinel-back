@@ -11,9 +11,11 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::table('entities', function (Blueprint $table) {
-            $table->boolean('is_external')->default(false)->after('is_active');
-        });
+        if (!Schema::hasColumn('entities', 'is_external')) {
+            Schema::table('entities', function (Blueprint $table) {
+                $table->boolean('is_external')->default(false)->after('is_active');
+            });
+        }
     }
 
     /**
