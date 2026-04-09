@@ -546,6 +546,96 @@ class MasterStructureSeeder extends Seeder
         $this->command->info("📱 Creando aplicaciones para: {$enterprise->name}");
 
         // ========================================
+        // APLICACIÓN: INVENTARIO
+        // ========================================
+        $inventario = Application::firstOrCreate(
+            ['slug' => 'inventario', 'enterprise_id' => $enterprise->id],
+            [
+                'name' => 'Inventario',
+                'description' => 'Control de inventarios, compras y almacén',
+                'icon' => 'Warehouse',
+                'path' => '/splendidbyporvenir/inventario',
+                'is_active' => true,
+            ]
+        );
+        $this->command->info("  ✓ Inventario");
+
+        // Módulo: Catálogos
+        $invCatalogos = Module::firstOrCreate(
+            ['slug' => 'catalogos', 'application_id' => $inventario->id],
+            ['name' => 'Catálogos', 'icon' => 'BookOpen', 'order' => 1, 'is_active' => true]
+        );
+
+        $catSubmodules = [
+            ['slug' => 'categorias', 'name' => 'Categorías', 'icon' => 'Tags', 'order' => 1],
+            ['slug' => 'articulos', 'name' => 'Artículos', 'icon' => 'Package', 'order' => 2],
+            ['slug' => 'recetas', 'name' => 'Recetas', 'icon' => 'ChefHat', 'order' => 3],
+            ['slug' => 'tipos-carga', 'name' => 'Tipos de Carga', 'icon' => 'BoxSelect', 'order' => 4],
+        ];
+        foreach ($catSubmodules as $sub) {
+            Submodule::firstOrCreate(
+                ['slug' => $sub['slug'], 'module_id' => $invCatalogos->id],
+                ['name' => $sub['name'], 'icon' => $sub['icon'], 'order' => $sub['order'], 'is_active' => true]
+            );
+        }
+        $this->command->info("    → Catálogos: Categorías, Artículos, Recetas, Tipos de Carga");
+
+        // Módulo: Operaciones
+        $operaciones = Module::firstOrCreate(
+            ['slug' => 'operaciones', 'application_id' => $inventario->id],
+            ['name' => 'Operaciones', 'icon' => 'ArrowLeftRight', 'order' => 2, 'is_active' => true]
+        );
+
+        $opSubmodules = [
+            ['slug' => 'entradas', 'name' => 'Entradas', 'icon' => 'ArrowDownLeft', 'order' => 1],
+            ['slug' => 'salidas', 'name' => 'Salidas', 'icon' => 'ArrowUpRight', 'order' => 2],
+            ['slug' => 'transferencias', 'name' => 'Transferencias', 'icon' => 'ArrowLeftRight', 'order' => 3],
+            ['slug' => 'ajustes', 'name' => 'Ajustes', 'icon' => 'SlidersHorizontal', 'order' => 4],
+        ];
+        foreach ($opSubmodules as $sub) {
+            Submodule::firstOrCreate(
+                ['slug' => $sub['slug'], 'module_id' => $operaciones->id],
+                ['name' => $sub['name'], 'icon' => $sub['icon'], 'order' => $sub['order'], 'is_active' => true]
+            );
+        }
+        $this->command->info("    → Operaciones: Entradas, Salidas, Transferencias, Ajustes");
+
+        // Módulo: Reportes
+        $reportes = Module::firstOrCreate(
+            ['slug' => 'reportes', 'application_id' => $inventario->id],
+            ['name' => 'Reportes', 'icon' => 'BarChart3', 'order' => 3, 'is_active' => true]
+        );
+
+        $repSubmodules = [
+            ['slug' => 'stock', 'name' => 'Existencias', 'icon' => 'Boxes', 'order' => 1],
+            ['slug' => 'movimientos', 'name' => 'Movimientos', 'icon' => 'History', 'order' => 2],
+            ['slug' => 'valorizado', 'name' => 'Valorizado', 'icon' => 'DollarSign', 'order' => 3],
+        ];
+        foreach ($repSubmodules as $sub) {
+            Submodule::firstOrCreate(
+                ['slug' => $sub['slug'], 'module_id' => $reportes->id],
+                ['name' => $sub['name'], 'icon' => $sub['icon'], 'order' => $sub['order'], 'is_active' => true]
+            );
+        }
+        $this->command->info("    → Reportes: Existencias, Movimientos, Valorizado");
+
+        // Módulo: Compras
+        $compras = Module::firstOrCreate(
+            ['slug' => 'compras', 'application_id' => $inventario->id],
+            ['name' => 'Compras', 'icon' => 'ShoppingCart', 'order' => 4, 'is_active' => true]
+        );
+
+        Submodule::firstOrCreate(
+            ['slug' => 'ordenes-compra', 'module_id' => $compras->id],
+            ['name' => 'Órdenes de Compra', 'icon' => 'FileText', 'order' => 1, 'is_active' => true]
+        );
+        Submodule::firstOrCreate(
+            ['slug' => 'recepciones', 'module_id' => $compras->id],
+            ['name' => 'Recepciones', 'icon' => 'PackageCheck', 'order' => 2, 'is_active' => true]
+        );
+        $this->command->info("    → Compras: Órdenes de Compra, Recepciones");
+
+        // ========================================
         // APLICACIÓN: VENTAS
         // ========================================
         $sales = Application::firstOrCreate(

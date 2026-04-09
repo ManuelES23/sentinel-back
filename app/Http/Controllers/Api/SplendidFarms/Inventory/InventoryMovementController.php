@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Api\SplendidFarms\Inventory;
 
 use App\Http\Controllers\Controller;
+use App\Models\Enterprise;
+use App\Models\Entity;
 use App\Models\InventoryMovement;
 use App\Models\InventoryMovementDetail;
 use App\Models\InventoryStock;
@@ -16,6 +18,90 @@ use Illuminate\Support\Facades\DB;
 class InventoryMovementController extends Controller
 {
     /**
+     * Obtiene el enterprise actual a partir del header X-Enterprise-Slug.
+     */
+    private function getEnterprise(Request $request): ?Enterprise
+    {
+        $slug = $request->header('X-Enterprise-Slug');
+        if (!$slug) return null;
+        return Enterprise::where('slug', $slug)->first();
+    }
+
+    /**
+     * IDs de entidades accesibles por la empresa actual.
+     */
+    private function getAccessibleEntityIds(Request $request): array
+    {
+        $enterprise = $this->getEnterprise($request);
+        if (!$enterprise) return [];
+        return $enterprise->accessibleEntities()->pluck('entities.id')->toArray();
+    }
+
+    /**
+     * Entidades accesibles para selects del frontend.
+     */
+    public function accessibleEntities(Request $request): JsonResponse
+    {
+        $enterprise = $this->getEnterprise($request);
+        if (!$enterprise) {
+            return response()->json(['success' => true, 'data' => []]);
+        }
+
+        $entities = $enterprise->accessibleEntities()
+            ->with(['branch:id,name,enterprise_id', 'branch.enterprise:id,name,slug', 'entityType:id,name,icon,color'])
+            ->active()
+            ->get()
+            ->map(function ($entity) use ($enterprise) {
+                $isOwn = $entity->branch && $entity->branch->enterprise_id === $enterprise->id;
+                return [
+                    'id' => $entity->id,
+                    'code' => $entity->code,
+                    'name' => $entity->name,
+                    'branch' => $entity->branch?->name,
+                    'ownerEnterprise' => $entity->branch?->enterprise?->name,
+                    'entityType' => $entity->entityType?->name,
+                    'entityTypeIcon' => $entity->entityType?->icon,
+                    'entityTypeColor' => $entity->entityType?->color,
+                    'isOwn' => $isOwn,
+                    'accessLevel' => $entity->pivot->access_level,
+                ];
+            });
+
+        return response()->json([
+            'success' => true,
+            'data' => $entities,
+        ]);
+    }
+
+    /**
+     * Consultar stock de una entidad para validación del frontend.
+     */
+    public function entityStock(Request $request, Entity $entity): JsonResponse
+    {
+        $entityIds = $this->getAccessibleEntityIds($request);
+        if (!in_array($entity->id, $entityIds)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No tienes acceso a esta entidad',
+            ], 403);
+        }
+
+        $query = InventoryStock::where('entity_id', $entity->id)
+            ->where('quantity', '>', 0)
+            ->with(['product:id,code,name,sku']);
+
+        if ($request->filled('product_id')) {
+            $query->where('product_id', $request->product_id);
+        }
+
+        $stock = $query->get();
+
+        return response()->json([
+            'success' => true,
+            'data' => $stock,
+        ]);
+    }
+    /**
      * Display a listing of the resource.
      */
     public function index(Request $request): JsonResponse
@@ -26,6 +112,15 @@ class InventoryMovementController extends Controller
             'destinationEntity:id,name,code',
             'createdBy:id,name'
         ]);
+
+        // Filtrar por entidades accesibles de la empresa actual
+        $entityIds = $this->getAccessibleEntityIds($request);
+        if (!empty($entityIds)) {
+            $query->where(function ($q) use ($entityIds) {
+                $q->whereIn('source_entity_id', $entityIds)
+                  ->orWhereIn('destination_entity_id', $entityIds);
+            });
+        }
 
         // Filtrar por estado
         if ($request->filled('status')) {
@@ -129,6 +224,23 @@ class InventoryMovementController extends Controller
                 'status' => 'error',
                 'message' => 'Este tipo de movimiento requiere una entidad destino'
             ], 422);
+        }
+
+        // Validar que las entidades sean accesibles por la empresa actual
+        $entityIds = $this->getAccessibleEntityIds($request);
+        if (!empty($entityIds)) {
+            if (!empty($validated['source_entity_id']) && !in_array($validated['source_entity_id'], $entityIds)) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'No tienes acceso a la entidad origen seleccionada'
+                ], 403);
+            }
+            if (!empty($validated['destination_entity_id']) && !in_array($validated['destination_entity_id'], $entityIds)) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'No tienes acceso a la entidad destino seleccionada'
+                ], 403);
+            }
         }
 
         DB::beginTransaction();
@@ -370,6 +482,34 @@ class InventoryMovementController extends Controller
 
         try {
             $movementType = $movement->movementType;
+
+            // Validar stock suficiente para salidas y transferencias
+            if (in_array($movementType->direction, ['out', 'transfer']) ||
+                ($movementType->direction === 'adjustment' && $movementType->effect === 'decrease')) {
+
+                $entityId = $movement->source_entity_id;
+                $insufficientStock = [];
+
+                foreach ($movement->details as $detail) {
+                    $qty = $detail->base_quantity ?? $detail->quantity;
+                    $stock = InventoryStock::where('product_id', $detail->product_id)
+                        ->where('entity_id', $entityId)
+                        ->when($detail->lot_number, fn($q) => $q->where('lot_number', $detail->lot_number))
+                        ->sum('quantity');
+
+                    if ($stock < $qty) {
+                        $productName = $detail->product?->name ?? "ID:{$detail->product_id}";
+                        $insufficientStock[] = "{$productName} (disponible: {$stock}, requerido: {$qty})";
+                    }
+                }
+
+                if (!empty($insufficientStock)) {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'Stock insuficiente para los siguientes productos: ' . implode(', ', $insufficientStock),
+                    ], 422);
+                }
+            }
 
             foreach ($movement->details as $detail) {
                 // Procesar según dirección y efecto

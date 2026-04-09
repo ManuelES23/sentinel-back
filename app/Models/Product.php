@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Product extends Model
@@ -104,6 +105,25 @@ class Product extends Model
     public function kardex(): HasMany
     {
         return $this->hasMany(InventoryKardex::class, 'product_id');
+    }
+
+    /**
+     * Empresas que usan este producto
+     */
+    public function enterprises(): BelongsToMany
+    {
+        return $this->belongsToMany(Enterprise::class, 'enterprise_product')
+            ->withTimestamps();
+    }
+
+    /**
+     * Scope para filtrar por empresa
+     */
+    public function scopeForEnterprise($query, int $enterpriseId)
+    {
+        return $query->whereHas('enterprises', function ($q) use ($enterpriseId) {
+            $q->where('enterprises.id', $enterpriseId);
+        });
     }
 
     /**

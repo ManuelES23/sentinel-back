@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\SplendidFarms\Inventory;
 
 use App\Http\Controllers\Controller;
 use App\Models\Product;
+use App\Models\Enterprise;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Storage;
@@ -16,6 +17,15 @@ class ProductController extends Controller
     public function index(Request $request): JsonResponse
     {
         $query = Product::with(['category:id,name,code', 'unit:id,name,abbreviation', 'brand:id,name,code']);
+
+        // Filtrar por empresa si se envía el header
+        $enterpriseSlug = $request->header('X-Enterprise-Slug');
+        if ($enterpriseSlug) {
+            $enterprise = Enterprise::where('slug', $enterpriseSlug)->first();
+            if ($enterprise) {
+                $query->forEnterprise($enterprise->id);
+            }
+        }
 
         // Filtrar solo activos
         if ($request->boolean('active_only')) {
@@ -127,6 +137,16 @@ class ProductController extends Controller
         }
 
         $product = Product::create($validated);
+
+        // Vincular producto a la empresa actual
+        $enterpriseSlug = $request->header('X-Enterprise-Slug');
+        if ($enterpriseSlug) {
+            $enterprise = Enterprise::where('slug', $enterpriseSlug)->first();
+            if ($enterprise) {
+                $product->enterprises()->syncWithoutDetaching([$enterprise->id]);
+            }
+        }
+
         $product->load(['category:id,name,code', 'unit:id,name,abbreviation', 'brand:id,name,code']);
 
         return response()->json([
@@ -256,6 +276,123 @@ class ProductController extends Controller
                 'available_stock' => $stock->sum('available_quantity'),
                 'details' => $stock
             ]
+        ]);
+    }
+
+    /**
+     * Productos disponibles para importar desde otras empresas.
+     */
+    public function availableForImport(Request $request): JsonResponse
+    {
+        $enterpriseSlug = $request->header('X-Enterprise-Slug');
+        if (!$enterpriseSlug) {
+            return response()->json(['status' => 'error', 'message' => 'Enterprise header requerido'], 400);
+        }
+
+        $enterprise = Enterprise::where('slug', $enterpriseSlug)->first();
+        if (!$enterprise) {
+            return response()->json(['status' => 'error', 'message' => 'Empresa no encontrada'], 404);
+        }
+
+        // Productos que NO están vinculados a esta empresa
+        $query = Product::with(['category:id,name,code', 'unit:id,name,abbreviation', 'brand:id,name,code'])
+            ->whereDoesntHave('enterprises', function ($q) use ($enterprise) {
+                $q->where('enterprises.id', $enterprise->id);
+            })
+            ->active();
+
+        if ($request->filled('search')) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%")
+                  ->orWhere('code', 'like', "%{$search}%")
+                  ->orWhere('sku', 'like', "%{$search}%");
+            });
+        }
+
+        $products = $query->orderBy('name')->get();
+
+        // Agregar info de qué empresas lo usan
+        $products->each(function ($product) {
+            $product->used_by = $product->enterprises()->pluck('enterprises.name');
+        });
+
+        return response()->json([
+            'success' => true,
+            'data' => $products
+        ]);
+    }
+
+    /**
+     * Importar (vincular) producto(s) de otra empresa a la empresa actual.
+     */
+    public function importProducts(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'product_ids' => 'required|array|min:1',
+            'product_ids.*' => 'exists:products,id',
+        ]);
+
+        $enterpriseSlug = $request->header('X-Enterprise-Slug');
+        if (!$enterpriseSlug) {
+            return response()->json(['status' => 'error', 'message' => 'Enterprise header requerido'], 400);
+        }
+
+        $enterprise = Enterprise::where('slug', $enterpriseSlug)->first();
+        if (!$enterprise) {
+            return response()->json(['status' => 'error', 'message' => 'Empresa no encontrada'], 404);
+        }
+
+        $enterprise->products()->syncWithoutDetaching($validated['product_ids']);
+
+        $imported = Product::with(['category:id,name,code', 'unit:id,name,abbreviation', 'brand:id,name,code'])
+            ->whereIn('id', $validated['product_ids'])
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'message' => count($validated['product_ids']) . ' artículo(s) importado(s) exitosamente',
+            'data' => $imported
+        ]);
+    }
+
+    /**
+     * Desvincular un producto de la empresa actual.
+     */
+    public function unlinkProduct(Request $request, Product $product): JsonResponse
+    {
+        $enterpriseSlug = $request->header('X-Enterprise-Slug');
+        if (!$enterpriseSlug) {
+            return response()->json(['status' => 'error', 'message' => 'Enterprise header requerido'], 400);
+        }
+
+        $enterprise = Enterprise::where('slug', $enterpriseSlug)->first();
+        if (!$enterprise) {
+            return response()->json(['status' => 'error', 'message' => 'Empresa no encontrada'], 404);
+        }
+
+        // Verificar que el producto no tenga stock en entidades de esta empresa
+        $hasStock = $product->stock()
+            ->whereHas('entity', function ($q) use ($enterprise) {
+                $q->whereHas('branch', function ($bq) use ($enterprise) {
+                    $bq->where('enterprise_id', $enterprise->id);
+                });
+            })
+            ->where('quantity', '>', 0)
+            ->exists();
+
+        if ($hasStock) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No se puede desvincular: el artículo tiene stock en esta empresa'
+            ], 422);
+        }
+
+        $enterprise->products()->detach($product->id);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Artículo desvinculado exitosamente'
         ]);
     }
 }

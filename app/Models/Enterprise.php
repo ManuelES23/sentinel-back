@@ -95,6 +95,25 @@ class Enterprise extends Model
     }
 
     /**
+     * Productos vinculados a esta empresa
+     */
+    public function products(): BelongsToMany
+    {
+        return $this->belongsToMany(Product::class, 'enterprise_product')
+            ->withTimestamps();
+    }
+
+    /**
+     * Entidades accesibles por esta empresa (propias + compartidas).
+     */
+    public function accessibleEntities(): BelongsToMany
+    {
+        return $this->belongsToMany(Entity::class, 'enterprise_entity')
+            ->withPivot('access_level')
+            ->withTimestamps();
+    }
+
+    /**
      * Scope a query to only include active enterprises.
      */
     public function scopeActive($query)

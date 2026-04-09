@@ -83,6 +83,28 @@ class Entity extends Model
             ->withTimestamps();
     }
 
+    public function accessibleByEnterprises()
+    {
+        return $this->belongsToMany(Enterprise::class, 'enterprise_entity')
+            ->withPivot('access_level')
+            ->withTimestamps();
+    }
+
+    /**
+     * Empresa dueña: la empresa de la sucursal a la que pertenece.
+     */
+    public function ownerEnterprise()
+    {
+        return $this->hasOneThrough(
+            Enterprise::class,
+            Branch::class,
+            'id',           // branches.id
+            'id',           // enterprises.id
+            'branch_id',    // entities.branch_id
+            'enterprise_id' // branches.enterprise_id
+        );
+    }
+
     // Scopes
     public function scopeActive($query)
     {
@@ -107,5 +129,26 @@ class Entity extends Model
     public function scopeByType($query, $typeId)
     {
         return $query->where('entity_type_id', $typeId);
+    }
+
+    /**
+     * Entidades accesibles por una empresa (propias + compartidas).
+     */
+    public function scopeAccessibleBy($query, $enterpriseId)
+    {
+        return $query->whereHas('accessibleByEnterprises', function ($q) use ($enterpriseId) {
+            $q->where('enterprises.id', $enterpriseId);
+        });
+    }
+
+    /**
+     * Entidades con acceso de escritura para una empresa.
+     */
+    public function scopeWritableBy($query, $enterpriseId)
+    {
+        return $query->whereHas('accessibleByEnterprises', function ($q) use ($enterpriseId) {
+            $q->where('enterprises.id', $enterpriseId)
+              ->where('enterprise_entity.access_level', 'write');
+        });
     }
 }

@@ -293,6 +293,9 @@ Route::middleware('auth:sanctum')->group(function () {
                     ->parameters(['unidades' => 'unit']);
                 
                 // Artículos/Productos
+                Route::get('articulos/available-import', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'availableForImport']);
+                Route::post('articulos/import', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'importProducts']);
+                Route::delete('articulos/{product}/unlink', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'unlinkProduct']);
                 Route::get('articulos/{product}/stock', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'stock']);
                 Route::apiResource('articulos', App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class)
                     ->parameters(['articulos' => 'product']);
@@ -321,6 +324,10 @@ Route::middleware('auth:sanctum')->group(function () {
             
             // Módulo Operaciones (Movimientos)
             Route::prefix('operaciones')->group(function () {
+                // Entidades accesibles para selects
+                Route::get('entidades-accesibles', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'accessibleEntities']);
+                Route::get('entidades/{entity}/stock', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'entityStock']);
+
                 // Movimientos generales
                 Route::apiResource('movimientos', App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class)
                     ->parameters(['movimientos' => 'movement']);
@@ -564,6 +571,15 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('enterprises/{enterprise}/schedules', [App\Http\Controllers\Api\Admin\ScheduleController::class, 'forEnterprise']);
         Route::get('enterprises/{enterprise}/schedules/available', [App\Http\Controllers\Api\Admin\ScheduleController::class, 'availableForEnterprise']);
 
+        // Acceso de entidades entre empresas
+        Route::prefix('enterprises/{enterprise}/entity-access')->group(function () {
+            Route::get('/', [App\Http\Controllers\Api\Admin\EntityAccessController::class, 'index']);
+            Route::get('available', [App\Http\Controllers\Api\Admin\EntityAccessController::class, 'available']);
+            Route::post('share', [App\Http\Controllers\Api\Admin\EntityAccessController::class, 'share']);
+            Route::delete('{entity}', [App\Http\Controllers\Api\Admin\EntityAccessController::class, 'revoke']);
+            Route::patch('{entity}', [App\Http\Controllers\Api\Admin\EntityAccessController::class, 'updateAccess']);
+        });
+
         // Configuración de procesos de aprobación
         Route::prefix('approval-processes')->group(function () {
             Route::get('form-data', [App\Http\Controllers\Api\Admin\ApprovalConfigController::class, 'formData']);
@@ -584,6 +600,96 @@ Route::middleware('auth:sanctum')->group(function () {
     
     // Rutas específicas de Splendid by Porvenir
     Route::prefix('splendidbyporvenir')->group(function () {
+        
+        // =====================================================
+        // APLICACIÓN INVENTARIO (mismos controllers que SF)
+        // =====================================================
+        Route::prefix('inventario')->group(function () {
+            
+            // Módulo Catálogos
+            Route::prefix('catalogos')->group(function () {
+                Route::get('categorias/tree', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductCategoryController::class, 'tree']);
+                Route::apiResource('categorias', App\Http\Controllers\Api\SplendidFarms\Inventory\ProductCategoryController::class)
+                    ->parameters(['categorias' => 'category']);
+                
+                Route::get('unidades/convert', [App\Http\Controllers\Api\SplendidFarms\Inventory\UnitOfMeasureController::class, 'convert']);
+                Route::apiResource('unidades', App\Http\Controllers\Api\SplendidFarms\Inventory\UnitOfMeasureController::class)
+                    ->parameters(['unidades' => 'unit']);
+                
+                // Artículos con soporte de importación entre empresas
+                Route::get('articulos/available-import', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'availableForImport']);
+                Route::post('articulos/import', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'importProducts']);
+                Route::delete('articulos/{product}/unlink', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'unlinkProduct']);
+                Route::get('articulos/{product}/stock', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'stock']);
+                Route::apiResource('articulos', App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class)
+                    ->parameters(['articulos' => 'product']);
+                
+                Route::get('marcas/list', [App\Http\Controllers\Api\SplendidFarms\Inventory\BrandController::class, 'list']);
+                Route::apiResource('marcas', App\Http\Controllers\Api\SplendidFarms\Inventory\BrandController::class)
+                    ->parameters(['marcas' => 'brand']);
+                
+                Route::apiResource('tipos-carga', App\Http\Controllers\Api\SplendidFarms\Inventory\TipoCargaController::class)
+                    ->parameters(['tipos-carga' => 'tipoCarga']);
+                
+                Route::apiResource('tipos-movimiento', App\Http\Controllers\Api\SplendidFarms\Inventory\MovementTypeController::class)
+                    ->parameters(['tipos-movimiento' => 'type']);
+                
+                Route::post('recetas/{recipe}/items', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'addItem']);
+                Route::put('recetas/{recipe}/items/{item}', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'updateItem']);
+                Route::delete('recetas/{recipe}/items/{item}', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'deleteItem']);
+                Route::post('recetas/{recipe}/recalculate-cost', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'recalculateCost']);
+                Route::apiResource('recetas', App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class)
+                    ->parameters(['recetas' => 'recipe']);
+            });
+            
+            // Módulo Operaciones
+            Route::prefix('operaciones')->group(function () {
+                // Entidades accesibles para selects
+                Route::get('entidades-accesibles', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'accessibleEntities']);
+                Route::get('entidades/{entity}/stock', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'entityStock']);
+
+                Route::apiResource('movimientos', App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class)
+                    ->parameters(['movimientos' => 'movement']);
+                Route::post('movimientos/{movement}/approve', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'approve']);
+                Route::post('movimientos/{movement}/cancel', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'cancel']);
+            });
+            
+            // Módulo Compras
+            Route::prefix('compras')->group(function () {
+                Route::post('ordenes/{order}/submit', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'submit']);
+                Route::post('ordenes/{order}/approve', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'approve']);
+                Route::post('ordenes/{order}/reject', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'reject']);
+                Route::post('ordenes/{order}/send', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'send']);
+                Route::post('ordenes/{order}/confirm', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'confirm']);
+                Route::post('ordenes/{order}/cancel', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'cancel']);
+                Route::post('ordenes/{order}/duplicate', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'duplicate']);
+                Route::get('ordenes/{order}/pending-items', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'pendingItems']);
+                Route::post('ordenes/{order}/details', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'addDetail']);
+                Route::put('ordenes/{order}/details/{detail}', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'updateDetail']);
+                Route::delete('ordenes/{order}/details/{detail}', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'deleteDetail']);
+                Route::apiResource('ordenes', App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class)
+                    ->parameters(['ordenes' => 'order']);
+                
+                Route::post('recepciones/from-order/{order}', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'fromPurchaseOrder']);
+                Route::post('recepciones/{receipt}/submit', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'submit']);
+                Route::post('recepciones/{receipt}/complete', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'complete']);
+                Route::post('recepciones/{receipt}/cancel', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'cancel']);
+                Route::post('recepciones/{receipt}/details', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'addDetail']);
+                Route::put('recepciones/{receipt}/details/{detail}', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'updateDetail']);
+                Route::delete('recepciones/{receipt}/details/{detail}', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'deleteDetail']);
+                Route::apiResource('recepciones', App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class)
+                    ->parameters(['recepciones' => 'receipt']);
+            });
+            
+            // Módulo Reportes
+            Route::prefix('reportes')->group(function () {
+                Route::get('stock', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryReportController::class, 'stock']);
+                Route::get('movimientos', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryReportController::class, 'movements']);
+                Route::get('valorizado', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryReportController::class, 'valued']);
+                Route::get('alertas', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryReportController::class, 'alerts']);
+                Route::get('kardex/{product}', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryReportController::class, 'productKardex']);
+            });
+        });
         
         // Ventas
         Route::prefix('sales')->group(function () {
