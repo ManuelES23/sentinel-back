@@ -543,6 +543,15 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::apiResource('embarques', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\EmbarqueEmpaqueController::class)
                     ->parameters(['embarques' => 'embarque']);
 
+                // Pre-Embarques (escaneo QR)
+                Route::apiResource('pre-embarques', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\PreEmbarqueEmpaqueController::class)
+                    ->parameters(['pre-embarques' => 'preEmbarque'])
+                    ->except(['update']);
+                Route::post('pre-embarques/{preEmbarque}/scan', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\PreEmbarqueEmpaqueController::class, 'scanPallet']);
+                Route::delete('pre-embarques/{preEmbarque}/pallets/{produccion}', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\PreEmbarqueEmpaqueController::class, 'removePallet']);
+                Route::get('pre-embarques/{preEmbarque}/convertir-datos', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\PreEmbarqueEmpaqueController::class, 'convertirDatos']);
+                Route::post('pre-embarques/{preEmbarque}/completar', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\PreEmbarqueEmpaqueController::class, 'completar']);
+
                 // Consignatarios
                 Route::get('consignatarios/list', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ConsignatarioController::class, 'list']);
                 Route::apiResource('consignatarios', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ConsignatarioController::class)
