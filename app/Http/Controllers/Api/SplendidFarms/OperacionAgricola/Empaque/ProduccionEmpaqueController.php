@@ -196,6 +196,48 @@ class ProduccionEmpaqueController extends Controller
     }
 
     /**
+     * Toggle estado cuarto frío de un pallet.
+     */
+    public function toggleCuartoFrio(ProduccionEmpaque $produccion): JsonResponse
+    {
+        $produccion->update([
+            'en_cuarto_frio' => !$produccion->en_cuarto_frio,
+        ]);
+
+        $produccion->load($this->eagerLoad);
+
+        return response()->json([
+            'success' => true,
+            'message' => $produccion->en_cuarto_frio
+                ? 'Pallet marcado en cuarto frío'
+                : 'Pallet retirado de cuarto frío',
+            'data' => $produccion,
+        ]);
+    }
+
+    /**
+     * Toggle masivo de cuarto frío para múltiples pallets.
+     */
+    public function toggleCuartoFrioMasivo(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'ids' => 'required|array|min:1',
+            'ids.*' => 'exists:produccion_empaque,id',
+            'en_cuarto_frio' => 'required|boolean',
+        ]);
+
+        ProduccionEmpaque::whereIn('id', $validated['ids'])
+            ->update(['en_cuarto_frio' => $validated['en_cuarto_frio']]);
+
+        $label = $validated['en_cuarto_frio'] ? 'ingresados a' : 'retirados de';
+
+        return response()->json([
+            'success' => true,
+            'message' => count($validated['ids']) . " pallet(s) {$label} cuarto frío",
+        ]);
+    }
+
+    /**
      * Listar pallets cola (incompletos) para poder continuar al día siguiente.
      */
     public function colaPallets(Request $request): JsonResponse

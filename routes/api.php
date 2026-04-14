@@ -529,6 +529,8 @@ Route::middleware('auth:sanctum')->group(function () {
                 // Producción (cajas / pallets)
                 Route::get('produccion/next-pallet', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'nextPalletNumber']);
                 Route::get('produccion/cola-pallets', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'colaPallets']);
+                Route::post('produccion/{produccion}/toggle-cuarto-frio', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'toggleCuartoFrio']);
+                Route::post('produccion/toggle-cuarto-frio-masivo', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'toggleCuartoFrioMasivo']);
                 Route::apiResource('produccion', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class)
                     ->parameters(['produccion' => 'produccion']);
 
@@ -537,8 +539,14 @@ Route::middleware('auth:sanctum')->group(function () {
                     ->parameters(['rezaga' => 'rezaga']);
 
                 // Embarques
+                Route::get('embarques/pallets-disponibles', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\EmbarqueEmpaqueController::class, 'palletsDisponibles']);
                 Route::apiResource('embarques', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\EmbarqueEmpaqueController::class)
                     ->parameters(['embarques' => 'embarque']);
+
+                // Consignatarios
+                Route::get('consignatarios/list', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ConsignatarioController::class, 'list']);
+                Route::apiResource('consignatarios', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ConsignatarioController::class)
+                    ->parameters(['consignatarios' => 'consignatario']);
 
                 // Venta de Rezaga
                 Route::apiResource('venta-rezaga', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\VentaRezagaEmpaqueController::class)

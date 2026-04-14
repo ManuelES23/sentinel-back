@@ -1,5 +1,20 @@
 # SENTINEL 3.0 Backend - Copilot Instructions
 
+## Regla Obligatoria: Verificación Post-Cambio
+
+**Después de CADA cambio de código, SIEMPRE ejecutar verificación:**
+
+```bash
+# Verificar que no hay errores de sintaxis/compilación
+php artisan route:clear && php artisan config:clear && php artisan view:clear
+php -l <archivo_modificado>.php   # Lint del archivo modificado
+```
+
+- Si hay errores, **corregirlos inmediatamente** antes de responder al usuario.
+- Si se modificó una migración, verificar con `php artisan migrate --pretend`.
+- Si se modificó un modelo o controller, ejecutar `php -l` sobre cada archivo tocado.
+- NO dar por terminado un cambio sin haber validado que compila sin errores.
+
 ## Arquitectura General
 
 API REST multi-tenant con Laravel 12 + Sanctum. Jerarquía: **Empresa → Aplicación → Módulo → Submódulo**.
@@ -16,9 +31,9 @@ API REST multi-tenant con Laravel 12 + Sanctum. Jerarquía: **Empresa → Aplica
 
 | Recurso     | Cantidad |
 | ----------- | -------- |
-| Controllers | 48       |
-| Modelos     | 87       |
-| Events      | 13       |
+| Controllers | 76       |
+| Modelos     | 94       |
+| Events      | 14       |
 | Servicios   | 4        |
 
 ## Estructura de Controllers
@@ -39,7 +54,8 @@ app/Http/Controllers/Api/
 ├── Admin/
 │   ├── ActivityLogController.php         # Logs de actividad
 │   ├── ScheduleController.php            # Horarios globales (CRUD + asignación)
-│   └── ApprovalConfigController.php      # Configuración de procesos de aprobación
+│   ├── ApprovalConfigController.php      # Configuración de procesos de aprobación
+│   └── EntityAccessController.php        # Acceso cruzado de entidades entre empresas
 ├── GrupoEsplendido/
 │   └── RH/
 │       ├── DepartmentController.php      # Departamentos (jerárquico)
@@ -54,6 +70,7 @@ app/Http/Controllers/Api/
 └── SplendidFarms/
     ├── CropController.php                # Cultivos
     ├── AgricultureCycleController.php    # Ciclos agrícolas
+    ├── CalibreController.php             # Calibres
     ├── TemporadaController.php           # Temporadas
     ├── VariedadController.php            # Variedades
     ├── TipoVariedadController.php        # Tipos de variedad
@@ -65,7 +82,10 @@ app/Http/Controllers/Api/
     │   ├── EntityTypeController.php      # Tipos de entidad
     │   ├── EntityController.php          # Entidades
     │   ├── AreaController.php            # Áreas
-    │   └── SupplierController.php        # Proveedores
+    │   ├── SupplierController.php        # Proveedores
+    │   ├── ConvenioCompraController.php  # Convenios de compra
+    │   ├── LiquidacionConsignacionController.php # Liquidaciones consignación
+    │   └── TableroProductoresController.php      # Tablero de productores
     ├── Inventory/
     │   ├── BrandController.php           # Catálogo de marcas (CRUD + list)
     │   ├── ProductCategoryController.php # Categorías (tree jerárquico)
@@ -79,7 +99,7 @@ app/Http/Controllers/Api/
     │   ├── RecipeController.php          # Recetas / BOM (Bill of Materials)
     │   └── TipoCargaController.php       # Tipos de carga por cultivo
     ├── Accounting/
-    │   └── AccountPayableController.php  # Cuentas por pagar
+    │   └── AccountPayableController.php  # Cuentas por pagar (+ pagos + aplicaciones)
     └── OperacionAgricola/
         ├── TemporadaOAController.php     # Temporadas OA
         ├── CatalogoOAController.php      # Catálogos OA
@@ -101,7 +121,7 @@ app/Http/Controllers/Api/
         └── Empaque/                               # ⭐ Módulo Empaque (7 fases)
             ├── RecepcionEmpaqueController.php     # Recepciones de cosecha
             ├── ProcesoEmpaqueController.php       # Proceso (piso)
-            ├── ProduccionEmpaqueController.php    # Producción (cajas/pallets)
+            ├── ProduccionEmpaqueController.php    # Producción (cajas/pallets) + Cuarto Frío
             ├── RezagaEmpaqueController.php        # Rezaga (mermas)
             ├── EmbarqueEmpaqueController.php      # Embarques + detalles
             ├── VentaRezagaEmpaqueController.php   # Venta de rezaga + detalles
@@ -165,10 +185,12 @@ Department, Position, Employee, AttendanceRecord, VacationRequest,
 VacationBalance, WorkSchedule, EmployeeIncident, IncidentType
 ```
 
-### Administración Splendid Farms (6)
+### Administración Splendid Farms (6+)
 
 ```
-Branch, EntityType, Entity, Area, Supplier, SupplierContact
+Branch, EntityType, Entity, Area, Supplier, SupplierContact,
+ConvenioCompra, ConvenioCompraPrecio, LiquidacionConsignacion,
+LiquidacionConsignacionDetalle
 ```
 
 ### Agrícola Splendid Farms (15+)
@@ -195,20 +217,23 @@ EmbarqueEmpaque, EmbarqueEmpaqueDetalle, VentaRezagaEmpaque,
 VentaRezagaEmpaqueDetalle, CalidadEmpaque
 ```
 
-### Inventario Splendid Farms (18)
+### Inventario Splendid Farms (22)
 
 ```
-Brand, ProductCategory, Product, UnitOfMeasure,
+Brand, ProductCategory, Product, UnitOfMeasure, Calibre,
 InventoryMovement, InventoryMovementDetail, InventoryMovementType,
-InventoryItem, InventoryStock, InventoryKardex,
+InventoryItem, InventoryStock, InventoryKardex, InventoryCategory,
 PurchaseOrder, PurchaseOrderDetail, PurchaseReceipt, PurchaseReceiptDetail,
-Recipe, RecipeItem, MovementType, TipoCarga
+Recipe, RecipeItem, RecipeCalibre, RecipeCalibrePlu,
+MovementType, TipoCarga
 ```
 
-### Contabilidad Splendid Farms (2)
+### Contabilidad Splendid Farms (7)
 
 ```
-AccountPayable, AccountPayablePayment
+AccountPayable, AccountPayablePayment, PaymentApplication,
+LiquidacionConsignacion, LiquidacionConsignacionDetalle,
+ConvenioCompra, ConvenioCompraPrecio
 ```
 
 ### Notificaciones
@@ -328,6 +353,9 @@ Route::prefix('splendidfarms')->group(function () {
             Route::apiResource('recepciones', RecepcionEmpaqueController::class);
             Route::apiResource('proceso', ProcesoEmpaqueController::class);
             Route::apiResource('produccion', ProduccionEmpaqueController::class);
+            // Cuarto Frío
+            Route::post('produccion/{produccion}/toggle-cuarto-frio', ...);
+            Route::post('produccion/toggle-cuarto-frio-masivo', ...);
             Route::apiResource('rezaga', RezagaEmpaqueController::class);
             Route::apiResource('embarques', EmbarqueEmpaqueController::class);
             Route::apiResource('venta-rezaga', VentaRezagaEmpaqueController::class);
@@ -335,6 +363,9 @@ Route::prefix('splendidfarms')->group(function () {
         });
     });
 });
+
+// Admin - Acceso cruzado de entidades
+Route::prefix('admin/enterprises/{enterprise}/entity-access')->group(...);
 
 // Checador público (SIN AUTH)
 Route::prefix('checador')->group(...);  // qr, pin, status, server-time
@@ -422,16 +453,16 @@ public function list() {
 
 ## Eventos de Broadcast
 
-### Eventos Disponibles (13)
+### Eventos Disponibles (14)
 
 ```php
 // Modelos con broadcast automático
-AreaUpdated, BranchUpdated, CultivoUpdated, EntityTypeUpdated,
-EntityUpdated, LoteUpdated, ProductorUpdated, SalidaCampoUpdated,
-ZonaCultivoUpdated
+AreaUpdated, BranchUpdated, ConvenioCompraUpdated, CultivoUpdated,
+EntityTypeUpdated, EntityUpdated, LiquidacionConsignacionUpdated,
+LoteUpdated, ProductorUpdated, SalidaCampoUpdated, ZonaCultivoUpdated
 
 // Notificaciones y vacaciones
-UserNotification, VacationRequestUpdated, NotificationCreated
+UserNotification, VacationRequestUpdated
 
 // Evento genérico
 ModelBroadcastEvent
@@ -456,6 +487,41 @@ Flujo de 7 fases: **Recepciones → Proceso → Producción → Rezaga → Embar
 - VentaRezagaEmpaque tiene detalle (VentaRezagaEmpaqueDetalle)
 - Filtrado por `entity_id` (planta empacadora seleccionada en frontend)
 - Requiere seleccionar entidad (planta) antes de operar
+
+### Cuarto Frío (Producción)
+
+Control de ubicación física de pallets en cuarto frío:
+
+```php
+// ProduccionEmpaque tiene campo `en_cuarto_frio` (boolean, default true)
+// Toggle individual
+Route::post('produccion/{produccion}/toggle-cuarto-frio', [ProduccionEmpaqueController::class, 'toggleCuartoFrio']);
+// Toggle masivo
+Route::post('produccion/toggle-cuarto-frio-masivo', [ProduccionEmpaqueController::class, 'toggleCuartoFrioMasivo']);
+// Masivo espera: { ids: [1,2,3], en_cuarto_frio: true|false }
+```
+
+## Acceso Cruzado de Entidades (Cross-Enterprise)
+
+Permite que una empresa acceda a entidades (bodegas/plantas) de otra:
+
+```php
+// Tabla pivot: enterprise_entity (enterprise_id, entity_id, access_level)
+// access_level: 'read' | 'write'
+
+// EntityAccessController (Admin)
+Route::prefix('admin/enterprises/{enterprise}/entity-access')->group(function () {
+    Route::get('/', ...);           // Listar entidades accesibles
+    Route::get('/available', ...);  // Entidades disponibles para compartir
+    Route::post('/share', ...);     // Compartir entidad
+    Route::delete('/{entity}', ...);// Revocar acceso
+    Route::patch('/{entity}', ...); // Cambiar nivel de acceso
+});
+
+// Operaciones: entidades accesibles para inventario
+Route::get('operaciones/entidades-accesibles', ...);
+Route::get('operaciones/entidades/{entity}/stock', ...);
+```
 
 ## Cálculo de Vacaciones LFT México
 
@@ -502,15 +568,157 @@ $timestamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
 & "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe" -u root -pMasterKey sentinel < "backups/sentinel_backup_YYYY-MM-DD_HH-mm-ss.sql"
 ```
 
+## Skills Disponibles
+
+| Skill | Archivo | Uso |
+|-------|---------|-----|
+| Backend Performance | `.github/skills/backend-performance/SKILL.md` | Optimización de queries, N+1, caché, índices |
+| Code Audit & Security | `.github/skills/code-audit-security/SKILL.md` | OWASP, validación, SQL injection, XSS, multi-tenant |
+| Laravel CRUD Workflow | `.github/skills/laravel-crud-workflow/SKILL.md` | Crear recursos CRUD completos paso a paso |
+
+## Estándares de Calidad de Código
+
+### Reglas de Performance (Obligatorias)
+
+```php
+// ✅ SIEMPRE eager loading con columnas específicas
+Model::with(['relation:id,name,code'])->get();
+
+// ✅ SIEMPRE paginación en index() excepto endpoint list()
+$query->paginate($request->per_page ?? 15);
+
+// ✅ SIEMPRE filtros condicionales con when()
+$query->when($request->search, fn($q, $s) => $q->where('name', 'like', "%{$s}%"));
+
+// ❌ NUNCA Model::all() en index() de tablas grandes
+// ❌ NUNCA lazy loading en colecciones (causa N+1)
+// ❌ NUNCA queries en loops
+```
+
+### Reglas de Seguridad (Obligatorias)
+
+```php
+// ✅ SIEMPRE validar inputs con $request->validate()
+$validated = $request->validate([...]);
+$record = Model::create($validated);
+
+// ✅ SIEMPRE findOrFail() para evitar enumeration
+$record = Model::findOrFail($id);
+
+// ✅ SIEMPRE $fillable explícito en modelos (nunca $guarded = [])
+// ✅ SIEMPRE exists:table,id para validar FKs
+// ✅ SIEMPRE validar uploads: mimes, max size
+// ❌ NUNCA $request->all() sin validación previa
+// ❌ NUNCA concatenar input en queries raw
+// ❌ NUNCA usar nombre original de archivos subidos
+```
+
+### Reglas de Auditoría
+
+```php
+// ✅ Todos los modelos de negocio DEBEN usar trait Loggable
+use HasFactory, Loggable, SoftDeletes;
+
+// ✅ SoftDeletes en entidades principales (datos no se pierden)
+// ✅ Headers X- para contexto en ActivityLog
+// ✅ No loggear campos sensibles (password, tokens)
+```
+
+### Estructura de Controller Estándar
+
+```php
+class ExampleController extends Controller
+{
+    // 1. index()  → Listar con paginación + filtros + eager loading
+    // 2. list()   → Lista simple para selects (solo id, code, name)
+    // 3. store()  → Crear con validate() + auto-code + load relations
+    // 4. show()   → Detalle con eager loading
+    // 5. update() → Actualizar con validate('sometimes') + load relations
+    // 6. destroy()→ Eliminar con verificación de dependencias
+}
+```
+
+### Formato de Respuesta JSON (Consistente)
+
+```php
+// Éxito con datos
+return response()->json([
+    'success' => true,
+    'message' => 'Operación exitosa',
+    'data' => $resource
+], 200); // 201 para store
+
+// Éxito con paginación
+return response()->json([
+    'success' => true,
+    'data' => $paginated->items(),
+    'meta' => [
+        'total' => $paginated->total(),
+        'per_page' => $paginated->perPage(),
+        'current_page' => $paginated->currentPage(),
+        'last_page' => $paginated->lastPage(),
+    ]
+]);
+
+// Error
+return response()->json([
+    'status' => 'error',
+    'message' => 'Descripción del error'
+], 404|403|422);
+```
+
+### Convenciones de Migraciones
+
+```php
+// ✅ Índices obligatorios
+$table->index('enterprise_id');                  // FKs frecuentes
+$table->index('is_active');                      // Filtros booleanos
+$table->index('code');                           // Búsqueda por código
+$table->index(['enterprise_id', 'is_active']);   // Queries compuestas multi-tenant
+
+// ✅ SoftDeletes siempre en entidades principales
+$table->softDeletes();
+
+// ✅ Precision en decimales financieros
+$table->decimal('price', 12, 2);
+$table->decimal('quantity', 12, 4);
+```
+
 ## Checklist para Nuevos Recursos
 
-1. [ ] Crear migración: `php artisan make:migration create_recursos_table`
-2. [ ] Crear modelo con `Loggable` trait y `SoftDeletes` si aplica
+1. [ ] Crear migración con índices, FKs, softDeletes
+2. [ ] Crear modelo con `Loggable`, `SoftDeletes`, `$fillable`, `$casts`
 3. [ ] Crear controller en carpeta de empresa correspondiente
 4. [ ] Agregar rutas en `routes/api.php` bajo el prefijo correcto
-5. [ ] Definir `$fillable` y `$casts` en el modelo
+5. [ ] Validación completa en `store()` y `update()`
 6. [ ] Auto-generar código con `withTrashed()` si tiene campo `code`
-7. [ ] Endpoint `list` para selects si es catálogo
-8. [ ] Crear evento de broadcast si requiere tiempo real
-9. [ ] Usar `NotificationService` para notificar cambios importantes
-10. [ ] Validar FK con `exists:tabla,id` en store/update
+7. [ ] Eager loading con columnas específicas en `index()` y `show()`
+8. [ ] Paginación en `index()`, endpoint `list()` sin paginar para selects
+9. [ ] Crear evento de broadcast si requiere tiempo real
+10. [ ] Usar `NotificationService` para notificar cambios importantes
+11. [ ] Validar FK con `exists:tabla,id` en store/update
+12. [ ] Verificar dependencias antes de `destroy()`
+13. [ ] Uploads: validar tipo, tamaño, usar nombre hasheado
+
+## Checklist de Code Review
+
+### Performance
+- [ ] ¿Eager loading en todas las relaciones usadas?
+- [ ] ¿Paginación en index()?
+- [ ] ¿Select de columnas específicas en with()?
+- [ ] ¿Filtros con when() para queries condicionales?
+- [ ] ¿Índices en migraciones para FKs y filtros?
+
+### Seguridad
+- [ ] ¿Todos los inputs validados con validate()?
+- [ ] ¿$validated usado en create/update?
+- [ ] ¿FKs validadas con exists:table,id?
+- [ ] ¿findOrFail() en lugar de find()?
+- [ ] ¿Uploads validados (mimes, max)?
+- [ ] ¿$fillable definido (no $guarded = [])?
+
+### Auditoría
+- [ ] ¿Modelo usa trait Loggable?
+- [ ] ¿SoftDeletes en entidad principal?
+- [ ] ¿Respuesta JSON en formato estándar?
+- [ ] ¿Headers X- usados para contexto?
