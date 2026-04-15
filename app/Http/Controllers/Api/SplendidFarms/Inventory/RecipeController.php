@@ -88,6 +88,7 @@ class RecipeController extends Controller
             'slug' => 'nullable|string|max:255|unique:recipes,slug',
             'description' => 'nullable|string',
             'category_id' => 'nullable|exists:product_categories,id',
+            'cultivo_id' => 'nullable|exists:cultivos,id',
             'output_quantity' => 'nullable|numeric|min:0.01',
             'output_unit_id' => 'nullable|exists:units_of_measure,id',
             'peso_pieza' => 'nullable|numeric|min:0',
@@ -125,7 +126,8 @@ class RecipeController extends Controller
             // Generar código automático de receta
             if (empty($validated['code'])) {
                 $prefix = 'REC';
-                $lastRecipe = Recipe::where('code', 'like', $prefix . '-%')
+                $lastRecipe = Recipe::withTrashed()
+                    ->where('code', 'like', $prefix . '-%')
                     ->orderByRaw('CAST(SUBSTRING(code, ' . (strlen($prefix) + 2) . ') AS UNSIGNED) DESC')
                     ->first();
 
