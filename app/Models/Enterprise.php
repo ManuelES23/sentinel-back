@@ -15,6 +15,13 @@ class Enterprise extends Model
     protected $fillable = [
         'slug',
         'name',
+        'razon_social',
+        'rfc',
+        'direccion',
+        'ciudad',
+        'pais',
+        'agente_aduana_mx',
+        'telefono',
         'description',
         'logo',
         'domain',

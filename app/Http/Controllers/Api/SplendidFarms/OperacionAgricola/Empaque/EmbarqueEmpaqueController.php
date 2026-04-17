@@ -154,6 +154,9 @@ class EmbarqueEmpaqueController extends Controller
             'proceso.etapa.variedad:id,nombre',
             'proceso.recepcion.salidaCampo.variedad:id,nombre',
             'variedad:id,nombre',
+            'recipe:id,name,code,output_product_id',
+            'recipe.outputProduct:id,name,brand_id',
+            'recipe.outputProduct.brand:id,name,code',
         ])->whereIn('id', $palletIds)->get();
 
         // Calculate totals from actual pallet data
@@ -173,6 +176,11 @@ class EmbarqueEmpaqueController extends Controller
                     ?? $proceso?->recepcion?->salidaCampo?->variedad?->nombre;
                 $lote = $proceso?->lote?->nombre ?? $proceso?->lote?->numero_lote;
 
+                // Recipe-based data
+                $marca = $pallet->recipe?->outputProduct?->brand?->name;
+                $loteProductoTerminado = $pallet->lote_producto_terminado;
+                $presentacion = $pallet->tipo_empaque;
+
                 $embarque->detalles()->create([
                     'produccion_id' => $pallet->id,
                     'numero_pallet' => $pallet->numero_pallet,
@@ -180,6 +188,9 @@ class EmbarqueEmpaqueController extends Controller
                     'productor' => $productorName,
                     'variedad' => $variedad,
                     'lote' => $lote,
+                    'marca' => $marca,
+                    'lote_producto_terminado' => $loteProductoTerminado,
+                    'presentacion' => $presentacion,
                     'tipo_empaque' => $pallet->tipo_empaque,
                     'etiqueta' => $pallet->etiqueta,
                     'calibre' => $pallet->calibre,
@@ -288,10 +299,18 @@ class EmbarqueEmpaqueController extends Controller
     private function generarFolio(array $data): string
     {
         $prefix = $data['tipo_venta'] === 'exportacion' ? 'EXP' : 'NAC';
-        $count = EmbarqueEmpaque::where('temporada_id', $data['temporada_id'])
-            ->where('entity_id', $data['entity_id'])
-            ->count() + 1;
         $entityId = str_pad($data['entity_id'], 2, '0', STR_PAD_LEFT);
-        return "{$prefix}-{$entityId}-" . str_pad($count, 4, '0', STR_PAD_LEFT);
+        $pattern = "{$prefix}-{$entityId}-%";
+
+        $lastFolio = EmbarqueEmpaque::withTrashed()
+            ->where('temporada_id', $data['temporada_id'])
+            ->where('entity_id', $data['entity_id'])
+            ->where('folio_embarque', 'like', $pattern)
+            ->orderByDesc('folio_embarque')
+            ->value('folio_embarque');
+
+        $nextNumber = $lastFolio ? (int) substr($lastFolio, -4) + 1 : 1;
+
+        return "{$prefix}-{$entityId}-" . str_pad($nextNumber, 4, '0', STR_PAD_LEFT);
     }
 }

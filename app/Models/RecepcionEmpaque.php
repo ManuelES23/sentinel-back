@@ -17,13 +17,15 @@ class RecepcionEmpaque extends Model
         'temporada_id', 'entity_id', 'salida_campo_id', 'folio_recepcion',
         'fecha_recepcion', 'hora_recepcion', 'productor_id', 'lote_id',
         'etapa_id', 'zona_cultivo_id', 'tipo_carga_id', 'cantidad_recibida',
-        'peso_recibido_kg', 'temperatura', 'transportista', 'vehiculo',
+        'peso_recibido_kg', 'peso_bascula', 'folio_ticket_bascula', 'clave_we', 'lote_origen',
+        'temperatura', 'transportista', 'vehiculo',
         'chofer', 'es_batanga', 'status', 'observaciones', 'recibido_por', 'created_by',
     ];
 
     protected $casts = [
         'cantidad_recibida' => 'integer',
         'peso_recibido_kg' => 'decimal:2',
+        'peso_bascula' => 'decimal:2',
         'temperatura' => 'decimal:2',
         'fecha_recepcion' => 'date:Y-m-d',
         'es_batanga' => 'boolean',

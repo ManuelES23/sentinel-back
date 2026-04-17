@@ -15,7 +15,7 @@ class RezagaEmpaque extends Model
 
     protected $fillable = [
         'temporada_id', 'entity_id', 'proceso_id', 'folio_rezaga',
-        'tipo_rezaga', 'fecha', 'cantidad_kg', 'motivo',
+        'tipo_rezaga', 'subtipo_rezaga', 'fecha', 'cantidad_kg', 'motivo',
         'status', 'observaciones', 'created_by',
     ];
 

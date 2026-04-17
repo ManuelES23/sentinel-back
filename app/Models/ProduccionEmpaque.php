@@ -16,15 +16,17 @@ class ProduccionEmpaque extends Model
     protected $fillable = [
         'temporada_id', 'entity_id', 'proceso_id', 'recipe_id', 'folio_produccion',
         'fecha_produccion', 'turno', 'variedad_id', 'linea_empaque',
-        'numero_pallet', 'pallet_qr_id', 'total_cajas', 'peso_neto_kg', 'tipo_empaque',
-        'etiqueta', 'calibre', 'categoria', 'status', 'is_cola', 'en_cuarto_frio', 'observaciones', 'created_by',
+        'numero_pallet', 'lote_producto_terminado', 'pallet_qr_id', 'total_cajas', 'cajas_objetivo', 'peso_neto_kg', 'tipo_empaque',
+        'etiqueta', 'calibre', 'categoria', 'status', 'is_cola', 'is_mixto', 'en_cuarto_frio', 'observaciones', 'created_by',
     ];
 
     protected $casts = [
         'total_cajas' => 'integer',
+        'cajas_objetivo' => 'integer',
         'peso_neto_kg' => 'decimal:2',
         'fecha_produccion' => 'date:Y-m-d',
         'is_cola' => 'boolean',
+        'is_mixto' => 'boolean',
         'en_cuarto_frio' => 'boolean',
     ];
 
@@ -36,6 +38,7 @@ class ProduccionEmpaque extends Model
     public function creador() { return $this->belongsTo(User::class, 'created_by'); }
     public function embarqueDetalles() { return $this->hasMany(EmbarqueEmpaqueDetalle::class, 'produccion_id'); }
     public function evaluacionesCalidad() { return $this->morphMany(CalidadEmpaque::class, 'evaluable'); }
+    public function detalles() { return $this->hasMany(ProduccionEmpaqueDetalle::class, 'produccion_id')->orderBy('numero_entrada'); }
 
     public function scopeByTemporada($query, $id) { return $query->where('temporada_id', $id); }
     public function scopeByStatus($query, $s) { return $query->where('status', $s); }

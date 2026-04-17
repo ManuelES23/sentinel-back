@@ -28,6 +28,8 @@ class SalidaCampoCosecha extends Model
         'hora_salida',
         'cantidad',
         'peso_neto_kg',
+        'peso_bascula',
+        'folio_ticket_bascula',
         'folio_salida',
         'vehiculo',
         'chofer',
@@ -41,6 +43,7 @@ class SalidaCampoCosecha extends Model
     protected $casts = [
         'cantidad' => 'integer',
         'peso_neto_kg' => 'decimal:2',
+        'peso_bascula' => 'decimal:2',
         'es_batanga' => 'boolean',
         'eliminado' => 'boolean',
         'fecha' => 'date:Y-m-d',
@@ -98,6 +101,11 @@ class SalidaCampoCosecha extends Model
     public function creador(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+
+    public function recepciones(): HasMany
+    {
+        return $this->hasMany(RecepcionEmpaque::class, 'salida_campo_id');
     }
 
     public function calidadInspecciones(): HasMany

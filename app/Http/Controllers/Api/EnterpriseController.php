@@ -325,4 +325,28 @@ class EnterpriseController extends Controller
             'data' => $applications
         ]);
     }
+
+    /**
+     * Get enterprise profile data (for embarque manifest auto-fill).
+     */
+    public function profile(Request $request, $id): JsonResponse
+    {
+        $enterprise = is_numeric($id)
+            ? Enterprise::findOrFail($id)
+            : Enterprise::where('slug', $id)->firstOrFail();
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'razonSocial' => $enterprise->razon_social,
+                'rfc' => $enterprise->rfc,
+                'direccion' => $enterprise->direccion,
+                'ciudad' => $enterprise->ciudad,
+                'pais' => $enterprise->pais,
+                'agenteAduanaMx' => $enterprise->agente_aduana_mx,
+                'telefono' => $enterprise->telefono,
+                'logoUrl' => $enterprise->logo_url,
+            ],
+        ]);
+    }
 }

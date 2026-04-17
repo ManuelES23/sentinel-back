@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque;
 
 use App\Http\Controllers\Controller;
 use App\Models\RezagaEmpaque;
+use App\Models\ProcesoEmpaque;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -11,11 +12,58 @@ class RezagaEmpaqueController extends Controller
 {
     private array $eagerLoad = [
         'entity:id,name,code',
-        'proceso:id,folio_proceso,productor_id,lote_id',
+        'proceso:id,folio_proceso,productor_id,lote_id,etapa_id',
         'proceso.productor:id,nombre,apellido',
         'proceso.lote:id,nombre,numero_lote',
+        'proceso.etapa:id,nombre,variedad_id',
+        'proceso.etapa.variedad:id,nombre,cultivo_id',
+        'proceso.etapa.variedad.cultivo:id,nombre',
         'creador:id,name',
     ];
+
+    /**
+     * GET /rezaga/procesos-del-dia — Procesos que fueron procesados en una fecha dada
+     */
+    public function procesosDelDia(Request $request): JsonResponse
+    {
+        $request->validate([
+            'fecha' => 'required|date',
+            'temporada_id' => 'required|exists:temporadas,id',
+        ]);
+
+        $query = ProcesoEmpaque::with([
+            'productor:id,nombre,apellido',
+            'lote:id,nombre,numero_lote',
+            'etapa:id,nombre,variedad_id',
+            'etapa.variedad:id,nombre,cultivo_id',
+            'etapa.variedad.cultivo:id,nombre',
+        ])
+        ->where('temporada_id', $request->temporada_id)
+        ->whereDate('fecha_proceso', $request->fecha);
+
+        if ($request->filled('entity_id')) {
+            $query->where('entity_id', $request->entity_id);
+        }
+
+        $procesos = $query->orderByDesc('id')->get();
+
+        // Attach existing rezagas for each proceso on this date
+        $procesoIds = $procesos->pluck('id');
+        $rezagas = RezagaEmpaque::with($this->eagerLoad)
+            ->whereIn('proceso_id', $procesoIds)
+            ->whereDate('fecha', $request->fecha)
+            ->orderByDesc('id')
+            ->get()
+            ->groupBy('proceso_id');
+
+        $result = $procesos->map(function ($p) use ($rezagas) {
+            $data = $p->toArray();
+            $data['rezagas_del_dia'] = $rezagas->get($p->id, collect())->values();
+            return $data;
+        });
+
+        return response()->json(['success' => true, 'data' => $result]);
+    }
 
     public function index(Request $request): JsonResponse
     {
@@ -52,7 +100,8 @@ class RezagaEmpaqueController extends Controller
             'temporada_id' => 'required|exists:temporadas,id',
             'entity_id' => 'required|exists:entities,id',
             'proceso_id' => 'required|exists:proceso_empaque,id',
-            'tipo_rezaga' => 'required|in:descarte,merma,segunda,basura',
+            'tipo_rezaga' => 'required|in:produccion,cuarto_frio',
+            'subtipo_rezaga' => 'required|in:hoja,producto',
             'fecha' => 'required|date',
             'cantidad_kg' => 'required|numeric|min:0.01',
             'motivo' => 'nullable|string',
@@ -86,7 +135,8 @@ class RezagaEmpaqueController extends Controller
         $validated = $request->validate([
             'entity_id' => 'sometimes|exists:entities,id',
             'proceso_id' => 'nullable|exists:proceso_empaque,id',
-            'tipo_rezaga' => 'sometimes|in:descarte,merma,segunda,basura',
+            'tipo_rezaga' => 'sometimes|in:produccion,cuarto_frio',
+            'subtipo_rezaga' => 'sometimes|in:hoja,producto',
             'fecha' => 'sometimes|date',
             'cantidad_kg' => 'sometimes|numeric|min:0.01',
             'motivo' => 'nullable|string',

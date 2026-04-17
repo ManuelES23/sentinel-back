@@ -13,7 +13,8 @@ class EmbarqueEmpaqueDetalle extends Model
 
     protected $fillable = [
         'embarque_id', 'produccion_id', 'numero_pallet', 'folio_produccion',
-        'productor', 'variedad', 'lote', 'tipo_empaque', 'etiqueta',
+        'productor', 'variedad', 'lote', 'marca', 'lote_producto_terminado',
+        'presentacion', 'tipo_empaque', 'etiqueta',
         'calibre', 'fecha_produccion', 'cajas', 'peso_kg', 'is_cola',
         'posicion_carga',
     ];

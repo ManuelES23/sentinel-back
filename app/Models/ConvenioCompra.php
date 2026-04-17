@@ -27,6 +27,7 @@ class ConvenioCompra extends Model
         'fecha_fin',
         'notas',
         'porcentaje_rezaga',
+        'calculo_por_kilos',
         'created_by',
     ];
 
@@ -34,6 +35,7 @@ class ConvenioCompra extends Model
         'fecha_inicio' => 'date',
         'fecha_fin' => 'date',
         'porcentaje_rezaga' => 'decimal:2',
+        'calculo_por_kilos' => 'boolean',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
         'deleted_at' => 'datetime',

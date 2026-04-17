@@ -74,6 +74,10 @@ class RecepcionEmpaqueController extends Controller
             'tipo_carga_id' => 'nullable|exists:tipos_carga,id',
             'cantidad_recibida' => 'nullable|integer|min:1',
             'peso_recibido_kg' => 'nullable|numeric|min:0',
+            'peso_bascula' => 'nullable|numeric|min:0',
+            'folio_ticket_bascula' => 'nullable|string|max:100',
+            'clave_we' => 'nullable|string|max:100',
+            'lote_origen' => 'nullable|string|max:100',
             'vehiculo' => 'nullable|string|max:150',
             'chofer' => 'nullable|string|max:150',
             'es_batanga' => 'nullable|boolean',
@@ -100,6 +104,14 @@ class RecepcionEmpaqueController extends Controller
                 $validated['chofer'] = $salida->chofer;
                 $validated['es_batanga'] = $salida->es_batanga;
                 $validated['folio_recepcion'] = $salida->folio_salida;
+
+                // Copiar datos de báscula de la salida si no se proporcionan
+                if (empty($validated['peso_bascula']) && $salida->peso_bascula) {
+                    $validated['peso_bascula'] = $salida->peso_bascula;
+                }
+                if (empty($validated['folio_ticket_bascula']) && $salida->folio_ticket_bascula) {
+                    $validated['folio_ticket_bascula'] = $salida->folio_ticket_bascula;
+                }
 
                 // Remove soft-deleted recepcion with same folio to avoid unique constraint
                 RecepcionEmpaque::onlyTrashed()
@@ -198,6 +210,10 @@ class RecepcionEmpaqueController extends Controller
             'tipo_carga_id' => 'sometimes|exists:tipos_carga,id',
             'cantidad_recibida' => 'sometimes|integer|min:1',
             'peso_recibido_kg' => 'nullable|numeric|min:0',
+            'peso_bascula' => 'nullable|numeric|min:0',
+            'folio_ticket_bascula' => 'nullable|string|max:100',
+            'clave_we' => 'nullable|string|max:100',
+            'lote_origen' => 'nullable|string|max:100',
             'vehiculo' => 'nullable|string|max:150',
             'chofer' => 'nullable|string|max:150',
             'es_batanga' => 'nullable|boolean',

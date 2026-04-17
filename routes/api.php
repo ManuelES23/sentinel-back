@@ -82,6 +82,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Rutas de empresas
     Route::apiResource('enterprises', App\Http\Controllers\Api\EnterpriseController::class);
     Route::get('enterprises/{enterprise}/applications', [App\Http\Controllers\Api\EnterpriseController::class, 'applications']);
+    Route::get('enterprises/{enterprise}/profile', [App\Http\Controllers\Api\EnterpriseController::class, 'profile']);
     
     // Rutas de aplicaciones
     Route::prefix('applications')->group(function () {
@@ -528,13 +529,17 @@ Route::middleware('auth:sanctum')->group(function () {
 
                 // Producción (cajas / pallets)
                 Route::get('produccion/next-pallet', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'nextPalletNumber']);
+                Route::get('produccion/next-cola', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'nextColaNumber']);
                 Route::get('produccion/cola-pallets', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'colaPallets']);
+                Route::post('produccion/buscar-qr', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'buscarPorQr']);
+                Route::post('produccion/{produccion}/completar-cola', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'completarCola']);
                 Route::post('produccion/{produccion}/toggle-cuarto-frio', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'toggleCuartoFrio']);
                 Route::post('produccion/toggle-cuarto-frio-masivo', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'toggleCuartoFrioMasivo']);
                 Route::apiResource('produccion', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class)
                     ->parameters(['produccion' => 'produccion']);
 
                 // Rezaga (mermas / descarte)
+                Route::get('rezaga/procesos-del-dia', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\RezagaEmpaqueController::class, 'procesosDelDia']);
                 Route::apiResource('rezaga', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\RezagaEmpaqueController::class)
                     ->parameters(['rezaga' => 'rezaga']);
 
