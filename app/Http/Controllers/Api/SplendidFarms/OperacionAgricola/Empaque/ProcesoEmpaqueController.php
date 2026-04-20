@@ -3,9 +3,13 @@
 namespace App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque;
 
 use App\Http\Controllers\Controller;
+use App\Models\Entity;
 use App\Models\ProcesoEmpaque;
 use App\Models\RecepcionEmpaque;
+use App\Models\RezagaEmpaque;
+use App\Models\Submodule;
 use App\Models\TipoCarga;
+use App\Models\UserSubmodulePermission;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -15,7 +19,8 @@ class ProcesoEmpaqueController extends Controller
     private array $eagerLoad = [
         'entity:id,name,code',
         'recepcion:id,folio_recepcion,fecha_recepcion,cantidad_recibida,peso_recibido_kg,salida_campo_id',
-        'recepcion.salidaCampo:id,folio_salida',
+        'recepcion.salidaCampo:id,folio_salida,variedad_id',
+        'recepcion.salidaCampo.variedad:id,nombre',
         'tipoCarga:id,nombre,peso_estimado_kg',
         'productor:id,nombre,apellido',
         'lote:id,nombre,numero_lote,zona_cultivo_id',
@@ -72,7 +77,7 @@ class ProcesoEmpaqueController extends Controller
             'recepcion.salidaCampo:id,variedad_id',
             'recepcion.salidaCampo.variedad:id,nombre',
             'tipoCarga:id,nombre,peso_estimado_kg',
-        ])->where('status', 'en_proceso');
+        ])->whereIn('status', ['en_proceso', 'listo_produccion']);
 
         if ($request->filled('temporada_id')) {
             $query->byTemporada($request->temporada_id);
@@ -87,9 +92,30 @@ class ProcesoEmpaqueController extends Controller
     }
 
     /**
-     * GET /proceso/piso — Piso = recepciones con cantidad disponible (recibido - en_proceso - procesado)
+     * GET /proceso/piso — Piso = items disponibles para procesar
+     * Si la entidad usa_hidrotermico → muestra ProcesoEmpaque con status listo_produccion (vienen de lavado)
+     * Si no → muestra recepciones con cantidad disponible (flujo directo)
      */
     public function piso(Request $request): JsonResponse
+    {
+        // Determine if entity uses hydrothermal
+        $usaHidrotermico = false;
+        if ($request->filled('entity_id')) {
+            $entity = Entity::find($request->entity_id);
+            $usaHidrotermico = $entity && $entity->usa_hidrotermico;
+        }
+
+        if ($usaHidrotermico) {
+            return $this->pisoFromLavado($request);
+        }
+
+        return $this->pisoFromRecepciones($request);
+    }
+
+    /**
+     * Piso directo: recepciones con cantidad disponible (sin lavado)
+     */
+    private function pisoFromRecepciones(Request $request): JsonResponse
     {
         $query = RecepcionEmpaque::with($this->recepcionEagerLoad)
             ->where('status', '!=', 'rechazada');
@@ -105,9 +131,8 @@ class ProcesoEmpaqueController extends Controller
 
         $piso = [];
         foreach ($recepciones as $rec) {
-            // Sum quantities in active procesos for this recepcion
             $enProceso = ProcesoEmpaque::where('recepcion_id', $rec->id)
-                ->whereIn('status', ['en_proceso', 'procesado'])
+                ->whereIn('status', ['lavando', 'lavado', 'hidrotermico', 'enfriando', 'listo_produccion', 'en_proceso', 'procesado'])
                 ->sum('cantidad_entrada');
 
             $disponible = $rec->cantidad_recibida - $enProceso;
@@ -128,6 +153,7 @@ class ProcesoEmpaqueController extends Controller
                     'cantidad_en_proceso' => (int) $enProceso,
                     'cantidad_disponible' => $disponible,
                     'peso_disponible_kg' => round($disponible * $pesoUnitario, 2),
+                    'source' => 'recepcion',
                 ];
             }
         }
@@ -136,9 +162,100 @@ class ProcesoEmpaqueController extends Controller
     }
 
     /**
-     * POST /proceso/mover-a-proceso — Move from piso (recepcion) to procesando
+     * Piso desde lavado: ProcesoEmpaque con status listo_produccion
+     */
+    private function pisoFromLavado(Request $request): JsonResponse
+    {
+        $query = ProcesoEmpaque::with($this->eagerLoad)
+            ->where('status', 'listo_produccion');
+
+        if ($request->filled('temporada_id')) {
+            $query->byTemporada($request->temporada_id);
+        }
+        if ($request->filled('entity_id')) {
+            $query->where('entity_id', $request->entity_id);
+        }
+
+        $procesos = $query->orderByDesc('fecha_listo_produccion')->orderByDesc('id')->get();
+
+        $piso = [];
+        foreach ($procesos as $p) {
+            $pesoUnitario = $p->tipoCarga ? (float) $p->tipoCarga->peso_estimado_kg : 0;
+
+            $piso[] = [
+                'proceso_id' => $p->id,
+                'recepcion_id' => $p->recepcion_id,
+                'folio' => $p->folio_proceso,
+                'fecha_recepcion' => $p->fecha_entrada,
+                'productor' => $p->productor,
+                'lote' => $p->lote,
+                'etapa' => $p->etapa,
+                'tipo_carga' => $p->tipoCarga,
+                'entity' => $p->entity,
+                'cantidad_recibida' => $p->cantidad_entrada,
+                'cantidad_en_proceso' => 0,
+                'cantidad_disponible' => $p->cantidad_entrada,
+                'peso_disponible_kg' => round($p->cantidad_entrada * $pesoUnitario, 2),
+                'source' => 'lavado',
+            ];
+        }
+
+        return response()->json(['success' => true, 'data' => $piso]);
+    }
+
+    /**
+     * POST /proceso/mover-a-proceso — Move to procesando
+     * Supports two flows:
+     * - proceso_id: promote from listo_produccion to en_proceso (hydrothermal flow)
+     * - recepcion_id + cantidad: create new proceso from recepcion (direct flow)
      */
     public function store(Request $request): JsonResponse
+    {
+        // Flow from lavado: promote existing proceso
+        if ($request->filled('proceso_id')) {
+            return $this->promoverFromLavado($request);
+        }
+
+        // Flow directo: create new proceso from recepcion
+        return $this->crearFromRecepcion($request);
+    }
+
+    /**
+     * Promote a listo_produccion proceso to en_proceso
+     */
+    private function promoverFromLavado(Request $request): JsonResponse
+    {
+        $request->validate([
+            'proceso_id' => 'required|exists:procesos_empaque,id',
+        ]);
+
+        $proceso = ProcesoEmpaque::findOrFail($request->proceso_id);
+
+        if ($proceso->status !== 'listo_produccion') {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Solo se pueden mover folios con status "listo para producción"',
+            ], 422);
+        }
+
+        $proceso->update([
+            'status' => 'en_proceso',
+            'fecha_proceso' => now('America/Mexico_City')->toDateString(),
+        ]);
+
+        $proceso->load($this->eagerLoad);
+
+        return response()->json([
+            'success' => true,
+            'message' => "Folio movido a procesando ({$proceso->cantidad_entrada} uds)",
+            'data' => $proceso,
+        ], 200);
+    }
+
+    /**
+     * Create new proceso from recepcion (direct flow)
+     */
+    private function crearFromRecepcion(Request $request): JsonResponse
     {
         $validated = $request->validate([
             'temporada_id' => 'required|exists:temporadas,id',
@@ -146,14 +263,11 @@ class ProcesoEmpaqueController extends Controller
             'cantidad' => 'required|integer|min:1',
         ]);
 
-        $recepcion = RecepcionEmpaque::with('tipoCarga')->find($validated['recepcion_id']);
-        if (!$recepcion) {
-            return response()->json(['status' => 'error', 'message' => 'Recepción no encontrada'], 404);
-        }
+        $recepcion = RecepcionEmpaque::with('tipoCarga')->findOrFail($validated['recepcion_id']);
 
-        // Calculate available
+        // Calculate available (including lavado pipeline)
         $enProceso = ProcesoEmpaque::where('recepcion_id', $recepcion->id)
-            ->whereIn('status', ['en_proceso', 'procesado'])
+            ->whereIn('status', ['lavando', 'lavado', 'hidrotermico', 'enfriando', 'listo_produccion', 'en_proceso', 'procesado'])
             ->sum('cantidad_entrada');
         $disponible = $recepcion->cantidad_recibida - $enProceso;
 
@@ -167,17 +281,8 @@ class ProcesoEmpaqueController extends Controller
         $pesoUnitario = $recepcion->tipoCarga ? (float) $recepcion->tipoCarga->peso_estimado_kg : 0;
         $cantidad = $validated['cantidad'];
 
-        // Generate unique folio: base folio for first entry, suffix for subsequent
-        $baseFolio = $recepcion->folio_recepcion;
-        if (!ProcesoEmpaque::where('folio_proceso', $baseFolio)->exists()) {
-            $folioProceso = $baseFolio;
-        } else {
-            $suffix = 2;
-            while (ProcesoEmpaque::where('folio_proceso', "{$baseFolio}-{$suffix}")->exists()) {
-                $suffix++;
-            }
-            $folioProceso = "{$baseFolio}-{$suffix}";
-        }
+        // Use recepcion folio as proceso folio
+        $folioProceso = $recepcion->folio_recepcion;
 
         $proceso = ProcesoEmpaque::create([
             'temporada_id' => $validated['temporada_id'],
@@ -220,6 +325,8 @@ class ProcesoEmpaqueController extends Controller
 
     /**
      * DELETE — Remove proceso entry (devolver a piso)
+     * If the proceso came from lavado (has fecha_lavado), revert to listo_produccion
+     * If direct flow, forceDelete the record
      */
     public function destroy(ProcesoEmpaque $proceso): JsonResponse
     {
@@ -230,14 +337,81 @@ class ProcesoEmpaqueController extends Controller
             ], 422);
         }
 
+        // If came from lavado pipeline, revert to listo_produccion
+        if ($proceso->fecha_lavado) {
+            $proceso->update([
+                'status' => 'listo_produccion',
+                'fecha_proceso' => null,
+            ]);
+            return response()->json(['success' => true, 'message' => 'Folio devuelto a lavado (listo para producción)']);
+        }
+
         $proceso->forceDelete();
 
         return response()->json(['success' => true, 'message' => 'Folio devuelto a piso']);
     }
 
     /**
+     * DELETE /proceso/{proceso}/eliminar-consumido
+     * Elimina un folio consumido (procesado). Requiere permiso delete_procesado.
+     */
+    public function eliminarConsumido(Request $request, ProcesoEmpaque $proceso): JsonResponse
+    {
+        if ($proceso->status !== 'procesado') {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Solo se pueden eliminar folios consumidos (procesado)',
+            ], 422);
+        }
+
+        // Verificar permiso delete_procesado
+        $user = $request->user();
+        $submodule = Submodule::where('slug', 'proceso')->first();
+
+        if (!$submodule) {
+            return response()->json(['status' => 'error', 'message' => 'Submódulo no encontrado'], 500);
+        }
+
+        $hasPermission = UserSubmodulePermission::where('user_id', $user->id)
+            ->where('submodule_id', $submodule->id)
+            ->whereHas('permissionType', fn($q) => $q->where('slug', 'delete_procesado'))
+            ->where('is_granted', true)
+            ->exists();
+
+        if (!$hasPermission) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No tienes permiso para eliminar folios consumidos',
+            ], 403);
+        }
+
+        // Verificar que no tenga producción ni rezaga asociada
+        $produccionesCount = $proceso->producciones()->count();
+        $rezagasCount = $proceso->rezagas()->count();
+
+        if ($produccionesCount > 0 || $rezagasCount > 0) {
+            $deps = [];
+            if ($produccionesCount > 0) $deps[] = "{$produccionesCount} producción(es)";
+            if ($rezagasCount > 0) $deps[] = "{$rezagasCount} rezaga(s)";
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No se puede eliminar: el folio tiene ' . implode(' y ', $deps) . ' asociadas',
+            ], 422);
+        }
+
+        $folio = $proceso->folio_proceso;
+        $proceso->forceDelete();
+
+        return response()->json([
+            'success' => true,
+            'message' => "Folio consumido {$folio} eliminado correctamente",
+        ]);
+    }
+
+    /**
      * POST /proceso/{id}/cerrar
      * cuarto_frio + fresco. If sum < cantidad → remainder stays in piso automatically
+     * Accepts optional production rezaga
      */
     public function cerrar(Request $request, ProcesoEmpaque $proceso): JsonResponse
     {
@@ -251,6 +425,9 @@ class ProcesoEmpaqueController extends Controller
         $validated = $request->validate([
             'cantidad_cuarto_frio' => 'required|integer|min:0',
             'cantidad_fresco' => 'required|integer|min:0',
+            'rezaga_kg' => 'nullable|numeric|min:0.01',
+            'subtipo_rezaga' => 'required_with:rezaga_kg|in:hoja,producto',
+            'rezaga_observaciones' => 'nullable|string|max:1000',
         ]);
 
         $cuartoFrio = $validated['cantidad_cuarto_frio'];
@@ -273,6 +450,30 @@ class ProcesoEmpaqueController extends Controller
 
         $remainder = $proceso->cantidad_disponible - $totalProcesado;
 
+        // Register production rezaga if provided
+        if ($request->filled('rezaga_kg')) {
+            $count = RezagaEmpaque::where('temporada_id', $proceso->temporada_id)
+                ->where('entity_id', $proceso->entity_id)
+                ->count() + 1;
+            $entityId = str_pad($proceso->entity_id, 2, '0', STR_PAD_LEFT);
+            $folioRezaga = "REZ-{$entityId}-" . str_pad($count, 4, '0', STR_PAD_LEFT);
+
+            RezagaEmpaque::create([
+                'temporada_id' => $proceso->temporada_id,
+                'entity_id' => $proceso->entity_id,
+                'proceso_id' => $proceso->id,
+                'folio_rezaga' => $folioRezaga,
+                'tipo_rezaga' => 'produccion',
+                'subtipo_rezaga' => $validated['subtipo_rezaga'],
+                'fecha' => now('America/Mexico_City')->toDateString(),
+                'cantidad_kg' => $validated['rezaga_kg'],
+                'motivo' => null,
+                'status' => 'pendiente',
+                'observaciones' => $validated['rezaga_observaciones'] ?? null,
+                'created_by' => $request->user()->id,
+            ]);
+        }
+
         // Update the proceso: cantidad_entrada reflects what was actually processed
         $proceso->update([
             'cantidad_cuarto_frio' => $cuartoFrio,
@@ -290,6 +491,31 @@ class ProcesoEmpaqueController extends Controller
             'message' => $remainder > 0
                 ? "Cerrado. $totalProcesado procesadas, $remainder devueltas a piso"
                 : 'Folio cerrado completamente',
+            'data' => $proceso,
+        ]);
+    }
+
+    /**
+     * POST /proceso/{proceso}/reabrir — Reopen a closed (procesado) folio
+     */
+    public function reabrir(Request $request, ProcesoEmpaque $proceso): JsonResponse
+    {
+        if ($proceso->status !== 'procesado') {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Solo se pueden reabrir folios con status "procesado"',
+            ], 422);
+        }
+
+        $proceso->update([
+            'status' => 'en_proceso',
+        ]);
+
+        $proceso->load($this->eagerLoad);
+
+        return response()->json([
+            'success' => true,
+            'message' => "Folio {$proceso->folio_proceso} reabierto",
             'data' => $proceso,
         ]);
     }

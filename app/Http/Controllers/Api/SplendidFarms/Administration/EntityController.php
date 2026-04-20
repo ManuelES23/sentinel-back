@@ -67,6 +67,7 @@ class EntityController extends Controller
             'contract_end_date' => 'nullable|date',
             'contract_notes' => 'nullable|string',
             'metadata' => 'nullable|array',
+            'usa_hidrotermico' => 'boolean',
         ]);
 
         // Generar código automático si no se proporciona
@@ -143,6 +144,7 @@ class EntityController extends Controller
             'contract_end_date' => 'nullable|date',
             'contract_notes' => 'nullable|string',
             'metadata' => 'nullable|array',
+            'usa_hidrotermico' => 'boolean',
         ]);
 
         $entity->update($validated);

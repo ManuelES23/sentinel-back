@@ -27,6 +27,11 @@ class CalidadEmpaqueController extends Controller
                     ProcesoEmpaque::class => [
                         'productor:id,nombre,apellido',
                         'lote:id,nombre,numero_lote',
+                        'etapa:id,nombre,variedad_id',
+                        'etapa.variedad:id,nombre',
+                        'recepcion:id,salida_campo_id',
+                        'recepcion.salidaCampo:id,variedad_id',
+                        'recepcion.salidaCampo.variedad:id,nombre',
                     ],
                 ]);
             },
@@ -133,10 +138,21 @@ class CalidadEmpaqueController extends Controller
     private function generarFolio(array $data): string
     {
         $prefix = $data['tipo_evaluacion'] === 'recepcion' ? 'QC-R' : 'QC-E';
-        $count = CalidadEmpaque::where('temporada_id', $data['temporada_id'])
-            ->where('entity_id', $data['entity_id'])
-            ->count() + 1;
         $entityId = str_pad($data['entity_id'], 2, '0', STR_PAD_LEFT);
-        return "{$prefix}-{$entityId}-" . str_pad($count, 4, '0', STR_PAD_LEFT);
+        $fullPrefix = "{$prefix}-{$entityId}-";
+
+        $lastFolio = CalidadEmpaque::withTrashed()
+            ->where('temporada_id', $data['temporada_id'])
+            ->where('entity_id', $data['entity_id'])
+            ->where('folio_evaluacion', 'like', "{$fullPrefix}%")
+            ->orderByDesc('folio_evaluacion')
+            ->value('folio_evaluacion');
+
+        $nextNum = 1;
+        if ($lastFolio) {
+            $nextNum = (int) str_replace($fullPrefix, '', $lastFolio) + 1;
+        }
+
+        return $fullPrefix . str_pad($nextNum, 4, '0', STR_PAD_LEFT);
     }
 }

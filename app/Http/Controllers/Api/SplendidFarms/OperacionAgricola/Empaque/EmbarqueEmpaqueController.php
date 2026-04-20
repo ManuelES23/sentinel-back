@@ -13,7 +13,14 @@ class EmbarqueEmpaqueController extends Controller
 {
     private array $eagerLoad = [
         'entity:id,name,code',
-        'detalles',
+        'detalles.produccion:id,numero_pallet,is_cola,variedad_id',
+        'detalles.produccion.variedad:id,nombre',
+        'detalles.produccion.detalles',
+        'detalles.produccion.detalles.proceso:id,folio_proceso,etapa_id,recepcion_id',
+        'detalles.produccion.detalles.proceso.productor:id,nombre,apellido',
+        'detalles.produccion.detalles.proceso.lote:id,nombre,numero_lote',
+        'detalles.produccion.detalles.proceso.etapa:id,nombre,variedad_id',
+        'detalles.produccion.detalles.proceso.etapa.variedad:id,nombre',
         'creador:id,name',
     ];
 
@@ -154,9 +161,6 @@ class EmbarqueEmpaqueController extends Controller
             'proceso.etapa.variedad:id,nombre',
             'proceso.recepcion.salidaCampo.variedad:id,nombre',
             'variedad:id,nombre',
-            'recipe:id,name,code,output_product_id',
-            'recipe.outputProduct:id,name,brand_id',
-            'recipe.outputProduct.brand:id,name,code',
         ])->whereIn('id', $palletIds)->get();
 
         // Calculate totals from actual pallet data
@@ -176,21 +180,16 @@ class EmbarqueEmpaqueController extends Controller
                     ?? $proceso?->recepcion?->salidaCampo?->variedad?->nombre;
                 $lote = $proceso?->lote?->nombre ?? $proceso?->lote?->numero_lote;
 
-                // Recipe-based data
-                $marca = $pallet->recipe?->outputProduct?->brand?->name;
-                $loteProductoTerminado = $pallet->lote_producto_terminado;
-                $presentacion = $pallet->tipo_empaque;
-
                 $embarque->detalles()->create([
                     'produccion_id' => $pallet->id,
                     'numero_pallet' => $pallet->numero_pallet,
                     'folio_produccion' => $pallet->folio_produccion,
                     'productor' => $productorName,
                     'variedad' => $variedad,
-                    'lote' => $lote,
-                    'marca' => $marca,
-                    'lote_producto_terminado' => $loteProductoTerminado,
-                    'presentacion' => $presentacion,
+                    'lote' => $pallet->lote_producto_terminado ?: $lote,
+                    'marca' => $pallet->marca,
+                    'lote_producto_terminado' => $pallet->lote_producto_terminado,
+                    'presentacion' => $pallet->presentacion ?: $pallet->tipo_empaque,
                     'tipo_empaque' => $pallet->tipo_empaque,
                     'etiqueta' => $pallet->etiqueta,
                     'calibre' => $pallet->calibre,

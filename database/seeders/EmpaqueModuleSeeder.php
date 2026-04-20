@@ -44,12 +44,13 @@ class EmpaqueModuleSeeder extends Seeder
         // Crear submódulos
         $submodules = [
             ['slug' => 'recepciones',  'name' => 'Recepciones',      'icon' => 'Download',       'order' => 1],
-            ['slug' => 'proceso',      'name' => 'Proceso',          'icon' => 'Layers',         'order' => 2],
-            ['slug' => 'produccion',   'name' => 'Producción',       'icon' => 'Package',        'order' => 3],
-            ['slug' => 'rezaga',       'name' => 'Rezaga',           'icon' => 'Trash2',         'order' => 4],
-            ['slug' => 'embarques',    'name' => 'Embarques',        'icon' => 'Truck',          'order' => 5],
-            ['slug' => 'venta-rezaga', 'name' => 'Venta de Rezaga',  'icon' => 'ShoppingCart',   'order' => 6],
-            ['slug' => 'calidad',      'name' => 'Calidad',          'icon' => 'ClipboardCheck', 'order' => 7],
+            ['slug' => 'lavado',       'name' => 'Lavado',           'icon' => 'Droplets',       'order' => 2],
+            ['slug' => 'proceso',      'name' => 'Proceso',          'icon' => 'Layers',         'order' => 3],
+            ['slug' => 'produccion',   'name' => 'Producción',       'icon' => 'Package',        'order' => 4],
+            ['slug' => 'rezaga',       'name' => 'Rezaga',           'icon' => 'Trash2',         'order' => 5],
+            ['slug' => 'embarques',    'name' => 'Embarques',        'icon' => 'Truck',          'order' => 6],
+            ['slug' => 'venta-rezaga', 'name' => 'Venta de Rezaga',  'icon' => 'ShoppingCart',   'order' => 7],
+            ['slug' => 'calidad',      'name' => 'Calidad',          'icon' => 'ClipboardCheck', 'order' => 8],
         ];
 
         $createdSubmodules = [];
@@ -111,6 +112,6 @@ class EmpaqueModuleSeeder extends Seeder
         }
 
         $this->command->info('');
-        $this->command->info('✅ Módulo Empaque creado exitosamente con 7 submódulos');
+        $this->command->info('✅ Módulo Empaque creado exitosamente con 8 submódulos');
     }
 }

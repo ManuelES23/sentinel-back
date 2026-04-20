@@ -520,21 +520,22 @@ class MasterStructureSeeder extends Seeder
 
         $empaqueSubmodules = [
             ['slug' => 'recepciones',  'name' => 'Recepciones',      'icon' => 'Download',       'order' => 1],
-            ['slug' => 'proceso',      'name' => 'Proceso',          'icon' => 'Layers',         'order' => 2],
-            ['slug' => 'produccion',   'name' => 'Producción',       'icon' => 'Package',        'order' => 3],
-            ['slug' => 'rezaga',       'name' => 'Rezaga',           'icon' => 'Trash2',         'order' => 4],
-            ['slug' => 'embarques',    'name' => 'Embarques',        'icon' => 'Truck',          'order' => 5],
-            ['slug' => 'venta-rezaga', 'name' => 'Venta de Rezaga',  'icon' => 'ShoppingCart',   'order' => 6],
-            ['slug' => 'calidad',      'name' => 'Calidad',          'icon' => 'ClipboardCheck', 'order' => 7],
+            ['slug' => 'lavado',       'name' => 'Lavado',           'icon' => 'Droplets',       'order' => 2],
+            ['slug' => 'proceso',      'name' => 'Proceso',          'icon' => 'Layers',         'order' => 3],
+            ['slug' => 'produccion',   'name' => 'Producción',       'icon' => 'Package',        'order' => 4],
+            ['slug' => 'rezaga',       'name' => 'Rezaga',           'icon' => 'Trash2',         'order' => 5],
+            ['slug' => 'embarques',    'name' => 'Embarques',        'icon' => 'Truck',          'order' => 6],
+            ['slug' => 'venta-rezaga', 'name' => 'Venta de Rezaga',  'icon' => 'ShoppingCart',   'order' => 7],
+            ['slug' => 'calidad',      'name' => 'Calidad',          'icon' => 'ClipboardCheck', 'order' => 8],
         ];
 
         foreach ($empaqueSubmodules as $sub) {
-            Submodule::firstOrCreate(
+            Submodule::updateOrCreate(
                 ['slug' => $sub['slug'], 'module_id' => $oaEmpaque->id],
                 ['name' => $sub['name'], 'icon' => $sub['icon'], 'order' => $sub['order'], 'is_active' => true]
             );
         }
-        $this->command->info("    → Empaque: Recepciones, Proceso, Producción, Rezaga, Embarques, Venta Rezaga, Calidad");
+        $this->command->info("    → Empaque: Recepciones, Lavado, Proceso, Producción, Rezaga, Embarques, Venta Rezaga, Calidad");
     }
 
     /**

@@ -19,6 +19,9 @@ class ProcesoEmpaque extends Model
         'cantidad_entrada', 'peso_entrada_kg', 'cantidad_disponible',
         'peso_disponible_kg', 'cantidad_cuarto_frio', 'cantidad_fresco',
         'fecha_entrada', 'fecha_proceso',
+        'fecha_lavado', 'fecha_hidrotermico', 'fecha_enfriamiento', 'fecha_listo_produccion',
+        'rezaga_lavado_kg', 'rezaga_lavado_cantidad',
+        'rezaga_hidrotermico_kg', 'rezaga_hidrotermico_cantidad',
         'linea_proceso', 'status', 'observaciones', 'created_by',
     ];
 
@@ -31,6 +34,14 @@ class ProcesoEmpaque extends Model
         'cantidad_fresco' => 'integer',
         'fecha_entrada' => 'date:Y-m-d',
         'fecha_proceso' => 'date:Y-m-d',
+        'fecha_lavado' => 'date:Y-m-d',
+        'fecha_hidrotermico' => 'date:Y-m-d',
+        'fecha_enfriamiento' => 'date:Y-m-d',
+        'fecha_listo_produccion' => 'date:Y-m-d',
+        'rezaga_lavado_kg' => 'decimal:2',
+        'rezaga_lavado_cantidad' => 'integer',
+        'rezaga_hidrotermico_kg' => 'decimal:2',
+        'rezaga_hidrotermico_cantidad' => 'integer',
     ];
 
     public function temporada() { return $this->belongsTo(Temporada::class); }
@@ -47,5 +58,10 @@ class ProcesoEmpaque extends Model
     public function scopeByTemporada($query, $id) { return $query->where('temporada_id', $id); }
     public function scopeByStatus($query, $s) { return $query->where('status', $s); }
     public function scopeEnPiso($query) { return $query->where('status', 'en_piso'); }
-    public function scopeDisponible($query) { return $query->whereIn('status', ['en_piso', 'en_proceso']); }
+    public function scopeLavando($query) { return $query->where('status', 'lavando'); }
+    public function scopeLavado($query) { return $query->where('status', 'lavado'); }
+    public function scopeHidrotermico($query) { return $query->where('status', 'hidrotermico'); }
+    public function scopeEnfriando($query) { return $query->where('status', 'enfriando'); }
+    public function scopeListoProduccion($query) { return $query->where('status', 'listo_produccion'); }
+    public function scopeDisponible($query) { return $query->whereIn('status', ['en_piso', 'en_proceso', 'listo_produccion']); }
 }

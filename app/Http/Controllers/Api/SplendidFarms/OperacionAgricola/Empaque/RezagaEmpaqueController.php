@@ -12,49 +12,101 @@ class RezagaEmpaqueController extends Controller
 {
     private array $eagerLoad = [
         'entity:id,name,code',
-        'proceso:id,folio_proceso,productor_id,lote_id,etapa_id',
+        'proceso:id,folio_proceso,productor_id,lote_id,etapa_id,recepcion_id',
         'proceso.productor:id,nombre,apellido',
         'proceso.lote:id,nombre,numero_lote',
         'proceso.etapa:id,nombre,variedad_id',
         'proceso.etapa.variedad:id,nombre,cultivo_id',
         'proceso.etapa.variedad.cultivo:id,nombre',
+        'proceso.recepcion:id,salida_campo_id',
+        'proceso.recepcion.salidaCampo:id,variedad_id',
+        'proceso.recepcion.salidaCampo.variedad:id,nombre',
         'creador:id,name',
     ];
 
     /**
-     * GET /rezaga/procesos-del-dia — Procesos que fueron procesados en una fecha dada
+     * GET /rezaga/procesos-del-dia — Procesos con rezaga, filtro de fecha opcional
      */
     public function procesosDelDia(Request $request): JsonResponse
     {
         $request->validate([
-            'fecha' => 'required|date',
+            'fecha' => 'nullable|date',
             'temporada_id' => 'required|exists:temporadas,id',
         ]);
 
-        $query = ProcesoEmpaque::with([
+        $fecha = $request->fecha;
+        $temporadaId = $request->temporada_id;
+        $entityId = $request->entity_id;
+
+        $eagerProceso = [
             'productor:id,nombre,apellido',
             'lote:id,nombre,numero_lote',
             'etapa:id,nombre,variedad_id',
             'etapa.variedad:id,nombre,cultivo_id',
             'etapa.variedad.cultivo:id,nombre',
-        ])
-        ->where('temporada_id', $request->temporada_id)
-        ->whereDate('fecha_proceso', $request->fecha);
+            'recepcion:id,salida_campo_id',
+            'recepcion.salidaCampo:id,variedad_id',
+            'recepcion.salidaCampo.variedad:id,nombre',
+            'tipoCarga:id,nombre',
+        ];
 
-        if ($request->filled('entity_id')) {
-            $query->where('entity_id', $request->entity_id);
+        if ($fecha) {
+            // Procesos processed on this date
+            $procesosPorFecha = ProcesoEmpaque::with($eagerProceso)
+                ->where('temporada_id', $temporadaId)
+                ->when($entityId, fn($q) => $q->where('entity_id', $entityId))
+                ->whereDate('fecha_proceso', $fecha)
+                ->orderByDesc('id')
+                ->get();
+
+            // Procesos that have rezagas registered on this date (may have been processed another day)
+            $idsConRezagaEnFecha = RezagaEmpaque::whereDate('fecha', $fecha)
+                ->whereHas('proceso', function ($q) use ($temporadaId, $entityId) {
+                    $q->where('temporada_id', $temporadaId);
+                    if ($entityId) $q->where('entity_id', $entityId);
+                })
+                ->pluck('proceso_id')
+                ->unique();
+
+            $procesosConRezaga = ProcesoEmpaque::with($eagerProceso)
+                ->whereIn('id', $idsConRezagaEnFecha)
+                ->whereNotIn('id', $procesosPorFecha->pluck('id'))
+                ->orderByDesc('id')
+                ->get();
+
+            $procesos = $procesosPorFecha->merge($procesosConRezaga);
+
+            // Attach rezagas filtered by date
+            $procesoIds = $procesos->pluck('id');
+            $rezagas = RezagaEmpaque::with($this->eagerLoad)
+                ->whereIn('proceso_id', $procesoIds)
+                ->whereDate('fecha', $fecha)
+                ->orderByDesc('id')
+                ->get()
+                ->groupBy('proceso_id');
+        } else {
+            // No date filter: all procesos that have rezagas in this temporada
+            $idsConRezaga = RezagaEmpaque::whereHas('proceso', function ($q) use ($temporadaId, $entityId) {
+                    $q->where('temporada_id', $temporadaId);
+                    if ($entityId) $q->where('entity_id', $entityId);
+                })
+                ->pluck('proceso_id')
+                ->unique();
+
+            $procesos = ProcesoEmpaque::with($eagerProceso)
+                ->whereIn('id', $idsConRezaga)
+                ->orderByDesc('fecha_proceso')
+                ->orderByDesc('id')
+                ->get();
+
+            // Attach ALL rezagas for each proceso
+            $procesoIds = $procesos->pluck('id');
+            $rezagas = RezagaEmpaque::with($this->eagerLoad)
+                ->whereIn('proceso_id', $procesoIds)
+                ->orderByDesc('id')
+                ->get()
+                ->groupBy('proceso_id');
         }
-
-        $procesos = $query->orderByDesc('id')->get();
-
-        // Attach existing rezagas for each proceso on this date
-        $procesoIds = $procesos->pluck('id');
-        $rezagas = RezagaEmpaque::with($this->eagerLoad)
-            ->whereIn('proceso_id', $procesoIds)
-            ->whereDate('fecha', $request->fecha)
-            ->orderByDesc('id')
-            ->get()
-            ->groupBy('proceso_id');
 
         $result = $procesos->map(function ($p) use ($rezagas) {
             $data = $p->toArray();
@@ -100,7 +152,7 @@ class RezagaEmpaqueController extends Controller
             'temporada_id' => 'required|exists:temporadas,id',
             'entity_id' => 'required|exists:entities,id',
             'proceso_id' => 'required|exists:proceso_empaque,id',
-            'tipo_rezaga' => 'required|in:produccion,cuarto_frio',
+            'tipo_rezaga' => 'required|in:produccion,cuarto_frio,lavado,hidrotermico',
             'subtipo_rezaga' => 'required|in:hoja,producto',
             'fecha' => 'required|date',
             'cantidad_kg' => 'required|numeric|min:0.01',
@@ -135,7 +187,7 @@ class RezagaEmpaqueController extends Controller
         $validated = $request->validate([
             'entity_id' => 'sometimes|exists:entities,id',
             'proceso_id' => 'nullable|exists:proceso_empaque,id',
-            'tipo_rezaga' => 'sometimes|in:produccion,cuarto_frio',
+            'tipo_rezaga' => 'sometimes|in:produccion,cuarto_frio,lavado,hidrotermico',
             'subtipo_rezaga' => 'sometimes|in:hoja,producto',
             'fecha' => 'sometimes|date',
             'cantidad_kg' => 'sometimes|numeric|min:0.01',
@@ -163,10 +215,82 @@ class RezagaEmpaqueController extends Controller
 
     private function generarFolio(array $data): string
     {
-        $count = RezagaEmpaque::where('temporada_id', $data['temporada_id'])
-            ->where('entity_id', $data['entity_id'])
-            ->count() + 1;
         $entityId = str_pad($data['entity_id'], 2, '0', STR_PAD_LEFT);
-        return "REZ-{$entityId}-" . str_pad($count, 4, '0', STR_PAD_LEFT);
+        $prefix = "REZ-{$entityId}-";
+
+        $lastFolio = RezagaEmpaque::withTrashed()
+            ->where('temporada_id', $data['temporada_id'])
+            ->where('entity_id', $data['entity_id'])
+            ->where('folio_rezaga', 'like', "{$prefix}%")
+            ->orderByDesc('folio_rezaga')
+            ->value('folio_rezaga');
+
+        $nextNum = 1;
+        if ($lastFolio) {
+            $nextNum = (int) str_replace($prefix, '', $lastFolio) + 1;
+        }
+
+        return $prefix . str_pad($nextNum, 4, '0', STR_PAD_LEFT);
+    }
+
+    /**
+     * GET /rezaga/pendientes — Folios que completaron etapas sin registrar rezaga
+     * Returns procesos that went through lavado/HT/produccion but have no rezaga for that stage
+     */
+    public function pendientesRezaga(Request $request): JsonResponse
+    {
+        $request->validate([
+            'temporada_id' => 'required|exists:temporadas,id',
+            'entity_id' => 'nullable|exists:entities,id',
+        ]);
+
+        $temporadaId = $request->temporada_id;
+        $entityId = $request->entity_id;
+
+        $eagerLoad = [
+            'productor:id,nombre,apellido',
+            'lote:id,nombre,numero_lote',
+            'etapa:id,nombre,variedad_id',
+            'etapa.variedad:id,nombre,cultivo_id',
+            'etapa.variedad.cultivo:id,nombre',
+            'recepcion:id,salida_campo_id',
+            'recepcion.salidaCampo:id,variedad_id',
+            'recepcion.salidaCampo.variedad:id,nombre',
+            'tipoCarga:id,nombre',
+            'rezagas',
+        ];
+
+        // Procesos that passed through lavado (have fecha_lavado) but no rezaga tipo=lavado
+        $sinRezagaLavado = ProcesoEmpaque::with($eagerLoad)
+            ->where('temporada_id', $temporadaId)
+            ->when($entityId, fn($q) => $q->where('entity_id', $entityId))
+            ->whereNotNull('fecha_lavado')
+            ->whereDoesntHave('rezagas', fn($q) => $q->where('tipo_rezaga', 'lavado'))
+            ->get()
+            ->map(fn($p) => array_merge($p->toArray(), ['rezaga_pendiente_tipo' => 'lavado']));
+
+        // Procesos that passed through HT (have fecha_hidrotermico) but no rezaga tipo=hidrotermico
+        $sinRezagaHT = ProcesoEmpaque::with($eagerLoad)
+            ->where('temporada_id', $temporadaId)
+            ->when($entityId, fn($q) => $q->where('entity_id', $entityId))
+            ->whereNotNull('fecha_hidrotermico')
+            ->whereDoesntHave('rezagas', fn($q) => $q->where('tipo_rezaga', 'hidrotermico'))
+            ->get()
+            ->map(fn($p) => array_merge($p->toArray(), ['rezaga_pendiente_tipo' => 'hidrotermico']));
+
+        // Procesos cerrados (procesado) without rezaga tipo=produccion
+        $sinRezagaProduccion = ProcesoEmpaque::with($eagerLoad)
+            ->where('temporada_id', $temporadaId)
+            ->when($entityId, fn($q) => $q->where('entity_id', $entityId))
+            ->where('status', 'procesado')
+            ->whereDoesntHave('rezagas', fn($q) => $q->where('tipo_rezaga', 'produccion'))
+            ->get()
+            ->map(fn($p) => array_merge($p->toArray(), ['rezaga_pendiente_tipo' => 'produccion']));
+
+        $pendientes = $sinRezagaLavado->merge($sinRezagaHT)->merge($sinRezagaProduccion)
+            ->unique(fn($item) => $item['id'] . '-' . $item['rezaga_pendiente_tipo'])
+            ->values();
+
+        return response()->json(['success' => true, 'data' => $pendientes]);
     }
 }

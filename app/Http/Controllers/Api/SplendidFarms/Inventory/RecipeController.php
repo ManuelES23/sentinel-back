@@ -242,7 +242,8 @@ class RecipeController extends Controller
             'items.unit:id,name,abbreviation',
             'items.calibre:id,nombre,valor',
             'recipeCalibres.calibre:id,nombre,valor',
-            'recipeCalibres.plus.product:id,code,name',
+            'recipeCalibres.plus.product:id,code,name,brand_id',
+            'recipeCalibres.plus.product.brand:id,name,code',
         ]);
         $recipe->loadCount('items');
 

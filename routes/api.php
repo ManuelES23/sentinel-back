@@ -524,8 +524,21 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::get('proceso/piso', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProcesoEmpaqueController::class, 'piso']);
                 Route::get('proceso/en-proceso', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProcesoEmpaqueController::class, 'enProceso']);
                 Route::post('proceso/{proceso}/cerrar', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProcesoEmpaqueController::class, 'cerrar']);
+                Route::post('proceso/{proceso}/reabrir', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProcesoEmpaqueController::class, 'reabrir']);
+                Route::delete('proceso/{proceso}/eliminar-consumido', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProcesoEmpaqueController::class, 'eliminarConsumido']);
                 Route::apiResource('proceso', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProcesoEmpaqueController::class)
                     ->parameters(['proceso' => 'proceso']);
+
+                // Lavado (pipeline: lavando → lavado → hidrotérmico → enfriando → listo)
+                Route::get('lavado/pendientes', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'pendientes']);
+                Route::get('lavado/pipeline', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'pipeline']);
+                Route::post('lavado/mover-a-lavado', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'moverALavado']);
+                Route::post('lavado/{proceso}/completar-lavado', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'completarLavado']);
+                Route::post('lavado/{proceso}/iniciar-hidrotermico', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'iniciarHidrotermico']);
+                Route::post('lavado/{proceso}/completar-hidrotermico', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'completarHidrotermico']);
+                Route::post('lavado/{proceso}/completar-enfriamiento', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'completarEnfriamiento']);
+                Route::post('lavado/{proceso}/rezaga', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'registrarRezaga']);
+                Route::post('lavado/{proceso}/devolver-piso', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'devolverAPiso']);
 
                 // Producción (cajas / pallets)
                 Route::get('produccion/next-pallet', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'nextPalletNumber']);
@@ -540,6 +553,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
                 // Rezaga (mermas / descarte)
                 Route::get('rezaga/procesos-del-dia', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\RezagaEmpaqueController::class, 'procesosDelDia']);
+                Route::get('rezaga/pendientes', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\RezagaEmpaqueController::class, 'pendientesRezaga']);
                 Route::apiResource('rezaga', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\RezagaEmpaqueController::class)
                     ->parameters(['rezaga' => 'rezaga']);
 

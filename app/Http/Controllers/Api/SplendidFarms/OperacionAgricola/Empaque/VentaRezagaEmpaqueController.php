@@ -13,7 +13,13 @@ class VentaRezagaEmpaqueController extends Controller
 {
     private array $eagerLoad = [
         'entity:id,name,code',
-        'detalles.rezaga:id,folio_rezaga,tipo_rezaga,cantidad_kg',
+        'detalles.rezaga:id,folio_rezaga,tipo_rezaga,cantidad_kg,proceso_id',
+        'detalles.rezaga.proceso:id,folio_proceso,etapa_id,recepcion_id',
+        'detalles.rezaga.proceso.etapa:id,nombre,variedad_id',
+        'detalles.rezaga.proceso.etapa.variedad:id,nombre',
+        'detalles.rezaga.proceso.recepcion:id,salida_campo_id',
+        'detalles.rezaga.proceso.recepcion.salidaCampo:id,variedad_id',
+        'detalles.rezaga.proceso.recepcion.salidaCampo.variedad:id,nombre',
         'creador:id,name',
     ];
 
@@ -140,10 +146,21 @@ class VentaRezagaEmpaqueController extends Controller
 
     private function generarFolio(array $data): string
     {
-        $count = VentaRezagaEmpaque::where('temporada_id', $data['temporada_id'])
-            ->where('entity_id', $data['entity_id'])
-            ->count() + 1;
         $entityId = str_pad($data['entity_id'], 2, '0', STR_PAD_LEFT);
-        return "VREZ-{$entityId}-" . str_pad($count, 4, '0', STR_PAD_LEFT);
+        $prefix = "VREZ-{$entityId}-";
+
+        $lastFolio = VentaRezagaEmpaque::withTrashed()
+            ->where('temporada_id', $data['temporada_id'])
+            ->where('entity_id', $data['entity_id'])
+            ->where('folio_venta', 'like', "{$prefix}%")
+            ->orderByDesc('folio_venta')
+            ->value('folio_venta');
+
+        $nextNum = 1;
+        if ($lastFolio) {
+            $nextNum = (int) str_replace($prefix, '', $lastFolio) + 1;
+        }
+
+        return $prefix . str_pad($nextNum, 4, '0', STR_PAD_LEFT);
     }
 }

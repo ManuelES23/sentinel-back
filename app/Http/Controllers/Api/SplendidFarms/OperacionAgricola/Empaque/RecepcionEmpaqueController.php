@@ -16,7 +16,8 @@ class RecepcionEmpaqueController extends Controller
 {
     private array $eagerLoad = [
         'entity:id,name,code',
-        'salidaCampo:id,folio_salida,fecha,cantidad,peso_neto_kg,vehiculo,chofer,es_batanga',
+        'salidaCampo:id,folio_salida,fecha,cantidad,peso_neto_kg,vehiculo,chofer,es_batanga,variedad_id',
+        'salidaCampo.variedad:id,nombre',
         'productor:id,nombre,apellido',
         'lote:id,nombre,numero_lote,zona_cultivo_id',
         'lote.zonaCultivo:id,nombre',
@@ -285,6 +286,7 @@ class RecepcionEmpaqueController extends Controller
             'lote.zonaCultivo:id,nombre',
             'etapa:id,nombre,variedad_id',
             'etapa.variedad:id,nombre',
+            'variedad:id,nombre',
             'tipoCarga:id,nombre,peso_estimado_kg',
             'destinoEntity:id,name,code',
         ])->where('eliminado', false)

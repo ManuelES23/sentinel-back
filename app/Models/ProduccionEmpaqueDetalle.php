@@ -18,6 +18,8 @@ class ProduccionEmpaqueDetalle extends Model
         'proceso_id',
         'recipe_id',
         'tipo_empaque',
+        'marca',
+        'presentacion',
         'etiqueta',
         'calibre',
         'categoria',

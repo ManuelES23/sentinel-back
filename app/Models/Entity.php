@@ -34,6 +34,7 @@ class Entity extends Model
         'contract_end_date',
         'contract_notes',
         'metadata',
+        'usa_hidrotermico',
     ];
 
     protected $casts = [
@@ -43,6 +44,7 @@ class Entity extends Model
         'contract_start_date' => 'date',
         'contract_end_date' => 'date',
         'metadata' => 'array',
+        'usa_hidrotermico' => 'boolean',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
         'deleted_at' => 'datetime',
