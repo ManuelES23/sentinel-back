@@ -226,7 +226,7 @@ class ProcesoEmpaqueController extends Controller
     private function promoverFromLavado(Request $request): JsonResponse
     {
         $request->validate([
-            'proceso_id' => 'required|exists:procesos_empaque,id',
+            'proceso_id' => 'required|exists:proceso_empaque,id',
         ]);
 
         $proceso = ProcesoEmpaque::findOrFail($request->proceso_id);
