@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque;
 use App\Http\Controllers\Controller;
 use App\Models\EmbarqueEmpaqueDetalle;
 use App\Models\Entity;
+use App\Models\PreEmbarqueEmpaqueDetalle;
 use App\Models\ProcesoEmpaque;
 use App\Models\RecepcionEmpaque;
 use App\Models\RezagaEmpaque;
@@ -401,6 +402,14 @@ class ProcesoEmpaqueController extends Controller
                 ->get();
         }
 
+        $preEmbarqueDetallesSobreProduccionesEliminadas = collect();
+        if ($produccionesEliminadas->isNotEmpty()) {
+            $preEmbarqueDetallesSobreProduccionesEliminadas = PreEmbarqueEmpaqueDetalle::query()
+                ->whereIn('produccion_id', $produccionesEliminadas->pluck('id'))
+                ->select('id', 'pre_embarque_id', 'produccion_id')
+                ->get();
+        }
+
         $ventaDetallesSobreRezagasEliminadas = collect();
         if ($rezagasEliminadas->isNotEmpty()) {
             $ventaDetallesSobreRezagasEliminadas = VentaRezagaEmpaqueDetalle::query()
@@ -454,6 +463,11 @@ class ProcesoEmpaqueController extends Controller
                         'embarque_id' => $d->embarque_id,
                         'produccion_id' => $d->produccion_id,
                     ])->values(),
+                    'pre_embarque_detalles_sobre_producciones_eliminadas' => $preEmbarqueDetallesSobreProduccionesEliminadas->map(fn($d) => [
+                        'id' => $d->id,
+                        'pre_embarque_id' => $d->pre_embarque_id,
+                        'produccion_id' => $d->produccion_id,
+                    ])->values(),
                     'venta_detalles_sobre_rezagas_eliminadas' => $ventaDetallesSobreRezagasEliminadas->map(fn($d) => [
                         'id' => $d->id,
                         'venta_rezaga_id' => $d->venta_rezaga_id,
@@ -466,12 +480,19 @@ class ProcesoEmpaqueController extends Controller
         $folio = $proceso->folio_proceso;
 
         try {
-            DB::transaction(function () use ($proceso, $rezagasEliminadas) {
+            DB::transaction(function () use ($proceso, $rezagasEliminadas, $preEmbarqueDetallesSobreProduccionesEliminadas) {
                 // Si existen rezagas soft-deleted, purgarlas para liberar FK antes de eliminar el proceso
                 if ($rezagasEliminadas->isNotEmpty()) {
                     RezagaEmpaque::onlyTrashed()
                         ->where('proceso_id', $proceso->id)
                         ->forceDelete();
+                }
+
+                // Limpiar referencias de pre-embarque hacia producciones soft-deleted
+                if ($preEmbarqueDetallesSobreProduccionesEliminadas->isNotEmpty()) {
+                    PreEmbarqueEmpaqueDetalle::query()
+                        ->whereIn('id', $preEmbarqueDetallesSobreProduccionesEliminadas->pluck('id'))
+                        ->delete();
                 }
 
                 // Purgar producciones soft-deleted para liberar FK antes de eliminar el proceso
