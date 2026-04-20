@@ -8,6 +8,7 @@ use App\Models\Entity;
 use App\Models\ProcesoEmpaque;
 use App\Models\RecepcionEmpaque;
 use App\Models\RezagaEmpaque;
+use App\Models\VentaRezagaEmpaqueDetalle;
 use App\Models\Submodule;
 use App\Models\TipoCarga;
 use App\Models\UserSubmodulePermission;
@@ -400,10 +401,19 @@ class ProcesoEmpaqueController extends Controller
                 ->get();
         }
 
+        $ventaDetallesSobreRezagasEliminadas = collect();
+        if ($rezagasEliminadas->isNotEmpty()) {
+            $ventaDetallesSobreRezagasEliminadas = VentaRezagaEmpaqueDetalle::query()
+                ->whereIn('rezaga_id', $rezagasEliminadas->pluck('id'))
+                ->select('id', 'venta_rezaga_id', 'rezaga_id')
+                ->get();
+        }
+
         if (
             $produccionesActivas->isNotEmpty() ||
             $rezagasActivas->isNotEmpty() ||
-            $embarqueDetallesSobreProduccionesEliminadas->isNotEmpty()
+            $embarqueDetallesSobreProduccionesEliminadas->isNotEmpty() ||
+            $ventaDetallesSobreRezagasEliminadas->isNotEmpty()
         ) {
             $deps = [];
             if ($produccionesActivas->isNotEmpty()) {
@@ -414,6 +424,9 @@ class ProcesoEmpaqueController extends Controller
             }
             if ($embarqueDetallesSobreProduccionesEliminadas->isNotEmpty()) {
                 $deps[] = $embarqueDetallesSobreProduccionesEliminadas->count() . ' detalle(s) de embarque sobre producciones eliminadas';
+            }
+            if ($ventaDetallesSobreRezagasEliminadas->isNotEmpty()) {
+                $deps[] = $ventaDetallesSobreRezagasEliminadas->count() . ' detalle(s) de venta sobre rezagas eliminadas';
             }
 
             return response()->json([
@@ -440,6 +453,11 @@ class ProcesoEmpaqueController extends Controller
                         'id' => $d->id,
                         'embarque_id' => $d->embarque_id,
                         'produccion_id' => $d->produccion_id,
+                    ])->values(),
+                    'venta_detalles_sobre_rezagas_eliminadas' => $ventaDetallesSobreRezagasEliminadas->map(fn($d) => [
+                        'id' => $d->id,
+                        'venta_rezaga_id' => $d->venta_rezaga_id,
+                        'rezaga_id' => $d->rezaga_id,
                     ])->values(),
                 ],
             ], 422);
@@ -471,6 +489,7 @@ class ProcesoEmpaqueController extends Controller
                 'message' => 'No se pudo eliminar el folio consumido por dependencias asociadas',
                 'details' => [
                     'exception' => class_basename($e),
+                    'error' => $e->getMessage(),
                 ],
             ], 422);
         }
