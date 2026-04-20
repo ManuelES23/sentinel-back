@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque;
 
 use App\Http\Controllers\Controller;
+use App\Models\EmbarqueEmpaqueDetalle;
 use App\Models\Entity;
 use App\Models\ProcesoEmpaque;
 use App\Models\RecepcionEmpaque;
@@ -391,16 +392,28 @@ class ProcesoEmpaqueController extends Controller
         $rezagasActivas = $proceso->rezagas()->select('id', 'folio_rezaga')->get();
         $rezagasEliminadas = $proceso->rezagas()->onlyTrashed()->select('id', 'folio_rezaga')->get();
 
-        if ($produccionesActivas->isNotEmpty() || $produccionesEliminadas->isNotEmpty() || $rezagasActivas->isNotEmpty()) {
+        $embarqueDetallesSobreProduccionesEliminadas = collect();
+        if ($produccionesEliminadas->isNotEmpty()) {
+            $embarqueDetallesSobreProduccionesEliminadas = EmbarqueEmpaqueDetalle::query()
+                ->whereIn('produccion_id', $produccionesEliminadas->pluck('id'))
+                ->select('id', 'embarque_id', 'produccion_id')
+                ->get();
+        }
+
+        if (
+            $produccionesActivas->isNotEmpty() ||
+            $rezagasActivas->isNotEmpty() ||
+            $embarqueDetallesSobreProduccionesEliminadas->isNotEmpty()
+        ) {
             $deps = [];
             if ($produccionesActivas->isNotEmpty()) {
                 $deps[] = $produccionesActivas->count() . ' producción(es)';
             }
-            if ($produccionesEliminadas->isNotEmpty()) {
-                $deps[] = $produccionesEliminadas->count() . ' producción(es) eliminada(s)';
-            }
             if ($rezagasActivas->isNotEmpty()) {
                 $deps[] = $rezagasActivas->count() . ' rezaga(s)';
+            }
+            if ($embarqueDetallesSobreProduccionesEliminadas->isNotEmpty()) {
+                $deps[] = $embarqueDetallesSobreProduccionesEliminadas->count() . ' detalle(s) de embarque sobre producciones eliminadas';
             }
 
             return response()->json([
@@ -423,6 +436,11 @@ class ProcesoEmpaqueController extends Controller
                         'id' => $r->id,
                         'folio' => $r->folio_rezaga,
                     ])->values(),
+                    'embarque_detalles_sobre_producciones_eliminadas' => $embarqueDetallesSobreProduccionesEliminadas->map(fn($d) => [
+                        'id' => $d->id,
+                        'embarque_id' => $d->embarque_id,
+                        'produccion_id' => $d->produccion_id,
+                    ])->values(),
                 ],
             ], 422);
         }
@@ -430,13 +448,20 @@ class ProcesoEmpaqueController extends Controller
         $folio = $proceso->folio_proceso;
 
         try {
-            DB::transaction(function () use ($proceso) {
+            DB::transaction(function () use ($proceso, $rezagasEliminadas) {
                 // Si existen rezagas soft-deleted, purgarlas para liberar FK antes de eliminar el proceso
                 if ($rezagasEliminadas->isNotEmpty()) {
                     RezagaEmpaque::onlyTrashed()
                         ->where('proceso_id', $proceso->id)
                         ->forceDelete();
                 }
+
+                // Purgar producciones soft-deleted para liberar FK antes de eliminar el proceso
+                $proceso->producciones()
+                    ->onlyTrashed()
+                    ->get()
+                    ->each
+                    ->forceDelete();
 
                 $proceso->forceDelete();
             });
