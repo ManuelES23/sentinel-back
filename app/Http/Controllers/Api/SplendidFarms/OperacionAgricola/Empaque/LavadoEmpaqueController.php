@@ -43,6 +43,11 @@ class LavadoEmpaqueController extends Controller
      */
     public function pendientes(Request $request): JsonResponse
     {
+        $gate = $this->ensureLavadoEnabledForEntity($request->input('entity_id'));
+        if ($gate) {
+            return $gate;
+        }
+
         $query = RecepcionEmpaque::with($this->recepcionEagerLoad)
             ->where('status', '!=', 'rechazada');
 
@@ -102,6 +107,11 @@ class LavadoEmpaqueController extends Controller
 
         $recepcion = RecepcionEmpaque::with('tipoCarga')->findOrFail($validated['recepcion_id']);
 
+        $gate = $this->ensureLavadoEnabledForEntity($recepcion->entity_id);
+        if ($gate) {
+            return $gate;
+        }
+
         $lavadoStates = ['lavando', 'lavado', 'hidrotermico', 'enfriando', 'listo_produccion', 'en_proceso', 'procesado'];
         $usadas = ProcesoEmpaque::where('recepcion_id', $recepcion->id)
             ->whereIn('status', $lavadoStates)
@@ -154,6 +164,11 @@ class LavadoEmpaqueController extends Controller
      */
     public function pipeline(Request $request): JsonResponse
     {
+        $gate = $this->ensureLavadoEnabledForEntity($request->input('entity_id'));
+        if ($gate) {
+            return $gate;
+        }
+
         $query = ProcesoEmpaque::with($this->eagerLoad)
             ->whereIn('status', ['lavando', 'lavado', 'hidrotermico', 'enfriando', 'listo_produccion']);
 
@@ -194,6 +209,11 @@ class LavadoEmpaqueController extends Controller
      */
     public function completarLavado(Request $request, ProcesoEmpaque $proceso): JsonResponse
     {
+        $gate = $this->ensureLavadoEnabledForEntity($proceso->entity_id);
+        if ($gate) {
+            return $gate;
+        }
+
         if ($proceso->status !== 'lavando') {
             return response()->json([
                 'status' => 'error',
@@ -244,6 +264,11 @@ class LavadoEmpaqueController extends Controller
      */
     public function iniciarHidrotermico(Request $request, ProcesoEmpaque $proceso): JsonResponse
     {
+        $gate = $this->ensureLavadoEnabledForEntity($proceso->entity_id);
+        if ($gate) {
+            return $gate;
+        }
+
         if ($proceso->status !== 'lavado') {
             return response()->json([
                 'status' => 'error',
@@ -271,6 +296,11 @@ class LavadoEmpaqueController extends Controller
      */
     public function completarHidrotermico(Request $request, ProcesoEmpaque $proceso): JsonResponse
     {
+        $gate = $this->ensureLavadoEnabledForEntity($proceso->entity_id);
+        if ($gate) {
+            return $gate;
+        }
+
         if ($proceso->status !== 'hidrotermico') {
             return response()->json([
                 'status' => 'error',
@@ -311,6 +341,11 @@ class LavadoEmpaqueController extends Controller
      */
     public function completarEnfriamiento(Request $request, ProcesoEmpaque $proceso): JsonResponse
     {
+        $gate = $this->ensureLavadoEnabledForEntity($proceso->entity_id);
+        if ($gate) {
+            return $gate;
+        }
+
         if ($proceso->status !== 'enfriando') {
             return response()->json([
                 'status' => 'error',
@@ -337,6 +372,11 @@ class LavadoEmpaqueController extends Controller
      */
     public function registrarRezaga(Request $request, ProcesoEmpaque $proceso): JsonResponse
     {
+        $gate = $this->ensureLavadoEnabledForEntity($proceso->entity_id);
+        if ($gate) {
+            return $gate;
+        }
+
         if (!in_array($proceso->status, ['lavando', 'hidrotermico'])) {
             return response()->json([
                 'status' => 'error',
@@ -398,6 +438,11 @@ class LavadoEmpaqueController extends Controller
      */
     public function devolverAPiso(ProcesoEmpaque $proceso): JsonResponse
     {
+        $gate = $this->ensureLavadoEnabledForEntity($proceso->entity_id);
+        if ($gate) {
+            return $gate;
+        }
+
         if ($proceso->status !== 'lavando') {
             return response()->json([
                 'status' => 'error',
@@ -463,5 +508,33 @@ class LavadoEmpaqueController extends Controller
         }
 
         return $prefix . str_pad($nextNum, 4, '0', STR_PAD_LEFT);
+    }
+
+    private function ensureLavadoEnabledForEntity($entityId): ?JsonResponse
+    {
+        if (!$entityId) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'El módulo Lavado requiere entity_id',
+            ], 422);
+        }
+
+        $entity = Entity::find($entityId);
+
+        if (!$entity) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Entidad no encontrada',
+            ], 404);
+        }
+
+        if (!$entity->usa_hidrotermico) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Acceso denegado: el módulo Lavado solo está disponible para empaques con hidrotérmico habilitado',
+            ], 403);
+        }
+
+        return null;
     }
 }
