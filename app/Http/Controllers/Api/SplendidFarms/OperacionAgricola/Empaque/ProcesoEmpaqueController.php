@@ -385,22 +385,70 @@ class ProcesoEmpaqueController extends Controller
             ], 403);
         }
 
-        // Verificar que no tenga producción ni rezaga asociada
-        $produccionesCount = $proceso->producciones()->count();
-        $rezagasCount = $proceso->rezagas()->count();
+        // Verificar dependencias activas y soft-deleted
+        $produccionesActivas = $proceso->producciones()->select('id', 'folio_produccion')->get();
+        $produccionesEliminadas = $proceso->producciones()->onlyTrashed()->select('id', 'folio_produccion')->get();
+        $rezagasActivas = $proceso->rezagas()->select('id', 'folio_rezaga')->get();
+        $rezagasEliminadas = $proceso->rezagas()->onlyTrashed()->select('id', 'folio_rezaga')->get();
 
-        if ($produccionesCount > 0 || $rezagasCount > 0) {
+        if ($produccionesActivas->isNotEmpty() || $produccionesEliminadas->isNotEmpty() || $rezagasActivas->isNotEmpty()) {
             $deps = [];
-            if ($produccionesCount > 0) $deps[] = "{$produccionesCount} producción(es)";
-            if ($rezagasCount > 0) $deps[] = "{$rezagasCount} rezaga(s)";
+            if ($produccionesActivas->isNotEmpty()) {
+                $deps[] = $produccionesActivas->count() . ' producción(es)';
+            }
+            if ($produccionesEliminadas->isNotEmpty()) {
+                $deps[] = $produccionesEliminadas->count() . ' producción(es) eliminada(s)';
+            }
+            if ($rezagasActivas->isNotEmpty()) {
+                $deps[] = $rezagasActivas->count() . ' rezaga(s)';
+            }
+
             return response()->json([
                 'status' => 'error',
                 'message' => 'No se puede eliminar: el folio tiene ' . implode(' y ', $deps) . ' asociadas',
+                'details' => [
+                    'producciones_activas' => $produccionesActivas->map(fn($p) => [
+                        'id' => $p->id,
+                        'folio' => $p->folio_produccion,
+                    ])->values(),
+                    'producciones_eliminadas' => $produccionesEliminadas->map(fn($p) => [
+                        'id' => $p->id,
+                        'folio' => $p->folio_produccion,
+                    ])->values(),
+                    'rezagas_activas' => $rezagasActivas->map(fn($r) => [
+                        'id' => $r->id,
+                        'folio' => $r->folio_rezaga,
+                    ])->values(),
+                    'rezagas_eliminadas' => $rezagasEliminadas->map(fn($r) => [
+                        'id' => $r->id,
+                        'folio' => $r->folio_rezaga,
+                    ])->values(),
+                ],
             ], 422);
         }
 
         $folio = $proceso->folio_proceso;
-        $proceso->forceDelete();
+
+        try {
+            DB::transaction(function () use ($proceso) {
+                // Si existen rezagas soft-deleted, purgarlas para liberar FK antes de eliminar el proceso
+                if ($rezagasEliminadas->isNotEmpty()) {
+                    RezagaEmpaque::onlyTrashed()
+                        ->where('proceso_id', $proceso->id)
+                        ->forceDelete();
+                }
+
+                $proceso->forceDelete();
+            });
+        } catch (\Throwable $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No se pudo eliminar el folio consumido por dependencias asociadas',
+                'details' => [
+                    'exception' => class_basename($e),
+                ],
+            ], 422);
+        }
 
         return response()->json([
             'success' => true,
