@@ -9,6 +9,7 @@ use App\Models\RecepcionEmpaque;
 use App\Models\RezagaEmpaque;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class LavadoEmpaqueController extends Controller
 {
@@ -73,6 +74,7 @@ class LavadoEmpaqueController extends Controller
 
             if ($disponible > 0) {
                 $pesoUnitario = $rec->tipoCarga ? (float) $rec->tipoCarga->peso_estimado_kg : 0;
+                $variedad = $rec->etapa?->variedad ?? $rec->salidaCampo?->variedad;
 
                 $pendientes[] = [
                     'recepcion_id' => $rec->id,
@@ -81,6 +83,9 @@ class LavadoEmpaqueController extends Controller
                     'productor' => $rec->productor,
                     'lote' => $rec->lote,
                     'etapa' => $rec->etapa,
+                    'salida_campo' => $rec->salidaCampo,
+                    'variedad' => $variedad,
+                    'variedad_nombre' => $variedad?->nombre,
                     'tipo_carga' => $rec->tipoCarga,
                     'entity' => $rec->entity,
                     'cantidad_recibida' => $rec->cantidad_recibida,
@@ -247,6 +252,7 @@ class LavadoEmpaqueController extends Controller
                 'status' => 'listo_produccion',
                 'fecha_listo_produccion' => now('America/Mexico_City')->toDateString(),
             ]);
+            $proceso = $this->consolidarListoProduccion($proceso);
             $mensaje = 'Lavado completado. Listo para producción';
         }
 
@@ -357,6 +363,8 @@ class LavadoEmpaqueController extends Controller
             'status' => 'listo_produccion',
             'fecha_listo_produccion' => now('America/Mexico_City')->toDateString(),
         ]);
+
+        $proceso = $this->consolidarListoProduccion($proceso);
 
         $proceso->load($this->eagerLoad);
 
@@ -488,6 +496,54 @@ class LavadoEmpaqueController extends Controller
         }
 
         return $rezaga;
+    }
+
+    /**
+     * Consolida folios parciales en listo_produccion para evitar duplicados del mismo folio.
+     */
+    private function consolidarListoProduccion(ProcesoEmpaque $proceso): ProcesoEmpaque
+    {
+        if ($proceso->status !== 'listo_produccion') {
+            return $proceso;
+        }
+
+        $target = ProcesoEmpaque::query()
+            ->where('id', '!=', $proceso->id)
+            ->where('temporada_id', $proceso->temporada_id)
+            ->where('entity_id', $proceso->entity_id)
+            ->where('recepcion_id', $proceso->recepcion_id)
+            ->where('folio_proceso', $proceso->folio_proceso)
+            ->where('status', 'listo_produccion')
+            ->orderBy('id')
+            ->first();
+
+        if (!$target) {
+            return $proceso;
+        }
+
+        DB::transaction(function () use (&$target, $proceso) {
+            $target->update([
+                'cantidad_entrada' => (int) $target->cantidad_entrada + (int) $proceso->cantidad_entrada,
+                'peso_entrada_kg' => (float) $target->peso_entrada_kg + (float) $proceso->peso_entrada_kg,
+                'cantidad_disponible' => (int) $target->cantidad_disponible + (int) $proceso->cantidad_disponible,
+                'peso_disponible_kg' => (float) $target->peso_disponible_kg + (float) $proceso->peso_disponible_kg,
+                'rezaga_lavado_kg' => (float) $target->rezaga_lavado_kg + (float) $proceso->rezaga_lavado_kg,
+                'rezaga_lavado_cantidad' => (int) $target->rezaga_lavado_cantidad + (int) $proceso->rezaga_lavado_cantidad,
+                'rezaga_hidrotermico_kg' => (float) $target->rezaga_hidrotermico_kg + (float) $proceso->rezaga_hidrotermico_kg,
+                'rezaga_hidrotermico_cantidad' => (int) $target->rezaga_hidrotermico_cantidad + (int) $proceso->rezaga_hidrotermico_cantidad,
+                'fecha_listo_produccion' => now('America/Mexico_City')->toDateString(),
+            ]);
+
+            RezagaEmpaque::where('proceso_id', $proceso->id)
+                ->update(['proceso_id' => $target->id]);
+
+            // Soft delete: mantiene trazabilidad y evita mostrar duplicados en queries normales.
+            $proceso->delete();
+
+            $target->refresh();
+        });
+
+        return $target;
     }
 
     private function generarFolioRezaga(int $temporadaId, int $entityId): string

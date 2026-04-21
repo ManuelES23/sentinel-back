@@ -35,6 +35,8 @@ class ProcesoEmpaqueController extends Controller
 
     private array $recepcionEagerLoad = [
         'entity:id,name,code',
+        'salidaCampo:id,folio_salida,variedad_id',
+        'salidaCampo.variedad:id,nombre',
         'productor:id,nombre,apellido',
         'lote:id,nombre,numero_lote,zona_cultivo_id',
         'lote.zonaCultivo:id,nombre',
@@ -142,6 +144,7 @@ class ProcesoEmpaqueController extends Controller
 
             if ($disponible > 0) {
                 $pesoUnitario = $rec->tipoCarga ? (float) $rec->tipoCarga->peso_estimado_kg : 0;
+                $variedad = $rec->etapa?->variedad ?? $rec->salidaCampo?->variedad;
 
                 $piso[] = [
                     'recepcion_id' => $rec->id,
@@ -150,6 +153,9 @@ class ProcesoEmpaqueController extends Controller
                     'productor' => $rec->productor,
                     'lote' => $rec->lote,
                     'etapa' => $rec->etapa,
+                    'salida_campo' => $rec->salidaCampo,
+                    'variedad' => $variedad,
+                    'variedad_nombre' => $variedad?->nombre,
                     'tipo_carga' => $rec->tipoCarga,
                     'entity' => $rec->entity,
                     'cantidad_recibida' => $rec->cantidad_recibida,
@@ -184,6 +190,7 @@ class ProcesoEmpaqueController extends Controller
         $piso = [];
         foreach ($procesos as $p) {
             $pesoUnitario = $p->tipoCarga ? (float) $p->tipoCarga->peso_estimado_kg : 0;
+            $variedad = $p->etapa?->variedad ?? $p->recepcion?->salidaCampo?->variedad;
 
             $piso[] = [
                 'proceso_id' => $p->id,
@@ -193,6 +200,9 @@ class ProcesoEmpaqueController extends Controller
                 'productor' => $p->productor,
                 'lote' => $p->lote,
                 'etapa' => $p->etapa,
+                'recepcion' => $p->recepcion,
+                'variedad' => $variedad,
+                'variedad_nombre' => $variedad?->nombre,
                 'tipo_carga' => $p->tipoCarga,
                 'entity' => $p->entity,
                 'cantidad_recibida' => $p->cantidad_entrada,
