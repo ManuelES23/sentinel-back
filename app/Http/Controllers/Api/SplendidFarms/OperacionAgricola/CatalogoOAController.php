@@ -84,11 +84,22 @@ class CatalogoOAController extends Controller
     {
         $query = Plaga::active()->orderBy('tipo')->orderBy('nombre');
 
+        if ($request->filled('cultivo_id')) {
+            $query->byCultivo($request->cultivo_id);
+        }
+
         if ($request->filled('tipo')) {
             $query->byTipo($request->tipo);
         }
 
-        $plagas = $query->get(['id', 'nombre', 'nombre_cientifico', 'tipo']);
+        $plagas = $query->get([
+            'id',
+            'cultivo_id',
+            'nombre',
+            'abreviatura',
+            'nombre_cientifico',
+            'tipo',
+        ]);
 
         return response()->json([
             'success' => true,

@@ -47,6 +47,9 @@ class MasterStructureSeeder extends Seeder
         $this->createSplendidFarmsApps($enterprises['splendidfarms']);
         $this->createSplendidByPorvenirApps($enterprises['splendidbyporvenir']);
 
+        // 3.1 Catálogos base de personal SF (grupos y puestos)
+        $this->call(SfPersonalCatalogSeeder::class);
+
         // 4. Asignar permisos
         $this->assignPermissions();
 
@@ -284,6 +287,7 @@ class MasterStructureSeeder extends Seeder
             ['slug' => 'convenios-compra', 'name' => 'Convenios de Compra', 'icon' => 'Handshake', 'order' => 1],
             ['slug' => 'liquidaciones', 'name' => 'Liquidaciones', 'icon' => 'Receipt', 'order' => 2],
             ['slug' => 'tablero-productores', 'name' => 'Tablero de Productores', 'icon' => 'BarChart3', 'order' => 3],
+            ['slug' => 'abonos', 'name' => 'Abonos', 'icon' => 'Wallet', 'order' => 4],
         ];
 
         foreach ($comprasAgricolasSubmodules as $sub) {
@@ -292,7 +296,7 @@ class MasterStructureSeeder extends Seeder
                 ['name' => $sub['name'], 'icon' => $sub['icon'], 'order' => $sub['order'], 'is_active' => true]
             );
         }
-        $this->command->info("    → Compras Agrícolas: Convenios, Liquidaciones, Tablero Productores");
+        $this->command->info("    → Compras Agrícolas: Convenios, Liquidaciones, Tablero Productores, Abonos");
 
         // Módulo: Organización
         $organizacion = Module::firstOrCreate(
@@ -326,6 +330,29 @@ class MasterStructureSeeder extends Seeder
             ['name' => 'Proveedores', 'icon' => 'Truck', 'order' => 1, 'is_active' => true]
         );
         $this->command->info("    → Catálogos: Proveedores");
+
+        // Módulo: Personal (Empleados SF + Puestos + Grupos + Contratos)
+        $personal = Module::firstOrCreate(
+            ['slug' => 'personal', 'application_id' => $administration->id],
+            ['name' => 'Personal', 'icon' => 'Users', 'order' => 5, 'is_active' => true]
+        );
+
+        $personalSubmodules = [
+            ['slug' => 'empleados', 'name' => 'Empleados', 'icon' => 'UserSquare', 'order' => 1],
+            ['slug' => 'puestos', 'name' => 'Puestos', 'icon' => 'Briefcase', 'order' => 2],
+            ['slug' => 'grupos', 'name' => 'Grupos Salariales', 'icon' => 'Grid3X3', 'order' => 3],
+            ['slug' => 'contratos', 'name' => 'Contratos', 'icon' => 'FileSignature', 'order' => 4],
+            ['slug' => 'asistencia', 'name' => 'Asistencia', 'icon' => 'ClipboardList', 'order' => 5],
+            ['slug' => 'nomina', 'name' => 'Nómina', 'icon' => 'Calculator', 'order' => 6],
+        ];
+
+        foreach ($personalSubmodules as $sub) {
+            Submodule::firstOrCreate(
+                ['slug' => $sub['slug'], 'module_id' => $personal->id],
+                ['name' => $sub['name'], 'icon' => $sub['icon'], 'order' => $sub['order'], 'is_active' => true]
+            );
+        }
+        $this->command->info("    → Personal: Empleados, Puestos, Grupos Salariales, Contratos, Nómina");
 
         // ========================================
         // APLICACIÓN: INVENTARIO

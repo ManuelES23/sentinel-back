@@ -123,26 +123,54 @@ class LiquidacionConsignacion extends Model
     {
         $convenio = $this->convenioCompra;
 
-        // Obtener salidas del convenio en el período
+        // Obtener salidas del convenio en el período con trazabilidad de rezaga real
         $salidas = SalidaCampoCosecha::where('convenio_compra_id', $this->convenio_compra_id)
             ->where('eliminado', false)
             ->whereBetween('fecha', [$this->periodo_inicio, $this->periodo_fin])
-            ->with('tipoCarga:id,nombre')
+            ->with([
+                'tipoCarga:id,nombre',
+                'recepciones:id,salida_campo_id,peso_recibido_kg,peso_bascula',
+                'recepciones.procesos:id,recepcion_id',
+                'recepciones.procesos.rezagas:id,proceso_id,cantidad_kg',
+            ])
             ->get();
 
         // Limpiar detalles previos
         $this->detalles()->delete();
 
+        $esPorKilos = (bool) ($convenio->calculo_por_kilos ?? false);
         $totalKilos = 0;
         $totalCantidad = 0;
         $totalSubtotal = 0;
+        $totalRezagaKg = 0;
+        $totalPesoBase = 0; // Base para calcular % real de rezaga
 
         foreach ($salidas as $salida) {
             // Buscar precio vigente para este tipo de carga
             $precio = $convenio->precioVigente($salida->tipo_carga_id, $salida->fecha);
             $precioUnitario = $precio ? (float) $precio->precio_unitario : 0;
 
-            $subtotal = $salida->cantidad * $precioUnitario;
+            // Calcular rezaga real y peso báscula recibido
+            $pesoBasculaRecepcion = 0;
+            $rezagaKg = 0;
+            foreach ($salida->recepciones as $recepcion) {
+                $pesoBasculaRecepcion += (float) ($recepcion->peso_bascula ?? 0);
+                foreach ($recepcion->procesos as $proceso) {
+                    foreach ($proceso->rezagas as $rezaga) {
+                        $rezagaKg += (float) $rezaga->cantidad_kg;
+                    }
+                }
+            }
+            $totalRezagaKg += $rezagaKg;
+
+            // Subtotal según modalidad del convenio
+            if ($esPorKilos) {
+                $subtotal = $pesoBasculaRecepcion * $precioUnitario;
+                $totalPesoBase += $pesoBasculaRecepcion;
+            } else {
+                $subtotal = $salida->cantidad * $precioUnitario;
+                $totalPesoBase += (float) ($salida->peso_neto_kg ?? 0);
+            }
             $totalSubtotal += $subtotal;
             $totalKilos += (float) ($salida->peso_neto_kg ?? 0);
             $totalCantidad += $salida->cantidad;
@@ -170,8 +198,16 @@ class LiquidacionConsignacion extends Model
             ->first();
 
         $porcentaje = $precioRef ? (float) $precioRef->porcentaje_productor : 100;
-        $porcentajeRezaga = (float) ($convenio->porcentaje_rezaga ?? 0);
-        $descuentoRezaga = $totalSubtotal * ($porcentajeRezaga / 100);
+
+        // Lógica correcta de rezaga:
+        // - porcentaje_rezaga del convenio = rezaga ACEPTADA (tolerada, no se descuenta)
+        // - Solo se descuenta el EXCEDENTE sobre ese umbral
+        $porcentajeRezagaAceptada = (float) ($convenio->porcentaje_rezaga ?? 0);
+        $porcentajeRealRezaga = $totalPesoBase > 0
+            ? ($totalRezagaKg / $totalPesoBase) * 100
+            : 0;
+        $excedentePorcentaje = max(0, $porcentajeRealRezaga - $porcentajeRezagaAceptada);
+        $descuentoRezaga = $totalSubtotal * ($excedentePorcentaje / 100);
         $montoDespuesRezaga = $totalSubtotal - $descuentoRezaga;
 
         $this->total_salidas = $salidas->count();
@@ -180,7 +216,8 @@ class LiquidacionConsignacion extends Model
         $this->precio_unitario_utilizado = $precioRef ? (float) $precioRef->precio_unitario : 0;
         $this->porcentaje_productor = $porcentaje;
         $this->monto_bruto = $totalSubtotal;
-        $this->porcentaje_rezaga_aplicado = $porcentajeRezaga;
+        // Guardamos el % EXCEDENTE realmente aplicado (0 si no hubo excedente)
+        $this->porcentaje_rezaga_aplicado = $excedentePorcentaje;
         $this->descuento_rezaga = $descuentoRezaga;
         $this->monto_productor_calculado = $montoDespuesRezaga * ($porcentaje / 100);
         $this->monto_final = $this->monto_ajustado ?? $this->monto_productor_calculado;

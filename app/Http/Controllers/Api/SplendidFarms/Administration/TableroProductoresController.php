@@ -171,25 +171,36 @@ class TableroProductoresController extends Controller
     private function calcularConvenio(ConvenioCompra $convenio, Request $request): array
     {
         $esPorKilos = (bool) $convenio->calculo_por_kilos;
-        // Si es por kilos, necesitamos recepciones para obtener peso_bascula
-        $salidas = $this->getSalidas($convenio, $request, $esPorKilos);
+        // Trazabilidad siempre para calcular rezaga real (excedente)
+        $salidas = $this->getSalidas($convenio, $request, true);
 
         $montoBruto = 0;
+        $totalRezagaKg = 0;
+        $totalPesoBase = 0;
         $salidasData = [];
 
         foreach ($salidas as $salida) {
             $precioUnitario = $this->obtenerPrecio($convenio, $salida->tipo_carga_id, $salida->fecha);
 
-            if ($esPorKilos) {
-                // Cálculo por kilos: usar peso_bascula de recepciones
-                $pesoBascula = 0;
-                foreach ($salida->recepciones as $recepcion) {
-                    $pesoBascula += (float) ($recepcion->peso_bascula ?? 0);
+            // Peso báscula y rezaga real desde trazabilidad
+            $pesoBasculaRecepcion = 0;
+            $rezagaKg = 0;
+            foreach ($salida->recepciones as $recepcion) {
+                $pesoBasculaRecepcion += (float) ($recepcion->peso_bascula ?? 0);
+                foreach ($recepcion->procesos as $proceso) {
+                    foreach ($proceso->rezagas as $rezaga) {
+                        $rezagaKg += (float) $rezaga->cantidad_kg;
+                    }
                 }
-                $subtotal = $pesoBascula * $precioUnitario;
+            }
+            $totalRezagaKg += $rezagaKg;
+
+            if ($esPorKilos) {
+                $subtotal = $pesoBasculaRecepcion * $precioUnitario;
+                $totalPesoBase += $pesoBasculaRecepcion;
             } else {
-                // Cálculo estándar: por cantidad (cajas/unidades)
                 $subtotal = $salida->cantidad * $precioUnitario;
+                $totalPesoBase += (float) ($salida->peso_neto_kg ?? 0);
             }
             $montoBruto += $subtotal;
 
@@ -217,8 +228,13 @@ class TableroProductoresController extends Controller
             $salidasData[] = $salidaData;
         }
 
+        // Rezaga: solo se descuenta el EXCEDENTE sobre el % aceptado
         $porcentajeRezaga = (float) ($convenio->porcentaje_rezaga ?? 0);
-        $descuentoRezaga = $montoBruto * ($porcentajeRezaga / 100);
+        $porcentajeRealRezaga = $totalPesoBase > 0
+            ? ($totalRezagaKg / $totalPesoBase) * 100
+            : 0;
+        $excedentePorcentaje = max(0, $porcentajeRealRezaga - $porcentajeRezaga);
+        $descuentoRezaga = $montoBruto * ($excedentePorcentaje / 100);
         $montoNeto = $montoBruto - $descuentoRezaga;
 
         return [
@@ -236,6 +252,9 @@ class TableroProductoresController extends Controller
             'total_salidas' => count($salidasData),
             'total_cantidad' => $salidas->sum('cantidad'),
             'total_kilos' => (float) $salidas->sum('peso_neto_kg'),
+            'total_rezaga_kg' => round($totalRezagaKg, 2),
+            'porcentaje_real_rezaga' => round($porcentajeRealRezaga, 2),
+            'excedente_rezaga_pct' => round($excedentePorcentaje, 2),
             'monto_bruto' => $montoBruto,
             'descuento_rezaga' => $descuentoRezaga,
             'monto_neto' => $montoNeto,

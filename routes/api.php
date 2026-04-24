@@ -273,6 +273,47 @@ Route::middleware('auth:sanctum')->group(function () {
                 // Tablero de Productores
                 Route::get('tablero-productores', [App\Http\Controllers\Api\SplendidFarms\Administration\TableroProductoresController::class, 'index']);
                 Route::get('tablero-productores/{productor}', [App\Http\Controllers\Api\SplendidFarms\Administration\TableroProductoresController::class, 'show']);
+
+                // Abonos a Productores
+                Route::get('abonos/estado-cuenta/{productor}', [App\Http\Controllers\Api\SplendidFarms\Administration\AbonoProductorController::class, 'estadoCuenta']);
+                Route::apiResource('abonos', App\Http\Controllers\Api\SplendidFarms\Administration\AbonoProductorController::class)
+                    ->parameters(['abonos' => 'abono']);
+            });
+
+            // ─── Módulo: Personal (Empleados SF + Contratos) ─────
+            Route::prefix('personal')->group(function () {
+                // Empleados SF
+                Route::get('empleados/list', [App\Http\Controllers\Api\SplendidFarms\Administration\SfEmployeeController::class, 'list']);
+                Route::apiResource('empleados', App\Http\Controllers\Api\SplendidFarms\Administration\SfEmployeeController::class)
+                    ->parameters(['empleados' => 'sfEmployee']);
+
+                // Catálogo de grupos salariales (A-Z)
+                Route::get('grupos/list', [App\Http\Controllers\Api\SplendidFarms\Administration\SfPositionGroupController::class, 'list']);
+                Route::apiResource('grupos', App\Http\Controllers\Api\SplendidFarms\Administration\SfPositionGroupController::class)
+                    ->parameters(['grupos' => 'grupo']);
+
+                // Catálogo de puestos (asignados a grupo salarial)
+                Route::get('puestos/list', [App\Http\Controllers\Api\SplendidFarms\Administration\SfPositionController::class, 'list']);
+                Route::apiResource('puestos', App\Http\Controllers\Api\SplendidFarms\Administration\SfPositionController::class)
+                    ->parameters(['puestos' => 'puesto']);
+
+                // Contratos (PDF/DOCX se generan en el frontend)
+                Route::apiResource('contratos', App\Http\Controllers\Api\SplendidFarms\Administration\SfEmployeeContractController::class)
+                    ->parameters(['contratos' => 'contract']);
+
+                // Asistencia SF (importación por llave de checador y prenómina)
+                Route::prefix('asistencia')->group(function () {
+                    Route::get('/', [App\Http\Controllers\Api\SplendidFarms\Administration\SfAttendanceController::class, 'index']);
+                    Route::post('importar-excel', [App\Http\Controllers\Api\SplendidFarms\Administration\SfAttendanceController::class, 'importExcel']);
+                    Route::get('nomina-resumen', [App\Http\Controllers\Api\SplendidFarms\Administration\SfAttendanceController::class, 'payrollSummary']);
+                });
+
+                // Nómina SF (submódulo histórico)
+                Route::prefix('nomina')->group(function () {
+                    Route::get('historico', [App\Http\Controllers\Api\SplendidFarms\Administration\SfPayrollController::class, 'index']);
+                    Route::get('historico/{nomina}', [App\Http\Controllers\Api\SplendidFarms\Administration\SfPayrollController::class, 'show']);
+                    Route::post('procesar-archivo', [App\Http\Controllers\Api\SplendidFarms\Administration\SfPayrollController::class, 'processFile']);
+                });
             });
         });
         
@@ -790,6 +831,8 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::prefix('asistencia')->group(function () {
                 Route::get('dashboard', [App\Http\Controllers\Api\GrupoEsplendido\RH\AttendanceController::class, 'todayDashboard']);
                 Route::get('reporte', [App\Http\Controllers\Api\GrupoEsplendido\RH\AttendanceController::class, 'report']);
+                Route::post('importar-excel', [App\Http\Controllers\Api\GrupoEsplendido\RH\AttendanceController::class, 'importExcel']);
+                Route::get('nomina-resumen', [App\Http\Controllers\Api\GrupoEsplendido\RH\AttendanceController::class, 'payrollSummary']);
             });
             Route::apiResource('asistencia', App\Http\Controllers\Api\GrupoEsplendido\RH\AttendanceController::class)
                 ->parameters(['asistencia' => 'attendance']);

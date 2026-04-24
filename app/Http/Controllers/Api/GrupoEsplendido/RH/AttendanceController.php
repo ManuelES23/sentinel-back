@@ -5,12 +5,17 @@ namespace App\Http\Controllers\Api\GrupoEsplendido\RH;
 use App\Http\Controllers\Controller;
 use App\Models\AttendanceRecord;
 use App\Models\Employee;
+use App\Services\AttendanceSpreadsheetService;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class AttendanceController extends Controller
 {
+    public function __construct(private readonly AttendanceSpreadsheetService $spreadsheetService)
+    {
+    }
+
     /**
      * Listar registros de asistencia
      */
@@ -332,6 +337,217 @@ class AttendanceController extends Controller
                     'end' => $validated['end_date'],
                 ],
                 'report' => $report,
+            ],
+        ]);
+    }
+
+    /**
+     * Importar asistencias desde Excel/CSV por checker_key.
+     */
+    public function importExcel(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'file' => 'required|file|max:10240',
+            'enterprise_id' => 'nullable|exists:enterprises,id',
+        ]);
+
+        $file = $request->file('file');
+        $allowedExtensions = ['xlsx', 'xls', 'csv', 'txt', 'ods'];
+        $ext = strtolower($file->getClientOriginalExtension());
+
+        if (! in_array($ext, $allowedExtensions, true)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'El archivo debe tener una extensión válida: ' . implode(', ', $allowedExtensions),
+            ], 422);
+        }
+
+        $rows = $this->spreadsheetService->parse($request->file('file'));
+
+        $employees = Employee::query()
+            ->when(! empty($validated['enterprise_id']), function ($query) use ($validated) {
+                $query->where('enterprise_id', $validated['enterprise_id']);
+            })
+            ->get();
+
+        $employeeMap = [];
+        foreach ($employees as $employee) {
+            $keys = array_filter([
+                $employee->checker_key,
+                $employee->employee_number,
+                ltrim((string) $employee->checker_key, '0'),
+                ltrim((string) $employee->employee_number, '0'),
+            ]);
+
+            foreach ($keys as $key) {
+                $normalized = strtoupper((string) $key);
+                if ($normalized !== '') {
+                    $employeeMap[$normalized] = $employee;
+                }
+            }
+        }
+
+        $created = 0;
+        $updated = 0;
+        $notMatched = 0;
+        $invalidRows = 0;
+        $unmatchedKeys = [];
+        $importedDates = [];
+
+        foreach ($rows as $row) {
+            $rawKey = strtoupper((string) $row['checker_key']);
+            $trimmedKey = ltrim($rawKey, '0');
+
+            $employee = $employeeMap[$rawKey]
+                ?? $employeeMap[$trimmedKey]
+                ?? null;
+
+            if (! $employee) {
+                $notMatched++;
+                $unmatchedKeys[$rawKey] = true;
+                continue;
+            }
+
+            try {
+                $checkIn = $row['check_in'] ? Carbon::parse($row['date'] . ' ' . $row['check_in']) : null;
+                $checkOut = $row['check_out'] ? Carbon::parse($row['date'] . ' ' . $row['check_out']) : null;
+                if ($checkIn && $checkOut && $checkOut->lessThan($checkIn)) {
+                    $checkOut->addDay();
+                }
+            } catch (\Throwable) {
+                $invalidRows++;
+                continue;
+            }
+
+            $payload = [
+                'check_in' => $checkIn,
+                'check_out' => $checkOut,
+                'status' => in_array($row['status'], [
+                    'present',
+                    'absent',
+                    'late',
+                    'early_leave',
+                    'half_day',
+                    'holiday',
+                    'vacation',
+                    'sick_leave',
+                    'personal_leave',
+                    'work_from_home',
+                ], true) ? $row['status'] : 'present',
+                'check_in_method' => 'auto',
+                'check_out_method' => 'auto',
+                'check_in_device' => $row['device'],
+                'check_out_device' => $row['device'],
+                'notes' => $row['notes'],
+            ];
+
+            if ($checkIn && $checkOut) {
+                $payload['hours_worked'] = $checkIn->diffInMinutes($checkOut) / 60;
+            }
+
+            $record = AttendanceRecord::updateOrCreate(
+                ['employee_id' => $employee->id, 'date' => $row['date']],
+                $payload
+            );
+
+            $importedDates[$row['date']] = true;
+
+            if ($record->wasRecentlyCreated) {
+                $created++;
+            } else {
+                $updated++;
+            }
+        }
+
+        $dateList = array_keys($importedDates);
+        sort($dateList);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Importación de asistencias completada',
+            'data' => [
+                'total_rows' => count($rows),
+                'created' => $created,
+                'updated' => $updated,
+                'not_matched' => $notMatched,
+                'invalid_rows' => $invalidRows,
+                'unmatched_keys' => array_values(array_slice(array_keys($unmatchedKeys), 0, 50)),
+                'imported_dates' => $dateList,
+                'start_date' => $dateList[0] ?? null,
+                'end_date' => $dateList[count($dateList) - 1] ?? null,
+            ],
+        ]);
+    }
+
+    /**
+     * Resumen de prenómina por rango de fechas.
+     */
+    public function payrollSummary(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'start_date' => 'required|date',
+            'end_date' => 'required|date|after_or_equal:start_date',
+            'enterprise_id' => 'nullable|exists:enterprises,id',
+        ]);
+
+        $employeesQuery = Employee::query()->active();
+        if (! empty($validated['enterprise_id'])) {
+            $employeesQuery->where('enterprise_id', $validated['enterprise_id']);
+        }
+
+        $employees = $employeesQuery->get();
+        $rows = [];
+
+        foreach ($employees as $employee) {
+            $records = AttendanceRecord::query()
+                ->where('employee_id', $employee->id)
+                ->whereBetween('date', [$validated['start_date'], $validated['end_date']])
+                ->get();
+
+            $effectiveDays = $records->sum(function (AttendanceRecord $record) {
+                return match ($record->status) {
+                    'present', 'late', 'early_leave', 'work_from_home' => 1,
+                    'half_day' => 0.5,
+                    default => 0,
+                };
+            });
+
+            $dailyRate = 0.0;
+            if ($employee->salary) {
+                $dailyRate = match ($employee->payment_frequency) {
+                    'weekly' => ((float) $employee->salary) / 7,
+                    'monthly' => ((float) $employee->salary) / 30,
+                    default => ((float) $employee->salary) / 15,
+                };
+            }
+
+            $gross = round($effectiveDays * $dailyRate, 2);
+
+            $rows[] = [
+                'employee_id' => $employee->id,
+                'employee_number' => $employee->employee_number,
+                'checker_key' => $employee->checker_key,
+                'full_name' => $employee->full_name,
+                'payment_frequency' => $employee->payment_frequency,
+                'base_salary' => (float) ($employee->salary ?? 0),
+                'daily_rate_calculated' => round($dailyRate, 2),
+                'effective_days' => $effectiveDays,
+                'gross_pay' => $gross,
+            ];
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'period' => [
+                    'start' => $validated['start_date'],
+                    'end' => $validated['end_date'],
+                ],
+                'employees' => $rows,
+                'totals' => [
+                    'employees' => count($rows),
+                    'gross_pay' => round(collect($rows)->sum('gross_pay'), 2),
+                ],
             ],
         ]);
     }

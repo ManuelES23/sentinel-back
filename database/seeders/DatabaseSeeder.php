@@ -35,6 +35,7 @@ class DatabaseSeeder extends Seeder
         $this->call([
             UnitOfMeasureSeeder::class,
             MovementTypeSeeder::class,
+            PlagasEloteDulceSeeder::class,
         ]);
     }
 }

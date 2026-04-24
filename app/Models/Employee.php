@@ -48,6 +48,7 @@ class Employee extends Model
         'payment_frequency',
         'qr_code',
         'pin',
+        'checker_key',
         'status',
         'photo',
         'notes',
@@ -286,7 +287,8 @@ class Employee extends Model
               ->orWhere('first_name', 'like', "%{$term}%")
               ->orWhere('last_name', 'like', "%{$term}%")
               ->orWhere('email', 'like', "%{$term}%")
-              ->orWhere('curp', 'like', "%{$term}%");
+                            ->orWhere('curp', 'like', "%{$term}%")
+                            ->orWhere('checker_key', 'like', "%{$term}%");
         });
     }
 

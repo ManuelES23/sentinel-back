@@ -14,7 +14,9 @@ class Plaga extends Model
     protected $table = 'plagas';
 
     protected $fillable = [
+        'cultivo_id',
         'nombre',
+        'abreviatura',
         'nombre_cientifico',
         'tipo',
         'descripcion',
@@ -35,5 +37,15 @@ class Plaga extends Model
     public function scopeByTipo($query, $tipo)
     {
         return $query->where('tipo', $tipo);
+    }
+
+    public function scopeByCultivo($query, $cultivoId)
+    {
+        return $query->where('cultivo_id', $cultivoId);
+    }
+
+    public function cultivo()
+    {
+        return $this->belongsTo(Cultivo::class);
     }
 }
