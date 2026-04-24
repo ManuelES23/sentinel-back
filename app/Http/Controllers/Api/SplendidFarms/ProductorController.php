@@ -15,7 +15,7 @@ class ProductorController extends Controller
      */
     public function index(): JsonResponse
     {
-        $productores = Productor::with('cultivos')
+        $productores = Productor::with(['cultivos', 'temporadas:id,nombre,estado'])
             ->orderBy('created_at', 'desc')
             ->get();
         
@@ -40,11 +40,20 @@ class ProductorController extends Controller
             'rfc' => 'nullable|string|max:13',
             'notas' => 'nullable|string',
             'is_active' => 'boolean',
+            'temporada_ids' => 'nullable|array',
+            'temporada_ids.*' => 'integer|exists:temporadas,id',
         ]);
+
+        $temporadaIds = $validated['temporada_ids'] ?? [];
+        unset($validated['temporada_ids']);
 
         $productor = Productor::create($validated);
 
-        // Broadcast evento en tiempo real
+        if (!empty($temporadaIds)) {
+            $productor->temporadas()->sync($temporadaIds);
+        }
+
+        $productor->load(['cultivos', 'temporadas:id,nombre,estado']);
         broadcast(new ProductorUpdated('created', $productor->toArray()));
 
         return response()->json([
@@ -61,7 +70,7 @@ class ProductorController extends Controller
     {
         return response()->json([
             'success' => true,
-            'data' => $productor->load('cultivos')
+            'data' => $productor->load(['cultivos', 'temporadas:id,nombre,estado'])
         ]);
     }
 
@@ -80,17 +89,26 @@ class ProductorController extends Controller
             'rfc' => 'nullable|string|max:13',
             'notas' => 'nullable|string',
             'is_active' => 'boolean',
+            'temporada_ids' => 'nullable|array',
+            'temporada_ids.*' => 'integer|exists:temporadas,id',
         ]);
+
+        $temporadaIds = $validated['temporada_ids'] ?? null;
+        unset($validated['temporada_ids']);
 
         $productor->update($validated);
 
-        // Broadcast evento en tiempo real
-        broadcast(new ProductorUpdated('updated', $productor->fresh()->toArray()));
+        if ($temporadaIds !== null) {
+            $productor->temporadas()->sync($temporadaIds);
+        }
+
+        $productor->load(['cultivos', 'temporadas:id,nombre,estado']);
+        broadcast(new ProductorUpdated('updated', $productor->toArray()));
 
         return response()->json([
             'success' => true,
             'message' => 'Productor actualizado exitosamente',
-            'data' => $productor->fresh()
+            'data' => $productor
         ]);
     }
 
@@ -117,7 +135,7 @@ class ProductorController extends Controller
      */
     public function activos(): JsonResponse
     {
-        $productores = Productor::with('cultivos')
+        $productores = Productor::with(['cultivos', 'temporadas:id,nombre,estado'])
             ->active()
             ->orderBy('created_at', 'desc')
             ->get();
@@ -142,12 +160,12 @@ class ProductorController extends Controller
         $productor->cultivos()->sync($validated['cultivo_ids']);
 
         // Broadcast evento en tiempo real
-        broadcast(new ProductorUpdated('updated', $productor->load('cultivos')->toArray()));
+        broadcast(new ProductorUpdated('updated', $productor->load(['cultivos', 'temporadas:id,nombre,estado'])->toArray()));
 
         return response()->json([
             'success' => true,
             'message' => 'Cultivos asignados exitosamente',
-            'data' => $productor->load('cultivos')
+            'data' => $productor->load(['cultivos', 'temporadas:id,nombre,estado'])
         ]);
     }
 
@@ -159,6 +177,24 @@ class ProductorController extends Controller
         return response()->json([
             'success' => true,
             'data' => $productor->cultivos
+        ]);
+    }
+
+    public function syncTemporadas(Request $request, Productor $productor): JsonResponse
+    {
+        $validated = $request->validate([
+            'temporada_ids' => 'required|array',
+            'temporada_ids.*' => 'integer|exists:temporadas,id',
+        ]);
+
+        $productor->temporadas()->sync($validated['temporada_ids']);
+        $productor->load(['cultivos', 'temporadas:id,nombre,estado']);
+        broadcast(new ProductorUpdated('updated', $productor->toArray()));
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Temporadas asignadas exitosamente',
+            'data' => $productor
         ]);
     }
 }

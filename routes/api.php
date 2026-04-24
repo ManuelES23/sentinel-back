@@ -244,6 +244,7 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::get('productores-activos', [App\Http\Controllers\Api\SplendidFarms\ProductorController::class, 'activos']);
                 Route::get('productores/{productor}/cultivos', [App\Http\Controllers\Api\SplendidFarms\ProductorController::class, 'getCultivos']);
                 Route::post('productores/{productor}/cultivos', [App\Http\Controllers\Api\SplendidFarms\ProductorController::class, 'syncCultivos']);
+                                Route::post('productores/{productor}/temporadas', [App\Http\Controllers\Api\SplendidFarms\ProductorController::class, 'syncTemporadas']);
                 Route::get('productores/{productor}/lotes', [App\Http\Controllers\Api\SplendidFarms\LoteController::class, 'byProductor']);
                 // Zonas de Cultivo
                 Route::apiResource('zonas-cultivo', App\Http\Controllers\Api\SplendidFarms\ZonaCultivoController::class);

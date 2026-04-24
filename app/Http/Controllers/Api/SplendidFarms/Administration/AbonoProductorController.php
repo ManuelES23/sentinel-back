@@ -15,7 +15,6 @@ class AbonoProductorController extends Controller
     private array $eagerLoad = [
         'productor:id,nombre,apellido,tipo',
         'temporada:id,nombre',
-        'convenioCompra:id,folio_convenio,modalidad,status',
         'creador:id,name',
     ];
 
@@ -31,9 +30,6 @@ class AbonoProductorController extends Controller
         }
         if ($request->filled('temporada_id')) {
             $query->porTemporada($request->temporada_id);
-        }
-        if ($request->filled('convenio_compra_id')) {
-            $query->porConvenio($request->convenio_compra_id);
         }
         if ($request->filled('status')) {
             $query->where('status', $request->status);
@@ -61,7 +57,6 @@ class AbonoProductorController extends Controller
         $validated = $request->validate([
             'productor_id' => 'required|exists:productores,id',
             'temporada_id' => 'nullable|exists:temporadas,id',
-            'convenio_compra_id' => 'nullable|exists:convenios_compra,id',
             'fecha' => 'required|date',
             'monto' => 'required|numeric|min:0.01',
             'metodo_pago' => 'required|in:efectivo,transferencia,cheque,deposito,otro',
@@ -111,7 +106,6 @@ class AbonoProductorController extends Controller
         $validated = $request->validate([
             'productor_id' => 'sometimes|exists:productores,id',
             'temporada_id' => 'sometimes|nullable|exists:temporadas,id',
-            'convenio_compra_id' => 'sometimes|nullable|exists:convenios_compra,id',
             'fecha' => 'sometimes|date',
             'monto' => 'sometimes|numeric|min:0.01',
             'metodo_pago' => 'sometimes|in:efectivo,transferencia,cheque,deposito,otro',

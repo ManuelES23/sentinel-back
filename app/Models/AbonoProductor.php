@@ -18,7 +18,6 @@ class AbonoProductor extends Model
         'folio_abono',
         'productor_id',
         'temporada_id',
-        'convenio_compra_id',
         'fecha',
         'monto',
         'metodo_pago',
@@ -49,11 +48,6 @@ class AbonoProductor extends Model
         return $this->belongsTo(Temporada::class);
     }
 
-    public function convenioCompra(): BelongsTo
-    {
-        return $this->belongsTo(ConvenioCompra::class);
-    }
-
     public function creador(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');
@@ -76,8 +70,4 @@ class AbonoProductor extends Model
         return $query->where('temporada_id', $temporadaId);
     }
 
-    public function scopePorConvenio($query, $convenioId)
-    {
-        return $query->where('convenio_compra_id', $convenioId);
-    }
 }
