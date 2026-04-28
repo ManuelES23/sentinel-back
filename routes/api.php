@@ -81,6 +81,7 @@ Route::middleware('auth:sanctum')->group(function () {
     
     // Rutas de empresas
     Route::apiResource('enterprises', App\Http\Controllers\Api\EnterpriseController::class);
+    Route::get('enterprises/{enterprise}/logo-data', [App\Http\Controllers\Api\EnterpriseController::class, 'logoData']);
     Route::get('enterprises/{enterprise}/applications', [App\Http\Controllers\Api\EnterpriseController::class, 'applications']);
     Route::get('enterprises/{enterprise}/profile', [App\Http\Controllers\Api\EnterpriseController::class, 'profile']);
     

@@ -546,6 +546,7 @@ class MasterStructureSeeder extends Seeder
         );
 
         $empaqueSubmodules = [
+            ['slug' => 'dashboard',    'name' => 'Dashboard',        'icon' => 'LayoutDashboard','order' => 0],
             ['slug' => 'recepciones',  'name' => 'Recepciones',      'icon' => 'Download',       'order' => 1],
             ['slug' => 'lavado',       'name' => 'Lavado',           'icon' => 'Droplets',       'order' => 2],
             ['slug' => 'proceso',      'name' => 'Proceso',          'icon' => 'Layers',         'order' => 3],
@@ -554,6 +555,7 @@ class MasterStructureSeeder extends Seeder
             ['slug' => 'embarques',    'name' => 'Embarques',        'icon' => 'Truck',          'order' => 6],
             ['slug' => 'venta-rezaga', 'name' => 'Venta de Rezaga',  'icon' => 'ShoppingCart',   'order' => 7],
             ['slug' => 'calidad',      'name' => 'Calidad',          'icon' => 'ClipboardCheck', 'order' => 8],
+            ['slug' => 'reportes',     'name' => 'Reportes',         'icon' => 'FileText',       'order' => 9],
         ];
 
         foreach ($empaqueSubmodules as $sub) {
@@ -562,7 +564,7 @@ class MasterStructureSeeder extends Seeder
                 ['name' => $sub['name'], 'icon' => $sub['icon'], 'order' => $sub['order'], 'is_active' => true]
             );
         }
-        $this->command->info("    → Empaque: Recepciones, Lavado, Proceso, Producción, Rezaga, Embarques, Venta Rezaga, Calidad");
+        $this->command->info("    → Empaque: Dashboard, Recepciones, Lavado, Proceso, Producción, Rezaga, Embarques, Venta Rezaga, Calidad, Reportes");
     }
 
     /**

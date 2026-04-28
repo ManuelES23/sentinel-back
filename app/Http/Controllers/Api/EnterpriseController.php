@@ -188,6 +188,45 @@ class EnterpriseController extends Controller
     }
 
     /**
+     * Obtener logo de una empresa como data URL para exportes (PDF/DOCX).
+     */
+    public function logoData($id): JsonResponse
+    {
+        $enterpriseModel = is_numeric($id)
+            ? Enterprise::find($id)
+            : Enterprise::where('slug', $id)->first();
+
+        if (!$enterpriseModel) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Empresa no encontrada'
+            ], 404);
+        }
+
+        if (!$enterpriseModel->logo || !Storage::disk('public')->exists($enterpriseModel->logo)) {
+            return response()->json([
+                'status' => 'success',
+                'data' => [
+                    'logo_data_url' => null,
+                    'logo' => null,
+                ]
+            ]);
+        }
+
+        $mime = Storage::disk('public')->mimeType($enterpriseModel->logo) ?? 'image/png';
+        $content = Storage::disk('public')->get($enterpriseModel->logo);
+        $dataUrl = 'data:' . $mime . ';base64,' . base64_encode($content);
+
+        return response()->json([
+            'status' => 'success',
+            'data' => [
+                'logo_data_url' => $dataUrl,
+                'logo' => asset('storage/' . $enterpriseModel->logo),
+            ]
+        ]);
+    }
+
+    /**
      * Actualizar una empresa
      */
     public function update(Request $request, $id): JsonResponse
