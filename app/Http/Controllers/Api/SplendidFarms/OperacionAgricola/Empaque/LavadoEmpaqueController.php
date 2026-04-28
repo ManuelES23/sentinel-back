@@ -7,6 +7,7 @@ use App\Models\Entity;
 use App\Models\ProcesoEmpaque;
 use App\Models\RecepcionEmpaque;
 use App\Models\RezagaEmpaque;
+use App\Models\TipoCarga;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -14,10 +15,11 @@ use Illuminate\Support\Facades\DB;
 class LavadoEmpaqueController extends Controller
 {
     private array $eagerLoad = [
-        'entity:id,name,code',
-        'recepcion:id,folio_recepcion,fecha_recepcion,cantidad_recibida,peso_recibido_kg,salida_campo_id',
+        'entity:id,name,code,usa_hidrotermico',
+        'recepcion:id,folio_recepcion,fecha_recepcion,cantidad_recibida,peso_recibido_kg,peso_bascula,salida_campo_id,tipo_carga_id',
         'recepcion.salidaCampo:id,variedad_id',
         'recepcion.salidaCampo.variedad:id,nombre',
+        'recepcion.tipoCarga:id,nombre,peso_estimado_kg',
         'tipoCarga:id,nombre,peso_estimado_kg',
         'productor:id,nombre,apellido',
         'lote:id,nombre,numero_lote,zona_cultivo_id',
@@ -28,7 +30,7 @@ class LavadoEmpaqueController extends Controller
     ];
 
     private array $recepcionEagerLoad = [
-        'entity:id,name,code',
+        'entity:id,name,code,usa_hidrotermico',
         'salidaCampo:id,variedad_id',
         'salidaCampo.variedad:id,nombre',
         'productor:id,nombre,apellido',
@@ -66,13 +68,36 @@ class LavadoEmpaqueController extends Controller
 
         $pendientes = [];
         foreach ($recepciones as $rec) {
-            $usadas = ProcesoEmpaque::where('recepcion_id', $rec->id)
+            $procesosVinculados = ProcesoEmpaque::where('recepcion_id', $rec->id)
                 ->whereIn('status', $lavadoStates)
-                ->sum('cantidad_entrada');
+                ->get(['cantidad_entrada', 'peso_entrada_kg', 'modo_kilos']);
 
-            $disponible = $rec->cantidad_recibida - $usadas;
+            $usadasCajasLegacy = (int) $procesosVinculados->where('modo_kilos', false)->sum('cantidad_entrada');
+            $usadasCajasModoKilos = (int) $procesosVinculados->where('modo_kilos', true)->sum('cantidad_entrada');
+            $usadasKgEnModoKilos = (float) $procesosVinculados->where('modo_kilos', true)->sum('peso_entrada_kg');
 
-            if ($disponible > 0) {
+            $pesoBascula = (float) ($rec->peso_bascula ?? 0);
+            $puedeModoKilos = ($rec->entity?->usa_hidrotermico ?? false) && $pesoBascula > 0;
+
+            // Descuento proporcional de cajas legacy sobre el peso báscula
+            $totalCajas = (int) $rec->cantidad_recibida;
+            $usadasKgEnModoCajas = ($pesoBascula > 0 && $totalCajas > 0)
+                ? round(($usadasCajasLegacy / $totalCajas) * $pesoBascula, 2)
+                : 0.0;
+            $usadasKgTotal = $usadasKgEnModoKilos + $usadasKgEnModoCajas;
+            $pesoBasculaDisponibleKg = max(0, round($pesoBascula - $usadasKgTotal, 2));
+
+            // Cajas disponibles: total menos consumidas en cualquier modo (modo_kilos descuenta cajas equivalentes)
+            $disponibleCajas = max(0, $totalCajas - $usadasCajasLegacy - $usadasCajasModoKilos);
+
+            // Reglas de visibilidad:
+            //  - Si la recepción es candidata a modo_kilos: aparece pendiente solo si quedan kg disponibles.
+            //  - Si no: aparece pendiente solo si quedan cajas disponibles.
+            $aparecePendiente = $puedeModoKilos
+                ? $pesoBasculaDisponibleKg > 0
+                : $disponibleCajas > 0;
+
+            if ($aparecePendiente) {
                 $pesoUnitario = $rec->tipoCarga ? (float) $rec->tipoCarga->peso_estimado_kg : 0;
                 $variedad = $rec->etapa?->variedad ?? $rec->salidaCampo?->variedad;
 
@@ -89,9 +114,13 @@ class LavadoEmpaqueController extends Controller
                     'tipo_carga' => $rec->tipoCarga,
                     'entity' => $rec->entity,
                     'cantidad_recibida' => $rec->cantidad_recibida,
-                    'cantidad_usada' => (int) $usadas,
-                    'cantidad_disponible' => $disponible,
-                    'peso_disponible_kg' => round($disponible * $pesoUnitario, 2),
+                    'cantidad_usada' => $usadasCajasLegacy + $usadasCajasModoKilos,
+                    'cantidad_disponible' => $disponibleCajas,
+                    'peso_disponible_kg' => round($disponibleCajas * $pesoUnitario, 2),
+                    'peso_bascula' => $pesoBascula,
+                    'peso_bascula_usada_kg' => round($usadasKgTotal, 2),
+                    'peso_bascula_disponible_kg' => $pesoBasculaDisponibleKg,
+                    'puede_modo_kilos' => $puedeModoKilos,
                 ];
             }
         }
@@ -101,40 +130,113 @@ class LavadoEmpaqueController extends Controller
 
     /**
      * POST /lavado/mover-a-lavado — Create proceso with status=lavando
+     *
+     * Soporta dos modos:
+     *  - Modo cajas (default): se proporciona `cantidad` (entero).
+     *  - Modo kilos: cuando entity.usa_hidrotermico=true Y recepcion.peso_bascula>0
+     *    se debe proporcionar `cantidad_kg` (decimal). El proceso queda con
+     *    `modo_kilos=true` y `peso_disponible_kg` como fuente de verdad.
      */
     public function moverALavado(Request $request): JsonResponse
     {
         $validated = $request->validate([
             'temporada_id' => 'required|exists:temporadas,id',
             'recepcion_id' => 'required|exists:recepciones_empaque,id',
-            'cantidad' => 'required|integer|min:1',
+            'cantidad' => 'nullable|integer|min:1',
+            'cantidad_kg' => 'nullable|numeric|min:0.01',
         ]);
 
-        $recepcion = RecepcionEmpaque::with('tipoCarga')->findOrFail($validated['recepcion_id']);
+        if (empty($validated['cantidad']) && empty($validated['cantidad_kg'])) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Debes proporcionar `cantidad` (cajas) o `cantidad_kg` (kilos)',
+            ], 422);
+        }
+
+        $recepcion = RecepcionEmpaque::with(['tipoCarga', 'entity'])->findOrFail($validated['recepcion_id']);
 
         $gate = $this->ensureLavadoEnabledForEntity($recepcion->entity_id);
         if ($gate) {
             return $gate;
         }
 
-        $lavadoStates = ['lavando', 'lavado', 'hidrotermico', 'enfriando', 'listo_produccion', 'en_proceso', 'procesado'];
-        $usadas = ProcesoEmpaque::where('recepcion_id', $recepcion->id)
-            ->whereIn('status', $lavadoStates)
-            ->sum('cantidad_entrada');
-        $disponible = $recepcion->cantidad_recibida - $usadas;
+        $usaHidrotermico = (bool) ($recepcion->entity?->usa_hidrotermico ?? false);
+        $pesoBascula = (float) ($recepcion->peso_bascula ?? 0);
+        $puedeModoKilos = $usaHidrotermico && $pesoBascula > 0;
+        $modoKilos = $puedeModoKilos && !empty($validated['cantidad_kg']);
 
-        if ($validated['cantidad'] > $disponible) {
-            return response()->json([
-                'status' => 'error',
-                'message' => "Cantidad solicitada ({$validated['cantidad']}) excede disponible ($disponible)",
-            ], 422);
-        }
+        $lavadoStates = ['lavando', 'lavado', 'hidrotermico', 'enfriando', 'listo_produccion', 'en_proceso', 'procesado'];
+        $procesosVinculados = ProcesoEmpaque::where('recepcion_id', $recepcion->id)
+            ->whereIn('status', $lavadoStates)
+            ->get(['cantidad_entrada', 'peso_entrada_kg', 'modo_kilos']);
 
         $pesoUnitario = $recepcion->tipoCarga ? (float) $recepcion->tipoCarga->peso_estimado_kg : 0;
-        $cantidad = $validated['cantidad'];
-
-        // Use recepcion folio as proceso folio
         $folioProceso = $recepcion->folio_recepcion;
+        $fechaHoy = now('America/Mexico_City')->toDateString();
+
+        if ($modoKilos) {
+            $usadasKgEnModoKilos = (float) $procesosVinculados->where('modo_kilos', true)->sum('peso_entrada_kg');
+            $usadasCajasLegacy = (int) $procesosVinculados->where('modo_kilos', false)->sum('cantidad_entrada');
+            $totalCajas = (int) $recepcion->cantidad_recibida;
+            $usadasKgEnModoCajas = ($pesoBascula > 0 && $totalCajas > 0)
+                ? round(($usadasCajasLegacy / $totalCajas) * $pesoBascula, 2)
+                : 0.0;
+            $usadasKgTotal = $usadasKgEnModoKilos + $usadasKgEnModoCajas;
+            $disponibleKg = max(0, round($pesoBascula - $usadasKgTotal, 2));
+            $solicitadoKg = (float) $validated['cantidad_kg'];
+
+            if ($solicitadoKg > $disponibleKg) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => "Kilos solicitados ($solicitadoKg) exceden disponible ($disponibleKg)",
+                ], 422);
+            }
+
+            // Cajas equivalentes (referencia informativa)
+            $cantidadEquivalente = $pesoUnitario > 0
+                ? (int) max(1, round($solicitadoKg / $pesoUnitario))
+                : 0;
+
+            $proceso = ProcesoEmpaque::create([
+                'temporada_id' => $validated['temporada_id'],
+                'entity_id' => $recepcion->entity_id,
+                'recepcion_id' => $recepcion->id,
+                'folio_proceso' => $folioProceso,
+                'tipo_carga_id' => $recepcion->tipo_carga_id,
+                'productor_id' => $recepcion->productor_id,
+                'lote_id' => $recepcion->lote_id,
+                'etapa_id' => $recepcion->etapa_id,
+                'cantidad_entrada' => $cantidadEquivalente,
+                'peso_entrada_kg' => $solicitadoKg,
+                'cantidad_disponible' => $cantidadEquivalente,
+                'peso_disponible_kg' => $solicitadoKg,
+                'modo_kilos' => true,
+                'fecha_entrada' => $fechaHoy,
+                'fecha_lavado' => $fechaHoy,
+                'status' => 'lavando',
+                'created_by' => $request->user()->id,
+            ]);
+
+            $proceso->load($this->eagerLoad);
+
+            return response()->json([
+                'success' => true,
+                'message' => "Folio movido a lavado ($solicitadoKg kg)",
+                'data' => $proceso,
+            ], 201);
+        }
+
+        // Modo cajas (default)
+        $usadas = (int) $procesosVinculados->where('modo_kilos', false)->sum('cantidad_entrada');
+        $disponible = (int) $recepcion->cantidad_recibida - $usadas;
+        $cantidad = (int) $validated['cantidad'];
+
+        if ($cantidad > $disponible) {
+            return response()->json([
+                'status' => 'error',
+                'message' => "Cantidad solicitada ($cantidad) excede disponible ($disponible)",
+            ], 422);
+        }
 
         $proceso = ProcesoEmpaque::create([
             'temporada_id' => $validated['temporada_id'],
@@ -149,8 +251,9 @@ class LavadoEmpaqueController extends Controller
             'peso_entrada_kg' => $cantidad * $pesoUnitario,
             'cantidad_disponible' => $cantidad,
             'peso_disponible_kg' => $cantidad * $pesoUnitario,
-            'fecha_entrada' => now('America/Mexico_City')->toDateString(),
-            'fecha_lavado' => now('America/Mexico_City')->toDateString(),
+            'modo_kilos' => false,
+            'fecha_entrada' => $fechaHoy,
+            'fecha_lavado' => $fechaHoy,
             'status' => 'lavando',
             'created_by' => $request->user()->id,
         ]);
@@ -230,9 +333,12 @@ class LavadoEmpaqueController extends Controller
         $request->validate([
             'rezaga_kg' => 'nullable|numeric|min:0.01',
             'rezaga_unidades' => 'nullable|integer|min:0',
+            'rezaga_unidades_pequenas' => 'nullable|integer|min:0',
             'subtipo_rezaga' => 'required_with:rezaga_kg|in:hoja,producto',
             'rezaga_motivo' => 'nullable|string|max:500',
             'rezaga_observaciones' => 'nullable|string|max:1000',
+            'tipo_carga_convertida_id' => 'nullable|exists:tipos_carga,id',
+            'cantidad_convertida' => 'nullable|integer|min:1',
         ]);
 
         // Register rezaga if provided
@@ -245,7 +351,23 @@ class LavadoEmpaqueController extends Controller
         $usaHidrotermico = $entity?->usa_hidrotermico ?? false;
 
         if ($usaHidrotermico) {
-            $proceso->update(['status' => 'lavado']);
+            $updatePayload = ['status' => 'lavado'];
+
+            if ($proceso->modo_kilos) {
+                if (!$request->filled('tipo_carga_convertida_id') || !$request->filled('cantidad_convertida')) {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'Debes capturar el tipo de carga convertido y la cantidad de cajas resultantes.',
+                    ], 422);
+                }
+
+                $tipoCargaConvertida = TipoCarga::findOrFail($request->integer('tipo_carga_convertida_id'));
+
+                $updatePayload['tipo_carga_id'] = $tipoCargaConvertida->id;
+                $updatePayload['cantidad_disponible'] = $request->integer('cantidad_convertida');
+            }
+
+            $proceso->update($updatePayload);
             $mensaje = 'Lavado completado. Pendiente de hidrotérmico';
         } else {
             $proceso->update([
@@ -318,6 +440,7 @@ class LavadoEmpaqueController extends Controller
         $request->validate([
             'rezaga_kg' => 'nullable|numeric|min:0.01',
             'rezaga_unidades' => 'nullable|integer|min:0',
+            'rezaga_unidades_pequenas' => 'nullable|integer|min:0',
             'subtipo_rezaga' => 'required_with:rezaga_kg|in:hoja,producto',
             'rezaga_motivo' => 'nullable|string|max:500',
             'rezaga_observaciones' => 'nullable|string|max:1000',
@@ -396,6 +519,7 @@ class LavadoEmpaqueController extends Controller
             'subtipo_rezaga' => 'required|in:hoja,producto',
             'cantidad_kg' => 'required|numeric|min:0.01',
             'cantidad_unidades' => 'nullable|integer|min:0',
+            'cantidad_unidades_pequenas' => 'nullable|integer|min:0',
             'motivo' => 'nullable|string|max:500',
             'observaciones' => 'nullable|string|max:1000',
         ]);
@@ -414,6 +538,7 @@ class LavadoEmpaqueController extends Controller
             'subtipo_rezaga' => $validated['subtipo_rezaga'],
             'fecha' => now('America/Mexico_City')->toDateString(),
             'cantidad_kg' => $validated['cantidad_kg'],
+            'cantidad_unidades_pequenas' => $validated['cantidad_unidades_pequenas'] ?? null,
             'motivo' => $validated['motivo'] ?? null,
             'status' => 'pendiente',
             'observaciones' => $validated['observaciones'] ?? null,
@@ -483,6 +608,7 @@ class LavadoEmpaqueController extends Controller
             'subtipo_rezaga' => $request->input('subtipo_rezaga'),
             'fecha' => now('America/Mexico_City')->toDateString(),
             'cantidad_kg' => $request->input('rezaga_kg'),
+            'cantidad_unidades_pequenas' => $request->input('rezaga_unidades_pequenas'),
             'motivo' => $request->input('rezaga_motivo'),
             'status' => 'pendiente',
             'observaciones' => $request->input('rezaga_observaciones'),
@@ -548,11 +674,12 @@ class LavadoEmpaqueController extends Controller
 
     private function generarFolioRezaga(int $temporadaId, int $entityId): string
     {
-        $entityPad = str_pad($entityId, 2, '0', STR_PAD_LEFT);
+        $entityPad = str_pad((string) $entityId, 2, '0', STR_PAD_LEFT);
         $prefix = "REZ-{$entityPad}-";
 
+        // Nota: la constraint unique de folio_rezaga es global (no por temporada),
+        // por eso el contador se calcula globalmente por entity_id (no por temporada).
         $lastFolio = RezagaEmpaque::withTrashed()
-            ->where('temporada_id', $temporadaId)
             ->where('entity_id', $entityId)
             ->where('folio_rezaga', 'like', "{$prefix}%")
             ->orderByDesc('folio_rezaga')
@@ -563,7 +690,17 @@ class LavadoEmpaqueController extends Controller
             $nextNum = (int) str_replace($prefix, '', $lastFolio) + 1;
         }
 
-        return $prefix . str_pad($nextNum, 4, '0', STR_PAD_LEFT);
+        // Loop de seguridad ante race conditions
+        for ($i = 0; $i < 5; $i++) {
+            $candidate = $prefix . str_pad((string) $nextNum, 4, '0', STR_PAD_LEFT);
+            $exists = RezagaEmpaque::withTrashed()->where('folio_rezaga', $candidate)->exists();
+            if (!$exists) {
+                return $candidate;
+            }
+            $nextNum++;
+        }
+
+        return $prefix . str_pad((string) $nextNum, 4, '0', STR_PAD_LEFT);
     }
 
     private function ensureLavadoEnabledForEntity($entityId): ?JsonResponse

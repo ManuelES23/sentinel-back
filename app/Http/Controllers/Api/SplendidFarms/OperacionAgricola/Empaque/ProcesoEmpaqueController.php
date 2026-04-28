@@ -21,9 +21,10 @@ class ProcesoEmpaqueController extends Controller
 {
     private array $eagerLoad = [
         'entity:id,name,code',
-        'recepcion:id,folio_recepcion,fecha_recepcion,cantidad_recibida,peso_recibido_kg,salida_campo_id',
+        'recepcion:id,folio_recepcion,fecha_recepcion,cantidad_recibida,peso_recibido_kg,salida_campo_id,tipo_carga_id',
         'recepcion.salidaCampo:id,folio_salida,variedad_id',
         'recepcion.salidaCampo.variedad:id,nombre',
+        'recepcion.tipoCarga:id,nombre,peso_estimado_kg',
         'tipoCarga:id,nombre,peso_estimado_kg',
         'productor:id,nombre,apellido',
         'lote:id,nombre,numero_lote,zona_cultivo_id',
@@ -78,9 +79,10 @@ class ProcesoEmpaqueController extends Controller
             'lote.zonaCultivo:id,nombre',
             'etapa:id,nombre,variedad_id',
             'etapa.variedad:id,nombre',
-            'recepcion:id,salida_campo_id',
+            'recepcion:id,salida_campo_id,tipo_carga_id',
             'recepcion.salidaCampo:id,variedad_id',
             'recepcion.salidaCampo.variedad:id,nombre',
+            'recepcion.tipoCarga:id,nombre,peso_estimado_kg',
             'tipoCarga:id,nombre,peso_estimado_kg',
         ])->whereIn('status', ['en_proceso', 'listo_produccion']);
 
@@ -191,6 +193,12 @@ class ProcesoEmpaqueController extends Controller
         foreach ($procesos as $p) {
             $pesoUnitario = $p->tipoCarga ? (float) $p->tipoCarga->peso_estimado_kg : 0;
             $variedad = $p->etapa?->variedad ?? $p->recepcion?->salidaCampo?->variedad;
+            $modoKilos = (bool) $p->modo_kilos;
+            // Cuando el proceso está en modo_kilos, peso_disponible_kg viene del peso báscula real
+            // y no debe recalcularse desde cantidad * peso_unitario.
+            $pesoDisponibleKg = $modoKilos
+                ? (float) $p->peso_disponible_kg
+                : round((float) $p->cantidad_entrada * $pesoUnitario, 2);
 
             $piso[] = [
                 'proceso_id' => $p->id,
@@ -207,8 +215,9 @@ class ProcesoEmpaqueController extends Controller
                 'entity' => $p->entity,
                 'cantidad_recibida' => $p->cantidad_entrada,
                 'cantidad_en_proceso' => 0,
-                'cantidad_disponible' => $p->cantidad_entrada,
-                'peso_disponible_kg' => round($p->cantidad_entrada * $pesoUnitario, 2),
+                'cantidad_disponible' => $p->cantidad_disponible,
+                'peso_disponible_kg' => $pesoDisponibleKg,
+                'modo_kilos' => $modoKilos,
                 'source' => 'lavado',
             ];
         }

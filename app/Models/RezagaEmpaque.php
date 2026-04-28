@@ -15,12 +15,14 @@ class RezagaEmpaque extends Model
 
     protected $fillable = [
         'temporada_id', 'entity_id', 'proceso_id', 'folio_rezaga',
-        'tipo_rezaga', 'subtipo_rezaga', 'fecha', 'cantidad_kg', 'motivo',
+        'tipo_rezaga', 'subtipo_rezaga', 'fecha', 'cantidad_kg',
+        'cantidad_unidades_pequenas', 'motivo',
         'status', 'observaciones', 'created_by',
     ];
 
     protected $casts = [
         'cantidad_kg' => 'decimal:2',
+        'cantidad_unidades_pequenas' => 'integer',
         'fecha' => 'date:Y-m-d',
     ];
 

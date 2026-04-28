@@ -156,6 +156,7 @@ class RezagaEmpaqueController extends Controller
             'subtipo_rezaga' => 'required|in:hoja,producto',
             'fecha' => 'required|date',
             'cantidad_kg' => 'required|numeric|min:0.01',
+            'cantidad_unidades_pequenas' => 'nullable|integer|min:0',
             'motivo' => 'nullable|string',
             'status' => 'nullable|in:pendiente,vendida,destruida',
             'observaciones' => 'nullable|string',
@@ -191,6 +192,7 @@ class RezagaEmpaqueController extends Controller
             'subtipo_rezaga' => 'sometimes|in:hoja,producto',
             'fecha' => 'sometimes|date',
             'cantidad_kg' => 'sometimes|numeric|min:0.01',
+            'cantidad_unidades_pequenas' => 'nullable|integer|min:0',
             'motivo' => 'nullable|string',
             'status' => 'nullable|in:pendiente,vendida,destruida',
             'observaciones' => 'nullable|string',
@@ -215,12 +217,13 @@ class RezagaEmpaqueController extends Controller
 
     private function generarFolio(array $data): string
     {
-        $entityId = str_pad($data['entity_id'], 2, '0', STR_PAD_LEFT);
-        $prefix = "REZ-{$entityId}-";
+        $entityId = (int) $data['entity_id'];
+        $entityPad = str_pad((string) $entityId, 2, '0', STR_PAD_LEFT);
+        $prefix = "REZ-{$entityPad}-";
 
+        // Constraint unique global: el contador es por entity_id (no por temporada).
         $lastFolio = RezagaEmpaque::withTrashed()
-            ->where('temporada_id', $data['temporada_id'])
-            ->where('entity_id', $data['entity_id'])
+            ->where('entity_id', $entityId)
             ->where('folio_rezaga', 'like', "{$prefix}%")
             ->orderByDesc('folio_rezaga')
             ->value('folio_rezaga');
@@ -230,7 +233,17 @@ class RezagaEmpaqueController extends Controller
             $nextNum = (int) str_replace($prefix, '', $lastFolio) + 1;
         }
 
-        return $prefix . str_pad($nextNum, 4, '0', STR_PAD_LEFT);
+        // Retry hasta 5 veces ante race conditions
+        for ($i = 0; $i < 5; $i++) {
+            $candidate = $prefix . str_pad((string) $nextNum, 4, '0', STR_PAD_LEFT);
+            $exists = RezagaEmpaque::withTrashed()->where('folio_rezaga', $candidate)->exists();
+            if (!$exists) {
+                return $candidate;
+            }
+            $nextNum++;
+        }
+
+        return $prefix . str_pad((string) $nextNum, 4, '0', STR_PAD_LEFT);
     }
 
     /**
