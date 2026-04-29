@@ -13,8 +13,11 @@ class EmbarqueEmpaqueController extends Controller
 {
     private array $eagerLoad = [
         'entity:id,name,code',
-        'detalles.produccion:id,numero_pallet,is_cola,variedad_id',
+        'detalles.produccion:id,numero_pallet,is_cola,variedad_id,marca,presentacion,calibre,tipo_empaque,recipe_id,total_cajas',
         'detalles.produccion.variedad:id,nombre',
+        'detalles.produccion.recipe:id,name,output_product_id',
+        'detalles.produccion.recipe.outputProduct:id,name,brand_id',
+        'detalles.produccion.recipe.outputProduct.brand:id,name,code',
         'detalles.produccion.detalles',
         'detalles.produccion.detalles.proceso:id,folio_proceso,etapa_id,recepcion_id',
         'detalles.produccion.detalles.proceso.productor:id,nombre,apellido',
