@@ -158,8 +158,11 @@ class ProduccionEmpaqueController extends Controller
                             'numero_entrada' => 1,
                             'proceso_id' => $validated['proceso_id'],
                             'recipe_id' => $validated['recipe_id'] ?? null,
-                            'cajas_aportadas' => $validated['total_cajas'],
-                            'peso_neto_kg_aportado' => $validated['peso_neto_kg'] ?? 0,
+                            'fecha_produccion' => $validated['fecha_produccion'],
+                            'total_cajas' => $validated['total_cajas'],
+                            'peso_neto_kg' => $validated['peso_neto_kg'] ?? null,
+                            'turno' => $validated['turno'] ?? null,
+                            'observaciones' => $validated['observaciones'] ?? null,
                             'created_by' => $request->user()->id,
                         ]);
                     }
