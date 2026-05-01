@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\TipoCarga;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Schema;
 
 class TipoCargaController extends Controller
 {
@@ -17,10 +18,12 @@ class TipoCargaController extends Controller
             $query->byCultivo($request->cultivo_id);
         }
 
-        if ($request->filled('is_active')) {
-            $query->where('is_active', filter_var($request->is_active, FILTER_VALIDATE_BOOLEAN));
-        } else {
-            $query->active();
+        if (Schema::hasColumn('tipos_carga', 'is_active')) {
+            if ($request->filled('is_active')) {
+                $query->where('is_active', filter_var($request->is_active, FILTER_VALIDATE_BOOLEAN));
+            } else {
+                $query->active();
+            }
         }
 
         if ($request->filled('search')) {

@@ -7,6 +7,7 @@ use App\Models\Productor;
 use App\Models\Temporada;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * Controller simplificado de Productores para Operación Agrícola.
@@ -23,8 +24,15 @@ class ProductorSimpleController extends Controller
         }
 
         $temporada = Temporada::findOrFail($request->temporada_id);
-        $productorIds = $temporada->productoresActivos()->pluck('productores.id');
-        $query = Productor::whereIn('id', $productorIds);
+
+        $query = Productor::query()
+            ->join('temporada_productor', 'temporada_productor.productor_id', '=', 'productores.id')
+            ->where('temporada_productor.temporada_id', $temporada->id);
+
+        // Compatibilidad con instancias donde la columna pivot is_active no existe aún.
+        if (Schema::hasColumn('temporada_productor', 'is_active')) {
+            $query->where('temporada_productor.is_active', true);
+        }
 
         if ($request->filled('search')) {
             $search = $request->search;
@@ -34,9 +42,11 @@ class ProductorSimpleController extends Controller
             });
         }
 
-        $productores = $query->orderBy('nombre')->get([
-            'id', 'tipo', 'nombre', 'apellido', 'telefono', 'is_active', 'created_at',
-        ]);
+        $productores = $query
+            ->select('productores.id', 'productores.tipo', 'productores.nombre', 'productores.apellido', 'productores.telefono', 'productores.is_active', 'productores.created_at')
+            ->distinct()
+            ->orderBy('productores.nombre')
+            ->get();
 
         return response()->json(['success' => true, 'data' => $productores]);
     }

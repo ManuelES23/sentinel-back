@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque;
 use App\Events\SalidaCampoUpdated;
 use App\Http\Controllers\Controller;
 use App\Models\Lote;
+use App\Models\Etapa;
 use App\Models\RecepcionEmpaque;
 use App\Models\SalidaCampoCosecha;
 use App\Models\TipoCarga;
@@ -201,12 +202,17 @@ class RecepcionEmpaqueController extends Controller
 
     public function update(Request $request, RecepcionEmpaque $recepcion): JsonResponse
     {
+        if ($request->filled('etapa_id') && !Etapa::whereKey($request->input('etapa_id'))->exists()) {
+            // En registros legacy puede venir etapa inexistente desde frontend; se normaliza a null para permitir edición.
+            $request->merge(['etapa_id' => null]);
+        }
+
         $validated = $request->validate([
             'entity_id' => 'sometimes|exists:entities,id',
             'fecha_recepcion' => 'sometimes|date',
             'productor_id' => 'sometimes|exists:productores,id',
             'lote_id' => 'sometimes|exists:lotes,id',
-            'etapa_id' => 'sometimes|exists:etapas,id',
+            'etapa_id' => 'nullable|exists:etapas,id',
             'zona_cultivo_id' => 'nullable|exists:zonas_cultivo,id',
             'tipo_carga_id' => 'sometimes|exists:tipos_carga,id',
             'cantidad_recibida' => 'sometimes|integer|min:1',
