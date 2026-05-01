@@ -584,11 +584,7 @@ class ProcesoEmpaqueController extends Controller
 
         // Register production rezaga if provided
         if ($request->filled('rezaga_kg')) {
-            $count = RezagaEmpaque::where('temporada_id', $proceso->temporada_id)
-                ->where('entity_id', $proceso->entity_id)
-                ->count() + 1;
-            $entityId = str_pad($proceso->entity_id, 2, '0', STR_PAD_LEFT);
-            $folioRezaga = "REZ-{$entityId}-" . str_pad($count, 4, '0', STR_PAD_LEFT);
+            $folioRezaga = $this->generarFolioRezaga($proceso->entity_id);
 
             RezagaEmpaque::create([
                 'temporada_id' => $proceso->temporada_id,
@@ -650,5 +646,35 @@ class ProcesoEmpaqueController extends Controller
             'message' => "Folio {$proceso->folio_proceso} reabierto",
             'data' => $proceso,
         ]);
+    }
+
+    private function generarFolioRezaga(int $entityId): string
+    {
+        $entityPad = str_pad((string) $entityId, 2, '0', STR_PAD_LEFT);
+        $prefix = "REZ-{$entityPad}-";
+
+        // Constraint unique global: el consecutivo se calcula por entity_id.
+        $lastFolio = RezagaEmpaque::withTrashed()
+            ->where('entity_id', $entityId)
+            ->where('folio_rezaga', 'like', "{$prefix}%")
+            ->orderByDesc('folio_rezaga')
+            ->value('folio_rezaga');
+
+        $nextNum = 1;
+        if ($lastFolio) {
+            $nextNum = (int) str_replace($prefix, '', $lastFolio) + 1;
+        }
+
+        // Evita colisiones si hay inserciones casi simultáneas.
+        for ($i = 0; $i < 5; $i++) {
+            $candidate = $prefix . str_pad((string) $nextNum, 4, '0', STR_PAD_LEFT);
+            $exists = RezagaEmpaque::withTrashed()->where('folio_rezaga', $candidate)->exists();
+            if (! $exists) {
+                return $candidate;
+            }
+            $nextNum++;
+        }
+
+        return $prefix . str_pad((string) $nextNum, 4, '0', STR_PAD_LEFT);
     }
 }
