@@ -24,7 +24,7 @@ class RecepcionEmpaqueController extends Controller
         'lote.zonaCultivo:id,nombre',
         'etapa:id,nombre,orden,variedad_id',
         'etapa.variedad:id,nombre',
-        'tipoCarga:id,nombre,peso_estimado_kg',
+        'tipoCarga:id,nombre,categoria_caja,peso_estimado_kg',
         'recibidoPor:id,name',
         'creador:id,name',
     ];
@@ -173,7 +173,7 @@ class RecepcionEmpaqueController extends Controller
                     'lote.zonaCultivo:id,nombre',
                     'etapa:id,nombre,variedad_id',
                     'etapa.variedad:id,nombre',
-                    'tipoCarga:id,nombre,peso_estimado_kg',
+                    'tipoCarga:id,nombre,categoria_caja,peso_estimado_kg',
                     'destinoEntity:id,name,code',
                 ]);
                 broadcast(new SalidaCampoUpdated(
@@ -259,7 +259,7 @@ class RecepcionEmpaqueController extends Controller
                     'lote.zonaCultivo:id,nombre',
                     'etapa:id,nombre,variedad_id',
                     'etapa.variedad:id,nombre',
-                    'tipoCarga:id,nombre,peso_estimado_kg',
+                    'tipoCarga:id,nombre,categoria_caja,peso_estimado_kg',
                     'destinoEntity:id,name,code',
                 ]);
                 broadcast(new SalidaCampoUpdated(
@@ -293,7 +293,7 @@ class RecepcionEmpaqueController extends Controller
             'etapa:id,nombre,variedad_id',
             'etapa.variedad:id,nombre',
             'variedad:id,nombre',
-            'tipoCarga:id,nombre,peso_estimado_kg',
+            'tipoCarga:id,nombre,categoria_caja,peso_estimado_kg',
             'destinoEntity:id,name,code',
         ])->where('eliminado', false)
           ->whereIn('status', ['en_transito', 'registrada'])

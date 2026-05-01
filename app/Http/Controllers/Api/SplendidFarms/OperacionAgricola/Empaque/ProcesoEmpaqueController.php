@@ -24,8 +24,8 @@ class ProcesoEmpaqueController extends Controller
         'recepcion:id,folio_recepcion,fecha_recepcion,cantidad_recibida,peso_recibido_kg,salida_campo_id,tipo_carga_id',
         'recepcion.salidaCampo:id,folio_salida,variedad_id',
         'recepcion.salidaCampo.variedad:id,nombre',
-        'recepcion.tipoCarga:id,nombre,peso_estimado_kg',
-        'tipoCarga:id,nombre,peso_estimado_kg',
+        'recepcion.tipoCarga:id,nombre,categoria_caja,peso_estimado_kg',
+        'tipoCarga:id,nombre,categoria_caja,peso_estimado_kg',
         'productor:id,nombre,apellido',
         'lote:id,nombre,numero_lote,zona_cultivo_id',
         'lote.zonaCultivo:id,nombre',
@@ -43,7 +43,7 @@ class ProcesoEmpaqueController extends Controller
         'lote.zonaCultivo:id,nombre',
         'etapa:id,nombre,variedad_id',
         'etapa.variedad:id,nombre',
-        'tipoCarga:id,nombre,peso_estimado_kg',
+        'tipoCarga:id,nombre,categoria_caja,peso_estimado_kg',
     ];
 
     /**
@@ -82,8 +82,8 @@ class ProcesoEmpaqueController extends Controller
             'recepcion:id,salida_campo_id,tipo_carga_id',
             'recepcion.salidaCampo:id,variedad_id',
             'recepcion.salidaCampo.variedad:id,nombre',
-            'recepcion.tipoCarga:id,nombre,peso_estimado_kg',
-            'tipoCarga:id,nombre,peso_estimado_kg',
+            'recepcion.tipoCarga:id,nombre,categoria_caja,peso_estimado_kg',
+            'tipoCarga:id,nombre,categoria_caja,peso_estimado_kg',
         ])->whereIn('status', ['en_proceso', 'listo_produccion']);
 
         if ($request->filled('temporada_id')) {
@@ -138,9 +138,21 @@ class ProcesoEmpaqueController extends Controller
 
         $piso = [];
         foreach ($recepciones as $rec) {
+            // Sum quantities actively being processed
             $enProceso = ProcesoEmpaque::where('recepcion_id', $rec->id)
-                ->whereIn('status', ['lavando', 'lavado', 'hidrotermico', 'enfriando', 'listo_produccion', 'en_proceso', 'procesado'])
+                ->whereIn('status', ['lavando', 'lavado', 'hidrotermico', 'enfriando', 'listo_produccion', 'en_proceso'])
                 ->sum('cantidad_entrada');
+
+            // For procesado folios: sum what was actually used (cantidad_entrada - cantidad_disponible)
+            // This ensures remainder stays available in piso
+            $procesados = ProcesoEmpaque::where('recepcion_id', $rec->id)
+                ->where('status', 'procesado')
+                ->get();
+
+            foreach ($procesados as $proc) {
+                $usado = $proc->cantidad_entrada - $proc->cantidad_disponible;
+                $enProceso += $usado;
+            }
 
             $disponible = $rec->cantidad_recibida - $enProceso;
 
@@ -177,8 +189,15 @@ class ProcesoEmpaqueController extends Controller
      */
     private function pisoFromLavado(Request $request): JsonResponse
     {
+        // Include both 'listo_produccion' (fresh from lavado) AND 'procesado' with remainder > 0
         $query = ProcesoEmpaque::with($this->eagerLoad)
-            ->where('status', 'listo_produccion');
+            ->where(function ($q) {
+                $q->where('status', 'listo_produccion')
+                  ->orWhere(function ($sub) {
+                      $sub->where('status', 'procesado')
+                          ->where('cantidad_disponible', '>', 0);
+                  });
+            });
 
         if ($request->filled('temporada_id')) {
             $query->byTemporada($request->temporada_id);
@@ -194,11 +213,11 @@ class ProcesoEmpaqueController extends Controller
             $pesoUnitario = $p->tipoCarga ? (float) $p->tipoCarga->peso_estimado_kg : 0;
             $variedad = $p->etapa?->variedad ?? $p->recepcion?->salidaCampo?->variedad;
             $modoKilos = (bool) $p->modo_kilos;
-            // Cuando el proceso está en modo_kilos, peso_disponible_kg viene del peso báscula real
-            // y no debe recalcularse desde cantidad * peso_unitario.
+            // Use cantidad_disponible (may be remainder if status=procesado, or full if listo_produccion)
+            $cantidadDisponible = (int) $p->cantidad_disponible;
             $pesoDisponibleKg = $modoKilos
                 ? (float) $p->peso_disponible_kg
-                : round((float) $p->cantidad_entrada * $pesoUnitario, 2);
+                : round($cantidadDisponible * $pesoUnitario, 2);
 
             $piso[] = [
                 'proceso_id' => $p->id,
@@ -215,10 +234,10 @@ class ProcesoEmpaqueController extends Controller
                 'entity' => $p->entity,
                 'cantidad_recibida' => $p->cantidad_entrada,
                 'cantidad_en_proceso' => 0,
-                'cantidad_disponible' => $p->cantidad_disponible,
+                'cantidad_disponible' => $cantidadDisponible,
                 'peso_disponible_kg' => $pesoDisponibleKg,
                 'modo_kilos' => $modoKilos,
-                'source' => 'lavado',
+                'source' => $p->status === 'procesado' ? 'lavado_remainder' : 'lavado',
             ];
         }
 
@@ -243,7 +262,7 @@ class ProcesoEmpaqueController extends Controller
     }
 
     /**
-     * Promote a listo_produccion proceso to en_proceso
+     * Promote a listo_produccion or procesado-with-remainder proceso to en_proceso
      */
     private function promoverFromLavado(Request $request): JsonResponse
     {
@@ -253,10 +272,15 @@ class ProcesoEmpaqueController extends Controller
 
         $proceso = ProcesoEmpaque::findOrFail($request->proceso_id);
 
-        if ($proceso->status !== 'listo_produccion') {
+        // Allow both fresh-from-lavado and reopened-with-remainder flows
+        $isListoProduccion = $proceso->status === 'listo_produccion';
+        $isProcesadoConRemainder = $proceso->status === 'procesado'
+            && (int) $proceso->cantidad_disponible > 0;
+
+        if (! $isListoProduccion && ! $isProcesadoConRemainder) {
             return response()->json([
                 'status' => 'error',
-                'message' => 'Solo se pueden mover folios con status "listo para producción"',
+                'message' => 'Solo se pueden mover folios listos para producción o procesados con remanente en piso',
             ], 422);
         }
 
@@ -267,9 +291,13 @@ class ProcesoEmpaqueController extends Controller
 
         $proceso->load($this->eagerLoad);
 
+        $unidadesParaProcesar = $isProcesadoConRemainder
+            ? (int) $proceso->cantidad_disponible
+            : (int) $proceso->cantidad_entrada;
+
         return response()->json([
             'success' => true,
-            'message' => "Folio movido a procesando ({$proceso->cantidad_entrada} uds)",
+            'message' => "Folio movido a procesando ({$unidadesParaProcesar} cajas)",
             'data' => $proceso,
         ], 200);
     }
@@ -602,12 +630,32 @@ class ProcesoEmpaqueController extends Controller
             ]);
         }
 
-        // Update the proceso: cantidad_entrada reflects what was actually processed
+        // peso_entrada_kg and cantidad_entrada stay original (full folio entry).
+        // Calculate the weight of the remainder proportionally for piso display.
+        $pesoEntradaKgOriginal = (float) $proceso->peso_entrada_kg;
+        $cantidadEntradaOriginal = (int) $proceso->cantidad_entrada;
+
+        $pesoRemainder = 0;
+        if ($cantidadEntradaOriginal > 0 && $remainder > 0) {
+            $pesoUnitario = $pesoEntradaKgOriginal / $cantidadEntradaOriginal;
+            $pesoRemainder = round($pesoUnitario * $remainder, 2);
+        }
+
+        // Accumulate cuarto_frio/fresco so reopen+close cycles add up
+        // (e.g. first closure 540 + second closure of remaining 120 = 660 total)
+        $nuevoCuartoFrio = (int) $proceso->cantidad_cuarto_frio + $cuartoFrio;
+        $nuevoFresco = (int) $proceso->cantidad_fresco + $fresco;
+
+        // Update the proceso:
+        // - cantidad_entrada stays original (660)
+        // - cantidad_disponible = what goes back to piso
+        // - peso_disponible_kg = weight of remainder
+        // - cantidad_cuarto_frio + cantidad_fresco accumulate across multiple closures
         $proceso->update([
-            'cantidad_cuarto_frio' => $cuartoFrio,
-            'cantidad_fresco' => $fresco,
-            'cantidad_entrada' => $totalProcesado,
-            'cantidad_disponible' => $totalProcesado,
+            'cantidad_cuarto_frio' => $nuevoCuartoFrio,
+            'cantidad_fresco' => $nuevoFresco,
+            'cantidad_disponible' => $remainder,
+            'peso_disponible_kg' => $pesoRemainder,
             'status' => 'procesado',
         ]);
 

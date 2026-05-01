@@ -563,11 +563,6 @@ class ProduccionEmpaqueController extends Controller
 
     private function resolveCajasObjetivo(ProduccionEmpaque $produccion): int
     {
-        $directo = (int) ($produccion->cajas_objetivo ?? 0);
-        if ($directo > 1) {
-            return $directo;
-        }
-
         $porReceta = (int) ($produccion->recipe?->output_quantity ?? 0);
         if ($porReceta > 1) {
             return $porReceta;
@@ -582,19 +577,9 @@ class ProduccionEmpaqueController extends Controller
             return $porDetalle;
         }
 
-        // Fallback legacy: intenta inferir del texto (ej. "... 225 B15").
-        $texto = trim((string) ($produccion->presentacion ?: $produccion->tipo_empaque ?: ''));
-        if ($texto !== '') {
-            preg_match_all('/\b(\d{2,4})\b/', $texto, $matches);
-            foreach (($matches[1] ?? []) as $numero) {
-                $valor = (int) $numero;
-                if ($valor >= 50 && $valor <= 2000) {
-                    return $valor;
-                }
-            }
-        }
-
-        return max($directo, 0);
+        // Solo usar el valor persistido como último recurso (legacy).
+        $directo = (int) ($produccion->cajas_objetivo ?? 0);
+        return $directo > 1 ? $directo : 0;
     }
 
     private function generarNumeroCola(int $entityId, int $temporadaId): string

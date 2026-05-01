@@ -17,6 +17,7 @@ class TipoCarga extends Model
     protected $fillable = [
         'cultivo_id',
         'nombre',
+        'categoria_caja',
         'peso_estimado_kg',
         'descripcion',
         'is_active',

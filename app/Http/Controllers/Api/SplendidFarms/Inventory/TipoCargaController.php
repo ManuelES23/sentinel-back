@@ -47,6 +47,7 @@ class TipoCargaController extends Controller
         $validated = $request->validate([
             'cultivo_id' => 'required|exists:cultivos,id',
             'nombre' => 'required|string|max:100',
+            'categoria_caja' => 'required|in:campo,empaque,hidrotermico',
             'peso_estimado_kg' => 'required|numeric|min:0.01',
             'descripcion' => 'nullable|string',
             'is_active' => 'nullable|boolean',
@@ -77,6 +78,7 @@ class TipoCargaController extends Controller
         $validated = $request->validate([
             'cultivo_id' => 'sometimes|exists:cultivos,id',
             'nombre' => 'sometimes|string|max:100',
+            'categoria_caja' => 'sometimes|in:campo,empaque,hidrotermico',
             'peso_estimado_kg' => 'sometimes|numeric|min:0.01',
             'descripcion' => 'nullable|string',
             'is_active' => 'nullable|boolean',
