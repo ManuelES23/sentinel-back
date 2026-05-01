@@ -534,7 +534,6 @@ class ProduccionEmpaqueController extends Controller
         $prefix = "PROD-{$entityId}-";
 
         $lastFolio = ProduccionEmpaque::withTrashed()
-            ->where('temporada_id', $data['temporada_id'])
             ->where('entity_id', $data['entity_id'])
             ->where('folio_produccion', 'like', $prefix . '%')
             ->orderByDesc('folio_produccion')
