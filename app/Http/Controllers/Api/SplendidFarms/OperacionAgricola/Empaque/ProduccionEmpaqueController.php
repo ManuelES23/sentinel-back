@@ -8,6 +8,7 @@ use App\Models\ProcesoEmpaque;
 use App\Models\ProduccionEmpaque;
 use App\Models\ProduccionEmpaqueDetalle;
 use App\Models\Recipe;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -97,94 +98,94 @@ class ProduccionEmpaqueController extends Controller
             'observaciones' => 'nullable|string',
         ]);
 
-        return DB::transaction(function () use ($validated, $request) {
-            $validated['status'] = $validated['status'] ?? 'empacado';
-            $validated['is_cola'] = $validated['is_cola'] ?? false;
-            $validated['created_by'] = $request->user()->id;
-            $validated['folio_produccion'] = $this->generarFolio($validated);
+        $maxAttempts = 3;
 
-            // Auto-resolver variedad_id desde el proceso si no viene
-            if (empty($validated['variedad_id']) && !empty($validated['proceso_id'])) {
-                $proceso = ProcesoEmpaque::with([
-                    'etapa:id,variedad_id',
-                    'recepcion:id,salida_campo_id',
-                    'recepcion.salidaCampo:id,variedad_id',
-                ])->find($validated['proceso_id']);
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            try {
+                return DB::transaction(function () use ($validated, $request) {
+                    $validated['status'] = $validated['status'] ?? 'empacado';
+                    $validated['is_cola'] = $validated['is_cola'] ?? false;
+                    $validated['created_by'] = $request->user()->id;
+                    $validated['folio_produccion'] = $this->generarFolio($validated);
 
-                $variedadId = $proceso?->etapa?->variedad_id
-                    ?? $proceso?->recepcion?->salidaCampo?->variedad_id;
+                    // Auto-resolver variedad_id desde el proceso si no viene
+                    if (empty($validated['variedad_id']) && !empty($validated['proceso_id'])) {
+                        $proceso = ProcesoEmpaque::with([
+                            'etapa:id,variedad_id',
+                            'recepcion:id,salida_campo_id',
+                            'recepcion.salidaCampo:id,variedad_id',
+                        ])->find($validated['proceso_id']);
 
-                if ($variedadId) {
-                    $validated['variedad_id'] = $variedadId;
+                        $variedadId = $proceso?->etapa?->variedad_id
+                            ?? $proceso?->recepcion?->salidaCampo?->variedad_id;
+
+                        if ($variedadId) {
+                            $validated['variedad_id'] = $variedadId;
+                        }
+                    }
+
+                    // Si es cola, usar nomenclatura COLA-XXXX
+                    if ($validated['is_cola'] && (empty($validated['numero_pallet']) || str_starts_with($validated['numero_pallet'], 'COLA-'))) {
+                        $validated['numero_pallet'] = $this->generarNumeroCola($validated['entity_id'], $validated['temporada_id']);
+                    }
+
+                    // Generar UUID para QR del pallet si no viene
+                    if (empty($validated['pallet_qr_id'])) {
+                        $validated['pallet_qr_id'] = (string) Str::uuid();
+                    }
+
+                    // Si es cola y tiene receta, auto-set cajas_objetivo desde receta
+                    if ($validated['is_cola'] && !empty($validated['recipe_id']) && empty($validated['cajas_objetivo'])) {
+                        $recipe = Recipe::find($validated['recipe_id']);
+                        if ($recipe && $recipe->output_quantity > 0) {
+                            $validated['cajas_objetivo'] = (int) $recipe->output_quantity;
+                        }
+                    }
+
+                    // Auto-calcular peso neto si hay receta con peso_pieza y no se envió peso manual
+                    if (!empty($validated['recipe_id']) && empty($validated['peso_neto_kg'])) {
+                        $recipe = $recipe ?? Recipe::find($validated['recipe_id']);
+                        if ($recipe && $recipe->peso_pieza > 0) {
+                            $validated['peso_neto_kg'] = round($validated['total_cajas'] * (float) $recipe->peso_pieza, 2);
+                        }
+                    }
+
+                    $produccion = ProduccionEmpaque::create($validated);
+
+                    // Si es cola, crear el primer detalle automáticamente
+                    if ($validated['is_cola']) {
+                        $produccion->detalles()->create([
+                            'numero_entrada' => 1,
+                            'proceso_id' => $validated['proceso_id'],
+                            'recipe_id' => $validated['recipe_id'] ?? null,
+                            'cajas_aportadas' => $validated['total_cajas'],
+                            'peso_neto_kg_aportado' => $validated['peso_neto_kg'] ?? 0,
+                            'created_by' => $request->user()->id,
+                        ]);
+                    }
+
+                    $produccion->load($this->eagerLoad);
+
+                    return response()->json([
+                        'success' => true,
+                        'message' => 'Producción creada correctamente',
+                        'data' => $produccion,
+                    ], 201);
+                });
+            } catch (QueryException $e) {
+                $isDuplicateFolio = (int) ($e->errorInfo[1] ?? 0) === 1062
+                    && str_contains($e->getMessage(), 'produccion_empaque_folio_produccion_unique');
+
+                if (!$isDuplicateFolio || $attempt === $maxAttempts) {
+                    throw $e;
                 }
             }
+        }
 
-            // Si es cola, usar nomenclatura COLA-XXXX
-            if ($validated['is_cola'] && (empty($validated['numero_pallet']) || str_starts_with($validated['numero_pallet'], 'COLA-'))) {
-                $validated['numero_pallet'] = $this->generarNumeroCola($validated['entity_id'], $validated['temporada_id']);
-            }
-
-            // Generar UUID para QR del pallet si no viene
-            if (empty($validated['pallet_qr_id'])) {
-                $validated['pallet_qr_id'] = (string) Str::uuid();
-            }
-
-            // Si es cola y tiene receta, auto-set cajas_objetivo desde receta
-            if ($validated['is_cola'] && !empty($validated['recipe_id']) && empty($validated['cajas_objetivo'])) {
-                $recipe = Recipe::find($validated['recipe_id']);
-                if ($recipe && $recipe->output_quantity > 0) {
-                    $validated['cajas_objetivo'] = (int) $recipe->output_quantity;
-                }
-            }
-
-            // Auto-calcular peso neto si hay receta con peso_pieza y no se envió peso manual
-            if (!empty($validated['recipe_id']) && empty($validated['peso_neto_kg'])) {
-                $recipe = $recipe ?? Recipe::find($validated['recipe_id']);
-                if ($recipe && $recipe->peso_pieza > 0) {
-                    $validated['peso_neto_kg'] = round($validated['total_cajas'] * (float) $recipe->peso_pieza, 2);
-                }
-            }
-
-            $produccion = ProduccionEmpaque::create($validated);
-
-            // Si es cola, crear el primer detalle automáticamente
-            if ($validated['is_cola']) {
-                $produccion->detalles()->create([
-                    'numero_entrada' => 1,
-                    'proceso_id' => $validated['proceso_id'],
-                    'recipe_id' => $validated['recipe_id'] ?? null,
-                    'tipo_empaque' => $validated['tipo_empaque'] ?? null,
-                    'marca' => $validated['marca'] ?? null,
-                    'presentacion' => $validated['presentacion'] ?? null,
-                    'etiqueta' => $validated['etiqueta'] ?? null,
-                    'calibre' => $validated['calibre'] ?? null,
-                    'categoria' => $validated['categoria'] ?? null,
-                    'fecha_produccion' => $validated['fecha_produccion'],
-                    'total_cajas' => $validated['total_cajas'],
-                    'peso_neto_kg' => $validated['peso_neto_kg'] ?? null,
-                    'turno' => $validated['turno'] ?? null,
-                    'observaciones' => $validated['observaciones'] ?? null,
-                    'created_by' => $validated['created_by'],
-                ]);
-            }
-
-            $produccion->load($this->eagerLoad);
-
-            return response()->json([
-                'success' => true,
-                'message' => $validated['is_cola']
-                    ? 'Pallet cola registrado exitosamente'
-                    : 'Producción registrada exitosamente',
-                'data' => $produccion,
-            ], 201);
-        });
-    }
-
-    public function show(ProduccionEmpaque $produccion): JsonResponse
-    {
-        $produccion->load([...$this->eagerLoad, 'embarqueDetalles.embarque']);
-
-        return response()->json(['success' => true, 'data' => $produccion]);
+        return response()->json([
+            'status' => 'error',
+            'message' => 'No fue posible generar un folio único de producción. Intenta nuevamente.',
+        ], 409);
     }
 
     public function update(Request $request, ProduccionEmpaque $produccion): JsonResponse
