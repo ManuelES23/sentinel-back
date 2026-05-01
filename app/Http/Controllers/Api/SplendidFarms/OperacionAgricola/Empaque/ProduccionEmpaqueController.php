@@ -174,7 +174,7 @@ class ProduccionEmpaqueController extends Controller
                 });
             } catch (QueryException $e) {
                 $isDuplicateFolio = (int) ($e->errorInfo[1] ?? 0) === 1062
-                    && str_contains($e->getMessage(), 'produccion_empaque_folio_produccion_unique');
+                    && str_contains(strtolower($e->getMessage()), 'folio_produccion');
 
                 if (!$isDuplicateFolio || $attempt === $maxAttempts) {
                     throw $e;
