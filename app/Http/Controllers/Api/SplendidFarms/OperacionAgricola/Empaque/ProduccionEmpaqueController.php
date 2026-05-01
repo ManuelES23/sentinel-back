@@ -36,7 +36,7 @@ class ProduccionEmpaqueController extends Controller
         'detalles.proceso.recepcion:id,salida_campo_id',
         'detalles.proceso.recepcion.salidaCampo:id,variedad_id',
         'detalles.proceso.recepcion.salidaCampo.variedad:id,nombre',
-        'detalles.recipe:id,name,code,output_product_id',
+        'detalles.recipe:id,name,code,output_quantity,output_product_id',
         'detalles.recipe.outputProduct:id,name,brand_id',
         'detalles.recipe.outputProduct.brand:id,name,code',
         'detalles.creador:id,name',
@@ -66,6 +66,14 @@ class ProduccionEmpaqueController extends Controller
         }
 
         $producciones = $query->orderByDesc('fecha_produccion')->orderByDesc('id')->get();
+
+        $producciones->each(function (ProduccionEmpaque $produccion) {
+            if (! $produccion->is_cola) {
+                return;
+            }
+
+            $produccion->cajas_objetivo = $this->resolveCajasObjetivo($produccion);
+        });
 
         return response()->json(['success' => true, 'data' => $producciones]);
     }
@@ -325,6 +333,10 @@ class ProduccionEmpaqueController extends Controller
 
         $pallets = $query->orderByDesc('fecha_produccion')->orderByDesc('id')->get();
 
+        $pallets->each(function (ProduccionEmpaque $produccion) {
+            $produccion->cajas_objetivo = $this->resolveCajasObjetivo($produccion);
+        });
+
         return response()->json(['success' => true, 'data' => $pallets]);
     }
 
@@ -547,6 +559,42 @@ class ProduccionEmpaqueController extends Controller
             : 1;
 
         return $prefix . str_pad($nextNumber, 4, '0', STR_PAD_LEFT);
+    }
+
+    private function resolveCajasObjetivo(ProduccionEmpaque $produccion): int
+    {
+        $directo = (int) ($produccion->cajas_objetivo ?? 0);
+        if ($directo > 1) {
+            return $directo;
+        }
+
+        $porReceta = (int) ($produccion->recipe?->output_quantity ?? 0);
+        if ($porReceta > 1) {
+            return $porReceta;
+        }
+
+        $porDetalle = (int) ($produccion->detalles
+            ->pluck('recipe.output_quantity')
+            ->filter(fn($value) => (int) $value > 1)
+            ->first() ?? 0);
+
+        if ($porDetalle > 1) {
+            return $porDetalle;
+        }
+
+        // Fallback legacy: intenta inferir del texto (ej. "... 225 B15").
+        $texto = trim((string) ($produccion->presentacion ?: $produccion->tipo_empaque ?: ''));
+        if ($texto !== '') {
+            preg_match_all('/\b(\d{2,4})\b/', $texto, $matches);
+            foreach (($matches[1] ?? []) as $numero) {
+                $valor = (int) $numero;
+                if ($valor >= 50 && $valor <= 2000) {
+                    return $valor;
+                }
+            }
+        }
+
+        return max($directo, 0);
     }
 
     private function generarNumeroCola(int $entityId, int $temporadaId): string
