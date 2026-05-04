@@ -592,6 +592,7 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::post('produccion/buscar-qr', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'buscarPorQr']);
                 Route::post('produccion/{produccion}/completar-cola', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'completarCola']);
                 Route::post('produccion/{produccion}/toggle-cuarto-frio', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'toggleCuartoFrio']);
+                Route::post('produccion/{produccion}/peso-bascula', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'actualizarPesoBascula']);
                 Route::post('produccion/toggle-cuarto-frio-masivo', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'toggleCuartoFrioMasivo']);
                 Route::apiResource('produccion', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class)
                     ->parameters(['produccion' => 'produccion']);

@@ -115,6 +115,7 @@ class ProduccionEmpaqueController extends Controller
                 return DB::transaction(function () use ($validated, $request) {
                     $validated['status'] = $validated['status'] ?? 'empacado';
                     $validated['is_cola'] = $validated['is_cola'] ?? false;
+                    $validated['en_cuarto_frio'] = false;
                     $validated['created_by'] = $request->user()->id;
                     $validated['folio_produccion'] = $this->generarFolio($validated);
 
@@ -279,11 +280,24 @@ class ProduccionEmpaqueController extends Controller
     /**
      * Toggle estado cuarto frío de un pallet.
      */
-    public function toggleCuartoFrio(ProduccionEmpaque $produccion): JsonResponse
+    public function toggleCuartoFrio(Request $request, ProduccionEmpaque $produccion): JsonResponse
     {
-        $produccion->update([
-            'en_cuarto_frio' => !$produccion->en_cuarto_frio,
-        ]);
+        $nuevoEstado = ! $produccion->en_cuarto_frio;
+
+        if ($nuevoEstado) {
+            $validated = $request->validate([
+                'peso_bascula_kg' => 'required|numeric|min:0.01',
+            ]);
+
+            $produccion->update([
+                'en_cuarto_frio' => true,
+                'peso_bascula_kg' => $validated['peso_bascula_kg'],
+            ]);
+        } else {
+            $produccion->update([
+                'en_cuarto_frio' => false,
+            ]);
+        }
 
         $produccion->load($this->eagerLoad);
 
@@ -307,6 +321,13 @@ class ProduccionEmpaqueController extends Controller
             'en_cuarto_frio' => 'required|boolean',
         ]);
 
+        if ($validated['en_cuarto_frio']) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Para ingresar a cuarto frío debes capturar peso báscula por pallet. Usa el ingreso individual.',
+            ], 422);
+        }
+
         ProduccionEmpaque::whereIn('id', $validated['ids'])
             ->update(['en_cuarto_frio' => $validated['en_cuarto_frio']]);
 
@@ -315,6 +336,35 @@ class ProduccionEmpaqueController extends Controller
         return response()->json([
             'success' => true,
             'message' => count($validated['ids']) . " pallet(s) {$label} cuarto frío",
+        ]);
+    }
+
+    /**
+     * Actualizar peso báscula de un pallet ya ingresado en cuarto frío.
+     */
+    public function actualizarPesoBascula(Request $request, ProduccionEmpaque $produccion): JsonResponse
+    {
+        if (! $produccion->en_cuarto_frio) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'El pallet debe estar en cuarto frío para capturar peso báscula desde esta acción',
+            ], 422);
+        }
+
+        $validated = $request->validate([
+            'peso_bascula_kg' => 'required|numeric|min:0.01',
+        ]);
+
+        $produccion->update([
+            'peso_bascula_kg' => $validated['peso_bascula_kg'],
+        ]);
+
+        $produccion->load($this->eagerLoad);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Peso báscula actualizado correctamente',
+            'data' => $produccion,
         ]);
     }
 

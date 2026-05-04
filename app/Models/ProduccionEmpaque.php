@@ -16,7 +16,7 @@ class ProduccionEmpaque extends Model
     protected $fillable = [
         'temporada_id', 'entity_id', 'proceso_id', 'recipe_id', 'folio_produccion',
         'fecha_produccion', 'turno', 'variedad_id', 'linea_empaque',
-        'numero_pallet', 'lote_producto_terminado', 'pallet_qr_id', 'total_cajas', 'cajas_objetivo', 'peso_neto_kg', 'tipo_empaque',
+        'numero_pallet', 'lote_producto_terminado', 'pallet_qr_id', 'total_cajas', 'cajas_objetivo', 'peso_neto_kg', 'peso_bascula_kg', 'tipo_empaque',
         'marca', 'presentacion', 'etiqueta', 'calibre', 'categoria', 'status', 'is_cola', 'is_mixto', 'en_cuarto_frio', 'observaciones', 'created_by',
     ];
 
@@ -24,6 +24,7 @@ class ProduccionEmpaque extends Model
         'total_cajas' => 'integer',
         'cajas_objetivo' => 'integer',
         'peso_neto_kg' => 'decimal:2',
+        'peso_bascula_kg' => 'decimal:2',
         'fecha_produccion' => 'date:Y-m-d',
         'is_cola' => 'boolean',
         'is_mixto' => 'boolean',
