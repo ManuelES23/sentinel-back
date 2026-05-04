@@ -4,12 +4,98 @@ namespace App\Http\Controllers\Api\SplendidFarms\Administration;
 
 use App\Events\EntityUpdated;
 use App\Http\Controllers\Controller;
+use App\Models\Branch;
+use App\Models\Enterprise;
 use App\Models\Entity;
+use App\Models\EntityType;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 
 class EntityController extends Controller
 {
+    private function getCurrentEnterprise(Request $request): ?Enterprise
+    {
+        $slug = $request->header('X-Enterprise-Slug');
+        if (!$slug) {
+            return null;
+        }
+
+        return Enterprise::where('slug', $slug)->first();
+    }
+
+    /**
+     * Entidades externas disponibles (otras empresas) para vincular como externa.
+     * Solo tipos BODEGA/EMPAQUE.
+     */
+    public function externalCandidates(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'entity_type_id' => 'nullable|exists:entity_types,id',
+        ]);
+
+        $currentEnterprise = $this->getCurrentEnterprise($request);
+        if (!$currentEnterprise) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No se pudo determinar la empresa actual desde el header X-Enterprise-Slug',
+            ], 422);
+        }
+
+        $query = Entity::with([
+            'branch:id,enterprise_id,name,code',
+            'branch.enterprise:id,name,slug',
+            'entityType:id,code,name',
+        ])
+            ->where('is_active', true)
+            ->whereHas('branch', function ($q) use ($currentEnterprise) {
+                $q->where('enterprise_id', '!=', $currentEnterprise->id);
+            })
+            ->whereHas('entityType', function ($q) {
+                $q->whereIn('code', ['BODEGA', 'EMPAQUE']);
+            });
+
+        if (!empty($validated['entity_type_id'])) {
+            $query->where('entity_type_id', $validated['entity_type_id']);
+        }
+
+        $entities = $query
+            ->orderBy('name')
+            ->get()
+            ->map(function ($entity) {
+                return [
+                    'id' => $entity->id,
+                    'code' => $entity->code,
+                    'name' => $entity->name,
+                    'description' => $entity->description,
+                    'location' => $entity->location,
+                    'responsible' => $entity->responsible,
+                    'area_m2' => $entity->area_m2,
+                    'usa_hidrotermico' => (bool) $entity->usa_hidrotermico,
+                    'entity_type' => [
+                        'id' => $entity->entityType?->id,
+                        'code' => $entity->entityType?->code,
+                        'name' => $entity->entityType?->name,
+                    ],
+                    'source_branch' => [
+                        'id' => $entity->branch?->id,
+                        'name' => $entity->branch?->name,
+                        'code' => $entity->branch?->code,
+                    ],
+                    'source_enterprise' => [
+                        'id' => $entity->branch?->enterprise?->id,
+                        'slug' => $entity->branch?->enterprise?->slug,
+                        'name' => $entity->branch?->enterprise?->name,
+                    ],
+                ];
+            })
+            ->values();
+
+        return response()->json([
+            'success' => true,
+            'data' => $entities,
+        ]);
+    }
+
     /**
      * Display a listing of the resource.
      */
@@ -48,6 +134,7 @@ class EntityController extends Controller
         $validated = $request->validate([
             'branch_id' => 'required|exists:branches,id',
             'entity_type_id' => 'required|exists:entity_types,id',
+            'external_source_entity_id' => 'nullable|exists:entities,id',
             'code' => 'nullable|string|max:50|unique:entities,code',
             'abbreviation' => 'nullable|string|max:10',
             'name' => 'required|string|max:255',
@@ -70,10 +157,68 @@ class EntityController extends Controller
             'usa_hidrotermico' => 'boolean',
         ]);
 
+        $targetBranch = Branch::with('enterprise')->findOrFail($validated['branch_id']);
+        $sourceEntity = null;
+
+        if (!empty($validated['external_source_entity_id'])) {
+            $sourceEntity = Entity::with(['branch.enterprise', 'entityType'])->findOrFail($validated['external_source_entity_id']);
+
+            if ($sourceEntity->branch?->enterprise_id === $targetBranch->enterprise_id) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'La entidad origen debe pertenecer a otra empresa',
+                ], 422);
+            }
+
+            $allowedTypes = ['BODEGA', 'EMPAQUE'];
+            if (!in_array($sourceEntity->entityType?->code, $allowedTypes, true)) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Solo se pueden vincular entidades externas tipo Bodega o Empaque',
+                ], 422);
+            }
+
+            $alreadyLinked = Entity::with('branch')
+                ->whereHas('branch', function ($q) use ($targetBranch) {
+                    $q->where('enterprise_id', $targetBranch->enterprise_id);
+                })
+                ->get()
+                ->first(function ($entity) use ($sourceEntity) {
+                    $meta = $entity->metadata ?? [];
+                    return (int) ($meta['external_source_entity_id'] ?? 0) === (int) $sourceEntity->id;
+                });
+
+            if ($alreadyLinked) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Esta entidad externa ya fue vinculada en la empresa actual',
+                ], 422);
+            }
+
+            $validated['entity_type_id'] = $sourceEntity->entity_type_id;
+            $validated['is_external'] = true;
+            $validated['owner_company'] = $sourceEntity->branch?->enterprise?->name;
+            $validated['name'] = $validated['name'] ?: $sourceEntity->name;
+            $validated['description'] = $validated['description'] ?: $sourceEntity->description;
+            $validated['location'] = $validated['location'] ?: $sourceEntity->location;
+            $validated['responsible'] = $validated['responsible'] ?: $sourceEntity->responsible;
+            $validated['area_m2'] = $validated['area_m2'] ?: $sourceEntity->area_m2;
+            $validated['usa_hidrotermico'] = $validated['usa_hidrotermico'] ?? (bool) $sourceEntity->usa_hidrotermico;
+
+            $metadata = $validated['metadata'] ?? [];
+            $validated['metadata'] = array_merge($metadata, [
+                'external_source_entity_id' => $sourceEntity->id,
+                'external_source_entity_code' => $sourceEntity->code,
+                'external_source_enterprise_id' => $sourceEntity->branch?->enterprise?->id,
+                'external_source_enterprise_slug' => $sourceEntity->branch?->enterprise?->slug,
+                'external_source_enterprise_name' => $sourceEntity->branch?->enterprise?->name,
+            ]);
+        }
+
         // Generar código automático si no se proporciona
         if (empty($validated['code'])) {
             // Obtener el tipo de entidad para usar su código
-            $entityType = \App\Models\EntityType::find($validated['entity_type_id']);
+            $entityType = EntityType::find($validated['entity_type_id']);
             $prefix = $entityType->code;
             
             // Obtener el último código con este prefijo
@@ -90,6 +235,8 @@ class EntityController extends Controller
             
             $validated['code'] = $prefix . '-' . str_pad($nextNumber, 3, '0', STR_PAD_LEFT);
         }
+
+        unset($validated['external_source_entity_id']);
 
         $entity = Entity::create($validated);
         $entity->load(['branch', 'entityType', 'areas']);

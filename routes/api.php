@@ -183,6 +183,8 @@ Route::middleware('auth:sanctum')->group(function () {
                 // Tipos de Entidades
                 Route::apiResource('tipos-entidades', App\Http\Controllers\Api\SplendidFarms\Administration\EntityTypeController::class)
                     ->parameters(['tipos-entidades' => 'entityType']);
+                // Entidades externas disponibles para vincular
+                Route::get('entidades/disponibles-externas', [App\Http\Controllers\Api\SplendidFarms\Administration\EntityController::class, 'externalCandidates']);
                 // Entidades
                 Route::apiResource('entidades', App\Http\Controllers\Api\SplendidFarms\Administration\EntityController::class)
                     ->parameters(['entidades' => 'entity']);
@@ -679,6 +681,27 @@ Route::middleware('auth:sanctum')->group(function () {
     
     // Rutas específicas de Splendid by Porvenir
     Route::prefix('splendidbyporvenir')->group(function () {
+
+        // =====================================================
+        // APLICACIÓN ADMINISTRACIÓN (mismos controllers que SF)
+        // =====================================================
+        Route::prefix('administration')->group(function () {
+            Route::prefix('organizacion')->group(function () {
+                Route::apiResource('sucursales', App\Http\Controllers\Api\SplendidFarms\Administration\BranchController::class)
+                    ->parameters(['sucursales' => 'branch']);
+                Route::apiResource('tipos-entidades', App\Http\Controllers\Api\SplendidFarms\Administration\EntityTypeController::class)
+                    ->parameters(['tipos-entidades' => 'entityType']);
+                Route::get('entidades/disponibles-externas', [App\Http\Controllers\Api\SplendidFarms\Administration\EntityController::class, 'externalCandidates']);
+                Route::apiResource('entidades', App\Http\Controllers\Api\SplendidFarms\Administration\EntityController::class)
+                    ->parameters(['entidades' => 'entity']);
+                Route::apiResource('areas', App\Http\Controllers\Api\SplendidFarms\Administration\AreaController::class)
+                    ->parameters(['areas' => 'area']);
+                Route::post('areas/{area}/assign', [App\Http\Controllers\Api\SplendidFarms\Administration\AreaController::class, 'assignToEntity']);
+                Route::delete('areas/{area}/unassign/{entity}', [App\Http\Controllers\Api\SplendidFarms\Administration\AreaController::class, 'unassignFromEntity']);
+                Route::put('areas/{area}/assignment/{entity}', [App\Http\Controllers\Api\SplendidFarms\Administration\AreaController::class, 'updateAssignment']);
+                Route::get('entidades/{entity}/areas', [App\Http\Controllers\Api\SplendidFarms\Administration\AreaController::class, 'getByEntity']);
+            });
+        });
         
         // =====================================================
         // APLICACIÓN INVENTARIO (mismos controllers que SF)

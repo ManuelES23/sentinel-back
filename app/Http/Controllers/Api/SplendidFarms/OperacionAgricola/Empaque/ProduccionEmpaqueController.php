@@ -26,6 +26,7 @@ class ProduccionEmpaqueController extends Controller
         'proceso.recepcion.salidaCampo.variedad:id,nombre',
         'variedad:id,nombre',
         'recipe:id,name,code,recipe_type,peso_pieza,output_quantity,output_product_id',
+        'recipe.items:id,recipe_id,group_key,quantity',
         'recipe.outputProduct:id,name,brand_id',
         'recipe.outputProduct.brand:id,name,code',
         'creador:id,name',
@@ -37,6 +38,7 @@ class ProduccionEmpaqueController extends Controller
         'detalles.proceso.recepcion.salidaCampo:id,variedad_id',
         'detalles.proceso.recepcion.salidaCampo.variedad:id,nombre',
         'detalles.recipe:id,name,code,output_quantity,output_product_id',
+        'detalles.recipe.items:id,recipe_id,group_key,quantity',
         'detalles.recipe.outputProduct:id,name,brand_id',
         'detalles.recipe.outputProduct.brand:id,name,code',
         'detalles.creador:id,name',
@@ -142,11 +144,16 @@ class ProduccionEmpaqueController extends Controller
                         $validated['pallet_qr_id'] = (string) Str::uuid();
                     }
 
-                    // Si es cola y tiene receta, auto-set cajas_objetivo desde receta
+                    // Si es cola y tiene receta, auto-set cajas_objetivo desde el item grupo 'caja'
                     if ($validated['is_cola'] && !empty($validated['recipe_id']) && empty($validated['cajas_objetivo'])) {
-                        $recipe = Recipe::find($validated['recipe_id']);
-                        if ($recipe && $recipe->output_quantity > 0) {
-                            $validated['cajas_objetivo'] = (int) $recipe->output_quantity;
+                        $recipe = Recipe::with('items')->find($validated['recipe_id']);
+                        if ($recipe) {
+                            $cajaItem = $recipe->items->firstWhere('group_key', 'caja');
+                            if ($cajaItem && (int) $cajaItem->quantity > 0) {
+                                $validated['cajas_objetivo'] = (int) $cajaItem->quantity;
+                            } elseif ($recipe->output_quantity > 1) {
+                                $validated['cajas_objetivo'] = (int) $recipe->output_quantity;
+                            }
                         }
                     }
 
@@ -371,24 +378,29 @@ class ProduccionEmpaqueController extends Controller
             'observaciones' => 'nullable|string',
         ]);
 
-        // Auto-corregir cajas_objetivo si no está bien configurado y la receta lo indica
-        $recipeForObjCheck = $validated['recipe_id'] ? Recipe::find($validated['recipe_id']) : ($produccion->recipe_id ? Recipe::find($produccion->recipe_id) : null);
-        if ($recipeForObjCheck && $recipeForObjCheck->output_quantity > 1 && (!$produccion->cajas_objetivo || $produccion->cajas_objetivo <= 1)) {
-            $produccion->update(['cajas_objetivo' => (int) $recipeForObjCheck->output_quantity]);
+        // Calcular objetivo real de cajas (prioriza grupo 'caja' de receta)
+        $produccion->loadMissing([
+            'recipe.items:id,recipe_id,group_key,quantity',
+            'detalles.recipe.items:id,recipe_id,group_key,quantity',
+        ]);
+        $cajasObjetivo = $this->resolveCajasObjetivo($produccion);
+
+        if ($cajasObjetivo > 0 && (!$produccion->cajas_objetivo || $produccion->cajas_objetivo <= 1)) {
+            $produccion->update(['cajas_objetivo' => $cajasObjetivo]);
             $produccion->refresh();
         }
 
-        // Validar contra cajas_objetivo si existe (no exceder receta)
-        if ($produccion->cajas_objetivo) {
+        // Validar que no exceda el máximo restante del pallet cola
+        if ($cajasObjetivo > 0) {
             $cajasActuales = $produccion->total_cajas;
             $nuevasCajas = $validated['total_cajas'];
             $total = $cajasActuales + $nuevasCajas;
 
-            if ($total > $produccion->cajas_objetivo) {
-                $restantes = $produccion->cajas_objetivo - $cajasActuales;
+            if ($total > $cajasObjetivo) {
+                $restantes = max($cajasObjetivo - $cajasActuales, 0);
                 return response()->json([
                     'status' => 'error',
-                    'message' => "Excede el objetivo de la receta. Cajas actuales: {$cajasActuales}, objetivo: {$produccion->cajas_objetivo}, máximo a agregar: {$restantes}",
+                    'message' => "Excede el objetivo de la receta. Cajas actuales: {$cajasActuales}, objetivo: {$cajasObjetivo}, máximo a agregar: {$restantes}",
                 ], 422);
             }
         }
@@ -452,7 +464,9 @@ class ProduccionEmpaqueController extends Controller
 
             // Marcar completo si lo indica el usuario, o si alcanzó el objetivo
             $marcarCompleto = $validated['marcar_completo'] ?? false;
-            if ($marcarCompleto || ($produccion->cajas_objetivo && $totalCajas >= $produccion->cajas_objetivo)) {
+            $cajasObjetivoActual = max((int) ($produccion->cajas_objetivo ?? 0), $this->resolveCajasObjetivo($produccion));
+
+            if ($marcarCompleto || ($cajasObjetivoActual > 0 && $totalCajas >= $cajasObjetivoActual)) {
                 $updateData['is_cola'] = false;
 
                 // Reasignar número de pallet: COLA-XXXX → PREFIJO-XXXX consecutivo
@@ -563,21 +577,29 @@ class ProduccionEmpaqueController extends Controller
 
     private function resolveCajasObjetivo(ProduccionEmpaque $produccion): int
     {
+        // Buscar la cantidad del grupo 'caja' en los items de la receta del pallet
+        $cajaItem = $produccion->recipe?->items
+            ?->firstWhere('group_key', 'caja');
+        if ($cajaItem && (int) $cajaItem->quantity > 0) {
+            return (int) $cajaItem->quantity;
+        }
+
+        // Buscar en las recetas de los detalles (entradas)
+        $cajaItemDetalle = $produccion->detalles
+            ->map(fn($d) => $d->recipe?->items?->firstWhere('group_key', 'caja'))
+            ->filter()
+            ->first();
+        if ($cajaItemDetalle && (int) $cajaItemDetalle->quantity > 0) {
+            return (int) $cajaItemDetalle->quantity;
+        }
+
+        // Fallback legacy: output_quantity si es mayor a 1
         $porReceta = (int) ($produccion->recipe?->output_quantity ?? 0);
         if ($porReceta > 1) {
             return $porReceta;
         }
 
-        $porDetalle = (int) ($produccion->detalles
-            ->pluck('recipe.output_quantity')
-            ->filter(fn($value) => (int) $value > 1)
-            ->first() ?? 0);
-
-        if ($porDetalle > 1) {
-            return $porDetalle;
-        }
-
-        // Solo usar el valor persistido como último recurso (legacy).
+        // Solo usar el valor persistido como último recurso.
         $directo = (int) ($produccion->cajas_objetivo ?? 0);
         return $directo > 1 ? $directo : 0;
     }

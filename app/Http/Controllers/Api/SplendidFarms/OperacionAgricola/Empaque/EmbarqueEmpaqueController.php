@@ -149,7 +149,6 @@ class EmbarqueEmpaqueController extends Controller
 
         $validated['status'] = $validated['status'] ?? 'programado';
         $validated['created_by'] = $request->user()->id;
-        $validated['folio_embarque'] = $this->generarFolio($validated);
 
         $palletsInput = $validated['pallets'];
         unset($validated['pallets']);
@@ -172,6 +171,9 @@ class EmbarqueEmpaqueController extends Controller
         $validated['peso_total_kg'] = $pallets->sum('peso_neto_kg');
 
         $embarque = DB::transaction(function () use ($validated, $pallets) {
+            // Generar folio dentro de la transacción con lock para evitar duplicados por concurrencia
+            $validated['folio_embarque'] = $this->generarFolio($validated);
+
             $embarque = EmbarqueEmpaque::create($validated);
 
             foreach ($pallets as $pallet) {
@@ -305,10 +307,10 @@ class EmbarqueEmpaqueController extends Controller
         $pattern = "{$prefix}-{$entityId}-%";
 
         $lastFolio = EmbarqueEmpaque::withTrashed()
-            ->where('temporada_id', $data['temporada_id'])
             ->where('entity_id', $data['entity_id'])
             ->where('folio_embarque', 'like', $pattern)
             ->orderByDesc('folio_embarque')
+            ->lockForUpdate()
             ->value('folio_embarque');
 
         $nextNumber = $lastFolio ? (int) substr($lastFolio, -4) + 1 : 1;

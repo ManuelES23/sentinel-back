@@ -576,6 +576,42 @@ class MasterStructureSeeder extends Seeder
         $this->command->info("📱 Creando aplicaciones para: {$enterprise->name}");
 
         // ========================================
+        // APLICACIÓN: ADMINISTRACIÓN
+        // ========================================
+        $administration = Application::firstOrCreate(
+            ['slug' => 'administration', 'enterprise_id' => $enterprise->id],
+            [
+                'name' => 'Administración',
+                'description' => 'Gestión de organización y entidades',
+                'icon' => 'Settings',
+                'path' => '/splendidbyporvenir/administration',
+                'is_active' => true,
+            ]
+        );
+        $this->command->info("  ✓ Administración");
+
+        // Módulo: Organización
+        $organizacion = Module::firstOrCreate(
+            ['slug' => 'organizacion', 'application_id' => $administration->id],
+            ['name' => 'Organización', 'icon' => 'Building', 'order' => 1, 'is_active' => true]
+        );
+
+        $orgSubmodules = [
+            ['slug' => 'sucursales', 'name' => 'Sucursales', 'icon' => 'Building2', 'order' => 1],
+            ['slug' => 'tipos-entidades', 'name' => 'Tipos de Entidades', 'icon' => 'FileType', 'order' => 2],
+            ['slug' => 'entidades', 'name' => 'Entidades', 'icon' => 'Landmark', 'order' => 3],
+            ['slug' => 'areas', 'name' => 'Áreas', 'icon' => 'LayoutGrid', 'order' => 4],
+        ];
+
+        foreach ($orgSubmodules as $sub) {
+            Submodule::firstOrCreate(
+                ['slug' => $sub['slug'], 'module_id' => $organizacion->id],
+                ['name' => $sub['name'], 'icon' => $sub['icon'], 'order' => $sub['order'], 'is_active' => true]
+            );
+        }
+        $this->command->info("    → Organización: Sucursales, Tipos Entidades, Entidades, Áreas");
+
+        // ========================================
         // APLICACIÓN: INVENTARIO
         // ========================================
         $inventario = Application::firstOrCreate(
