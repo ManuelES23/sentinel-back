@@ -85,6 +85,12 @@ class Entity extends Model
             ->withTimestamps();
     }
 
+    public function cultivos()
+    {
+        return $this->belongsToMany(Cultivo::class, 'entity_cultivo')
+            ->withTimestamps();
+    }
+
     public function accessibleByEnterprises()
     {
         return $this->belongsToMany(Enterprise::class, 'enterprise_entity')
