@@ -8,8 +8,10 @@ use App\Models\Branch;
 use App\Models\Enterprise;
 use App\Models\Entity;
 use App\Models\EntityType;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\DB;
 
 class EntityController extends Controller
 {
@@ -215,30 +217,46 @@ class EntityController extends Controller
             ]);
         }
 
-        // Generar código automático si no se proporciona
-        if (empty($validated['code'])) {
-            // Obtener el tipo de entidad para usar su código
-            $entityType = EntityType::find($validated['entity_type_id']);
-            $prefix = $entityType->code;
-            
-            // Obtener el último código con este prefijo
-            $lastEntity = Entity::where('code', 'like', $prefix . '-%')
-                ->orderByRaw('CAST(SUBSTRING(code, ' . (strlen($prefix) + 2) . ') AS UNSIGNED) DESC')
-                ->first();
-            
-            if ($lastEntity) {
-                $lastNumber = (int) substr($lastEntity->code, strlen($prefix) + 1);
-                $nextNumber = $lastNumber + 1;
-            } else {
-                $nextNumber = 1;
-            }
-            
-            $validated['code'] = $prefix . '-' . str_pad($nextNumber, 3, '0', STR_PAD_LEFT);
-        }
-
         unset($validated['external_source_entity_id']);
 
-        $entity = Entity::create($validated);
+        try {
+            $entity = DB::transaction(function () use ($validated) {
+                $data = $validated;
+
+                // Generación atómica del código por tipo para evitar colisiones en concurrencia.
+                if (empty($data['code'])) {
+                    $entityType = EntityType::query()
+                        ->whereKey($data['entity_type_id'])
+                        ->lockForUpdate()
+                        ->firstOrFail();
+
+                    $prefix = $entityType->code;
+                    $lastCode = Entity::withTrashed()
+                        ->where('code', 'like', $prefix . '-%')
+                        ->select('code')
+                        ->orderByRaw('CAST(SUBSTRING(code, ' . (strlen($prefix) + 2) . ') AS UNSIGNED) DESC')
+                        ->value('code');
+
+                    $nextNumber = $lastCode
+                        ? ((int) substr($lastCode, strlen($prefix) + 1)) + 1
+                        : 1;
+
+                    $data['code'] = $prefix . '-' . str_pad($nextNumber, 3, '0', STR_PAD_LEFT);
+                }
+
+                return Entity::create($data);
+            });
+        } catch (QueryException $e) {
+            if ((int) $e->getCode() === 23000) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'No se pudo crear la entidad porque el código ya existe. Intenta nuevamente.',
+                ], 422);
+            }
+
+            throw $e;
+        }
+
         $entity->load(['branch', 'entityType', 'areas']);
 
         // Broadcast evento en tiempo real

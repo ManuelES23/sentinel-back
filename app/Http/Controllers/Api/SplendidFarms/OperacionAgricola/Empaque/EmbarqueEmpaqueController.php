@@ -13,7 +13,7 @@ class EmbarqueEmpaqueController extends Controller
 {
     private array $eagerLoad = [
         'entity:id,name,code',
-        'detalles.produccion:id,numero_pallet,is_cola,variedad_id,marca,presentacion,calibre,tipo_empaque,recipe_id,total_cajas',
+        'detalles.produccion:id,numero_pallet,is_cola,variedad_id,marca,presentacion,calibre,tipo_empaque,recipe_id,total_cajas,peso_bascula_kg',
         'detalles.produccion.variedad:id,nombre',
         'detalles.produccion.recipe:id,name,output_product_id',
         'detalles.produccion.recipe.outputProduct:id,name,brand_id',
@@ -169,6 +169,7 @@ class EmbarqueEmpaqueController extends Controller
         $validated['total_pallets'] = $pallets->count();
         $validated['total_cajas'] = $pallets->sum('total_cajas');
         $validated['peso_total_kg'] = $pallets->sum('peso_neto_kg');
+        $validated['peso_bascula_total_kg'] = $pallets->sum('peso_bascula_kg');
 
         $embarque = DB::transaction(function () use ($validated, $pallets) {
             // Generar folio dentro de la transacción con lock para evitar duplicados por concurrencia
@@ -201,6 +202,7 @@ class EmbarqueEmpaqueController extends Controller
                     'fecha_produccion' => $pallet->fecha_produccion,
                     'cajas' => $pallet->total_cajas,
                     'peso_kg' => $pallet->peso_neto_kg,
+                    'peso_bascula_kg' => $pallet->peso_bascula_kg,
                     'is_cola' => $pallet->is_cola,
                     'posicion_carga' => $posiciones[$pallet->id]['posicion_carga'] ?? null,
                 ]);

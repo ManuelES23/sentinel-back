@@ -108,7 +108,7 @@ class RezagaEmpaqueController extends Controller
                 ->groupBy('proceso_id');
         }
 
-        $result = $procesos->map(function ($p) use ($rezagas) {
+        $result = $procesos->map(function (ProcesoEmpaque $p) use ($rezagas) {
             $data = $p->toArray();
             $data['rezagas_del_dia'] = $rezagas->get($p->id, collect())->values();
             return $data;
@@ -248,7 +248,7 @@ class RezagaEmpaqueController extends Controller
 
     /**
      * GET /rezaga/pendientes — Folios que completaron etapas sin registrar rezaga
-     * Returns procesos that went through lavado/HT/produccion but have no rezaga for that stage
+        * Returns procesos that went through lavado/produccion but have no rezaga for that stage
      */
     public function pendientesRezaga(Request $request): JsonResponse
     {
@@ -280,16 +280,7 @@ class RezagaEmpaqueController extends Controller
             ->whereNotNull('fecha_lavado')
             ->whereDoesntHave('rezagas', fn($q) => $q->where('tipo_rezaga', 'lavado'))
             ->get()
-            ->map(fn($p) => array_merge($p->toArray(), ['rezaga_pendiente_tipo' => 'lavado']));
-
-        // Procesos that passed through HT (have fecha_hidrotermico) but no rezaga tipo=hidrotermico
-        $sinRezagaHT = ProcesoEmpaque::with($eagerLoad)
-            ->where('temporada_id', $temporadaId)
-            ->when($entityId, fn($q) => $q->where('entity_id', $entityId))
-            ->whereNotNull('fecha_hidrotermico')
-            ->whereDoesntHave('rezagas', fn($q) => $q->where('tipo_rezaga', 'hidrotermico'))
-            ->get()
-            ->map(fn($p) => array_merge($p->toArray(), ['rezaga_pendiente_tipo' => 'hidrotermico']));
+            ->map(fn(ProcesoEmpaque $p) => array_merge($p->toArray(), ['rezaga_pendiente_tipo' => 'lavado']));
 
         // Procesos cerrados (procesado) without rezaga tipo=produccion
         $sinRezagaProduccion = ProcesoEmpaque::with($eagerLoad)
@@ -298,9 +289,9 @@ class RezagaEmpaqueController extends Controller
             ->where('status', 'procesado')
             ->whereDoesntHave('rezagas', fn($q) => $q->where('tipo_rezaga', 'produccion'))
             ->get()
-            ->map(fn($p) => array_merge($p->toArray(), ['rezaga_pendiente_tipo' => 'produccion']));
+            ->map(fn(ProcesoEmpaque $p) => array_merge($p->toArray(), ['rezaga_pendiente_tipo' => 'produccion']));
 
-        $pendientes = $sinRezagaLavado->merge($sinRezagaHT)->merge($sinRezagaProduccion)
+        $pendientes = $sinRezagaLavado->merge($sinRezagaProduccion)
             ->unique(fn($item) => $item['id'] . '-' . $item['rezaga_pendiente_tipo'])
             ->values();
 

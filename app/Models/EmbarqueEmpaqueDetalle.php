@@ -15,13 +15,14 @@ class EmbarqueEmpaqueDetalle extends Model
         'embarque_id', 'produccion_id', 'numero_pallet', 'folio_produccion',
         'productor', 'variedad', 'lote', 'marca', 'lote_producto_terminado',
         'presentacion', 'tipo_empaque', 'etiqueta',
-        'calibre', 'fecha_produccion', 'cajas', 'peso_kg', 'is_cola',
+        'calibre', 'fecha_produccion', 'cajas', 'peso_kg', 'peso_bascula_kg', 'is_cola',
         'posicion_carga',
     ];
 
     protected $casts = [
         'cajas' => 'integer',
         'peso_kg' => 'decimal:2',
+        'peso_bascula_kg' => 'decimal:2',
         'fecha_produccion' => 'date:Y-m-d',
         'is_cola' => 'boolean',
         'posicion_carga' => 'integer',

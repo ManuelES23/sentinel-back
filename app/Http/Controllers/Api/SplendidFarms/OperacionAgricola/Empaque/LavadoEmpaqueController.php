@@ -389,6 +389,11 @@ class LavadoEmpaqueController extends Controller
 
     /**
      * POST /lavado/{proceso}/iniciar-hidrotermico
+     *
+     * Para folios en modo_kilos permite capturar kilos parciales.
+     * Si kg_hidrotermico < peso_disponible_kg → se crea un registro hijo para el lote
+     * parcial (status=hidrotermico) y el padre queda en "lavado" con los kg restantes.
+     * Si se envían todos los kg (o folio no es modo_kilos) → comportamiento original.
      */
     public function iniciarHidrotermico(Request $request, ProcesoEmpaque $proceso): JsonResponse
     {
@@ -404,8 +409,100 @@ class LavadoEmpaqueController extends Controller
             ], 422);
         }
 
+        $modoKilos = (bool) $proceso->modo_kilos;
+
+        // ── Flujo modo_kilos: permite lote parcial ───────────────────────────
+        if ($modoKilos) {
+            $request->validate([
+                'kg_hidrotermico' => 'required|numeric|min:0.01',
+            ]);
+
+            $kgSolicitado   = round((float) $request->input('kg_hidrotermico'), 2);
+            $kgDisponible   = round((float) $proceso->peso_disponible_kg, 2);
+
+            if ($kgSolicitado > $kgDisponible) {
+                return response()->json([
+                    'status'  => 'error',
+                    'message' => "Kilos solicitados ($kgSolicitado) exceden los disponibles ($kgDisponible)",
+                ], 422);
+            }
+
+            // Obtener peso unitario del tipo de carga para calcular cajas equivalentes
+            $tipoCarga    = TipoCarga::find($proceso->tipo_carga_id);
+            $pesoUnitario = $tipoCarga ? (float) $tipoCarga->peso_estimado_kg : 0;
+            $cajasLote    = $pesoUnitario > 0
+                ? (int) max(1, round($kgSolicitado / $pesoUnitario))
+                : (int) $proceso->cantidad_disponible;
+
+            $fechaHoy = now('America/Mexico_City')->toDateString();
+
+            // Lote COMPLETO: actualizar el mismo registro
+            if ($kgSolicitado >= $kgDisponible) {
+                $proceso->update([
+                    'status'              => 'hidrotermico',
+                    'fecha_hidrotermico'  => $fechaHoy,
+                    'cantidad_disponible' => $cajasLote,
+                ]);
+
+                $proceso->load($this->eagerLoad);
+
+                return response()->json([
+                    'success' => true,
+                    'message' => "Tratamiento hidrotérmico iniciado ({$kgSolicitado} kg → {$cajasLote} cajas)",
+                    'data'    => $proceso,
+                ]);
+            }
+
+            // Lote PARCIAL: clonar a nuevo registro hijo, reducir padre
+            $kgRestante = round($kgDisponible - $kgSolicitado, 2);
+
+            DB::transaction(function () use ($proceso, $kgSolicitado, $cajasLote, $kgRestante, $fechaHoy, $request) {
+                $cajasRestante = (int) $proceso->cantidad_disponible - $cajasLote;
+                if ($cajasRestante < 0) {
+                    $cajasRestante = 0;
+                }
+
+                // Hijo: lote que entra a hidrotérmico ahora
+                ProcesoEmpaque::create([
+                    'temporada_id'         => $proceso->temporada_id,
+                    'entity_id'            => $proceso->entity_id,
+                    'recepcion_id'         => $proceso->recepcion_id,
+                    'folio_proceso'        => $proceso->folio_proceso,
+                    'tipo_carga_id'        => $proceso->tipo_carga_id,
+                    'productor_id'         => $proceso->productor_id,
+                    'lote_id'              => $proceso->lote_id,
+                    'etapa_id'             => $proceso->etapa_id,
+                    'cantidad_entrada'     => $cajasLote,
+                    'peso_entrada_kg'      => $kgSolicitado,
+                    'cantidad_disponible'  => $cajasLote,
+                    'peso_disponible_kg'   => $kgSolicitado,
+                    'modo_kilos'           => true,
+                    'fecha_entrada'        => $proceso->fecha_entrada,
+                    'fecha_lavado'         => $proceso->fecha_lavado,
+                    'fecha_hidrotermico'   => $fechaHoy,
+                    'status'               => 'hidrotermico',
+                    'created_by'           => $request->user()->id,
+                ]);
+
+                // Padre: reducir kg/cajas disponibles, mantener en "lavado"
+                $proceso->update([
+                    'cantidad_disponible' => $cajasRestante,
+                    'peso_disponible_kg'  => $kgRestante,
+                ]);
+            });
+
+            $proceso->load($this->eagerLoad);
+
+            return response()->json([
+                'success' => true,
+                'message' => "Lote parcial enviado a hidrotérmico: {$kgSolicitado} kg ({$cajasLote} cajas). Pendiente: {$kgRestante} kg",
+                'data'    => $proceso,
+            ]);
+        }
+
+        // ── Flujo modo cajas: comportamiento original ────────────────────────
         $proceso->update([
-            'status' => 'hidrotermico',
+            'status'             => 'hidrotermico',
             'fecha_hidrotermico' => now('America/Mexico_City')->toDateString(),
         ]);
 
@@ -414,7 +511,7 @@ class LavadoEmpaqueController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Tratamiento hidrotérmico iniciado',
-            'data' => $proceso,
+            'data'    => $proceso,
         ]);
     }
 

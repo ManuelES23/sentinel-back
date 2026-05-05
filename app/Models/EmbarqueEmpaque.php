@@ -26,7 +26,7 @@ class EmbarqueEmpaque extends Model
         'consigne_agente_aduana_eua', 'consigne_bodega',
         // Base
         'tipo_venta', 'cliente', 'destino', 'destino_consignatario_id',
-        'fecha_embarque', 'total_pallets', 'total_cajas', 'peso_total_kg',
+        'fecha_embarque', 'total_pallets', 'total_cajas', 'peso_total_kg', 'peso_bascula_total_kg',
         'codigo_rastreo', 'espacios_caja',
         // Transporte
         'transportista', 'vehiculo', 'chofer', 'rfc_chofer',
@@ -40,6 +40,7 @@ class EmbarqueEmpaque extends Model
         'total_pallets' => 'integer',
         'total_cajas' => 'integer',
         'peso_total_kg' => 'decimal:2',
+        'peso_bascula_total_kg' => 'decimal:2',
         'temperatura' => 'decimal:1',
         'fecha_embarque' => 'date:Y-m-d',
         'genera_manifiesto' => 'boolean',
