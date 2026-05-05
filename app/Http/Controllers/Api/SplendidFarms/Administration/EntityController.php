@@ -219,42 +219,66 @@ class EntityController extends Controller
 
         unset($validated['external_source_entity_id']);
 
-        try {
-            $entity = DB::transaction(function () use ($validated) {
-                $data = $validated;
+        $isAutoCode = empty($validated['code']);
+        $maxAttempts = $isAutoCode ? 5 : 1;
+        $entity = null;
 
-                // Generación atómica del código por tipo para evitar colisiones en concurrencia.
-                if (empty($data['code'])) {
-                    $entityType = EntityType::query()
-                        ->whereKey($data['entity_type_id'])
-                        ->lockForUpdate()
-                        ->firstOrFail();
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            try {
+                $entity = DB::transaction(function () use ($validated, $isAutoCode) {
+                    $data = $validated;
 
-                    $prefix = $entityType->code;
-                    $lastCode = Entity::withTrashed()
-                        ->where('code', 'like', $prefix . '-%')
-                        ->select('code')
-                        ->orderByRaw('CAST(SUBSTRING(code, ' . (strlen($prefix) + 2) . ') AS UNSIGNED) DESC')
-                        ->value('code');
+                    // Generación atómica del código por tipo para evitar colisiones en concurrencia.
+                    if ($isAutoCode) {
+                        $entityType = EntityType::query()
+                            ->whereKey($data['entity_type_id'])
+                            ->lockForUpdate()
+                            ->firstOrFail();
 
-                    $nextNumber = $lastCode
-                        ? ((int) substr($lastCode, strlen($prefix) + 1)) + 1
-                        : 1;
+                        $prefix = $entityType->code;
+                        $lastCode = Entity::withTrashed()
+                            ->where('code', 'like', $prefix . '-%')
+                            ->select('code')
+                            ->orderByRaw('CAST(SUBSTRING(code, ' . (strlen($prefix) + 2) . ') AS UNSIGNED) DESC')
+                            ->value('code');
 
-                    $data['code'] = $prefix . '-' . str_pad($nextNumber, 3, '0', STR_PAD_LEFT);
+                        $nextNumber = $lastCode
+                            ? ((int) substr($lastCode, strlen($prefix) + 1)) + 1
+                            : 1;
+
+                        $data['code'] = $prefix . '-' . str_pad($nextNumber, 3, '0', STR_PAD_LEFT);
+                    }
+
+                    return Entity::create($data);
+                });
+
+                break;
+            } catch (QueryException $e) {
+                if ((int) $e->getCode() !== 23000) {
+                    throw $e;
                 }
 
-                return Entity::create($data);
-            });
-        } catch (QueryException $e) {
-            if ((int) $e->getCode() === 23000) {
-                return response()->json([
-                    'status' => 'error',
-                    'message' => 'No se pudo crear la entidad porque el código ya existe. Intenta nuevamente.',
-                ], 422);
-            }
+                if (!$isAutoCode) {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'El código capturado ya existe. Usa otro código o déjalo vacío para autogenerarlo.',
+                    ], 422);
+                }
 
-            throw $e;
+                if ($attempt === $maxAttempts) {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'No se pudo crear la entidad por colisión de código. Intenta nuevamente.',
+                    ], 422);
+                }
+            }
+        }
+
+        if (!$entity) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No se pudo crear la entidad. Intenta nuevamente.',
+            ], 422);
         }
 
         $entity->load(['branch', 'entityType', 'areas']);
