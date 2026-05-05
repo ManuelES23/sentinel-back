@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque;
 
 use App\Http\Controllers\Controller;
 use App\Models\EmbarqueEmpaque;
+use App\Models\PreEmbarqueEmpaque;
 use App\Models\ProduccionEmpaque;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -287,19 +288,74 @@ class EmbarqueEmpaqueController extends Controller
         ]);
     }
 
-    public function destroy(EmbarqueEmpaque $embarque): JsonResponse
+    public function destroy(Request $request, EmbarqueEmpaque $embarque): JsonResponse
     {
-        DB::transaction(function () use ($embarque) {
-            // Revert production status
-            foreach ($embarque->detalles as $det) {
+        $preEmbarque = DB::transaction(function () use ($embarque, $request) {
+            $detalles = $embarque->detalles()->orderBy('id')->get();
+
+            $espaciosCaja = (int) ($embarque->espacios_caja ?: 0);
+            $totalPallets = $detalles->count();
+            if ($espaciosCaja < $totalPallets) {
+                $espaciosCaja = $totalPallets;
+            }
+            if ($espaciosCaja <= 0) {
+                $espaciosCaja = 22;
+            }
+
+            $observacionBase = 'Regresado desde embarque ' . $embarque->folio_embarque;
+            $observacionesPrevias = trim((string) $embarque->observaciones);
+
+            $preEmbarque = PreEmbarqueEmpaque::create([
+                'temporada_id' => $embarque->temporada_id,
+                'entity_id' => $embarque->entity_id,
+                'folio_pre_embarque' => $this->generarFolioPreEmbarque((int) $embarque->entity_id),
+                'espacios_caja' => $espaciosCaja,
+                'status' => 'abierto',
+                'observaciones' => $observacionesPrevias !== ''
+                    ? $observacionBase . '. ' . $observacionesPrevias
+                    : $observacionBase,
+                'created_by' => $request->user()?->id,
+            ]);
+
+            $usedPositions = [];
+            $nextPos = 1;
+
+            // Regresar pallets a inventario y reconstruir pre-embarque para editarlo/reembarcar.
+            foreach ($detalles as $det) {
                 ProduccionEmpaque::where('id', $det->produccion_id)
                     ->update(['status' => 'en_almacen', 'en_cuarto_frio' => true]);
+
+                $pos = (int) ($det->posicion_carga ?: 0);
+                if ($pos <= 0 || in_array($pos, $usedPositions, true)) {
+                    while (in_array($nextPos, $usedPositions, true)) {
+                        $nextPos++;
+                    }
+                    $pos = $nextPos;
+                }
+
+                $usedPositions[] = $pos;
+                $nextPos = max($nextPos, $pos + 1);
+
+                $preEmbarque->detalles()->create([
+                    'produccion_id' => $det->produccion_id,
+                    'posicion_carga' => $pos,
+                ]);
             }
+
             $embarque->detalles()->delete();
             $embarque->delete();
+
+            return $preEmbarque;
         });
 
-        return response()->json(['success' => true, 'message' => 'Embarque eliminado']);
+        return response()->json([
+            'success' => true,
+            'message' => 'Embarque eliminado y convertido de nuevo a pre-embarque',
+            'data' => [
+                'pre_embarque_id' => $preEmbarque->id,
+                'folio_pre_embarque' => $preEmbarque->folio_pre_embarque,
+            ],
+        ]);
     }
 
     private function generarFolio(array $data): string
@@ -318,5 +374,22 @@ class EmbarqueEmpaqueController extends Controller
         $nextNumber = $lastFolio ? (int) substr($lastFolio, -4) + 1 : 1;
 
         return "{$prefix}-{$entityId}-" . str_pad($nextNumber, 4, '0', STR_PAD_LEFT);
+    }
+
+    private function generarFolioPreEmbarque(int $entityId): string
+    {
+        $entityPad = str_pad((string) $entityId, 2, '0', STR_PAD_LEFT);
+        $pattern = "PRE-{$entityPad}-%";
+
+        $lastFolio = PreEmbarqueEmpaque::withTrashed()
+            ->where('entity_id', $entityId)
+            ->where('folio_pre_embarque', 'like', $pattern)
+            ->orderByDesc('folio_pre_embarque')
+            ->lockForUpdate()
+            ->value('folio_pre_embarque');
+
+        $nextNumber = $lastFolio ? (int) substr($lastFolio, -4) + 1 : 1;
+
+        return "PRE-{$entityPad}-" . str_pad((string) $nextNumber, 4, '0', STR_PAD_LEFT);
     }
 }
