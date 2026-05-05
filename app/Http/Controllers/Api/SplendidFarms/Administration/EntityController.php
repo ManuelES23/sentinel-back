@@ -12,6 +12,7 @@ use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class EntityController extends Controller
 {
@@ -249,6 +250,12 @@ class EntityController extends Controller
                         $data['code'] = $prefix . '-' . str_pad($nextNumber, 3, '0', STR_PAD_LEFT);
                     }
 
+                    // Evita colisiones de slug cuando se repite el nombre entre entidades.
+                    $data['slug'] = $this->generateUniqueEntitySlug(
+                        $data['slug'] ?? null,
+                        $data['name'] ?? ''
+                    );
+
                     return Entity::create($data);
                 });
 
@@ -258,10 +265,26 @@ class EntityController extends Controller
                     throw $e;
                 }
 
+                $constraint = $this->getUniqueConstraintName($e);
+
+                if ($this->isSlugConstraint($constraint)) {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'Ya existe una entidad con ese nombre/slug. Cambia el nombre o captura un slug diferente.',
+                    ], 422);
+                }
+
                 if (!$isAutoCode) {
                     return response()->json([
                         'status' => 'error',
                         'message' => 'El código capturado ya existe. Usa otro código o déjalo vacío para autogenerarlo.',
+                    ], 422);
+                }
+
+                if (!$this->isCodeConstraint($constraint)) {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'No se pudo crear la entidad por conflicto de datos únicos. Revisa código y nombre.',
                     ], 422);
                 }
 
@@ -374,5 +397,48 @@ class EntityController extends Controller
             'success' => true,
             'message' => 'Entidad eliminada exitosamente'
         ]);
+    }
+
+    private function generateUniqueEntitySlug(?string $requestedSlug, string $name): string
+    {
+        $base = Str::slug($requestedSlug ?: $name);
+        if ($base === '') {
+            $base = 'entidad';
+        }
+
+        $slug = $base;
+        $counter = 2;
+
+        while (Entity::withTrashed()->where('slug', $slug)->exists()) {
+            $slug = $base . '-' . $counter;
+            $counter++;
+        }
+
+        return $slug;
+    }
+
+    private function getUniqueConstraintName(QueryException $e): string
+    {
+        $details = strtolower((string) ($e->errorInfo[2] ?? ''));
+
+        if (str_contains($details, 'entities.entities_code_unique')) {
+            return 'entities.entities_code_unique';
+        }
+
+        if (str_contains($details, 'entities.entities_slug_unique')) {
+            return 'entities.entities_slug_unique';
+        }
+
+        return $details;
+    }
+
+    private function isCodeConstraint(string $constraint): bool
+    {
+        return str_contains($constraint, 'entities.entities_code_unique') || str_contains($constraint, 'code');
+    }
+
+    private function isSlugConstraint(string $constraint): bool
+    {
+        return str_contains($constraint, 'entities.entities_slug_unique') || str_contains($constraint, 'slug');
     }
 }
