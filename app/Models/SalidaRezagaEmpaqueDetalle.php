@@ -5,7 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
-class VentaRezagaEmpaqueDetalle extends Model
+class SalidaRezagaEmpaqueDetalle extends Model
 {
     use HasFactory;
 
@@ -19,6 +19,6 @@ class VentaRezagaEmpaqueDetalle extends Model
         'monto' => 'decimal:2',
     ];
 
-    public function ventaRezaga() { return $this->belongsTo(VentaRezagaEmpaque::class, 'venta_rezaga_id'); }
+    public function salidaRezaga() { return $this->belongsTo(SalidaRezagaEmpaque::class, 'venta_rezaga_id'); }
     public function rezaga() { return $this->belongsTo(RezagaEmpaque::class, 'rezaga_id'); }
 }

@@ -30,7 +30,9 @@ class RezagaEmpaque extends Model
     public function entity() { return $this->belongsTo(Entity::class); }
     public function proceso() { return $this->belongsTo(ProcesoEmpaque::class, 'proceso_id'); }
     public function creador() { return $this->belongsTo(User::class, 'created_by'); }
-    public function ventaDetalles() { return $this->hasMany(VentaRezagaEmpaqueDetalle::class, 'rezaga_id'); }
+    public function ventaDetalles() { return $this->hasMany(SalidaRezagaEmpaqueDetalle::class, 'rezaga_id'); }
+    public function salidaDetalles() { return $this->hasMany(SalidaRezagaEmpaqueDetalle::class, 'rezaga_id'); }
+    public function ajustesPeso() { return $this->hasMany(AjustePesoRezaga::class, 'rezaga_empaque_id'); }
 
     public function scopeByTemporada($query, $id) { return $query->where('temporada_id', $id); }
     public function scopeByStatus($query, $s) { return $query->where('status', $s); }

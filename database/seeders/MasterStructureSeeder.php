@@ -553,7 +553,7 @@ class MasterStructureSeeder extends Seeder
             ['slug' => 'produccion',   'name' => 'Producción',       'icon' => 'Package',        'order' => 4],
             ['slug' => 'rezaga',       'name' => 'Rezaga',           'icon' => 'Trash2',         'order' => 5],
             ['slug' => 'embarques',    'name' => 'Embarques',        'icon' => 'Truck',          'order' => 6],
-            ['slug' => 'venta-rezaga', 'name' => 'Venta de Rezaga',  'icon' => 'ShoppingCart',   'order' => 7],
+            ['slug' => 'salida-rezaga', 'name' => 'Salida de Rezaga',  'icon' => 'ShoppingCart',   'order' => 7],
             ['slug' => 'calidad',      'name' => 'Calidad',          'icon' => 'ClipboardCheck', 'order' => 8],
             ['slug' => 'reportes',     'name' => 'Reportes',         'icon' => 'FileText',       'order' => 9],
         ];
@@ -564,7 +564,7 @@ class MasterStructureSeeder extends Seeder
                 ['name' => $sub['name'], 'icon' => $sub['icon'], 'order' => $sub['order'], 'is_active' => true]
             );
         }
-        $this->command->info("    → Empaque: Dashboard, Recepciones, Lavado, Proceso, Producción, Rezaga, Embarques, Venta Rezaga, Calidad, Reportes");
+        $this->command->info("    → Empaque: Dashboard, Recepciones, Lavado, Proceso, Producción, Rezaga, Embarques, Salida Rezaga, Calidad, Reportes");
     }
 
     /**

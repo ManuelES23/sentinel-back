@@ -603,6 +603,11 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::apiResource('rezaga', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\RezagaEmpaqueController::class)
                     ->parameters(['rezaga' => 'rezaga']);
 
+                // Ajuste de peso de rezaga (pérdida por deshidratación / putrefacción)
+                Route::apiResource('ajuste-peso-rezaga', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\AjustePesoRezagaController::class)
+                    ->parameters(['ajuste-peso-rezaga' => 'ajustePesoRezaga'])
+                    ->except(['update']);
+
                 // Embarques
                 Route::get('embarques/pallets-disponibles', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\EmbarqueEmpaqueController::class, 'palletsDisponibles']);
                 Route::apiResource('embarques', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\EmbarqueEmpaqueController::class)
@@ -623,8 +628,8 @@ Route::middleware('auth:sanctum')->group(function () {
                     ->parameters(['consignatarios' => 'consignatario']);
 
                 // Venta de Rezaga
-                Route::apiResource('venta-rezaga', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\VentaRezagaEmpaqueController::class)
-                    ->parameters(['venta-rezaga' => 'ventaRezaga']);
+                Route::apiResource('salida-rezaga', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\SalidaRezagaEmpaqueController::class)
+                    ->parameters(['salida-rezaga' => 'salidaRezaga']);
 
                 // Calidad
                 Route::apiResource('calidad', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\CalidadEmpaqueController::class)

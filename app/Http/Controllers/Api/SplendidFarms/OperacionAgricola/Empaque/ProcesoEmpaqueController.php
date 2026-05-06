@@ -9,7 +9,7 @@ use App\Models\PreEmbarqueEmpaqueDetalle;
 use App\Models\ProcesoEmpaque;
 use App\Models\RecepcionEmpaque;
 use App\Models\RezagaEmpaque;
-use App\Models\VentaRezagaEmpaqueDetalle;
+use App\Models\SalidaRezagaEmpaqueDetalle;
 use App\Models\Submodule;
 use App\Models\TipoCarga;
 use App\Models\UserSubmodulePermission;
@@ -459,7 +459,7 @@ class ProcesoEmpaqueController extends Controller
 
         $ventaDetallesSobreRezagasEliminadas = collect();
         if ($rezagasEliminadas->isNotEmpty()) {
-            $ventaDetallesSobreRezagasEliminadas = VentaRezagaEmpaqueDetalle::query()
+            $ventaDetallesSobreRezagasEliminadas = SalidaRezagaEmpaqueDetalle::query()
                 ->whereIn('rezaga_id', $rezagasEliminadas->pluck('id'))
                 ->select('id', 'venta_rezaga_id', 'rezaga_id')
                 ->get();
