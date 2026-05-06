@@ -21,6 +21,7 @@ class RezagaEmpaqueController extends Controller
         'proceso.recepcion:id,salida_campo_id,folio_recepcion,cantidad_recibida',
         'proceso.recepcion.salidaCampo:id,variedad_id,folio_salida,cantidad',
         'proceso.recepcion.salidaCampo.variedad:id,nombre',
+        'ventaDetalles:id,rezaga_id,peso_kg',
         'creador:id,name',
     ];
 
@@ -83,6 +84,7 @@ class RezagaEmpaqueController extends Controller
                 ->whereDate('fecha', $fecha)
                 ->orderByDesc('id')
                 ->get()
+                ->map(fn(RezagaEmpaque $r) => $this->appendCantidadHistorica($r))
                 ->groupBy('proceso_id');
         } else {
             // No date filter: all procesos that have rezagas in this temporada
@@ -105,6 +107,7 @@ class RezagaEmpaqueController extends Controller
                 ->whereIn('proceso_id', $procesoIds)
                 ->orderByDesc('id')
                 ->get()
+                ->map(fn(RezagaEmpaque $r) => $this->appendCantidadHistorica($r))
                 ->groupBy('proceso_id');
         }
 
@@ -141,7 +144,8 @@ class RezagaEmpaqueController extends Controller
             });
         }
 
-        $rezagas = $query->orderByDesc('fecha')->orderByDesc('id')->get();
+        $rezagas = $query->orderByDesc('fecha')->orderByDesc('id')->get()
+            ->map(fn(RezagaEmpaque $r) => $this->appendCantidadHistorica($r));
 
         return response()->json(['success' => true, 'data' => $rezagas]);
     }
@@ -213,6 +217,17 @@ class RezagaEmpaqueController extends Controller
         $rezaga->delete();
 
         return response()->json(['success' => true, 'message' => 'Rezaga eliminada']);
+    }
+
+    private function appendCantidadHistorica(RezagaEmpaque $rezaga): RezagaEmpaque
+    {
+        $consumidoEnSalidas = (float) $rezaga->ventaDetalles->sum('peso_kg');
+        $cantidadActual = (float) $rezaga->cantidad_kg;
+
+        // Histórico independiente de salidas: cantidad antes de descontar salidas.
+        $rezaga->setAttribute('cantidad_historica_kg', round($cantidadActual + $consumidoEnSalidas, 2));
+
+        return $rezaga;
     }
 
     private function generarFolio(array $data): string
