@@ -16,11 +16,15 @@ class SalidaRezagaEmpaqueController extends Controller
         'entity:id,name,code',
         'detalles.rezaga:id,folio_rezaga,tipo_rezaga,cantidad_kg,proceso_id',
         'detalles.rezaga.proceso:id,folio_proceso,etapa_id,recepcion_id',
+        'detalles.rezaga.proceso.productor:id,nombre,apellido',
+        'detalles.rezaga.proceso.lote:id,nombre,numero_lote',
         'detalles.rezaga.proceso.etapa:id,nombre,variedad_id',
         'detalles.rezaga.proceso.etapa.variedad:id,nombre',
         'detalles.rezaga.proceso.recepcion:id,salida_campo_id,folio_recepcion,cantidad_recibida',
-        'detalles.rezaga.proceso.recepcion.salidaCampo:id,variedad_id,folio_salida,cantidad',
+        'detalles.rezaga.proceso.recepcion.salidaCampo:id,variedad_id,folio_salida,cantidad,productor_id,lote_id',
         'detalles.rezaga.proceso.recepcion.salidaCampo.variedad:id,nombre',
+        'detalles.rezaga.proceso.recepcion.salidaCampo.productor:id,nombre,apellido',
+        'detalles.rezaga.proceso.recepcion.salidaCampo.lote:id,nombre,numero_lote',
         'creador:id,name',
     ];
 
