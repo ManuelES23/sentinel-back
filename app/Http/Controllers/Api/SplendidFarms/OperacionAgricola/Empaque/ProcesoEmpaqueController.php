@@ -51,7 +51,7 @@ class ProcesoEmpaqueController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $query = ProcesoEmpaque::with([...$this->eagerLoad, 'producciones', 'rezagas']);
+        $query = ProcesoEmpaque::with([...$this->eagerLoad, 'producciones', 'rezagas.ventaDetalles:id,rezaga_id,peso_kg']);
 
         if ($request->filled('temporada_id')) {
             $query->byTemporada($request->temporada_id);
@@ -64,6 +64,14 @@ class ProcesoEmpaqueController extends Controller
         }
 
         $procesos = $query->orderByDesc('fecha_entrada')->orderByDesc('id')->get();
+
+        // Anotar cantidad_historica_kg en cada rezaga (= cantidad_kg + vendido en salidas)
+        $procesos->each(function ($proceso) {
+            $proceso->rezagas->each(function ($rezaga) {
+                $vendido = (float) $rezaga->ventaDetalles->sum('peso_kg');
+                $rezaga->setAttribute('cantidad_historica_kg', round((float) $rezaga->cantidad_kg + $vendido, 2));
+            });
+        });
 
         return response()->json(['success' => true, 'data' => $procesos]);
     }
@@ -602,6 +610,21 @@ class ProcesoEmpaqueController extends Controller
         }
 
         if ($totalProcesado === 0) {
+            // Permite destrabar folios reabiertos incorrectamente con disponible = 0.
+            if ((int) $proceso->cantidad_disponible === 0) {
+                $proceso->update([
+                    'status' => 'procesado',
+                ]);
+
+                $proceso->load($this->eagerLoad);
+
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Folio cerrado sin cambios (sin remanente disponible)',
+                    'data' => $proceso,
+                ]);
+            }
+
             return response()->json([
                 'status' => 'error',
                 'message' => 'Debe ingresar al menos 1 unidad procesada',
@@ -680,6 +703,13 @@ class ProcesoEmpaqueController extends Controller
             return response()->json([
                 'status' => 'error',
                 'message' => 'Solo se pueden reabrir folios con status "procesado"',
+            ], 422);
+        }
+
+        if ((int) $proceso->cantidad_disponible <= 0) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No se puede reabrir: el folio no tiene remanente disponible en piso',
             ], 422);
         }
 
