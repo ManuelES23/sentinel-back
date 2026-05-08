@@ -92,7 +92,7 @@ class ProcesoEmpaqueController extends Controller
             'recepcion.salidaCampo.variedad:id,nombre',
             'recepcion.tipoCarga:id,nombre,categoria_caja,peso_estimado_kg',
             'tipoCarga:id,nombre,categoria_caja,peso_estimado_kg',
-        ])->whereIn('status', ['en_proceso', 'listo_produccion']);
+        ])->where('status', 'en_proceso');
 
         if ($request->filled('temporada_id')) {
             $query->byTemporada($request->temporada_id);
