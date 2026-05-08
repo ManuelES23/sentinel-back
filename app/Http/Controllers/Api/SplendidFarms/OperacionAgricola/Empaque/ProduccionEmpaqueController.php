@@ -70,6 +70,8 @@ class ProduccionEmpaqueController extends Controller
         $producciones = $query->orderByDesc('fecha_produccion')->orderByDesc('id')->get();
 
         $producciones->each(function (ProduccionEmpaque $produccion) {
+            $this->syncAggregateFieldsFromDetalles($produccion);
+
             if (! $produccion->is_cola) {
                 return;
             }
@@ -391,6 +393,10 @@ class ProduccionEmpaqueController extends Controller
         $pallets = $query->orderByDesc('fecha_produccion')->orderByDesc('id')->get();
 
         $pallets->each(function (ProduccionEmpaque $produccion) {
+            $this->syncAggregateFieldsFromDetalles($produccion);
+        });
+
+        $pallets->each(function (ProduccionEmpaque $produccion) {
             $produccion->cajas_objetivo = $this->resolveCajasObjetivo($produccion);
         });
 
@@ -502,9 +508,11 @@ class ProduccionEmpaqueController extends Controller
                     || $tiposEmpaque->count() > 1;
             }
 
-            // Recalcular totales del pallet padre
-            $totalCajas = $produccion->detalles()->sum('total_cajas');
-            $totalPeso = $produccion->detalles()->sum('peso_neto_kg');
+            // Recalcular totales del pallet padre desde los detalles ya persistidos.
+            $produccion->refresh()->load('detalles');
+            $aggregateFields = $this->buildAggregateFieldsFromDetalles($produccion);
+            $totalCajas = $aggregateFields['total_cajas'];
+            $totalPeso = $aggregateFields['peso_neto_kg'];
 
             $updateData = [
                 'total_cajas' => $totalCajas,
@@ -536,6 +544,7 @@ class ProduccionEmpaqueController extends Controller
 
             $produccion->update($updateData);
             $produccion->load($this->eagerLoad);
+            $this->syncAggregateFieldsFromDetalles($produccion);
 
             $mixtoMsg = $isMixto ? ' (Pallet mixto)' : '';
             $message = $produccion->is_cola
@@ -652,6 +661,38 @@ class ProduccionEmpaqueController extends Controller
         // Solo usar el valor persistido como último recurso.
         $directo = (int) ($produccion->cajas_objetivo ?? 0);
         return $directo > 1 ? $directo : 0;
+    }
+
+    private function buildAggregateFieldsFromDetalles(ProduccionEmpaque $produccion): array
+    {
+        $detalles = $produccion->relationLoaded('detalles')
+            ? $produccion->detalles
+            : $produccion->detalles()->get();
+
+        if ($detalles->isEmpty()) {
+            return [
+                'total_cajas' => (int) ($produccion->total_cajas ?? 0),
+                'peso_neto_kg' => round((float) ($produccion->peso_neto_kg ?? 0), 2),
+            ];
+        }
+
+        return [
+            'total_cajas' => (int) $detalles->sum(fn (ProduccionEmpaqueDetalle $detalle) => (int) ($detalle->total_cajas ?? 0)),
+            'peso_neto_kg' => round(
+                (float) $detalles->sum(fn (ProduccionEmpaqueDetalle $detalle) => (float) ($detalle->peso_neto_kg ?? 0)),
+                2,
+            ),
+        ];
+    }
+
+    private function syncAggregateFieldsFromDetalles(ProduccionEmpaque $produccion): void
+    {
+        $aggregateFields = $this->buildAggregateFieldsFromDetalles($produccion);
+
+        $produccion->forceFill([
+            'total_cajas' => $aggregateFields['total_cajas'],
+            'peso_neto_kg' => $aggregateFields['peso_neto_kg'],
+        ]);
     }
 
     private function generarNumeroCola(int $entityId, int $temporadaId): string

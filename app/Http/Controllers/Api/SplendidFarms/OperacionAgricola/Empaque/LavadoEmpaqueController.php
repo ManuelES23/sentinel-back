@@ -337,9 +337,22 @@ class LavadoEmpaqueController extends Controller
             'subtipo_rezaga' => 'required_with:rezaga_kg|in:hoja,producto',
             'rezaga_motivo' => 'nullable|string|max:500',
             'rezaga_observaciones' => 'nullable|string|max:1000',
+            // kg finales (campo principal en modo_kilos)
+            'kg_finales' => 'nullable|numeric|min:0.01',
+            // tipo de carga e informativo de cajas (opcionales, solo referencia)
             'tipo_carga_convertida_id' => 'nullable|exists:tipos_carga,id',
             'cantidad_convertida' => 'nullable|integer|min:1',
         ]);
+
+        // En modo_kilos, si se captura un solo conteo de cajas de rezaga,
+        // reutilizarlo también como unidades_pequenas para mantener consistencia.
+        if ($proceso->modo_kilos
+            && $request->filled('rezaga_unidades')
+            && !$request->filled('rezaga_unidades_pequenas')) {
+            $request->merge([
+                'rezaga_unidades_pequenas' => $request->integer('rezaga_unidades'),
+            ]);
+        }
 
         // Register rezaga if provided
         if ($request->filled('rezaga_kg')) {
@@ -354,17 +367,36 @@ class LavadoEmpaqueController extends Controller
             $updatePayload = ['status' => 'lavado'];
 
             if ($proceso->modo_kilos) {
-                if (!$request->filled('tipo_carga_convertida_id') || !$request->filled('cantidad_convertida')) {
+                if (!$request->filled('kg_finales')) {
                     return response()->json([
                         'status' => 'error',
-                        'message' => 'Debes capturar el tipo de carga convertido y la cantidad de cajas resultantes.',
+                        'message' => 'Debes capturar los kilogramos finales que pasan al siguiente paso.',
                     ], 422);
                 }
 
-                $tipoCargaConvertida = TipoCarga::findOrFail($request->integer('tipo_carga_convertida_id'));
+                $kgFinales = round((float) $request->input('kg_finales'), 2);
+                $kgRezaga = round((float) $request->input('rezaga_kg', 0), 2);
+                $kgProcesados = round($kgFinales + $kgRezaga, 2);
+                $kgDisponiblesProceso = round((float) ($proceso->peso_disponible_kg ?? $proceso->peso_entrada_kg ?? 0), 2);
 
-                $updatePayload['tipo_carga_id'] = $tipoCargaConvertida->id;
-                $updatePayload['cantidad_disponible'] = $request->integer('cantidad_convertida');
+                if ($kgDisponiblesProceso > 0 && $kgProcesados > $kgDisponiblesProceso) {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => "Los kg finales + rezaga exceden el peso disponible del proceso. Finales: {$kgFinales} kg, rezaga: {$kgRezaga} kg, total: {$kgProcesados} kg, disponible: {$kgDisponiblesProceso} kg",
+                    ], 422);
+                }
+
+                // Los kg finales son el peso disponible para el siguiente paso
+                $updatePayload['peso_disponible_kg'] = $kgFinales;
+
+                // Tipo de carga y cajas son informativos (se guardan si se capturan)
+                if ($request->filled('tipo_carga_convertida_id')) {
+                    $tipoCargaConvertida = TipoCarga::findOrFail($request->integer('tipo_carga_convertida_id'));
+                    $updatePayload['tipo_carga_id'] = $tipoCargaConvertida->id;
+                }
+                if ($request->filled('cantidad_convertida')) {
+                    $updatePayload['cantidad_disponible'] = $request->integer('cantidad_convertida');
+                }
             }
 
             $proceso->update($updatePayload);
