@@ -926,6 +926,7 @@ class ProduccionEmpaqueController extends Controller
             'mix_items' => 'required|array|min:2',
             'mix_items.*.cola_id' => 'required|integer|distinct|exists:produccion_empaque,id',
             'mix_items.*.cajas' => 'required|integer|min:1',
+            'numero_pallet' => 'nullable|string|max:100',
         ]);
 
         return DB::transaction(function () use ($validated, $request) {
@@ -1213,6 +1214,22 @@ class ProduccionEmpaqueController extends Controller
             $marcasUnicas = $detallesCollection->pluck('marca')->filter(fn ($v) => filled($v))->unique()->values();
             $empaquesUnicos = $detallesCollection->pluck('tipo_empaque')->filter(fn ($v) => filled($v))->unique()->values();
             $lotesPtUnicos = $colas->pluck('lote_producto_terminado')->filter(fn ($v) => filled($v))->unique()->values();
+            $numeroPalletManual = trim((string) ($validated['numero_pallet'] ?? ''));
+            $numeroPalletFinal = $numeroPalletManual !== ''
+                ? $numeroPalletManual
+                : $this->generarNumeroPallet($base->entity_id);
+
+            $palletExiste = ProduccionEmpaque::withTrashed()
+                ->where('entity_id', $base->entity_id)
+                ->where('numero_pallet', $numeroPalletFinal)
+                ->exists();
+
+            if ($palletExiste) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => "El número de pallet {$numeroPalletFinal} ya existe. Captura uno diferente.",
+                ], 422);
+            }
 
             $nuevoPallet = ProduccionEmpaque::create([
                 'temporada_id' => $base->temporada_id,
@@ -1225,7 +1242,7 @@ class ProduccionEmpaqueController extends Controller
                 'fecha_produccion' => now()->toDateString(),
                 'turno' => $base->turno,
                 'variedad_id' => $variedadUnica->count() === 1 ? $variedadUnica->first() : null,
-                'numero_pallet' => $this->generarNumeroPallet($base->entity_id),
+                'numero_pallet' => $numeroPalletFinal,
                 'pallet_qr_id' => (string) Str::uuid(),
                 'total_cajas' => $totalCajas,
                 'peso_neto_kg' => round($totalPeso, 2),
