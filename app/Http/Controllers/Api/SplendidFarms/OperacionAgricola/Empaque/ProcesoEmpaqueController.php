@@ -706,22 +706,64 @@ class ProcesoEmpaqueController extends Controller
             ], 422);
         }
 
-        if ((int) $proceso->cantidad_disponible <= 0) {
+        $cantidadDisponible = (int) ($proceso->cantidad_disponible ?? 0);
+
+        // Si todavía tiene remanente, solo volver a en_proceso.
+        if ($cantidadDisponible > 0) {
+            $proceso->update([
+                'status' => 'en_proceso',
+            ]);
+
+            $proceso->load($this->eagerLoad);
+
             return response()->json([
-                'status' => 'error',
-                'message' => 'No se puede reabrir: el folio no tiene remanente disponible en piso',
-            ], 422);
+                'success' => true,
+                'message' => "Folio {$proceso->folio_proceso} reabierto",
+                'data' => $proceso,
+            ]);
         }
+
+        // Si está consumido (remanente 0), revisar si ya tiene movimientos activos asociados.
+        $produccionesActivas = $proceso->producciones()->count();
+        $rezagasActivas = $proceso->rezagas()->count();
+
+        if ($produccionesActivas > 0 || $rezagasActivas > 0) {
+            // Reapertura segura: permitir volver a en_proceso sin resetear disponibilidad,
+            // para evitar duplicar cantidades cuando ya existen movimientos ligados al folio.
+            $proceso->update([
+                'status' => 'en_proceso',
+            ]);
+
+            $proceso->load($this->eagerLoad);
+
+            return response()->json([
+                'success' => true,
+                'message' => "Folio {$proceso->folio_proceso} reabierto (con movimientos asociados, disponibilidad sin cambios)",
+                'data' => $proceso,
+                'details' => [
+                    'producciones_activas' => $produccionesActivas,
+                    'rezagas_activas' => $rezagasActivas,
+                ],
+            ]);
+        }
+
+        // Reapertura total: restaurar disponibilidad original para permitir nueva producción.
+        $cantidadEntrada = (int) ($proceso->cantidad_entrada ?? 0);
+        $pesoEntradaKg = (float) ($proceso->peso_entrada_kg ?? 0);
 
         $proceso->update([
             'status' => 'en_proceso',
+            'cantidad_disponible' => $cantidadEntrada,
+            'peso_disponible_kg' => $pesoEntradaKg,
+            'cantidad_cuarto_frio' => 0,
+            'cantidad_fresco' => 0,
         ]);
 
         $proceso->load($this->eagerLoad);
 
         return response()->json([
             'success' => true,
-            'message' => "Folio {$proceso->folio_proceso} reabierto",
+            'message' => "Folio {$proceso->folio_proceso} reabierto con disponibilidad restaurada ({$cantidadEntrada} cajas)",
             'data' => $proceso,
         ]);
     }

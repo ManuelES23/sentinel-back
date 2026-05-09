@@ -590,6 +590,8 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::get('produccion/next-cola', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'nextColaNumber']);
                 Route::get('produccion/cola-pallets', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'colaPallets']);
                 Route::post('produccion/buscar-qr', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'buscarPorQr']);
+                Route::post('produccion/mixtear-colas', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'mixtearColas']);
+                Route::post('produccion/{produccion}/revertir-mixteo', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'revertirMixteo']);
                 Route::post('produccion/{produccion}/completar-cola', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'completarCola']);
                 Route::post('produccion/{produccion}/toggle-cuarto-frio', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'toggleCuartoFrio']);
                 Route::post('produccion/{produccion}/peso-bascula', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'actualizarPesoBascula']);
