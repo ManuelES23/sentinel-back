@@ -1214,15 +1214,15 @@ class ProduccionEmpaqueController extends Controller
             $marcasUnicas = $detallesCollection->pluck('marca')->filter(fn ($v) => filled($v))->unique()->values();
             $empaquesUnicos = $detallesCollection->pluck('tipo_empaque')->filter(fn ($v) => filled($v))->unique()->values();
             $lotesPtUnicos = $colas->pluck('lote_producto_terminado')->filter(fn ($v) => filled($v))->unique()->values();
-            $numeroPalletManual = trim((string) ($validated['numero_pallet'] ?? ''));
+            $numeroPalletManual = $this->normalizePalletName($validated['numero_pallet'] ?? null);
             $numeroPalletFinal = $numeroPalletManual !== ''
                 ? $numeroPalletManual
                 : $this->generarNumeroPallet($base->entity_id);
 
             $palletExiste = ProduccionEmpaque::withTrashed()
                 ->where('entity_id', $base->entity_id)
-                ->where('numero_pallet', $numeroPalletFinal)
-                ->exists();
+                ->get(['numero_pallet'])
+                ->contains(fn (ProduccionEmpaque $pallet) => $this->normalizePalletName($pallet->numero_pallet) === $numeroPalletFinal);
 
             if ($palletExiste) {
                 return response()->json([
@@ -1553,6 +1553,13 @@ class ProduccionEmpaqueController extends Controller
             ])
             ->values()
             ->all();
+    }
+
+    private function normalizePalletName(?string $value): string
+    {
+        $normalized = preg_replace('/\s+/u', ' ', trim((string) ($value ?? '')));
+
+        return trim((string) $normalized);
     }
 
     /**
