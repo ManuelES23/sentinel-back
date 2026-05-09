@@ -4,14 +4,12 @@ namespace App\Http\Controllers\Api\SplendidFarms\Inventory;
 
 use App\Http\Controllers\Controller;
 use App\Models\Product;
-use App\Models\ProductCategory;
 use App\Models\Recipe;
-use App\Models\RecipeCalibre;
-use App\Models\RecipeCalibrePlu;
 use App\Models\RecipeItem;
-use Illuminate\Http\Request;
+use App\Models\UnitOfMeasure;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Http\Request;
+use Illuminate\Support\Str;
 
 class RecipeController extends Controller
 {
@@ -58,8 +56,8 @@ class RecipeController extends Controller
             $search = $request->search;
             $query->where(function ($q) use ($search) {
                 $q->where('name', 'like', "%{$search}%")
-                  ->orWhere('code', 'like', "%{$search}%")
-                  ->orWhere('description', 'like', "%{$search}%");
+                    ->orWhere('code', 'like', "%{$search}%")
+                    ->orWhere('description', 'like', "%{$search}%");
             });
         }
 
@@ -122,108 +120,13 @@ class RecipeController extends Controller
             'calibres.*.plus.*.notes' => 'nullable|string|max:500',
         ]);
 
-        return DB::transaction(function () use ($validated) {
-            // Generar código automático de receta
-            if (empty($validated['code'])) {
-                $prefix = 'REC';
-                $lastRecipe = Recipe::withTrashed()
-                    ->where('code', 'like', $prefix . '-%')
-                    ->orderByRaw('CAST(SUBSTRING(code, ' . (strlen($prefix) + 2) . ') AS UNSIGNED) DESC')
-                    ->first();
+        $recipe = Recipe::create($validated);
+        $this->ensureCajaGroup($recipe);
 
-                $nextNumber = $lastRecipe
-                    ? ((int) substr($lastRecipe->code, strlen($prefix) + 1)) + 1
-                    : 1;
-
-                $validated['code'] = $prefix . '-' . str_pad($nextNumber, 3, '0', STR_PAD_LEFT);
-            }
-
-            // Auto-crear producto terminado
-            $ptCategory = ProductCategory::where('name', 'Producto Terminado')->first();
-
-            $productPrefix = 'PROD';
-            $lastProduct = Product::withTrashed()
-                ->where('code', 'like', $productPrefix . '-%')
-                ->orderByRaw('CAST(SUBSTRING(code, ' . (strlen($productPrefix) + 2) . ') AS UNSIGNED) DESC')
-                ->first();
-            $nextProductNumber = $lastProduct
-                ? ((int) substr($lastProduct->code, strlen($productPrefix) + 1)) + 1
-                : 1;
-            $productCode = $productPrefix . '-' . str_pad($nextProductNumber, 5, '0', STR_PAD_LEFT);
-
-            $product = Product::create([
-                'code' => $productCode,
-                'name' => $validated['name'],
-                'description' => $validated['description'] ?? null,
-                'category_id' => $ptCategory?->id,
-                'unit_id' => $validated['output_unit_id'] ?? null,
-                'product_type' => 'finished_good',
-                'track_inventory' => true,
-                'is_for_sale' => true,
-                'is_active' => $validated['is_active'] ?? true,
-            ]);
-
-            $validated['output_product_id'] = $product->id;
-
-            // Extraer items y calibres antes de crear la receta
-            $items = $validated['items'] ?? [];
-            $calibres = $validated['calibres'] ?? [];
-            unset($validated['items'], $validated['calibres']);
-
-            $recipe = Recipe::create($validated);
-
-            // Crear items si se enviaron
-            if (!empty($items)) {
-                foreach ($items as $index => $item) {
-                    $recipe->items()->create(array_merge($item, [
-                        'sort_order' => $item['sort_order'] ?? $index,
-                    ]));
-                }
-                $recipe->recalculateCost();
-
-                // Actualizar cost_price del producto con el costo estimado
-                $product->update(['cost_price' => $recipe->fresh()->estimated_cost ?? 0]);
-            }
-
-            // Crear calibres y PLUs si se enviaron
-            if (!empty($calibres)) {
-                foreach ($calibres as $calibreData) {
-                    $rc = $recipe->recipeCalibres()->create([
-                        'calibre_id' => $calibreData['calibre_id'],
-                    ]);
-                    if (!empty($calibreData['plus'])) {
-                        foreach ($calibreData['plus'] as $pluData) {
-                            $rc->plus()->create([
-                                'product_id' => $pluData['product_id'],
-                                'is_organic' => $pluData['is_organic'] ?? false,
-                                'notes' => $pluData['notes'] ?? null,
-                            ]);
-                        }
-                    }
-                }
-            }
-
-            $recipe->load([
-                'category:id,name,code',
-                'cultivo:id,nombre',
-                'variedad:id,nombre',
-                'outputProduct:id,name,code',
-                'outputUnit:id,name,abbreviation',
-                'items.product:id,name,code,brand_id',
-                'items.product.brand:id,name',
-                'items.unit:id,name,abbreviation',
-                'items.calibre:id,nombre,valor',
-                'recipeCalibres.calibre:id,nombre,valor',
-                'recipeCalibres.plus.product:id,code,name',
-            ]);
-            $recipe->loadCount('items');
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Receta creada exitosamente',
-                'data' => $recipe,
-            ], 201);
-        });
+        return response()->json([
+            'success' => true,
+            'data' => $recipe,
+        ]);
     }
 
     /**
@@ -242,8 +145,7 @@ class RecipeController extends Controller
             'items.unit:id,name,abbreviation',
             'items.calibre:id,nombre,valor',
             'recipeCalibres.calibre:id,nombre,valor',
-            'recipeCalibres.plus.product:id,code,name,brand_id',
-            'recipeCalibres.plus.product.brand:id,name,code',
+            'recipeCalibres.plus.product:id,code,name',
         ]);
         $recipe->loadCount('items');
 
@@ -259,9 +161,9 @@ class RecipeController extends Controller
     public function update(Request $request, Recipe $recipe): JsonResponse
     {
         $validated = $request->validate([
-            'code' => 'sometimes|string|max:50|unique:recipes,code,' . $recipe->id,
+            'code' => 'sometimes|string|max:50|unique:recipes,code,'.$recipe->id,
             'name' => 'sometimes|string|max:255',
-            'slug' => 'nullable|string|max:255|unique:recipes,slug,' . $recipe->id,
+            'slug' => 'nullable|string|max:255|unique:recipes,slug,'.$recipe->id,
             'description' => 'nullable|string',
             'category_id' => 'nullable|exists:product_categories,id',
             'cultivo_id' => 'nullable|exists:cultivos,id',
@@ -304,6 +206,7 @@ class RecipeController extends Controller
         $items = null;
         if (array_key_exists('items', $validated)) {
             $items = $validated['items'] ?? [];
+            $items = $this->ensureCajaGroupForEmpaquePallet($items, $validated, $recipe);
             unset($validated['items']);
         }
 
@@ -344,7 +247,7 @@ class RecipeController extends Controller
                 $rc = $recipe->recipeCalibres()->create([
                     'calibre_id' => $calibreData['calibre_id'],
                 ]);
-                if (!empty($calibreData['plus'])) {
+                if (! empty($calibreData['plus'])) {
                     foreach ($calibreData['plus'] as $pluData) {
                         $rc->plus()->create([
                             'product_id' => $pluData['product_id'],
@@ -371,7 +274,7 @@ class RecipeController extends Controller
             if (isset($validated['is_active'])) {
                 $productUpdates['is_active'] = $validated['is_active'];
             }
-            if (!empty($productUpdates)) {
+            if (! empty($productUpdates)) {
                 Product::where('id', $recipe->output_product_id)->update($productUpdates);
             }
         }
@@ -443,7 +346,7 @@ class RecipeController extends Controller
 
         // Verificar duplicado solo para items sin grupo o dentro del mismo grupo
         $duplicateQuery = $recipe->items()->where('product_id', $validated['product_id']);
-        if (!empty($validated['group_key'])) {
+        if (! empty($validated['group_key'])) {
             $duplicateQuery->where('group_key', $validated['group_key']);
         } else {
             $duplicateQuery->whereNull('group_key');
@@ -456,12 +359,12 @@ class RecipeController extends Controller
         }
 
         // Si no se envía cost_per_unit, tomarlo del producto
-        if (!isset($validated['cost_per_unit'])) {
+        if (! isset($validated['cost_per_unit'])) {
             $product = \App\Models\Product::find($validated['product_id']);
             $validated['cost_per_unit'] = $product?->cost_price ?? 0;
         }
 
-        if (!isset($validated['sort_order'])) {
+        if (! isset($validated['sort_order'])) {
             $validated['sort_order'] = $recipe->items()->max('sort_order') + 1;
         }
 
@@ -559,5 +462,143 @@ class RecipeController extends Controller
                 'estimated_cost' => $recipe->estimated_cost,
             ],
         ]);
+    }
+
+    /**
+     * Asegura el grupo "Caja" cuando la receta es de empaque para pallet.
+     *
+     * Regla:
+     * - Si ya existe el grupo caja (en cualquier casing), solo normaliza a "Caja".
+     * - Si no existe, mueve al grupo "Caja" los items sin grupo cuyo producto contiene "caja".
+     */
+    private function ensureCajaGroupForEmpaquePallet(array $items, array $payload, ?Recipe $recipe = null): array
+    {
+        if (empty($items) || ! $this->isEmpaquePalletRecipe($payload, $recipe)) {
+            return $items;
+        }
+
+        $normalizedItems = $items;
+        $hasCajaGroup = false;
+        $hasCajaDefault = false;
+        $firstCajaIndex = null;
+
+        foreach ($normalizedItems as $index => $item) {
+            $groupKey = trim((string) ($item['group_key'] ?? ''));
+            if ($groupKey === '') {
+                continue;
+            }
+
+            if (Str::lower($groupKey) === 'caja') {
+                $normalizedItems[$index]['group_key'] = 'Caja';
+                $hasCajaGroup = true;
+
+                if ($firstCajaIndex === null) {
+                    $firstCajaIndex = $index;
+                }
+
+                if (! empty($item['is_default'])) {
+                    $hasCajaDefault = true;
+                }
+            }
+        }
+
+        if (! $hasCajaGroup) {
+            $productIds = collect($normalizedItems)
+                ->pluck('product_id')
+                ->filter()
+                ->unique()
+                ->values();
+
+            $productNames = Product::whereIn('id', $productIds)
+                ->pluck('name', 'id');
+
+            foreach ($normalizedItems as $index => $item) {
+                $groupKey = trim((string) ($item['group_key'] ?? ''));
+                if ($groupKey !== '') {
+                    continue;
+                }
+
+                $productId = (int) ($item['product_id'] ?? 0);
+                $productName = Str::lower((string) ($productNames[$productId] ?? ''));
+
+                if ($productName !== '' && Str::contains($productName, 'caja')) {
+                    $normalizedItems[$index]['group_key'] = 'Caja';
+                    $hasCajaGroup = true;
+
+                    if ($firstCajaIndex === null) {
+                        $firstCajaIndex = $index;
+                    }
+
+                    if (! empty($item['is_default'])) {
+                        $hasCajaDefault = true;
+                    }
+                }
+            }
+        }
+
+        if ($hasCajaGroup && ! $hasCajaDefault && $firstCajaIndex !== null) {
+            $normalizedItems[$firstCajaIndex]['is_default'] = true;
+        }
+
+        return $normalizedItems;
+    }
+
+    /**
+     * Determina si la receta aplica a empaque para pallet.
+     */
+    private function isEmpaquePalletRecipe(array $payload, ?Recipe $recipe = null): bool
+    {
+        $recipeType = Str::lower((string) ($payload['recipe_type'] ?? $recipe?->recipe_type ?? ''));
+        if ($recipeType !== 'empaque') {
+            return false;
+        }
+
+        $metadata = $payload['metadata'] ?? ($recipe?->metadata ?? []);
+
+        $packagingTarget = Str::lower((string) (
+            data_get($metadata, 'packaging_target')
+            ?? data_get($metadata, 'packagingTarget')
+            ?? ''
+        ));
+
+        if ($packagingTarget === 'pallet') {
+            return true;
+        }
+
+        if ((bool) (data_get($metadata, 'is_pallet') ?? data_get($metadata, 'isPallet') ?? false)) {
+            return true;
+        }
+
+        $outputUnitId = (int) ($payload['output_unit_id'] ?? $recipe?->output_unit_id ?? 0);
+        if ($outputUnitId > 0) {
+            $unit = UnitOfMeasure::find($outputUnitId);
+            if ($unit) {
+                $unitText = Str::lower(trim(($unit->name ?? '').' '.($unit->abbreviation ?? '')));
+                if (Str::contains($unitText, ['pallet', 'tarima'])) {
+                    return true;
+                }
+            }
+        }
+
+        $name = Str::lower((string) ($payload['name'] ?? $recipe?->name ?? ''));
+
+        return Str::contains($name, 'pallet');
+    }
+
+    /**
+     * Ensure Caja group for Empaque + Pallet recipes.
+     */
+    private function ensureCajaGroup(Recipe $recipe): void
+    {
+        if ($recipe->recipe_type === 'empaque' && $recipe->category->name === 'Pallet') {
+            $existingGroup = $recipe->items()->where('group_name', 'Caja')->exists();
+            if (! $existingGroup) {
+                $recipe->items()->create([
+                    'group_name' => 'Caja',
+                    'quantity' => 1,
+                    'unit_id' => UnitOfMeasure::where('name', 'Caja')->value('id'),
+                ]);
+            }
+        }
     }
 }

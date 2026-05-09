@@ -67,7 +67,7 @@ class ProduccionEmpaqueController extends Controller
             });
         }
 
-        $producciones = $query->orderByDesc('fecha_produccion')->orderByDesc('id')->get();
+        $producciones = $query->distinct()->orderByDesc('fecha_produccion')->orderByDesc('id')->get();
 
         $producciones->each(function (ProduccionEmpaque $produccion) {
             $this->syncAggregateFieldsFromDetalles($produccion);

@@ -8,11 +8,6 @@ return new class extends Migration
 {
     public function up(): void
     {
-        // Agregar campo cajas_objetivo a produccion_empaque (target de cajas para colas)
-        Schema::table('produccion_empaque', function (Blueprint $table) {
-            $table->integer('cajas_objetivo')->nullable()->after('total_cajas');
-        });
-
         // Tabla de detalles/entradas de un pallet (para colas con múltiples adiciones)
         Schema::create('produccion_empaque_detalles', function (Blueprint $table) {
             $table->id();
