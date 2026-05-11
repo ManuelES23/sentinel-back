@@ -323,11 +323,23 @@ class ProcesoEmpaqueController extends Controller
 
         $recepcion = RecepcionEmpaque::with('tipoCarga')->findOrFail($validated['recepcion_id']);
 
-        // Calculate available (including lavado pipeline)
-        $enProceso = ProcesoEmpaque::where('recepcion_id', $recepcion->id)
-            ->whereIn('status', ['lavando', 'lavado', 'hidrotermico', 'enfriando', 'listo_produccion', 'en_proceso', 'procesado'])
+        // Calculate available with the same rule used by pisoFromRecepciones.
+        // Activos: se resta cantidad_entrada completa.
+        // Procesados: solo se resta lo realmente consumido (entrada - disponible).
+        $enProcesoActivo = ProcesoEmpaque::where('recepcion_id', $recepcion->id)
+            ->whereIn('status', ['lavando', 'lavado', 'hidrotermico', 'enfriando', 'listo_produccion', 'en_proceso'])
             ->sum('cantidad_entrada');
-        $disponible = $recepcion->cantidad_recibida - $enProceso;
+
+        $procesados = ProcesoEmpaque::where('recepcion_id', $recepcion->id)
+            ->where('status', 'procesado')
+            ->get(['cantidad_entrada', 'cantidad_disponible']);
+
+        $consumidoProcesado = 0;
+        foreach ($procesados as $proc) {
+            $consumidoProcesado += max(0, ((int) $proc->cantidad_entrada - (int) $proc->cantidad_disponible));
+        }
+
+        $disponible = (int) $recepcion->cantidad_recibida - (int) $enProcesoActivo - (int) $consumidoProcesado;
 
         if ($validated['cantidad'] > $disponible) {
             return response()->json([
