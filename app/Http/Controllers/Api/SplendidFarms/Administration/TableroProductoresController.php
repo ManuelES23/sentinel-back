@@ -4,9 +4,10 @@ namespace App\Http\Controllers\Api\SplendidFarms\Administration;
 
 use App\Http\Controllers\Controller;
 use App\Models\ConvenioCompra;
+use App\Models\Productor;
 use App\Models\SalidaCampoCosecha;
 use App\Models\RecepcionEmpaque;
-use App\Models\ProcesoEmpaque;
+use App\Models\TipoCarga;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -14,6 +15,7 @@ class TableroProductoresController extends Controller
 {
     /**
      * Tablero general: resumen y desglose por productor
+     * Incluye AMBOS: productores con convenios activos Y productores con recepciones sin convenio
      */
     public function index(Request $request): JsonResponse
     {
@@ -24,20 +26,10 @@ class TableroProductoresController extends Controller
             'fecha_fin' => 'nullable|date',
         ]);
 
-        $convenios = ConvenioCompra::with([
-                'productor:id,nombre,apellido,tipo',
-                'cultivo:id,nombre',
-                'variedad:id,nombre',
-                'precios.tipoCarga:id,nombre,peso_estimado_kg',
-            ])
-            ->where('temporada_id', $request->temporada_id)
-            ->where('status', 'activo')
-            ->when($request->filled('productor_id'), fn($q) => $q->where('productor_id', $request->productor_id))
-            ->get();
-
         $resumen = [
             'total_productores' => 0,
             'total_convenios' => 0,
+            'total_recepciones' => 0,
             'total_salidas' => 0,
             'total_kilos' => 0,
             'monto_total_bruto' => 0,
@@ -46,12 +38,26 @@ class TableroProductoresController extends Controller
         ];
 
         $productores = [];
+        $productoresPorId = [];
+
+        // 1. Procesar convenios activos
+        $convenios = ConvenioCompra::with([
+                'productor:id,nombre,apellido,tipo',
+                'cultivo:id,nombre',
+                'variedad:id,nombre',
+                'precios.tipoCarga:id,nombre,peso_estimado_kg',
+            ])
+            ->where('temporada_id', $request->temporada_id)
+            ->whereIn('status', [ConvenioCompra::STATUS_ACTIVO, ConvenioCompra::STATUS_BORRADOR])
+            ->when($request->filled('productor_id'), fn($q) => $q->where('productor_id', $request->productor_id))
+            ->get();
 
         foreach ($convenios->groupBy('productor_id') as $productorId => $productorConvenios) {
             $productor = $productorConvenios->first()->productor;
             $productorData = [
                 'productor' => $productor,
                 'convenios' => [],
+                'recepciones_sin_convenio' => [],
                 'totales' => [
                     'total_salidas' => 0,
                     'total_cantidad' => 0,
@@ -82,6 +88,95 @@ class TableroProductoresController extends Controller
             }
 
             $productores[] = $productorData;
+            $productoresPorId[$productorId] = count($productores) - 1;
+        }
+
+        // 2. Procesar recepciones (con y sin convenio) para mostrar desglose de entradas
+        $recepciones = RecepcionEmpaque::with([
+                'productor:id,nombre,apellido,tipo',
+                'lote:id,nombre,numero_lote',
+                'tipoCarga:id,nombre',
+                'salidaCampo:id,variedad_id',
+                'salidaCampo.variedad:id,nombre',
+                'procesos:id,recepcion_id,rezaga_lavado_kg',
+            ])
+            ->where('temporada_id', $request->temporada_id)
+            ->whereNotNull('productor_id')
+            ->when($request->filled('productor_id'), fn($q) => $q->where('productor_id', $request->productor_id))
+            ->get();
+
+        foreach ($recepciones->groupBy('productor_id') as $productorId => $recepcionesProductor) {
+            $productor = $recepcionesProductor->first()->productor;
+
+            if (!array_key_exists($productorId, $productoresPorId)) {
+                $productores[] = [
+                    'productor' => $productor,
+                    'convenios' => [],
+                    'recepciones_sin_convenio' => [],
+                    'totales' => [
+                        'total_salidas' => 0,
+                        'total_cantidad' => 0,
+                        'total_kilos' => 0,
+                        'monto_bruto' => 0,
+                        'descuento_rezaga' => 0,
+                        'monto_neto' => 0,
+                    ],
+                ];
+
+                $productoresPorId[$productorId] = count($productores) - 1;
+            }
+
+            $index = $productoresPorId[$productorId];
+            $esProductorSinConvenio = empty($productores[$index]['convenios']);
+
+            foreach ($recepcionesProductor as $recepcion) {
+                if ($request->filled('fecha_inicio') && $recepcion->fecha_recepcion < $request->fecha_inicio) {
+                    continue;
+                }
+                if ($request->filled('fecha_fin') && $recepcion->fecha_recepcion > $request->fecha_fin) {
+                    continue;
+                }
+
+                $pesoBascula = (float) ($recepcion->peso_bascula ?? $recepcion->peso_recibido_kg ?? 0);
+
+                // Calcular rezaga de lavado desde procesos asociados
+                $rezagaLavadoKg = 0;
+                foreach ($recepcion->procesos as $proceso) {
+                    $rezagaLavadoKg += (float) ($proceso->rezaga_lavado_kg ?? 0);
+                }
+
+                // Calcular porcentaje de rezaga
+                $porcentajeRezaga = $pesoBascula > 0 
+                    ? round(($rezagaLavadoKg / $pesoBascula) * 100, 2)
+                    : 0;
+
+                // Obtener variedad desde salida de campo
+                $variedad = $recepcion->salidaCampo?->variedad?->nombre ?? '—';
+
+                $productores[$index]['recepciones_sin_convenio'][] = [
+                    'id' => $recepcion->id,
+                    'folio_recepcion' => $recepcion->folio_recepcion,
+                    'fecha_recepcion' => $recepcion->fecha_recepcion->format('Y-m-d'),
+                    'variedad' => $variedad,
+                    'cantidad' => $recepcion->cantidad_recibida ?? 0,
+                    'peso_bascula_kg' => round($pesoBascula, 2),
+                    'rezaga_lavado_kg' => round($rezagaLavadoKg, 2),
+                    'porcentaje_rezaga' => $porcentajeRezaga,
+                    'tipo_carga' => $recepcion->tipoCarga?->nombre ?? 'N/A',
+                    'lote' => $recepcion->lote?->nombre ?? '—',
+                    'monto_bruto' => 0,
+                    'monto_neto' => 0,
+                    'nota' => 'Sin convenio',
+                ];
+
+                if ($esProductorSinConvenio) {
+                    $productores[$index]['totales']['total_salidas']++;
+                    $productores[$index]['totales']['total_kilos'] += $pesoBascula;
+                    $resumen['total_salidas']++;
+                    $resumen['total_kilos'] += $pesoBascula;
+                    $resumen['total_recepciones']++;
+                }
+            }
         }
 
         $resumen['total_productores'] = count($productores);
@@ -106,6 +201,16 @@ class TableroProductoresController extends Controller
             'fecha_fin' => 'nullable|date',
         ]);
 
+        $productor = Productor::select('id', 'nombre', 'apellido', 'tipo', 'telefono', 'email', 'rfc')
+            ->find($productorId);
+
+        if (!$productor) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Productor no encontrado',
+            ], 404);
+        }
+
         $convenios = ConvenioCompra::with([
                 'productor:id,nombre,apellido,tipo,telefono,email,rfc',
                 'cultivo:id,nombre',
@@ -114,17 +219,38 @@ class TableroProductoresController extends Controller
             ])
             ->where('temporada_id', $request->temporada_id)
             ->where('productor_id', $productorId)
-            ->where('status', 'activo')
+            ->whereIn('status', [ConvenioCompra::STATUS_ACTIVO, ConvenioCompra::STATUS_BORRADOR])
+            ->orderBy('fecha_inicio')
             ->get();
+
+        [$recepcionesDesglose, $recepcionesTotales] = $this->buildRecepcionesDesglose($request, $productorId);
+        [$estadoCuentaRows, $estadoCuentaTotals] = $this->buildEstadoCuentaRows($request, $productorId, $convenios);
 
         if ($convenios->isEmpty()) {
             return response()->json([
-                'success' => false,
-                'message' => 'No se encontraron convenios activos para este productor en la temporada',
-            ], 404);
+                'success' => true,
+                'data' => [
+                    'productor' => $productor,
+                    'convenios' => [],
+                    'estado_cuenta_rows' => $estadoCuentaRows,
+                    'recepciones_desglose' => $recepcionesDesglose,
+                    'totales' => [
+                        'total_salidas' => $estadoCuentaTotals['total_salidas'] ?? $recepcionesTotales['total_salidas'],
+                        'total_cantidad' => $estadoCuentaTotals['total_cantidad'] ?? $recepcionesTotales['total_cantidad'],
+                        'total_kilos' => $estadoCuentaTotals['total_kilos'] ?? $recepcionesTotales['total_kilos'],
+                        'total_recibido_kg' => $estadoCuentaTotals['total_recibido_kg'] ?? $recepcionesTotales['total_kilos'],
+                        'total_producido_cajas' => $estadoCuentaTotals['total_producido_cajas'] ?? 0,
+                        'total_embarcado_cajas' => $estadoCuentaTotals['total_embarcado_cajas'] ?? 0,
+                        'total_rezaga_kg' => $estadoCuentaTotals['total_rezaga_kg'] ?? $recepcionesTotales['total_rezaga_kg'],
+                        'total_producido_kg' => $estadoCuentaTotals['total_producido_kg'] ?? 0,
+                        'monto_bruto' => $estadoCuentaTotals['monto_bruto'] ?? 0,
+                        'descuento_rezaga' => $estadoCuentaTotals['descuento_rezaga'] ?? 0,
+                        'monto_neto' => $estadoCuentaTotals['monto_neto'] ?? 0,
+                    ],
+                ],
+            ]);
         }
 
-        $productor = $convenios->first()->productor;
         $conveniosData = [];
         $totales = [
             'total_salidas' => 0,
@@ -140,6 +266,10 @@ class TableroProductoresController extends Controller
         ];
 
         foreach ($convenios as $convenio) {
+            if (!$convenio instanceof ConvenioCompra) {
+                continue;
+            }
+
             $convenioResult = $this->calcularConvenioDetallado($convenio, $request);
             $conveniosData[] = $convenioResult;
 
@@ -160,9 +290,223 @@ class TableroProductoresController extends Controller
             'data' => [
                 'productor' => $productor,
                 'convenios' => $conveniosData,
-                'totales' => $totales,
+                'estado_cuenta_rows' => $estadoCuentaRows,
+                'recepciones_desglose' => $recepcionesDesglose,
+                'totales' => [
+                    'total_salidas' => $estadoCuentaTotals['total_salidas'] ?? $totales['total_salidas'],
+                    'total_cantidad' => $estadoCuentaTotals['total_cantidad'] ?? $totales['total_cantidad'],
+                    'total_kilos' => $estadoCuentaTotals['total_kilos'] ?? $totales['total_kilos'],
+                    'total_recibido_kg' => $estadoCuentaTotals['total_recibido_kg'] ?? $totales['total_recibido_kg'],
+                    'total_producido_cajas' => $estadoCuentaTotals['total_producido_cajas'] ?? $totales['total_producido_cajas'],
+                    'total_embarcado_cajas' => $estadoCuentaTotals['total_embarcado_cajas'] ?? $totales['total_embarcado_cajas'],
+                    'total_rezaga_kg' => $estadoCuentaTotals['total_rezaga_kg'] ?? $totales['total_rezaga_kg'],
+                    'total_producido_kg' => $estadoCuentaTotals['total_producido_kg'] ?? ($totales['total_producido_kg'] ?? 0),
+                    'monto_bruto' => $estadoCuentaTotals['monto_bruto'] ?? $totales['monto_bruto'],
+                    'descuento_rezaga' => $estadoCuentaTotals['descuento_rezaga'] ?? $totales['descuento_rezaga'],
+                    'monto_neto' => $estadoCuentaTotals['monto_neto'] ?? $totales['monto_neto'],
+                ],
             ],
         ]);
+    }
+
+    private function buildEstadoCuentaRows(Request $request, int $productorId, $convenios): array
+    {
+        $recepciones = RecepcionEmpaque::with([
+                'lote:id,nombre,numero_lote',
+                'zonaCultivo:id,nombre',
+                'tipoCarga:id,nombre',
+                'salidaCampo:id,variedad_id',
+                'salidaCampo.variedad:id,nombre,cultivo_id',
+                'procesos:id,recepcion_id,rezaga_lavado_kg',
+                'procesos.producciones:id,proceso_id,total_cajas,peso_neto_kg',
+                'procesos.producciones.embarqueDetalles:id,produccion_id,cajas',
+            ])
+            ->where('temporada_id', $request->temporada_id)
+            ->where('productor_id', $productorId)
+            ->when($request->filled('fecha_inicio'), fn($q) => $q->whereDate('fecha_recepcion', '>=', $request->fecha_inicio))
+            ->when($request->filled('fecha_fin'), fn($q) => $q->whereDate('fecha_recepcion', '<=', $request->fecha_fin))
+            ->orderBy('fecha_recepcion')
+            ->get();
+
+        $rows = [];
+        $totales = [
+            'total_salidas' => 0,
+            'total_cantidad' => 0,
+            'total_kilos' => 0,
+            'total_recibido_kg' => 0,
+            'total_producido_cajas' => 0,
+            'total_producido_kg' => 0,
+            'total_embarcado_cajas' => 0,
+            'total_rezaga_kg' => 0,
+            'monto_bruto' => 0,
+            'descuento_rezaga' => 0,
+            'monto_neto' => 0,
+        ];
+
+        $conveniosOrdenados = $convenios->sortBy(function ($c) {
+            return optional($c->fecha_inicio)->format('Y-m-d') ?? '0000-00-00';
+        })->values();
+
+        foreach ($recepciones as $recepcion) {
+            $fechaRecepcion = $recepcion->fecha_recepcion;
+            $convenioAsignado = null;
+
+            foreach ($conveniosOrdenados as $convenio) {
+                if ($convenio->fecha_inicio && $fechaRecepcion && $fechaRecepcion->lt($convenio->fecha_inicio)) {
+                    break;
+                }
+                $convenioAsignado = $convenio;
+            }
+
+            $pesoBascula = (float) ($recepcion->peso_bascula ?? $recepcion->peso_recibido_kg ?? 0);
+            $cantidad = (int) ($recepcion->cantidad_recibida ?? 0);
+
+            $rezagaLavadoKg = 0;
+            $producidoCajas = 0;
+            $embarcadoCajas = 0;
+            foreach ($recepcion->procesos as $proceso) {
+                $rezagaLavadoKg += (float) ($proceso->rezaga_lavado_kg ?? 0);
+                foreach ($proceso->producciones as $produccion) {
+                    $producidoCajas += (int) ($produccion->total_cajas ?? 0);
+                    foreach ($produccion->embarqueDetalles as $detalle) {
+                        $embarcadoCajas += (int) ($detalle->cajas ?? 0);
+                    }
+                }
+            }
+
+            $porcentajeRezaga = $pesoBascula > 0
+                ? round(($rezagaLavadoKg / $pesoBascula) * 100, 2)
+                : 0;
+            $producidoKg = max(0, $pesoBascula - $rezagaLavadoKg);
+
+            $precioUnitario = $convenioAsignado
+                ? $this->obtenerPrecio($convenioAsignado, $recepcion->tipo_carga_id, $fechaRecepcion)
+                : 0;
+
+            $esPorKilos = $this->debeCalcularPorKilos($convenioAsignado, $recepcion->tipo_carga_id, $recepcion->tipoCarga);
+            $subtotal = $esPorKilos
+                ? ($pesoBascula * $precioUnitario)
+                : ($cantidad * $precioUnitario);
+
+            $porcentajeAceptadoRezaga = (float) ($convenioAsignado?->porcentaje_rezaga ?? 0);
+            $excedenteRezagaPct = max(0, $porcentajeRezaga - $porcentajeAceptadoRezaga);
+            $descuentoRezaga = round($subtotal * ($excedenteRezagaPct / 100), 2);
+            $subtotalNeto = round($subtotal - $descuentoRezaga, 2);
+
+            $rows[] = [
+                'id' => $recepcion->id,
+                'folio' => $recepcion->folio_recepcion,
+                'fecha' => $fechaRecepcion?->format('Y-m-d'),
+                'convenio_folio' => $convenioAsignado?->folio_convenio,
+                'convenio_modalidad' => $convenioAsignado?->modalidad,
+                'convenio_porcentaje_rezaga' => $porcentajeAceptadoRezaga,
+                'convenio_calculo_por_kilos' => $esPorKilos,
+                'tipo_carga' => $recepcion->tipoCarga?->nombre,
+                'lote' => $recepcion->lote?->nombre,
+                'variedad' => $recepcion->salidaCampo?->variedad?->nombre,
+                'cantidad' => $cantidad,
+                'peso_bascula_kg' => round($pesoBascula, 2),
+                'recibido_kg' => round($pesoBascula, 2),
+                'producido_cajas' => $producidoCajas,
+                'producido_kg' => round($producidoKg, 2),
+                'embarcado_cajas' => $embarcadoCajas,
+                'rezaga_lavado_kg' => round($rezagaLavadoKg, 2),
+                'porcentaje_rezaga' => $porcentajeRezaga,
+                'excedente_rezaga_pct' => round($excedenteRezagaPct, 2),
+                'precio_unitario' => (float) $precioUnitario,
+                'subtotal' => round($subtotal, 2),
+                'descuento_rezaga' => $descuentoRezaga,
+                'subtotal_neto' => $subtotalNeto,
+            ];
+
+            $totales['total_salidas']++;
+            $totales['total_cantidad'] += $cantidad;
+            $totales['total_kilos'] += $pesoBascula;
+            $totales['total_recibido_kg'] += $pesoBascula;
+            $totales['total_producido_cajas'] += $producidoCajas;
+            $totales['total_producido_kg'] += $producidoKg;
+            $totales['total_embarcado_cajas'] += $embarcadoCajas;
+            $totales['total_rezaga_kg'] += $rezagaLavadoKg;
+            $totales['monto_bruto'] += $subtotal;
+            $totales['descuento_rezaga'] += $descuentoRezaga;
+            $totales['monto_neto'] += $subtotalNeto;
+        }
+
+        $totales['total_kilos'] = round($totales['total_kilos'], 2);
+        $totales['total_recibido_kg'] = round($totales['total_recibido_kg'], 2);
+        $totales['total_producido_kg'] = round($totales['total_producido_kg'], 2);
+        $totales['total_rezaga_kg'] = round($totales['total_rezaga_kg'], 2);
+        $totales['monto_bruto'] = round($totales['monto_bruto'], 2);
+        $totales['descuento_rezaga'] = round($totales['descuento_rezaga'], 2);
+        $totales['monto_neto'] = round($totales['monto_neto'], 2);
+
+        return [$rows, $totales];
+    }
+
+    private function buildRecepcionesDesglose(Request $request, int $productorId): array
+    {
+        $recepciones = RecepcionEmpaque::with([
+                'lote:id,nombre,numero_lote',
+                'tipoCarga:id,nombre',
+                'salidaCampo:id,variedad_id',
+                'salidaCampo.variedad:id,nombre',
+                'procesos:id,recepcion_id,rezaga_lavado_kg',
+            ])
+            ->where('temporada_id', $request->temporada_id)
+            ->where('productor_id', $productorId)
+            ->when($request->filled('fecha_inicio'), fn($q) => $q->whereDate('fecha_recepcion', '>=', $request->fecha_inicio))
+            ->when($request->filled('fecha_fin'), fn($q) => $q->whereDate('fecha_recepcion', '<=', $request->fecha_fin))
+            ->orderBy('fecha_recepcion')
+            ->get();
+
+        $desglose = [];
+        $totalKilos = 0;
+        $totalCantidad = 0;
+        $totalRezagaKg = 0;
+
+        foreach ($recepciones as $recepcion) {
+            $pesoBascula = (float) ($recepcion->peso_bascula ?? $recepcion->peso_recibido_kg ?? 0);
+            $cantidad = (int) ($recepcion->cantidad_recibida ?? 0);
+
+            $rezagaLavadoKg = 0;
+            foreach ($recepcion->procesos as $proceso) {
+                $rezagaLavadoKg += (float) ($proceso->rezaga_lavado_kg ?? 0);
+            }
+
+            $porcentajeRezaga = $pesoBascula > 0
+                ? round(($rezagaLavadoKg / $pesoBascula) * 100, 2)
+                : 0;
+
+            $desglose[] = [
+                'id' => $recepcion->id,
+                'folio_recepcion' => $recepcion->folio_recepcion,
+                'fecha_recepcion' => $recepcion->fecha_recepcion?->format('Y-m-d'),
+                'variedad' => $recepcion->salidaCampo?->variedad?->nombre ?? '—',
+                'cantidad' => $cantidad,
+                'peso_bascula_kg' => round($pesoBascula, 2),
+                'rezaga_lavado_kg' => round($rezagaLavadoKg, 2),
+                'porcentaje_rezaga' => $porcentajeRezaga,
+                'tipo_carga' => $recepcion->tipoCarga?->nombre ?? 'N/A',
+                'lote' => $recepcion->lote?->nombre ?? '—',
+                'monto_bruto' => 0,
+                'monto_neto' => 0,
+                'nota' => 'Sin convenio',
+            ];
+
+            $totalKilos += $pesoBascula;
+            $totalCantidad += $cantidad;
+            $totalRezagaKg += $rezagaLavadoKg;
+        }
+
+        return [
+            $desglose,
+            [
+                'total_salidas' => count($desglose),
+                'total_cantidad' => $totalCantidad,
+                'total_kilos' => round($totalKilos, 2),
+                'total_rezaga_kg' => round($totalRezagaKg, 2),
+            ],
+        ];
     }
 
     /**
@@ -170,17 +514,67 @@ class TableroProductoresController extends Controller
      */
     private function calcularConvenio(ConvenioCompra $convenio, Request $request): array
     {
-        $esPorKilos = (bool) $convenio->calculo_por_kilos;
+        $convenioEsPorKilos = $this->debeCalcularPorKilos($convenio);
         // Trazabilidad siempre para calcular rezaga real (excedente)
         $salidas = $this->getSalidas($convenio, $request, true);
+        $usarRecepcionesFallback = $salidas->isEmpty();
+        $recepcionesFallback = $usarRecepcionesFallback
+            ? $this->getRecepcionesParaConvenio($convenio, $request)
+            : collect();
 
         $montoBruto = 0;
         $totalRezagaKg = 0;
         $totalPesoBase = 0;
         $salidasData = [];
+        $totalCantidadConvenio = 0;
+        $totalKilosConvenio = 0;
 
-        foreach ($salidas as $salida) {
+        if ($usarRecepcionesFallback) {
+            foreach ($recepcionesFallback as $recepcion) {
+                $fechaOperacion = $recepcion->fecha_recepcion;
+                $precioUnitario = $this->obtenerPrecio($convenio, $recepcion->tipo_carga_id, $fechaOperacion);
+                $esPorKilos = $this->debeCalcularPorKilos($convenio, $recepcion->tipo_carga_id, $recepcion->tipoCarga);
+
+                $pesoBasculaRecepcion = (float) ($recepcion->peso_bascula ?? $recepcion->peso_recibido_kg ?? 0);
+                $cantidad = (int) ($recepcion->cantidad_recibida ?? 0);
+
+                $rezagaKg = 0;
+                foreach ($recepcion->procesos as $proceso) {
+                    $rezagaKg += (float) ($proceso->rezaga_lavado_kg ?? 0);
+                }
+                $totalRezagaKg += $rezagaKg;
+
+                if ($esPorKilos) {
+                    $subtotal = $pesoBasculaRecepcion * $precioUnitario;
+                    $totalPesoBase += $pesoBasculaRecepcion;
+                } else {
+                    $subtotal = $cantidad * $precioUnitario;
+                    $totalPesoBase += $pesoBasculaRecepcion;
+                }
+                $montoBruto += $subtotal;
+
+                $salidasData[] = [
+                    'id' => $recepcion->id,
+                    'folio_salida' => $recepcion->folio_recepcion,
+                    'fecha' => $fechaOperacion?->format('Y-m-d'),
+                    'cantidad' => $cantidad,
+                    'peso_neto_kg' => round($pesoBasculaRecepcion, 2),
+                    'peso_bascula' => (float) ($recepcion->peso_bascula ?? 0),
+                    'folio_ticket_bascula' => $recepcion->folio_ticket_bascula,
+                    'tipo_carga' => $recepcion->tipoCarga?->nombre,
+                    'precio_unitario' => $precioUnitario,
+                    'subtotal' => round($subtotal, 2),
+                    'origen' => 'recepcion',
+                ];
+
+                $totalCantidadConvenio += $cantidad;
+                $totalKilosConvenio += $pesoBasculaRecepcion;
+            }
+        }
+
+        foreach ($usarRecepcionesFallback ? collect() : $salidas as $salida) {
             $precioUnitario = $this->obtenerPrecio($convenio, $salida->tipo_carga_id, $salida->fecha);
+            $esPorKilos = $this->debeCalcularPorKilos($convenio, $salida->tipo_carga_id, $salida->tipoCarga);
 
             // Peso báscula y rezaga real desde trazabilidad
             $pesoBasculaRecepcion = 0;
@@ -226,6 +620,8 @@ class TableroProductoresController extends Controller
             }
 
             $salidasData[] = $salidaData;
+            $totalCantidadConvenio += (int) ($salida->cantidad ?? 0);
+            $totalKilosConvenio += (float) ($salida->peso_neto_kg ?? 0);
         }
 
         // Rezaga: solo se descuenta el EXCEDENTE sobre el % aceptado
@@ -242,7 +638,7 @@ class TableroProductoresController extends Controller
                 'id' => $convenio->id,
                 'folio_convenio' => $convenio->folio_convenio,
                 'modalidad' => $convenio->modalidad,
-                'calculo_por_kilos' => $esPorKilos,
+                'calculo_por_kilos' => $convenioEsPorKilos,
                 'porcentaje_rezaga' => $porcentajeRezaga,
                 'fecha_inicio' => $convenio->fecha_inicio?->format('Y-m-d'),
                 'fecha_fin' => $convenio->fecha_fin?->format('Y-m-d'),
@@ -250,8 +646,8 @@ class TableroProductoresController extends Controller
             'cultivo' => $convenio->cultivo?->nombre,
             'variedad' => $convenio->variedad?->nombre,
             'total_salidas' => count($salidasData),
-            'total_cantidad' => $salidas->sum('cantidad'),
-            'total_kilos' => (float) $salidas->sum('peso_neto_kg'),
+            'total_cantidad' => $totalCantidadConvenio,
+            'total_kilos' => round($totalKilosConvenio, 2),
             'total_rezaga_kg' => round($totalRezagaKg, 2),
             'porcentaje_real_rezaga' => round($porcentajeRealRezaga, 2),
             'excedente_rezaga_pct' => round($excedentePorcentaje, 2),
@@ -268,7 +664,11 @@ class TableroProductoresController extends Controller
     private function calcularConvenioDetallado(ConvenioCompra $convenio, Request $request): array
     {
         $salidas = $this->getSalidas($convenio, $request, true);
-        $esPorKilos = (bool) $convenio->calculo_por_kilos;
+        $convenioEsPorKilos = $this->debeCalcularPorKilos($convenio);
+        $usarRecepcionesFallback = $salidas->isEmpty();
+        $recepcionesFallback = $usarRecepcionesFallback
+            ? $this->getRecepcionesParaConvenio($convenio, $request)
+            : collect();
 
         $montoBruto = 0;
         $totalRecibidoKg = 0;
@@ -277,9 +677,73 @@ class TableroProductoresController extends Controller
         $totalEmbarcadoCajas = 0;
         $totalRezagaKg = 0;
         $salidasDetalle = [];
+        $totalCantidadConvenio = 0;
+        $totalKilosConvenio = 0;
 
-        foreach ($salidas as $salida) {
+        if ($usarRecepcionesFallback) {
+            foreach ($recepcionesFallback as $recepcion) {
+                $fechaOperacion = $recepcion->fecha_recepcion;
+                $precioUnitario = $this->obtenerPrecio($convenio, $recepcion->tipo_carga_id, $fechaOperacion);
+                $esPorKilos = $this->debeCalcularPorKilos($convenio, $recepcion->tipo_carga_id, $recepcion->tipoCarga);
+
+                $pesoBasculaRecepcion = (float) ($recepcion->peso_bascula ?? $recepcion->peso_recibido_kg ?? 0);
+                $cantidad = (int) ($recepcion->cantidad_recibida ?? 0);
+
+                $rezagaKg = 0;
+                foreach ($recepcion->procesos as $proceso) {
+                    $rezagaKg += (float) ($proceso->rezaga_lavado_kg ?? 0);
+                }
+
+                $producidoKg = $esPorKilos ? max(0, $pesoBasculaRecepcion - $rezagaKg) : 0;
+
+                if ($esPorKilos) {
+                    $subtotal = $pesoBasculaRecepcion * $precioUnitario;
+                } else {
+                    $subtotal = $cantidad * $precioUnitario;
+                }
+                $montoBruto += $subtotal;
+
+                $totalRecibidoKg += $pesoBasculaRecepcion;
+                $totalProducidoKg += $producidoKg;
+                $totalRezagaKg += $rezagaKg;
+
+                $salidaDetalle = [
+                    'id' => $recepcion->id,
+                    'folio_salida' => $recepcion->folio_recepcion,
+                    'fecha' => $fechaOperacion?->format('Y-m-d'),
+                    'cantidad' => $cantidad,
+                    'peso_neto_kg' => round($pesoBasculaRecepcion, 2),
+                    'peso_bascula' => (float) ($recepcion->peso_bascula ?? 0),
+                    'folio_ticket_bascula' => $recepcion->folio_ticket_bascula,
+                    'tipo_carga' => $recepcion->tipoCarga?->nombre,
+                    'tipo_carga_id' => $recepcion->tipo_carga_id,
+                    'lote' => $recepcion->lote?->nombre,
+                    'zona_cultivo' => $recepcion->zonaCultivo?->nombre,
+                    'precio_unitario' => $precioUnitario,
+                    'subtotal' => round($subtotal, 2),
+                    'status' => $recepcion->status,
+                    'recibido_kg' => round($pesoBasculaRecepcion, 2),
+                    'producido_cajas' => 0,
+                    'embarcado_cajas' => 0,
+                    'rezaga_kg' => round($rezagaKg, 2),
+                    'origen' => 'recepcion',
+                ];
+
+                if ($esPorKilos) {
+                    $salidaDetalle['peso_bascula_recepcion'] = round($pesoBasculaRecepcion, 2);
+                    $salidaDetalle['folio_ticket_bascula_recepcion'] = $recepcion->folio_ticket_bascula;
+                    $salidaDetalle['producido_kg'] = round($producidoKg, 2);
+                }
+
+                $salidasDetalle[] = $salidaDetalle;
+                $totalCantidadConvenio += $cantidad;
+                $totalKilosConvenio += $pesoBasculaRecepcion;
+            }
+        }
+
+        foreach ($usarRecepcionesFallback ? collect() : $salidas as $salida) {
             $precioUnitario = $this->obtenerPrecio($convenio, $salida->tipo_carga_id, $salida->fecha);
+            $esPorKilos = $this->debeCalcularPorKilos($convenio, $salida->tipo_carga_id, $salida->tipoCarga);
 
             // Trazabilidad: recepciones de esta salida
             $recibidoKg = 0;
@@ -358,21 +822,27 @@ class TableroProductoresController extends Controller
             }
 
             $salidasDetalle[] = $salidaDetalle;
+            $totalCantidadConvenio += (int) ($salida->cantidad ?? 0);
+            $totalKilosConvenio += (float) ($salida->peso_neto_kg ?? 0);
         }
 
         // Cálculo de descuento por rezaga
         $porcentajeRezaga = (float) ($convenio->porcentaje_rezaga ?? 0);
 
-        if ($esPorKilos) {
+        if ($convenioEsPorKilos) {
             // Para kilos: % rezaga real basado en peso báscula de recepciones
-            $totalPesoBase = $salidas->sum(function ($s) {
-                return $s->recepciones->sum('peso_bascula');
-            });
+            $totalPesoBase = $usarRecepcionesFallback
+                ? $totalRecibidoKg
+                : $salidas->sum(function ($s) {
+                    return $s->recepciones->sum('peso_bascula');
+                });
             $porcentajeRealRezaga = $totalPesoBase > 0
                 ? ($totalRezagaKg / $totalPesoBase) * 100
                 : 0;
         } else {
-            $totalPesoBase = (float) $salidas->sum('peso_neto_kg');
+            $totalPesoBase = $usarRecepcionesFallback
+                ? $totalKilosConvenio
+                : (float) $salidas->sum('peso_neto_kg');
             $porcentajeRealRezaga = $totalPesoBase > 0
                 ? ($totalRezagaKg / $totalPesoBase) * 100
                 : 0;
@@ -387,7 +857,7 @@ class TableroProductoresController extends Controller
                 'id' => $convenio->id,
                 'folio_convenio' => $convenio->folio_convenio,
                 'modalidad' => $convenio->modalidad,
-                'calculo_por_kilos' => $esPorKilos,
+                'calculo_por_kilos' => $convenioEsPorKilos,
                 'porcentaje_rezaga' => $porcentajeRezaga,
                 'fecha_inicio' => $convenio->fecha_inicio?->format('Y-m-d'),
                 'fecha_fin' => $convenio->fecha_fin?->format('Y-m-d'),
@@ -395,8 +865,8 @@ class TableroProductoresController extends Controller
             'cultivo' => $convenio->cultivo?->nombre,
             'variedad' => $convenio->variedad?->nombre,
             'total_salidas' => count($salidasDetalle),
-            'total_cantidad' => $salidas->sum('cantidad'),
-            'total_kilos' => (float) $salidas->sum('peso_neto_kg'),
+            'total_cantidad' => $totalCantidadConvenio,
+            'total_kilos' => round($totalKilosConvenio, 2),
             'total_recibido_kg' => round($totalRecibidoKg, 2),
             'total_producido_cajas' => $totalProducidoCajas,
             'total_embarcado_cajas' => $totalEmbarcadoCajas,
@@ -409,11 +879,51 @@ class TableroProductoresController extends Controller
             'salidas' => $salidasDetalle,
         ];
 
-        if ($esPorKilos) {
+        if ($convenioEsPorKilos) {
             $result['total_producido_kg'] = round($totalProducidoKg, 2);
         }
 
         return $result;
+    }
+
+    private function getRecepcionesParaConvenio(ConvenioCompra $convenio, Request $request)
+    {
+        $query = RecepcionEmpaque::with([
+                'lote:id,nombre,numero_lote',
+                'zonaCultivo:id,nombre',
+                'tipoCarga:id,nombre',
+                'salidaCampo:id,variedad_id',
+                'salidaCampo.variedad:id,nombre,cultivo_id',
+                'procesos:id,recepcion_id,rezaga_lavado_kg',
+            ])
+            ->where('temporada_id', $convenio->temporada_id)
+            ->where('productor_id', $convenio->productor_id);
+
+        if ($convenio->fecha_inicio) {
+            $query->whereDate('fecha_recepcion', '>=', $convenio->fecha_inicio);
+        }
+        if ($convenio->fecha_fin) {
+            $query->whereDate('fecha_recepcion', '<=', $convenio->fecha_fin);
+        }
+
+        if ($convenio->variedad_id) {
+            $query->whereHas('salidaCampo', function ($q) use ($convenio) {
+                $q->where('variedad_id', $convenio->variedad_id);
+            });
+        } elseif ($convenio->cultivo_id) {
+            $query->whereHas('salidaCampo.variedad', function ($q) use ($convenio) {
+                $q->where('cultivo_id', $convenio->cultivo_id);
+            });
+        }
+
+        if ($request->filled('fecha_inicio')) {
+            $query->whereDate('fecha_recepcion', '>=', $request->fecha_inicio);
+        }
+        if ($request->filled('fecha_fin')) {
+            $query->whereDate('fecha_recepcion', '<=', $request->fecha_fin);
+        }
+
+        return $query->orderBy('fecha_recepcion')->get();
     }
 
     /**
@@ -423,22 +933,64 @@ class TableroProductoresController extends Controller
      */
     private function obtenerPrecio(ConvenioCompra $convenio, ?int $tipoCargaId, $fecha): float
     {
-        if (!$tipoCargaId) {
+        $fechaRef = $fecha instanceof \DateTimeInterface
+            ? $fecha->format('Y-m-d')
+            : (string) $fecha;
+
+        $baseQuery = $convenio->precios()
+            ->where('is_active', true)
+            ->whereDate('vigencia_inicio', '<=', $fechaRef)
+            ->where(function ($q) use ($fechaRef) {
+                $q->whereNull('vigencia_fin')
+                  ->orWhereDate('vigencia_fin', '>=', $fechaRef);
+            });
+
+        // 1) Precio específico por tipo de carga
+        $precio = null;
+        if ($tipoCargaId) {
+            $precio = (clone $baseQuery)
+                ->where('tipo_carga_id', $tipoCargaId)
+                ->latest('vigencia_inicio')
+                ->first();
+        }
+
+        // 2) Fallback a precio genérico del convenio (sin tipo_carga)
+        if (!$precio) {
+            $precio = (clone $baseQuery)
+                ->whereNull('tipo_carga_id')
+                ->latest('vigencia_inicio')
+                ->first();
+        }
+
+        // 3) Último recurso: cualquier precio vigente del convenio
+        if (!$precio) {
+            $precio = (clone $baseQuery)
+                ->latest('vigencia_inicio')
+                ->first();
+        }
+
+        // 4) Fallback sin vigencia exacta: último precio activo por tipo_carga
+        if (!$precio && $tipoCargaId) {
+            $precio = $convenio->precios()
+                ->where('is_active', true)
+                ->where('tipo_carga_id', $tipoCargaId)
+                ->latest('vigencia_inicio')
+                ->first();
+        }
+
+        // 5) Fallback final sin vigencia/tipo: cualquier precio activo más reciente
+        if (!$precio) {
+            $precio = $convenio->precios()
+                ->where('is_active', true)
+                ->latest('vigencia_inicio')
+                ->first();
+        }
+
+        if (!$precio) {
             return 0;
         }
 
-        $precio = $convenio->precios()
-            ->where('is_active', true)
-            ->where('tipo_carga_id', $tipoCargaId)
-            ->where('vigencia_inicio', '<=', $fecha)
-            ->where(function ($q) use ($fecha) {
-                $q->whereNull('vigencia_fin')
-                  ->orWhere('vigencia_fin', '>=', $fecha);
-            })
-            ->latest('vigencia_inicio')
-            ->first();
-
-        return $precio ? (float) $precio->precio_unitario : 0;
+        return (float) ($precio->precio_unitario ?? $precio->precio_caja_empacada ?? 0);
     }
 
     /**
@@ -524,5 +1076,41 @@ class TableroProductoresController extends Controller
         }
 
         return $query->orderBy('fecha')->get();
+    }
+
+    private function debeCalcularPorKilos(?ConvenioCompra $convenio, ?int $tipoCargaId = null, $tipoCarga = null): bool
+    {
+        if (!$convenio) {
+            return false;
+        }
+
+        if ((bool) $convenio->calculo_por_kilos) {
+            return true;
+        }
+
+        $nombreTipoCarga = strtolower(trim((string) ($tipoCarga?->nombre ?? '')));
+
+        if ($nombreTipoCarga === '' && $tipoCargaId && $convenio->relationLoaded('precios')) {
+            $precioRelacion = $convenio->precios->firstWhere('tipo_carga_id', $tipoCargaId);
+            $nombreTipoCarga = strtolower(trim((string) ($precioRelacion?->tipoCarga?->nombre ?? '')));
+        }
+
+        if ($nombreTipoCarga === '' && $tipoCargaId) {
+            $tipoCargaModel = TipoCarga::find($tipoCargaId);
+            $nombreTipoCarga = strtolower(trim((string) ($tipoCargaModel?->nombre ?? '')));
+        }
+
+        if ($nombreTipoCarga === '' && $convenio->relationLoaded('precios')) {
+            $precioRelacion = $convenio->precios->first(function ($precio) {
+                $nombre = strtolower(trim((string) ($precio->tipoCarga?->nombre ?? '')));
+                return str_contains($nombre, 'kilo') || str_contains($nombre, 'kg');
+            });
+
+            if ($precioRelacion) {
+                $nombreTipoCarga = strtolower(trim((string) ($precioRelacion->tipoCarga?->nombre ?? '')));
+            }
+        }
+
+        return str_contains($nombreTipoCarga, 'kilo') || str_contains($nombreTipoCarga, 'kg');
     }
 }

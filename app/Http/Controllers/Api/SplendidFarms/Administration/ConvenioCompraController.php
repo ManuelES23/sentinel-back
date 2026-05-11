@@ -7,9 +7,11 @@ use App\Http\Controllers\Controller;
 use App\Models\ConvenioCompra;
 use App\Models\ConvenioCompraPrecio;
 use App\Models\Temporada;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Carbon;
 
 class ConvenioCompraController extends Controller
 {
@@ -86,6 +88,18 @@ class ConvenioCompraController extends Controller
         $temporada = Temporada::findOrFail($validated['temporada_id']);
         $validated['cultivo_id'] = $temporada->cultivo_id;
 
+        $duplicado = $this->findDuplicateConvenio($validated);
+        if ($duplicado) {
+            if ($duplicado->deleted_at) {
+                return $this->restoreDuplicateConvenio($duplicado, $validated);
+            }
+
+            return response()->json([
+                'status' => 'error',
+                'message' => "Ya existe un convenio con esta combinación y fecha de inicio: {$duplicado->folio_convenio}.",
+            ], 422);
+        }
+
         // Generar folio
         $validated['folio_convenio'] = $this->generarFolio();
         $validated['created_by'] = Auth::id();
@@ -94,7 +108,25 @@ class ConvenioCompraController extends Controller
         $preciosData = $validated['precios'] ?? [];
         unset($validated['precios']);
 
-        $convenio = ConvenioCompra::create($validated);
+        try {
+            $convenio = ConvenioCompra::create($validated);
+        } catch (QueryException $e) {
+            if ((int) ($e->errorInfo[1] ?? 0) === 1062) {
+                $duplicado = $this->findDuplicateConvenio($validated);
+                if ($duplicado && $duplicado->deleted_at) {
+                    return $this->restoreDuplicateConvenio($duplicado, $validated);
+                }
+
+                return response()->json([
+                    'status' => 'error',
+                    'message' => $duplicado
+                        ? "Ya existe un convenio con esta combinación y fecha de inicio: {$duplicado->folio_convenio}."
+                        : 'Ya existe un convenio con la misma combinación de productor, cultivo, variedad, modalidad y fecha de inicio.',
+                ], 422);
+            }
+
+            throw $e;
+        }
 
         // Crear precios iniciales
         foreach ($preciosData as $precio) {
@@ -151,7 +183,38 @@ class ConvenioCompraController extends Controller
             $validated['cultivo_id'] = $temporada->cultivo_id;
         }
 
-        $convenio->update($validated);
+        $candidate = array_merge([
+            'temporada_id' => $convenio->temporada_id,
+            'productor_id' => $convenio->productor_id,
+            'variedad_id' => $convenio->variedad_id,
+            'modalidad' => $convenio->modalidad,
+            'fecha_inicio' => optional($convenio->fecha_inicio)->format('Y-m-d'),
+            'cultivo_id' => $convenio->cultivo_id,
+        ], $validated);
+
+        $duplicado = $this->findDuplicateConvenio($candidate, $convenio->id);
+        if ($duplicado) {
+            return response()->json([
+                'status' => 'error',
+                'message' => "Ya existe un convenio con esta combinación y fecha de inicio: {$duplicado->folio_convenio}.",
+            ], 422);
+        }
+
+        try {
+            $convenio->update($validated);
+        } catch (QueryException $e) {
+            if ((int) ($e->errorInfo[1] ?? 0) === 1062) {
+                $duplicado = $this->findDuplicateConvenio($candidate, $convenio->id);
+                return response()->json([
+                    'status' => 'error',
+                    'message' => $duplicado
+                        ? "Ya existe un convenio con esta combinación y fecha de inicio: {$duplicado->folio_convenio}."
+                        : 'Ya existe un convenio con la misma combinación de productor, cultivo, variedad, modalidad y fecha de inicio.',
+                ], 422);
+            }
+
+            throw $e;
+        }
         $convenio = $convenio->fresh();
         $convenio->load($this->eagerLoad);
         $convenio->loadCount('precios');
@@ -310,5 +373,64 @@ class ConvenioCompraController extends Controller
         $nextNumber = $lastCode ? (int) substr($lastCode, 4) + 1 : 1;
 
         return 'CON-' . str_pad($nextNumber, 5, '0', STR_PAD_LEFT);
+    }
+
+    private function findDuplicateConvenio(array $data, ?int $ignoreId = null): ?ConvenioCompra
+    {
+        if (
+            empty($data['temporada_id']) ||
+            empty($data['productor_id']) ||
+            empty($data['cultivo_id']) ||
+            empty($data['modalidad']) ||
+            empty($data['fecha_inicio'])
+        ) {
+            return null;
+        }
+
+        $fechaInicio = Carbon::parse($data['fecha_inicio'])->toDateString();
+
+        $query = ConvenioCompra::withTrashed()
+            ->where('temporada_id', $data['temporada_id'])
+            ->where('productor_id', $data['productor_id'])
+            ->where('cultivo_id', $data['cultivo_id'])
+            ->where('modalidad', $data['modalidad'])
+            ->whereDate('fecha_inicio', $fechaInicio)
+            ->when(
+                array_key_exists('variedad_id', $data) && !empty($data['variedad_id']),
+                fn ($q) => $q->where('variedad_id', $data['variedad_id']),
+                fn ($q) => $q->whereNull('variedad_id')
+            );
+
+        if ($ignoreId) {
+            $query->where('id', '!=', $ignoreId);
+        }
+
+        return $query->first();
+    }
+
+    private function restoreDuplicateConvenio(ConvenioCompra $convenio, array $validated): JsonResponse
+    {
+        $preciosData = $validated['precios'] ?? [];
+        unset($validated['precios']);
+
+        $convenio->restore();
+        $convenio->update($validated);
+
+        $convenio->precios()->delete();
+        foreach ($preciosData as $precio) {
+            $convenio->precios()->create($precio);
+        }
+
+        $convenio = $convenio->fresh();
+        $convenio->load($this->eagerLoad);
+        $convenio->loadCount('precios');
+
+        broadcast(new ConvenioCompraUpdated('updated', $convenio->toArray()));
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Se restauró un convenio existente con la misma combinación.',
+            'data' => $convenio,
+        ], 200);
     }
 }

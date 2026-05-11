@@ -9,6 +9,7 @@ use App\Models\Productor;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Throwable;
 
 class AbonoProductorController extends Controller
 {
@@ -169,13 +170,66 @@ class AbonoProductorController extends Controller
 
         $liquidaciones = $liqQuery->orderByDesc('periodo_inicio')->get();
 
-        // Deuda: liquidaciones revisadas o aprobadas (monto_final pendiente de pago)
-        $totalDeuda = $liquidaciones
+        // Deuda base: liquidaciones revisadas o aprobadas (monto_final pendiente de pago)
+        $totalDeudaLiquidaciones = $liquidaciones
             ->whereIn('status', [
                 LiquidacionConsignacion::STATUS_REVISADA,
                 LiquidacionConsignacion::STATUS_APROBADA,
             ])
             ->sum('monto_final');
+
+        $totalDeuda = (float) $totalDeudaLiquidaciones;
+        $movimientosDeudaEstadoCuenta = collect();
+
+        // Si hay temporada seleccionada, la deuda debe salir del estado de cuenta del tablero.
+        if ($temporadaId) {
+            try {
+                $tableroRequest = Request::create('/', 'GET', [
+                    'temporada_id' => $temporadaId,
+                    'fecha_inicio' => $request->query('fecha_inicio'),
+                    'fecha_fin' => $request->query('fecha_fin'),
+                ]);
+
+                /** @var TableroProductoresController $tableroController */
+                $tableroController = app(TableroProductoresController::class);
+                $tableroResponse = $tableroController->show($tableroRequest, $productor->id);
+                $tableroPayload = $tableroResponse->getData(true);
+
+                if (($tableroPayload['success'] ?? false) && !empty($tableroPayload['data'])) {
+                    $estadoCuentaRows = $tableroPayload['data']['estado_cuenta_rows'] ?? [];
+                    $totalDeuda = (float) ($tableroPayload['data']['totales']['monto_neto'] ?? 0);
+
+                    $movimientosDeudaEstadoCuenta = collect($estadoCuentaRows)
+                        ->map(function ($row) {
+                            $folio = $row['folio']
+                                ?? $row['folio_recepcion']
+                                ?? $row['folio_salida']
+                                ?? '-';
+                            $fecha = $row['fecha'] ?? null;
+                            $convenio = $row['convenio_folio'] ?? 'Sin convenio';
+                            $tipoCarga = $row['tipo_carga'] ?? 'N/A';
+                            $lote = $row['lote'] ?? '—';
+                            $cargo = (float) ($row['subtotal_neto'] ?? 0);
+
+                            return [
+                                'tipo' => 'liquidacion',
+                                'id' => $row['id'] ?? md5(json_encode([$folio, $fecha, $cargo, $convenio])),
+                                'folio' => $folio,
+                                'fecha' => $fecha,
+                                'concepto' => "Estado de cuenta {$convenio} · {$tipoCarga} · {$lote}",
+                                'cargo' => round($cargo, 2),
+                                'abono' => 0,
+                                'status' => 'pendiente',
+                            ];
+                        })
+                        ->filter(fn($mov) => ($mov['cargo'] ?? 0) > 0)
+                        ->values();
+                }
+            } catch (Throwable $e) {
+                // Si falla el cálculo del tablero, mantener fallback por liquidaciones.
+                $totalDeuda = (float) $totalDeudaLiquidaciones;
+            }
+        }
 
         $totalPagadoLiquidaciones = $liquidaciones
             ->where('status', LiquidacionConsignacion::STATUS_PAGADA)
@@ -184,7 +238,7 @@ class AbonoProductorController extends Controller
         // ─── Abonos del productor ────────────────────────
         $abonosQuery = AbonoProductor::activo()
             ->porProductor($productor->id)
-            ->with(['convenioCompra:id,folio_convenio', 'temporada:id,nombre']);
+            ->with(['temporada:id,nombre']);
 
         if ($temporadaId) {
             $abonosQuery->porTemporada($temporadaId);
@@ -200,17 +254,21 @@ class AbonoProductorController extends Controller
         // ─── Movimientos combinados ──────────────────────
         $movimientos = collect();
 
-        foreach ($liquidaciones as $liq) {
-            $movimientos->push([
-                'tipo' => 'liquidacion',
-                'id' => $liq->id,
-                'folio' => $liq->folio_liquidacion,
-                'fecha' => optional($liq->periodo_fin)->format('Y-m-d') ?? $liq->created_at->format('Y-m-d'),
-                'concepto' => 'Liquidación ' . ($liq->convenioCompra?->folio_convenio ?? ''),
-                'cargo' => (float) $liq->monto_final,
-                'abono' => 0,
-                'status' => $liq->status,
-            ]);
+        if ($temporadaId && $movimientosDeudaEstadoCuenta->isNotEmpty()) {
+            $movimientos = $movimientos->merge($movimientosDeudaEstadoCuenta);
+        } else {
+            foreach ($liquidaciones as $liq) {
+                $movimientos->push([
+                    'tipo' => 'liquidacion',
+                    'id' => $liq->id,
+                    'folio' => $liq->folio_liquidacion,
+                    'fecha' => optional($liq->periodo_fin)->format('Y-m-d') ?? $liq->created_at->format('Y-m-d'),
+                    'concepto' => 'Liquidación ' . ($liq->convenioCompra?->folio_convenio ?? ''),
+                    'cargo' => (float) $liq->monto_final,
+                    'abono' => 0,
+                    'status' => $liq->status,
+                ]);
+            }
         }
 
         foreach ($abonos as $abono) {
@@ -238,7 +296,9 @@ class AbonoProductorController extends Controller
                     'tipo' => $productor->tipo,
                 ],
                 'resumen' => [
-                    'total_liquidaciones' => $liquidaciones->count(),
+                    'total_liquidaciones' => $temporadaId && $movimientosDeudaEstadoCuenta->isNotEmpty()
+                        ? $movimientosDeudaEstadoCuenta->count()
+                        : $liquidaciones->count(),
                     'total_deuda' => round((float) $totalDeuda, 2),
                     'total_pagado_liquidaciones' => round((float) $totalPagadoLiquidaciones, 2),
                     'total_abonos' => round($totalAbonos, 2),
