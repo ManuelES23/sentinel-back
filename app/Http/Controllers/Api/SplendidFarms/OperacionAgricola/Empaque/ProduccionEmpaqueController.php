@@ -3,11 +3,13 @@
 namespace App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque;
 
 use App\Http\Controllers\Controller;
+use App\Models\ActivityLog;
 use App\Models\Entity;
 use App\Models\ProcesoEmpaque;
 use App\Models\ProduccionEmpaque;
 use App\Models\ProduccionEmpaqueDetalle;
 use App\Models\Recipe;
+use Carbon\Carbon;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -48,6 +50,16 @@ class ProduccionEmpaqueController extends Controller
     {
         $query = ProduccionEmpaque::with($this->eagerLoad);
 
+        $asOf = null;
+        if ($request->filled('as_of_date')) {
+            $asOf = Carbon::parse($request->input('as_of_date'), 'America/Mexico_City')->endOfDay();
+            $query->withTrashed()
+                ->where('created_at', '<=', $asOf)
+                ->where(function ($q) use ($asOf) {
+                    $q->whereNull('deleted_at')->orWhere('deleted_at', '>', $asOf);
+                });
+        }
+
         if ($request->filled('temporada_id')) {
             $query->byTemporada($request->temporada_id);
         }
@@ -68,6 +80,35 @@ class ProduccionEmpaqueController extends Controller
         }
 
         $producciones = $query->distinct()->orderByDesc('fecha_produccion')->orderByDesc('id')->get();
+
+        if ($asOf && $producciones->isNotEmpty()) {
+            $ids = $producciones->pluck('id')->filter()->values();
+            $logsByModel = ActivityLog::query()
+                ->where('model', 'ProduccionEmpaque')
+                ->whereIn('model_id', $ids)
+                ->where('created_at', '<=', $asOf)
+                ->orderBy('created_at')
+                ->orderBy('id')
+                ->get(['model_id', 'new_values'])
+                ->groupBy('model_id');
+
+            $producciones->each(function (ProduccionEmpaque $produccion) use ($logsByModel) {
+                $logs = $logsByModel->get($produccion->id, collect());
+                if ($logs->isEmpty()) {
+                    return;
+                }
+
+                $historicoEnCuartoFrio = false;
+                foreach ($logs as $log) {
+                    if (is_array($log->new_values) && array_key_exists('en_cuarto_frio', $log->new_values)) {
+                        $historicoEnCuartoFrio = filter_var($log->new_values['en_cuarto_frio'], FILTER_VALIDATE_BOOLEAN);
+                    }
+                }
+
+                $produccion->setAttribute('en_cuarto_frio', $historicoEnCuartoFrio);
+                $produccion->setAttribute('en_cuarto_frio_historico', $historicoEnCuartoFrio);
+            });
+        }
 
         $producciones->each(function (ProduccionEmpaque $produccion) {
             $this->syncAggregateFieldsFromDetalles($produccion);

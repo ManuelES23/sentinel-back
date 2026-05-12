@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque;
 
 use App\Http\Controllers\Controller;
+use App\Models\ActivityLog;
 use App\Models\EmbarqueEmpaqueDetalle;
 use App\Models\Entity;
 use App\Models\PreEmbarqueEmpaqueDetalle;
@@ -11,8 +12,8 @@ use App\Models\RecepcionEmpaque;
 use App\Models\RezagaEmpaque;
 use App\Models\SalidaRezagaEmpaqueDetalle;
 use App\Models\Submodule;
-use App\Models\TipoCarga;
 use App\Models\UserSubmodulePermission;
+use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -53,6 +54,16 @@ class ProcesoEmpaqueController extends Controller
     {
         $query = ProcesoEmpaque::with([...$this->eagerLoad, 'producciones', 'rezagas.ventaDetalles:id,rezaga_id,peso_kg']);
 
+        $asOf = null;
+        if ($request->filled('as_of_date')) {
+            $asOf = Carbon::parse($request->input('as_of_date'), 'America/Mexico_City')->endOfDay();
+            $query->withTrashed()
+                ->where('created_at', '<=', $asOf)
+                ->where(function ($q) use ($asOf) {
+                    $q->whereNull('deleted_at')->orWhere('deleted_at', '>', $asOf);
+                });
+        }
+
         if ($request->filled('temporada_id')) {
             $query->byTemporada($request->temporada_id);
         }
@@ -64,6 +75,47 @@ class ProcesoEmpaqueController extends Controller
         }
 
         $procesos = $query->orderByDesc('fecha_entrada')->orderByDesc('id')->get();
+
+        if ($asOf && $procesos->isNotEmpty()) {
+            $ids = $procesos->pluck('id')->filter()->values();
+            $logsByModel = ActivityLog::query()
+                ->where('model', 'ProcesoEmpaque')
+                ->whereIn('model_id', $ids)
+                ->where('created_at', '<=', $asOf)
+                ->orderBy('created_at')
+                ->orderBy('id')
+                ->get(['model_id', 'action', 'new_values'])
+                ->groupBy('model_id');
+
+            $snapshotFields = [
+                'status', 'cantidad_disponible', 'peso_disponible_kg', 'modo_kilos',
+                'fecha_entrada', 'fecha_proceso', 'fecha_lavado', 'fecha_hidrotermico',
+                'fecha_enfriamiento', 'fecha_listo_produccion',
+            ];
+
+            $procesos->each(function (ProcesoEmpaque $proceso) use ($logsByModel, $snapshotFields) {
+                $logs = $logsByModel->get($proceso->id, collect());
+                if ($logs->isEmpty()) {
+                    return;
+                }
+
+                $state = [];
+                foreach ($logs as $log) {
+                    if (!is_array($log->new_values)) {
+                        continue;
+                    }
+                    foreach ($snapshotFields as $field) {
+                        if (array_key_exists($field, $log->new_values)) {
+                            $state[$field] = $log->new_values[$field];
+                        }
+                    }
+                }
+
+                foreach ($state as $field => $value) {
+                    $proceso->setAttribute($field, $value);
+                }
+            });
+        }
 
         // Anotar cantidad_historica_kg en cada rezaga (= cantidad_kg + vendido en salidas)
         $procesos->each(function ($proceso) {
