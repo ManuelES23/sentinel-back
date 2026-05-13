@@ -16,7 +16,7 @@ class LavadoEmpaqueController extends Controller
 {
     private array $eagerLoad = [
         'entity:id,name,code,usa_hidrotermico',
-        'recepcion:id,folio_recepcion,fecha_recepcion,cantidad_recibida,peso_recibido_kg,peso_bascula,salida_campo_id,tipo_carga_id',
+        'recepcion:id,folio_recepcion,fecha_recepcion,cantidad_recibida,peso_recibido_kg,peso_bascula,salida_campo_id,tipo_carga_id,lote_producto_terminado',
         'recepcion.salidaCampo:id,variedad_id',
         'recepcion.salidaCampo.variedad:id,nombre',
         'recepcion.tipoCarga:id,nombre,peso_estimado_kg',

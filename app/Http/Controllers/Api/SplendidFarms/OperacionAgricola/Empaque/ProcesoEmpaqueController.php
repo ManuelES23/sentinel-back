@@ -22,7 +22,7 @@ class ProcesoEmpaqueController extends Controller
 {
     private array $eagerLoad = [
         'entity:id,name,code',
-        'recepcion:id,folio_recepcion,fecha_recepcion,cantidad_recibida,peso_recibido_kg,salida_campo_id,tipo_carga_id',
+        'recepcion:id,folio_recepcion,fecha_recepcion,cantidad_recibida,peso_recibido_kg,salida_campo_id,tipo_carga_id,lote_producto_terminado',
         'recepcion.salidaCampo:id,folio_salida,variedad_id',
         'recepcion.salidaCampo.variedad:id,nombre',
         'recepcion.tipoCarga:id,nombre,categoria_caja,peso_estimado_kg',
@@ -139,7 +139,7 @@ class ProcesoEmpaqueController extends Controller
             'lote.zonaCultivo:id,nombre',
             'etapa:id,nombre,variedad_id',
             'etapa.variedad:id,nombre',
-            'recepcion:id,salida_campo_id,tipo_carga_id',
+            'recepcion:id,salida_campo_id,tipo_carga_id,lote_producto_terminado',
             'recepcion.salidaCampo:id,variedad_id',
             'recepcion.salidaCampo.variedad:id,nombre',
             'recepcion.tipoCarga:id,nombre,categoria_caja,peso_estimado_kg',
