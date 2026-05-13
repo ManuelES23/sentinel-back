@@ -452,6 +452,216 @@ class ProduccionEmpaqueController extends Controller
     }
 
     /**
+     * Revertir parcialmente un pallet mixto: extrae una cola origen específica.
+     */
+    public function revertirMixteoCola(Request $request, ProduccionEmpaque $produccion): JsonResponse
+    {
+        $request->merge([
+            'source_cola_id' => $request->input('source_cola_id', $request->input('sourceColaId')),
+            'source_cola_numero_pallet' => $request->input('source_cola_numero_pallet', $request->input('sourceColaNumeroPallet')),
+            'source_proceso_id' => $request->input('source_proceso_id', $request->input('sourceProcesoId')),
+        ]);
+
+        $validated = $request->validate([
+            'source_cola_id' => 'nullable|integer|min:1|required_without_all:source_cola_numero_pallet,source_proceso_id',
+            'source_cola_numero_pallet' => 'nullable|string|max:100|required_without_all:source_cola_id,source_proceso_id',
+            'source_proceso_id' => 'nullable|integer|min:1|required_without_all:source_cola_id,source_cola_numero_pallet',
+        ]);
+
+        return DB::transaction(function () use ($produccion, $validated) {
+            $produccion->loadMissing('detalles');
+
+            if (! $produccion->is_mixto) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Este pallet no es mixto',
+                ], 422);
+            }
+
+            $sourceColaId = (int) ($validated['source_cola_id'] ?? 0);
+            $sourceColaNumero = $this->normalizePalletName($validated['source_cola_numero_pallet'] ?? null);
+            $sourceProcesoId = (int) ($validated['source_proceso_id'] ?? 0);
+
+            if ($sourceColaId <= 0 && $sourceColaNumero !== '') {
+                $colaByNumero = ProduccionEmpaque::withTrashed()
+                    ->where('entity_id', $produccion->entity_id)
+                    ->where('temporada_id', $produccion->temporada_id)
+                    ->where('numero_pallet', $sourceColaNumero)
+                    ->first();
+
+                if (! $colaByNumero) {
+                    $colaByNumero = ProduccionEmpaque::withTrashed()
+                        ->where('entity_id', $produccion->entity_id)
+                        ->where('temporada_id', $produccion->temporada_id)
+                        ->get()
+                        ->first(fn (ProduccionEmpaque $cola) => $this->normalizePalletName($cola->numero_pallet) === $sourceColaNumero);
+                }
+
+                if ($colaByNumero) {
+                    $sourceColaId = (int) $colaByNumero->id;
+                }
+            }
+
+            if ($sourceColaId <= 0 && $sourceProcesoId > 0) {
+                $colaByProceso = ProduccionEmpaque::withTrashed()
+                    ->where('entity_id', $produccion->entity_id)
+                    ->where('temporada_id', $produccion->temporada_id)
+                    ->where('is_cola', true)
+                    ->where('proceso_id', $sourceProcesoId)
+                    ->latest('id')
+                    ->first();
+
+                if ($colaByProceso) {
+                    $sourceColaId = (int) $colaByProceso->id;
+                }
+            }
+
+            if ($sourceColaId <= 0) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'No fue posible identificar la cola origen seleccionada',
+                ], 422);
+            }
+
+            $detallesParaEstaCola = $produccion->detalles
+                ->filter(fn ($d) => $this->extractMixSourceColaId($d->observaciones) === $sourceColaId)
+                ->values();
+
+            $cola = ProduccionEmpaque::withTrashed()->find($sourceColaId);
+            if (! $cola) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => "No se encontró la cola origen #{$sourceColaId}",
+                ], 422);
+            }
+
+            if ($detallesParaEstaCola->isEmpty()) {
+                $detallesParaEstaCola = $produccion->detalles
+                    ->filter(fn ($d) => (int) ($d->proceso_id ?? 0) > 0 && (int) ($d->proceso_id ?? 0) === (int) ($cola->proceso_id ?? 0))
+                    ->values();
+            }
+
+            if ($detallesParaEstaCola->isEmpty() && $sourceProcesoId > 0) {
+                $detallesParaEstaCola = $produccion->detalles
+                    ->filter(fn ($d) => (int) ($d->proceso_id ?? 0) === $sourceProcesoId)
+                    ->values();
+            }
+
+            if ($detallesParaEstaCola->isEmpty()) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'La cola seleccionada no forma parte de este pallet mixto',
+                ], 422);
+            }
+
+            if ($cola->trashed()) {
+                $cola->restore();
+                $cola->refresh();
+            }
+
+            $createdBy = (int) (auth()->id() ?: $produccion->created_by);
+            $nextEntrada = (int) ($cola->detalles()->max('numero_entrada') ?? 0) + 1;
+
+            foreach ($detallesParaEstaCola as $detalle) {
+                $cola->detalles()->create([
+                    'numero_entrada' => $nextEntrada++,
+                    'proceso_id' => $detalle->proceso_id,
+                    'recipe_id' => $detalle->recipe_id,
+                    'tipo_empaque' => $detalle->tipo_empaque,
+                    'marca' => $detalle->marca,
+                    'presentacion' => $detalle->presentacion,
+                    'etiqueta' => $detalle->etiqueta,
+                    'calibre' => $detalle->calibre,
+                    'categoria' => $detalle->categoria,
+                    'fecha_produccion' => $detalle->fecha_produccion,
+                    'total_cajas' => (int) ($detalle->total_cajas ?? 0),
+                    'peso_neto_kg' => (float) ($detalle->peso_neto_kg ?? 0),
+                    'turno' => $detalle->turno,
+                    'observaciones' => $this->stripMixSourceTag($detalle->observaciones),
+                    'created_by' => $createdBy,
+                ]);
+            }
+
+            $cola->update([
+                'total_cajas' => (int) $cola->detalles()->sum('total_cajas'),
+                'peso_neto_kg' => round((float) $cola->detalles()->sum('peso_neto_kg'), 2),
+                'is_cola' => true,
+                'is_mixto' => false,
+            ]);
+
+            ProduccionEmpaqueDetalle::whereIn('id', $detallesParaEstaCola->pluck('id')->all())->delete();
+
+            $produccion->refresh()->load('detalles');
+
+            if ($produccion->detalles->isEmpty()) {
+                $mixtoEliminado = $produccion->numero_pallet;
+                $produccion->delete();
+
+                return response()->json([
+                    'success' => true,
+                    'message' => "Se extrajo la cola {$cola->numero_pallet} y el pallet mixto '{$mixtoEliminado}' quedó vacío, por lo que se eliminó",
+                    'data' => [
+                        'pallet_mixto_eliminado' => $mixtoEliminado,
+                        'cola_restaurada' => [
+                            'id' => $cola->id,
+                            'numero_pallet' => $cola->numero_pallet,
+                            'total_cajas' => $cola->total_cajas,
+                            'peso_neto_kg' => $cola->peso_neto_kg,
+                        ],
+                    ],
+                ]);
+            }
+
+            $aggregateFields = $this->buildAggregateFieldsFromDetalles($produccion);
+            $recipeIds = $produccion->detalles->pluck('recipe_id')->unique()->filter()->values();
+            $calibres = $produccion->detalles->pluck('calibre')->unique()->filter()->values();
+            $tiposEmpaque = $produccion->detalles->pluck('tipo_empaque')->unique()->filter()->values();
+
+            $isMixto = $recipeIds->count() > 1
+                || $calibres->count() > 1
+                || $tiposEmpaque->count() > 1;
+
+            $sourceColas = collect($this->extractSourceColasFromMixture($produccion->observaciones))
+                ->filter(fn ($source) => (int) ($source['id'] ?? 0) !== $sourceColaId)
+                ->values()
+                ->all();
+
+            $remainingDetalles = $produccion->detalles
+                ->map(fn ($d) => [
+                    'calibre' => $d->calibre,
+                    'total_cajas' => (int) ($d->total_cajas ?? 0),
+                ])
+                ->all();
+
+            $produccion->update([
+                'total_cajas' => $aggregateFields['total_cajas'],
+                'peso_neto_kg' => $aggregateFields['peso_neto_kg'],
+                'is_mixto' => $isMixto,
+                'observaciones' => $this->buildMixtureStructure(
+                    $sourceColas,
+                    $this->buildCalibreBreakdownFromDetalles($remainingDetalles),
+                ),
+            ]);
+
+            $produccion->load($this->eagerLoad);
+
+            return response()->json([
+                'success' => true,
+                'message' => "Se extrajo la cola {$cola->numero_pallet} del pallet mixto",
+                'data' => [
+                    'produccion' => $produccion,
+                    'cola_restaurada' => [
+                        'id' => $cola->id,
+                        'numero_pallet' => $cola->numero_pallet,
+                        'total_cajas' => $cola->total_cajas,
+                        'peso_neto_kg' => $cola->peso_neto_kg,
+                    ],
+                ],
+            ]);
+        });
+    }
+
+    /**
      * Revertir mixteo usando la estructura JSON guardada
      */
     private function revertirMixteoDesdeJSON(ProduccionEmpaque $produccion, array $sourceColasFromJSON): JsonResponse
@@ -1662,4 +1872,93 @@ class ProduccionEmpaqueController extends Controller
             ->values()
             ->all();
     }
+
+    /**
+     * Actualizar un detalle específico de una producción (entrada).
+     */
+    public function updateDetalle(Request $request, ProduccionEmpaque $produccion, ProduccionEmpaqueDetalle $detalle): JsonResponse
+    {
+        // Verificar que el detalle pertenece a esta producción
+        if ((int) $detalle->produccion_id !== (int) $produccion->id) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'El detalle no pertenece a esta producción',
+            ], 404);
+        }
+
+        $validated = $request->validate([
+            'fecha_produccion' => 'sometimes|date',
+            'total_cajas' => 'sometimes|integer|min:1',
+            'peso_neto_kg' => 'nullable|numeric|min:0',
+            'turno' => 'nullable|string|max:50',
+            'calibre' => 'nullable|string|max:50',
+            'observaciones' => 'nullable|string',
+        ]);
+
+        $detalle->update($validated);
+
+        // Recalcular totales del pallet padre si es necesario
+        $produccion->loadMissing('detalles');
+        $totalCajasDetalles = $produccion->detalles->sum('total_cajas');
+        $totalPesoDetalles = $produccion->detalles->sum('peso_neto_kg');
+
+        // Si el pallet tiene detalles, actualizar sus totales también
+        if ($produccion->detalles->isNotEmpty()) {
+            $produccion->update([
+                'total_cajas' => $totalCajasDetalles,
+                'peso_neto_kg' => $totalPesoDetalles,
+            ]);
+        }
+
+        $produccion->load($this->eagerLoad);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Detalle actualizado',
+            'data' => $produccion,
+        ]);
+    }
+
+    /**
+     * Eliminar un detalle específico de una producción sin eliminar el pallet completo.
+     */
+    public function destroyDetalle(ProduccionEmpaque $produccion, ProduccionEmpaqueDetalle $detalle): JsonResponse
+    {
+        if ((int) $detalle->produccion_id !== (int) $produccion->id) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'El detalle no pertenece a esta producción',
+            ], 404);
+        }
+
+        return DB::transaction(function () use ($produccion, $detalle) {
+            $produccion->loadMissing('detalles');
+
+            $sumDetallesCajas = (int) $produccion->detalles->sum('total_cajas');
+            $sumDetallesPeso = (float) $produccion->detalles->sum('peso_neto_kg');
+
+            // El registro base del pallet es lo que no está representado en detalles.
+            $baseCajas = max(((int) $produccion->total_cajas) - $sumDetallesCajas, 0);
+            $basePeso = max(((float) $produccion->peso_neto_kg) - $sumDetallesPeso, 0);
+
+            $detalle->delete();
+
+            $remainingCajas = (int) $produccion->detalles()->sum('total_cajas');
+            $remainingPeso = (float) $produccion->detalles()->sum('peso_neto_kg');
+
+            $produccion->update([
+                'total_cajas' => $baseCajas + $remainingCajas,
+                'peso_neto_kg' => round($basePeso + $remainingPeso, 2),
+            ]);
+
+            $produccion->load($this->eagerLoad);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Registro de cola eliminado',
+                'data' => $produccion,
+            ]);
+        });
+    }
 }
+
