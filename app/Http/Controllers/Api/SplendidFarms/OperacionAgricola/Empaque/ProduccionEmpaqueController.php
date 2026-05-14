@@ -52,7 +52,10 @@ class ProduccionEmpaqueController extends Controller
 
         $asOf = null;
         if ($request->filled('as_of_date')) {
-            $asOf = Carbon::parse($request->input('as_of_date'), 'America/Mexico_City')->endOfDay();
+            // created_at/deleted_at se almacenan en UTC; convertir el corte local a UTC evita excluir registros válidos del mismo día.
+            $asOf = Carbon::parse($request->input('as_of_date'), 'America/Mexico_City')
+                ->endOfDay()
+                ->utc();
             $query->withTrashed()
                 ->where('created_at', '<=', $asOf)
                 ->where(function ($q) use ($asOf) {
@@ -98,11 +101,18 @@ class ProduccionEmpaqueController extends Controller
                     return;
                 }
 
-                $historicoEnCuartoFrio = false;
+                // Conservar estado real por defecto; solo cambiar si hay un log explícito del campo.
+                $historicoEnCuartoFrio = (bool) $produccion->en_cuarto_frio;
+                $encontroCambioCuartoFrio = false;
                 foreach ($logs as $log) {
                     if (is_array($log->new_values) && array_key_exists('en_cuarto_frio', $log->new_values)) {
                         $historicoEnCuartoFrio = filter_var($log->new_values['en_cuarto_frio'], FILTER_VALIDATE_BOOLEAN);
+                        $encontroCambioCuartoFrio = true;
                     }
+                }
+
+                if (! $encontroCambioCuartoFrio) {
+                    return;
                 }
 
                 $produccion->setAttribute('en_cuarto_frio', $historicoEnCuartoFrio);
