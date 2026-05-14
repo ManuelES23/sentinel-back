@@ -277,6 +277,17 @@ class LavadoEmpaqueController extends Controller
             return $gate;
         }
 
+        // Auto-consolida duplicados de "lavado" para evitar filas repetidas del mismo folio.
+        $this->consolidarDuplicadosLavado(
+            $request->input('temporada_id'),
+            $request->input('entity_id')
+        );
+        // Auto-consolida duplicados de "enfriando" para evitar filas repetidas del mismo folio.
+        $this->consolidarDuplicadosEnfriando(
+            $request->input('temporada_id'),
+            $request->input('entity_id')
+        );
+
         $query = ProcesoEmpaque::with($this->eagerLoad)
             ->whereIn('status', ['lavando', 'lavado', 'hidrotermico', 'enfriando', 'listo_produccion']);
 
@@ -441,30 +452,62 @@ class LavadoEmpaqueController extends Controller
             ], 422);
         }
 
+
         $modoKilos = (bool) $proceso->modo_kilos;
 
-        // ── Flujo modo_kilos: permite lote parcial ───────────────────────────
         if ($modoKilos) {
             $request->validate([
-                'kg_hidrotermico' => 'required|numeric|min:0.01',
+                'kg_hidrotermico' => 'nullable|numeric|min:0.01',
+                'cajas_hidrotermico' => 'nullable|integer|min:1',
             ]);
 
-            $kgSolicitado   = round((float) $request->input('kg_hidrotermico'), 2);
             $kgDisponible   = round((float) $proceso->peso_disponible_kg, 2);
+            $cajasDisponibles = (int) $proceso->cantidad_disponible;
 
+            // Obtener promedio real del lote
+            $recepcion = $proceso->recepcion;
+            $pesoBascula = (float) ($recepcion->peso_bascula ?? 0);
+            $cantidadRecibida = (int) ($recepcion->cantidad_recibida ?? 0);
+            $pesoUnitarioReal = ($pesoBascula > 0 && $cantidadRecibida > 0)
+                ? round($pesoBascula / $cantidadRecibida, 4)
+                : 0;
+
+            $cajasSolicitadas = $request->filled('cajas_hidrotermico')
+                ? (int) $request->integer('cajas_hidrotermico')
+                : null;
+            $kgSolicitado = $request->filled('kg_hidrotermico')
+                ? round((float) $request->input('kg_hidrotermico'), 2)
+                : null;
+
+            // Si solo se envía cajas, calcular kg usando promedio real
+            if ($cajasSolicitadas !== null && $kgSolicitado === null && $pesoUnitarioReal > 0) {
+                $kgSolicitado = round($cajasSolicitadas * $pesoUnitarioReal, 2);
+            }
+            // Si solo se envía kg, calcular cajas usando promedio real
+            if ($kgSolicitado !== null && $cajasSolicitadas === null && $pesoUnitarioReal > 0) {
+                $cajasSolicitadas = max(1, (int) round($kgSolicitado / $pesoUnitarioReal));
+            }
+            // Si ambos vienen, usar ambos tal cual
+
+            // Validaciones
+            if ($kgSolicitado === null || $kgSolicitado <= 0) {
+                return response()->json([
+                    'status'  => 'error',
+                    'message' => 'Debes capturar cajas o kilos a mover a hidrotérmico',
+                ], 422);
+            }
             if ($kgSolicitado > $kgDisponible) {
                 return response()->json([
                     'status'  => 'error',
                     'message' => "Kilos solicitados ($kgSolicitado) exceden los disponibles ($kgDisponible)",
                 ], 422);
             }
-
-            // Obtener peso unitario del tipo de carga para calcular cajas equivalentes
-            $tipoCarga    = TipoCarga::find($proceso->tipo_carga_id);
-            $pesoUnitario = $tipoCarga ? (float) $tipoCarga->peso_estimado_kg : 0;
-            $cajasLote    = $pesoUnitario > 0
-                ? (int) max(1, round($kgSolicitado / $pesoUnitario))
-                : (int) $proceso->cantidad_disponible;
+            if ($cajasSolicitadas !== null && $cajasSolicitadas > $cajasDisponibles) {
+                return response()->json([
+                    'status'  => 'error',
+                    'message' => "Cajas solicitadas ($cajasSolicitadas) exceden las disponibles ($cajasDisponibles)",
+                ], 422);
+            }
 
             $fechaHoy = now('America/Mexico_City')->toDateString();
 
@@ -473,14 +516,15 @@ class LavadoEmpaqueController extends Controller
                 $proceso->update([
                     'status'              => 'hidrotermico',
                     'fecha_hidrotermico'  => $fechaHoy,
-                    'cantidad_disponible' => $cajasLote,
+                    'cantidad_disponible' => $cajasSolicitadas,
+                    'peso_disponible_kg'  => $kgSolicitado,
                 ]);
 
                 $proceso->load($this->eagerLoad);
 
                 return response()->json([
                     'success' => true,
-                    'message' => "Tratamiento hidrotérmico iniciado ({$kgSolicitado} kg → {$cajasLote} cajas)",
+                    'message' => "Tratamiento hidrotérmico iniciado ({$kgSolicitado} kg → {$cajasSolicitadas} cajas)",
                     'data'    => $proceso,
                 ]);
             }
@@ -488,8 +532,8 @@ class LavadoEmpaqueController extends Controller
             // Lote PARCIAL: clonar a nuevo registro hijo, reducir padre
             $kgRestante = round($kgDisponible - $kgSolicitado, 2);
 
-            DB::transaction(function () use ($proceso, $kgSolicitado, $cajasLote, $kgRestante, $fechaHoy, $request) {
-                $cajasRestante = (int) $proceso->cantidad_disponible - $cajasLote;
+            DB::transaction(function () use ($proceso, $kgSolicitado, $cajasSolicitadas, $kgRestante, $fechaHoy, $request) {
+                $cajasRestante = (int) $proceso->cantidad_disponible - $cajasSolicitadas;
                 if ($cajasRestante < 0) {
                     $cajasRestante = 0;
                 }
@@ -504,9 +548,9 @@ class LavadoEmpaqueController extends Controller
                     'productor_id'         => $proceso->productor_id,
                     'lote_id'              => $proceso->lote_id,
                     'etapa_id'             => $proceso->etapa_id,
-                    'cantidad_entrada'     => $cajasLote,
+                    'cantidad_entrada'     => $cajasSolicitadas,
                     'peso_entrada_kg'      => $kgSolicitado,
-                    'cantidad_disponible'  => $cajasLote,
+                    'cantidad_disponible'  => $cajasSolicitadas,
                     'peso_disponible_kg'   => $kgSolicitado,
                     'modo_kilos'           => true,
                     'fecha_entrada'        => $proceso->fecha_entrada,
@@ -527,7 +571,7 @@ class LavadoEmpaqueController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => "Lote parcial enviado a hidrotérmico: {$kgSolicitado} kg ({$cajasLote} cajas). Pendiente: {$kgRestante} kg",
+                'message' => "Lote parcial enviado a hidrotérmico: {$kgSolicitado} kg ({$cajasSolicitadas} cajas). Pendiente: {$kgRestante} kg",
                 'data'    => $proceso,
             ]);
         }
@@ -565,19 +609,18 @@ class LavadoEmpaqueController extends Controller
             ], 422);
         }
 
-        // Validate optional rezaga
-        $request->validate([
-            'rezaga_kg' => 'nullable|numeric|min:0.01',
-            'rezaga_unidades' => 'nullable|integer|min:0',
-            'rezaga_unidades_pequenas' => 'nullable|integer|min:0',
-            'subtipo_rezaga' => 'required_with:rezaga_kg|in:hoja,producto',
-            'rezaga_motivo' => 'nullable|string|max:500',
-            'rezaga_observaciones' => 'nullable|string|max:1000',
-        ]);
-
-        // Register rezaga if provided
-        if ($request->filled('rezaga_kg')) {
-            $this->crearRezagaInterna($proceso, 'hidrotermico', $request);
+        if (
+            $request->filled('rezaga_kg') ||
+            $request->filled('rezaga_unidades') ||
+            $request->filled('rezaga_unidades_pequenas') ||
+            $request->filled('subtipo_rezaga') ||
+            $request->filled('rezaga_motivo') ||
+            $request->filled('rezaga_observaciones')
+        ) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'El paso de hidrotérmico no permite captura de rezaga',
+            ], 422);
         }
 
         $proceso->update([
@@ -637,10 +680,10 @@ class LavadoEmpaqueController extends Controller
             return $gate;
         }
 
-        if (!in_array($proceso->status, ['lavando', 'hidrotermico'])) {
+        if ($proceso->status !== 'lavando') {
             return response()->json([
                 'status' => 'error',
-                'message' => 'Solo se puede registrar rezaga en etapas de lavado o hidrotérmico',
+                'message' => 'Solo se puede registrar rezaga en la etapa de lavado',
             ], 422);
         }
 
@@ -653,7 +696,7 @@ class LavadoEmpaqueController extends Controller
             'observaciones' => 'nullable|string|max:1000',
         ]);
 
-        $tipoRezaga = $proceso->status === 'lavando' ? 'lavado' : 'hidrotermico';
+        $tipoRezaga = 'lavado';
 
         // Generate folio
         $folioRezaga = $this->generarFolioRezaga($proceso->temporada_id, $proceso->entity_id);
@@ -718,6 +761,80 @@ class LavadoEmpaqueController extends Controller
         return response()->json([
             'success' => true,
             'message' => "Folio $folio devuelto a piso",
+        ]);
+    }
+
+    /**
+     * POST /lavado/{proceso}/devolver-lavado
+     *
+     * Devuelve un folio de hidrotérmico a lavado (esperando hidrotérmico).
+     */
+    public function devolverALavado(ProcesoEmpaque $proceso): JsonResponse
+    {
+        $gate = $this->ensureLavadoEnabledForEntity($proceso->entity_id);
+        if ($gate) {
+            return $gate;
+        }
+
+        if ($proceso->status !== 'hidrotermico') {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Solo se pueden devolver folios en estado "hidrotérmico"',
+            ], 422);
+        }
+
+        $target = ProcesoEmpaque::query()
+            ->where('id', '!=', $proceso->id)
+            ->where('temporada_id', $proceso->temporada_id)
+            ->where('entity_id', $proceso->entity_id)
+            ->where('folio_proceso', $proceso->folio_proceso)
+            ->where('status', 'lavado')
+            ->orderBy('id')
+            ->first();
+
+        if (!$target) {
+            $proceso->update([
+                'status' => 'lavado',
+                'fecha_hidrotermico' => null,
+            ]);
+
+            $proceso->load($this->eagerLoad);
+
+            return response()->json([
+                'success' => true,
+                'message' => "Folio {$proceso->folio_proceso} devuelto a lavado (esperando hidrotérmico)",
+                'data' => $proceso,
+            ]);
+        }
+
+        DB::transaction(function () use (&$target, $proceso) {
+            $target->update([
+                'cantidad_entrada' => (int) $target->cantidad_entrada + (int) $proceso->cantidad_entrada,
+                'peso_entrada_kg' => (float) $target->peso_entrada_kg + (float) $proceso->peso_entrada_kg,
+                'cantidad_disponible' => (int) $target->cantidad_disponible + (int) $proceso->cantidad_disponible,
+                'peso_disponible_kg' => (float) $target->peso_disponible_kg + (float) $proceso->peso_disponible_kg,
+                'rezaga_lavado_kg' => (float) $target->rezaga_lavado_kg + (float) $proceso->rezaga_lavado_kg,
+                'rezaga_lavado_cantidad' => (int) $target->rezaga_lavado_cantidad + (int) $proceso->rezaga_lavado_cantidad,
+                'rezaga_hidrotermico_kg' => (float) $target->rezaga_hidrotermico_kg + (float) $proceso->rezaga_hidrotermico_kg,
+                'rezaga_hidrotermico_cantidad' => (int) $target->rezaga_hidrotermico_cantidad + (int) $proceso->rezaga_hidrotermico_cantidad,
+                'fecha_hidrotermico' => null,
+            ]);
+
+            RezagaEmpaque::where('proceso_id', $proceso->id)
+                ->update(['proceso_id' => $target->id]);
+
+            // Se oculta el registro devuelto para evitar duplicados en pipeline.
+            $proceso->delete();
+
+            $target->refresh();
+        });
+
+        $target->load($this->eagerLoad);
+
+        return response()->json([
+            'success' => true,
+            'message' => "Folio {$target->folio_proceso} consolidado en lavado (esperando hidrotérmico)",
+            'data' => $target,
         ]);
     }
 
@@ -799,6 +916,79 @@ class LavadoEmpaqueController extends Controller
         });
 
         return $target;
+    }
+
+    /**
+     * Consolida registros duplicados en estado "lavado" por folio para
+     * temporada+entidad. Mantiene un registro y fusiona cantidades/pesos.
+     */
+    private function consolidarDuplicadosLavado($temporadaId = null, $entityId = null): void
+    {
+        $this->consolidarDuplicadosPorStatus('lavado', $temporadaId, $entityId);
+    }
+
+    /**
+     * Consolida registros duplicados en estado "enfriando" por folio para
+     * temporada+entidad. Mantiene un registro y fusiona cantidades/pesos.
+     */
+    private function consolidarDuplicadosEnfriando($temporadaId = null, $entityId = null): void
+    {
+        $this->consolidarDuplicadosPorStatus('enfriando', $temporadaId, $entityId);
+    }
+
+    /**
+     * Consolida registros duplicados por status y folio para temporada+entidad.
+     */
+    private function consolidarDuplicadosPorStatus(string $status, $temporadaId = null, $entityId = null): void
+    {
+        $duplicados = ProcesoEmpaque::query()
+            ->where('status', $status)
+            ->when($temporadaId, fn ($q) => $q->where('temporada_id', $temporadaId))
+            ->when($entityId, fn ($q) => $q->where('entity_id', $entityId))
+            ->select('temporada_id', 'entity_id', 'folio_proceso', DB::raw('COUNT(*) as total'))
+            ->groupBy('temporada_id', 'entity_id', 'folio_proceso')
+            ->having('total', '>', 1)
+            ->get();
+
+        foreach ($duplicados as $dup) {
+            $registros = ProcesoEmpaque::query()
+                ->where('status', $status)
+                ->where('temporada_id', $dup->temporada_id)
+                ->where('entity_id', $dup->entity_id)
+                ->where('folio_proceso', $dup->folio_proceso)
+                ->orderBy('id')
+                ->get();
+
+            if ($registros->count() <= 1) {
+                continue;
+            }
+
+            /** @var ProcesoEmpaque $target */
+            $target = $registros->first();
+            $others = $registros->slice(1);
+
+            DB::transaction(function () use ($registros, $target, $others) {
+                $target->update([
+                    'cantidad_entrada' => (int) $registros->sum('cantidad_entrada'),
+                    'peso_entrada_kg' => (float) $registros->sum('peso_entrada_kg'),
+                    'cantidad_disponible' => (int) $registros->sum('cantidad_disponible'),
+                    'peso_disponible_kg' => (float) $registros->sum('peso_disponible_kg'),
+                    'rezaga_lavado_kg' => (float) $registros->sum('rezaga_lavado_kg'),
+                    'rezaga_lavado_cantidad' => (int) $registros->sum('rezaga_lavado_cantidad'),
+                    'rezaga_hidrotermico_kg' => (float) $registros->sum('rezaga_hidrotermico_kg'),
+                    'rezaga_hidrotermico_cantidad' => (int) $registros->sum('rezaga_hidrotermico_cantidad'),
+                    'fecha_hidrotermico' => null,
+                ]);
+
+                $otherIds = $others->pluck('id')->values();
+                if ($otherIds->isNotEmpty()) {
+                    RezagaEmpaque::whereIn('proceso_id', $otherIds)
+                        ->update(['proceso_id' => $target->id]);
+
+                    ProcesoEmpaque::whereIn('id', $otherIds)->delete();
+                }
+            });
+        }
     }
 
     private function generarFolioRezaga(int $temporadaId, int $entityId): string

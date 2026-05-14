@@ -583,6 +583,7 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::post('lavado/{proceso}/completar-hidrotermico', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'completarHidrotermico']);
                 Route::post('lavado/{proceso}/completar-enfriamiento', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'completarEnfriamiento']);
                 Route::post('lavado/{proceso}/rezaga', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'registrarRezaga']);
+                Route::post('lavado/{proceso}/devolver-lavado', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'devolverALavado']);
                 Route::post('lavado/{proceso}/devolver-piso', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'devolverAPiso']);
 
                 // Producción (cajas / pallets)
