@@ -120,6 +120,21 @@ class RecipeController extends Controller
             'calibres.*.plus.*.notes' => 'nullable|string|max:500',
         ]);
 
+        if (empty($validated['code'])) {
+            $prefix = 'RCP';
+
+            $lastRecipe = Recipe::withTrashed()
+                ->where('code', 'like', $prefix . '-%')
+                ->orderByRaw('CAST(SUBSTRING(code, ' . (strlen($prefix) + 2) . ') AS UNSIGNED) DESC')
+                ->first();
+
+            $nextNumber = $lastRecipe
+                ? (int) substr($lastRecipe->code, strlen($prefix) + 1) + 1
+                : 1;
+
+            $validated['code'] = $prefix . '-' . str_pad($nextNumber, 5, '0', STR_PAD_LEFT);
+        }
+
         $recipe = Recipe::create($validated);
         $this->ensureCajaGroup($recipe);
 
@@ -590,15 +605,14 @@ class RecipeController extends Controller
      */
     private function ensureCajaGroup(Recipe $recipe): void
     {
-        if ($recipe->recipe_type === 'empaque' && $recipe->category->name === 'Pallet') {
-            $existingGroup = $recipe->items()->where('group_name', 'Caja')->exists();
-            if (! $existingGroup) {
-                $recipe->items()->create([
-                    'group_name' => 'Caja',
-                    'quantity' => 1,
-                    'unit_id' => UnitOfMeasure::where('name', 'Caja')->value('id'),
-                ]);
-            }
+        if (! $this->isEmpaquePalletRecipe([], $recipe)) {
+            return;
         }
+
+        // Normaliza variaciones de casing del grupo caja.
+        $recipe->items()
+            ->whereRaw('LOWER(group_key) = ?', ['caja'])
+            ->where('group_key', '!=', 'Caja')
+            ->update(['group_key' => 'Caja']);
     }
 }
