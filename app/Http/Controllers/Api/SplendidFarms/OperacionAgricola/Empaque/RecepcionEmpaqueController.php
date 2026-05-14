@@ -24,6 +24,7 @@ class RecepcionEmpaqueController extends Controller
         'lote.zonaCultivo:id,nombre',
         'etapa:id,nombre,orden,variedad_id',
         'etapa.variedad:id,nombre',
+        'variedad:id,nombre',
         'tipoCarga:id,nombre,categoria_caja,peso_estimado_kg',
         'recibidoPor:id,name',
         'creador:id,name',
@@ -72,6 +73,7 @@ class RecepcionEmpaqueController extends Controller
             'productor_id' => 'nullable|exists:productores,id',
             'lote_id' => 'nullable|exists:lotes,id',
             'etapa_id' => 'nullable|exists:etapas,id',
+            'variedad_id' => 'nullable|required_without:etapa_id|exists:variedades,id',
             'zona_cultivo_id' => 'nullable|exists:zonas_cultivo,id',
             'tipo_carga_id' => 'nullable|exists:tipos_carga,id',
             'cantidad_recibida' => 'nullable|integer|min:1',
@@ -123,13 +125,27 @@ class RecepcionEmpaqueController extends Controller
             }
         } else {
             // Manual entry: validate required fields
-            $missing = collect(['entity_id', 'productor_id', 'lote_id', 'etapa_id', 'tipo_carga_id', 'cantidad_recibida'])
+            $missingBase = collect(['entity_id', 'productor_id', 'lote_id', 'tipo_carga_id', 'cantidad_recibida'])
                 ->filter(fn($f) => empty($validated[$f]));
+            $missingVariedad = empty($validated['etapa_id']) && empty($validated['variedad_id']);
+
+            $missing = $missingBase;
+            if ($missingVariedad) {
+                $missing = $missing->push('variedad_id');
+            }
             if ($missing->isNotEmpty()) {
                 return response()->json([
                     'status' => 'error',
-                    'message' => 'Para entradas manuales se requieren: planta, productor, lote, etapa, tipo de carga y cantidad',
+                    'message' => 'Para entradas manuales se requieren: planta, productor, lote, variedad o etapa, tipo de carga y cantidad',
                 ], 422);
+            }
+        }
+
+        // Si tiene etapa, obtener variedad de la etapa automaticamente
+        if (!empty($validated['etapa_id'])) {
+            $etapa = Etapa::find($validated['etapa_id']);
+            if ($etapa) {
+                $validated['variedad_id'] = $etapa->variedad_id;
             }
         }
 
@@ -214,6 +230,7 @@ class RecepcionEmpaqueController extends Controller
             'productor_id' => 'sometimes|exists:productores,id',
             'lote_id' => 'sometimes|exists:lotes,id',
             'etapa_id' => 'nullable|exists:etapas,id',
+            'variedad_id' => 'nullable|exists:variedades,id',
             'zona_cultivo_id' => 'nullable|exists:zonas_cultivo,id',
             'tipo_carga_id' => 'sometimes|exists:tipos_carga,id',
             'cantidad_recibida' => 'sometimes|integer|min:1',
@@ -229,6 +246,14 @@ class RecepcionEmpaqueController extends Controller
             'status' => 'nullable|in:pendiente,recibida,en_proceso,rechazada',
             'observaciones' => 'nullable|string',
         ]);
+
+        // Si tiene etapa, obtener variedad de la etapa automaticamente
+        if (array_key_exists('etapa_id', $validated) && !empty($validated['etapa_id'])) {
+            $etapa = Etapa::find($validated['etapa_id']);
+            if ($etapa) {
+                $validated['variedad_id'] = $etapa->variedad_id;
+            }
+        }
 
         // Auto-fill zona_cultivo from lote if lote changed
         if (!empty($validated['lote_id']) && empty($validated['zona_cultivo_id'])) {

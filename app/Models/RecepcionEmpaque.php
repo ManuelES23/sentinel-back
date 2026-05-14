@@ -16,7 +16,7 @@ class RecepcionEmpaque extends Model
     protected $fillable = [
         'temporada_id', 'entity_id', 'salida_campo_id', 'folio_recepcion',
         'fecha_recepcion', 'hora_recepcion', 'productor_id', 'lote_id',
-        'etapa_id', 'zona_cultivo_id', 'tipo_carga_id', 'cantidad_recibida',
+        'etapa_id', 'variedad_id', 'zona_cultivo_id', 'tipo_carga_id', 'cantidad_recibida',
         'peso_recibido_kg', 'peso_bascula', 'folio_ticket_bascula', 'clave_we', 'lote_origen',
         'lote_producto_terminado',
         'temperatura', 'transportista', 'vehiculo',
@@ -38,6 +38,7 @@ class RecepcionEmpaque extends Model
     public function productor() { return $this->belongsTo(Productor::class); }
     public function lote() { return $this->belongsTo(Lote::class); }
     public function etapa() { return $this->belongsTo(Etapa::class); }
+    public function variedad() { return $this->belongsTo(Variedad::class); }
     public function zonaCultivo() { return $this->belongsTo(ZonaCultivo::class); }
     public function tipoCarga() { return $this->belongsTo(TipoCarga::class); }
     public function recibidoPor() { return $this->belongsTo(User::class, 'recibido_por'); }

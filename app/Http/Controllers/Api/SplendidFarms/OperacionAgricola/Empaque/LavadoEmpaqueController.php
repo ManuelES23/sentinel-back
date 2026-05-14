@@ -16,7 +16,8 @@ class LavadoEmpaqueController extends Controller
 {
     private array $eagerLoad = [
         'entity:id,name,code,usa_hidrotermico',
-        'recepcion:id,folio_recepcion,fecha_recepcion,cantidad_recibida,peso_recibido_kg,peso_bascula,salida_campo_id,tipo_carga_id,lote_producto_terminado',
+        'recepcion:id,folio_recepcion,fecha_recepcion,cantidad_recibida,peso_recibido_kg,peso_bascula,salida_campo_id,variedad_id,tipo_carga_id,lote_producto_terminado',
+        'recepcion.variedad:id,nombre',
         'recepcion.salidaCampo:id,variedad_id',
         'recepcion.salidaCampo.variedad:id,nombre',
         'recepcion.tipoCarga:id,nombre,peso_estimado_kg',
@@ -31,6 +32,7 @@ class LavadoEmpaqueController extends Controller
 
     private array $recepcionEagerLoad = [
         'entity:id,name,code,usa_hidrotermico',
+        'variedad:id,nombre',
         'salidaCampo:id,variedad_id',
         'salidaCampo.variedad:id,nombre',
         'productor:id,nombre,apellido',
@@ -99,7 +101,7 @@ class LavadoEmpaqueController extends Controller
 
             if ($aparecePendiente) {
                 $pesoUnitario = $rec->tipoCarga ? (float) $rec->tipoCarga->peso_estimado_kg : 0;
-                $variedad = $rec->etapa?->variedad ?? $rec->salidaCampo?->variedad;
+                $variedad = $rec->etapa?->variedad ?? $rec->variedad ?? $rec->salidaCampo?->variedad;
 
                 $pendientes[] = [
                     'recepcion_id' => $rec->id,
@@ -113,6 +115,7 @@ class LavadoEmpaqueController extends Controller
                     'variedad_nombre' => $variedad?->nombre,
                     'tipo_carga' => $rec->tipoCarga,
                     'entity' => $rec->entity,
+                    'lote_producto_terminado' => $rec->lote_producto_terminado,
                     'cantidad_recibida' => $rec->cantidad_recibida,
                     'cantidad_usada' => $usadasCajasLegacy + $usadasCajasModoKilos,
                     'cantidad_disponible' => $disponibleCajas,
@@ -177,12 +180,14 @@ class LavadoEmpaqueController extends Controller
         if ($modoKilos) {
             $usadasKgEnModoKilos = (float) $procesosVinculados->where('modo_kilos', true)->sum('peso_entrada_kg');
             $usadasCajasLegacy = (int) $procesosVinculados->where('modo_kilos', false)->sum('cantidad_entrada');
+            $usadasCajasModoKilos = (int) $procesosVinculados->where('modo_kilos', true)->sum('cantidad_entrada');
             $totalCajas = (int) $recepcion->cantidad_recibida;
             $usadasKgEnModoCajas = ($pesoBascula > 0 && $totalCajas > 0)
                 ? round(($usadasCajasLegacy / $totalCajas) * $pesoBascula, 2)
                 : 0.0;
             $usadasKgTotal = $usadasKgEnModoKilos + $usadasKgEnModoCajas;
             $disponibleKg = max(0, round($pesoBascula - $usadasKgTotal, 2));
+            $disponibleCajas = max(0, $totalCajas - $usadasCajasLegacy - $usadasCajasModoKilos);
             $solicitadoKg = (float) $validated['cantidad_kg'];
 
             if ($solicitadoKg > $disponibleKg) {
@@ -192,10 +197,11 @@ class LavadoEmpaqueController extends Controller
                 ], 422);
             }
 
-            // Cajas equivalentes (referencia informativa)
-            $cantidadEquivalente = $pesoUnitario > 0
-                ? (int) max(1, round($solicitadoKg / $pesoUnitario))
-                : 0;
+            // Cajas equivalentes usando proporcionalidad contra cajas reales disponibles.
+            // Esto evita inflar cajas por diferencia entre peso bascula real vs peso estimado por tipo de carga.
+            $cantidadEquivalente = $disponibleKg > 0 && $disponibleCajas > 0
+                ? (int) max(1, round(($solicitadoKg / $disponibleKg) * $disponibleCajas))
+                : $disponibleCajas;
 
             $proceso = ProcesoEmpaque::create([
                 'temporada_id' => $validated['temporada_id'],
@@ -277,13 +283,28 @@ class LavadoEmpaqueController extends Controller
             return $gate;
         }
 
+        // Auto-consolida duplicados de "lavando" para evitar filas repetidas del mismo folio.
+        $this->consolidarDuplicadosLavando(
+            $request->input('temporada_id'),
+            $request->input('entity_id')
+        );
         // Auto-consolida duplicados de "lavado" para evitar filas repetidas del mismo folio.
         $this->consolidarDuplicadosLavado(
             $request->input('temporada_id'),
             $request->input('entity_id')
         );
+        // Auto-consolida duplicados de "hidrotermico" para evitar filas repetidas del mismo folio.
+        $this->consolidarDuplicadosHidrotermico(
+            $request->input('temporada_id'),
+            $request->input('entity_id')
+        );
         // Auto-consolida duplicados de "enfriando" para evitar filas repetidas del mismo folio.
         $this->consolidarDuplicadosEnfriando(
+            $request->input('temporada_id'),
+            $request->input('entity_id')
+        );
+        // Refuerzo de consolidación en "listo_produccion" para datos históricos.
+        $this->consolidarDuplicadosListoProduccion(
             $request->input('temporada_id'),
             $request->input('entity_id')
         );
@@ -397,8 +418,11 @@ class LavadoEmpaqueController extends Controller
                     ], 422);
                 }
 
-                // Los kg finales son el peso disponible para el siguiente paso
+                // Los kg finales son el peso real para el siguiente paso.
+                // Se sincroniza también peso_entrada_kg para evitar arrastrar
+                // valores históricos que inflen métricas en etapas posteriores.
                 $updatePayload['peso_disponible_kg'] = $kgFinales;
+                $updatePayload['peso_entrada_kg'] = $kgFinales;
 
                 // Tipo de carga y cajas son informativos (se guardan si se capturan)
                 if ($request->filled('tipo_carga_convertida_id')) {
@@ -406,7 +430,9 @@ class LavadoEmpaqueController extends Controller
                     $updatePayload['tipo_carga_id'] = $tipoCargaConvertida->id;
                 }
                 if ($request->filled('cantidad_convertida')) {
-                    $updatePayload['cantidad_disponible'] = $request->integer('cantidad_convertida');
+                    $cantidadConvertida = $request->integer('cantidad_convertida');
+                    $updatePayload['cantidad_disponible'] = $cantidadConvertida;
+                    $updatePayload['cantidad_entrada'] = $cantidadConvertida;
                 }
             }
 
@@ -511,12 +537,18 @@ class LavadoEmpaqueController extends Controller
 
             $fechaHoy = now('America/Mexico_City')->toDateString();
 
+            if ($cajasSolicitadas === null) {
+                $cajasSolicitadas = $cajasDisponibles;
+            }
+
             // Lote COMPLETO: actualizar el mismo registro
             if ($kgSolicitado >= $kgDisponible) {
                 $proceso->update([
                     'status'              => 'hidrotermico',
                     'fecha_hidrotermico'  => $fechaHoy,
+                    'cantidad_entrada'    => $cajasSolicitadas,
                     'cantidad_disponible' => $cajasSolicitadas,
+                    'peso_entrada_kg'     => $kgSolicitado,
                     'peso_disponible_kg'  => $kgSolicitado,
                 ]);
 
@@ -562,7 +594,9 @@ class LavadoEmpaqueController extends Controller
 
                 // Padre: reducir kg/cajas disponibles, mantener en "lavado"
                 $proceso->update([
+                    'cantidad_entrada' => $cajasRestante,
                     'cantidad_disponible' => $cajasRestante,
+                    'peso_entrada_kg'  => $kgRestante,
                     'peso_disponible_kg'  => $kgRestante,
                 ]);
             });
@@ -919,6 +953,15 @@ class LavadoEmpaqueController extends Controller
     }
 
     /**
+     * Consolida registros duplicados en estado "lavando" por folio para
+     * temporada+entidad. Mantiene un registro y fusiona cantidades/pesos.
+     */
+    private function consolidarDuplicadosLavando($temporadaId = null, $entityId = null): void
+    {
+        $this->consolidarDuplicadosPorStatus('lavando', $temporadaId, $entityId);
+    }
+
+    /**
      * Consolida registros duplicados en estado "lavado" por folio para
      * temporada+entidad. Mantiene un registro y fusiona cantidades/pesos.
      */
@@ -928,12 +971,30 @@ class LavadoEmpaqueController extends Controller
     }
 
     /**
+     * Consolida registros duplicados en estado "hidrotermico" por folio para
+     * temporada+entidad. Mantiene un registro y fusiona cantidades/pesos.
+     */
+    private function consolidarDuplicadosHidrotermico($temporadaId = null, $entityId = null): void
+    {
+        $this->consolidarDuplicadosPorStatus('hidrotermico', $temporadaId, $entityId);
+    }
+
+    /**
      * Consolida registros duplicados en estado "enfriando" por folio para
      * temporada+entidad. Mantiene un registro y fusiona cantidades/pesos.
      */
     private function consolidarDuplicadosEnfriando($temporadaId = null, $entityId = null): void
     {
         $this->consolidarDuplicadosPorStatus('enfriando', $temporadaId, $entityId);
+    }
+
+    /**
+     * Consolida registros duplicados en estado "listo_produccion" por folio para
+     * temporada+entidad. Mantiene un registro y fusiona cantidades/pesos.
+     */
+    private function consolidarDuplicadosListoProduccion($temporadaId = null, $entityId = null): void
+    {
+        $this->consolidarDuplicadosPorStatus('listo_produccion', $temporadaId, $entityId);
     }
 
     /**
@@ -968,11 +1029,14 @@ class LavadoEmpaqueController extends Controller
             $others = $registros->slice(1);
 
             DB::transaction(function () use ($registros, $target, $others) {
+                $totalCantidad = (int) $registros->sum('cantidad_disponible');
+                $totalPeso = (float) $registros->sum('peso_disponible_kg');
+
                 $target->update([
-                    'cantidad_entrada' => (int) $registros->sum('cantidad_entrada'),
-                    'peso_entrada_kg' => (float) $registros->sum('peso_entrada_kg'),
-                    'cantidad_disponible' => (int) $registros->sum('cantidad_disponible'),
-                    'peso_disponible_kg' => (float) $registros->sum('peso_disponible_kg'),
+                    'cantidad_entrada' => $totalCantidad,
+                    'peso_entrada_kg' => $totalPeso,
+                    'cantidad_disponible' => $totalCantidad,
+                    'peso_disponible_kg' => $totalPeso,
                     'rezaga_lavado_kg' => (float) $registros->sum('rezaga_lavado_kg'),
                     'rezaga_lavado_cantidad' => (int) $registros->sum('rezaga_lavado_cantidad'),
                     'rezaga_hidrotermico_kg' => (float) $registros->sum('rezaga_hidrotermico_kg'),
