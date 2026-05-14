@@ -4,13 +4,17 @@ namespace App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque;
 
 use App\Http\Controllers\Controller;
 use App\Models\Entity;
+use App\Models\ProduccionEmpaque;
 use App\Models\ProcesoEmpaque;
 use App\Models\RecepcionEmpaque;
 use App\Models\RezagaEmpaque;
+use App\Models\Submodule;
 use App\Models\TipoCarga;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
+use App\Models\UserSubmodulePermission;
 
 class LavadoEmpaqueController extends Controller
 {
@@ -397,6 +401,22 @@ class LavadoEmpaqueController extends Controller
 
         if ($usaHidrotermico) {
             $updatePayload = ['status' => 'lavado'];
+
+            if ($this->supportsLavadoSnapshot()) {
+                // Snapshot para poder devolver desde "esperando hidrotérmico" a "lavando"
+                // restaurando los datos previos del proceso de lavado.
+                $updatePayload['lavado_snapshot'] = [
+                    'tipo_carga_id' => $proceso->tipo_carga_id,
+                    'cantidad_entrada' => (int) $proceso->cantidad_entrada,
+                    'peso_entrada_kg' => round((float) $proceso->peso_entrada_kg, 2),
+                    'cantidad_disponible' => (int) $proceso->cantidad_disponible,
+                    'peso_disponible_kg' => round((float) $proceso->peso_disponible_kg, 2),
+                    'rezaga_lavado_kg' => round((float) ($proceso->rezaga_lavado_kg ?? 0), 2),
+                    'rezaga_lavado_cantidad' => (int) ($proceso->rezaga_lavado_cantidad ?? 0),
+                    'rezaga_hidrotermico_kg' => round((float) ($proceso->rezaga_hidrotermico_kg ?? 0), 2),
+                    'rezaga_hidrotermico_cantidad' => (int) ($proceso->rezaga_hidrotermico_cantidad ?? 0),
+                ];
+            }
 
             if ($proceso->modo_kilos) {
                 if (!$request->filled('kg_finales')) {
@@ -810,10 +830,53 @@ class LavadoEmpaqueController extends Controller
             return $gate;
         }
 
+        // Caso 1: "esperando hidrotérmico" (status=lavado) -> regresar a "lavando"
+        // restaurando los datos previos guardados al completar lavado.
+        if ($proceso->status === 'lavado') {
+            $payload = [
+                'status' => 'lavando',
+                'fecha_hidrotermico' => null,
+            ];
+
+            if ($this->supportsLavadoSnapshot()) {
+                $snapshot = is_array($proceso->lavado_snapshot) ? $proceso->lavado_snapshot : [];
+                $payload['tipo_carga_id'] = $snapshot['tipo_carga_id'] ?? $proceso->tipo_carga_id;
+                $payload['cantidad_entrada'] = isset($snapshot['cantidad_entrada']) ? (int) $snapshot['cantidad_entrada'] : (int) $proceso->cantidad_entrada;
+                $payload['peso_entrada_kg'] = isset($snapshot['peso_entrada_kg']) ? round((float) $snapshot['peso_entrada_kg'], 2) : round((float) $proceso->peso_entrada_kg, 2);
+                $payload['cantidad_disponible'] = isset($snapshot['cantidad_disponible']) ? (int) $snapshot['cantidad_disponible'] : (int) $proceso->cantidad_disponible;
+                $payload['peso_disponible_kg'] = isset($snapshot['peso_disponible_kg']) ? round((float) $snapshot['peso_disponible_kg'], 2) : round((float) $proceso->peso_disponible_kg, 2);
+                $payload['rezaga_lavado_kg'] = isset($snapshot['rezaga_lavado_kg']) ? round((float) $snapshot['rezaga_lavado_kg'], 2) : round((float) ($proceso->rezaga_lavado_kg ?? 0), 2);
+                $payload['rezaga_lavado_cantidad'] = isset($snapshot['rezaga_lavado_cantidad']) ? (int) $snapshot['rezaga_lavado_cantidad'] : (int) ($proceso->rezaga_lavado_cantidad ?? 0);
+                $payload['rezaga_hidrotermico_kg'] = isset($snapshot['rezaga_hidrotermico_kg']) ? round((float) $snapshot['rezaga_hidrotermico_kg'], 2) : round((float) ($proceso->rezaga_hidrotermico_kg ?? 0), 2);
+                $payload['rezaga_hidrotermico_cantidad'] = isset($snapshot['rezaga_hidrotermico_cantidad']) ? (int) $snapshot['rezaga_hidrotermico_cantidad'] : (int) ($proceso->rezaga_hidrotermico_cantidad ?? 0);
+                $payload['lavado_snapshot'] = null;
+            }
+
+            DB::transaction(function () use ($proceso, $payload) {
+                $proceso->update($payload);
+
+                // Al regresar a "lavando", se limpian rezagas pendientes de la etapa de lavado
+                // capturadas para ese proceso, de forma que el usuario pueda recapturar/editar.
+                RezagaEmpaque::query()
+                    ->where('proceso_id', $proceso->id)
+                    ->where('tipo_rezaga', 'lavado')
+                    ->where('status', 'pendiente')
+                    ->delete();
+            });
+
+            $proceso->load($this->eagerLoad);
+
+            return response()->json([
+                'success' => true,
+                'message' => "Folio {$proceso->folio_proceso} devuelto a lavando",
+                'data' => $proceso,
+            ]);
+        }
+
         if ($proceso->status !== 'hidrotermico') {
             return response()->json([
                 'status' => 'error',
-                'message' => 'Solo se pueden devolver folios en estado "hidrotérmico"',
+                'message' => 'Solo se pueden devolver folios en estado "hidrotérmico" o "lavado"',
             ], 422);
         }
 
@@ -869,6 +932,105 @@ class LavadoEmpaqueController extends Controller
             'success' => true,
             'message' => "Folio {$target->folio_proceso} consolidado en lavado (esperando hidrotérmico)",
             'data' => $target,
+        ]);
+    }
+
+    /**
+     * POST /lavado/{proceso}/resetear-folio
+     *
+     * Reinicia el recorrido del folio en módulo lavado y lo regresa a
+     * "pendiente de lavar" eliminando su avance en pipeline.
+     */
+    public function resetearFolio(Request $request, ProcesoEmpaque $proceso): JsonResponse
+    {
+        $gate = $this->ensureLavadoEnabledForEntity($proceso->entity_id);
+        if ($gate) {
+            return $gate;
+        }
+
+        $submodule = Submodule::query()->where('slug', 'lavado')->first();
+        if (!$submodule) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Submódulo lavado no encontrado',
+            ], 500);
+        }
+
+        $hasPermission = UserSubmodulePermission::query()
+            ->where('user_id', $request->user()->id)
+            ->where('submodule_id', $submodule->id)
+            ->whereHas('permissionType', fn($q) => $q->where('slug', 'reiniciar_recorrido'))
+            ->where('is_granted', true)
+            ->exists();
+
+        if (!$hasPermission) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No tienes permiso para reiniciar el recorrido de folios',
+            ], 403);
+        }
+
+        $pipelineStatuses = ['lavando', 'lavado', 'hidrotermico', 'enfriando', 'listo_produccion'];
+
+        if (!in_array($proceso->status, $pipelineStatuses, true)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Solo se pueden resetear folios que estén en el pipeline de lavado',
+            ], 422);
+        }
+
+        $procesos = ProcesoEmpaque::query()
+            ->where('temporada_id', $proceso->temporada_id)
+            ->where('entity_id', $proceso->entity_id)
+            ->where('folio_proceso', $proceso->folio_proceso)
+            ->whereIn('status', $pipelineStatuses)
+            ->get(['id']);
+
+        if ($procesos->isEmpty()) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No se encontraron registros activos para resetear en este folio',
+            ], 404);
+        }
+
+        $procesoIds = $procesos->pluck('id')->all();
+
+        $produccionesRelacionadas = ProduccionEmpaque::query()
+            ->whereIn('proceso_id', $procesoIds)
+            ->count();
+
+        if ($produccionesRelacionadas > 0) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No se puede resetear el folio porque ya tiene producción relacionada',
+            ], 422);
+        }
+
+        $rezagasNoPendientes = RezagaEmpaque::query()
+            ->whereIn('proceso_id', $procesoIds)
+            ->where('status', '!=', 'pendiente')
+            ->count();
+
+        if ($rezagasNoPendientes > 0) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No se puede resetear el folio porque tiene rezagas ya procesadas (vendidas o destruidas)',
+            ], 422);
+        }
+
+        DB::transaction(function () use ($procesoIds) {
+            RezagaEmpaque::query()
+                ->whereIn('proceso_id', $procesoIds)
+                ->delete();
+
+            ProcesoEmpaque::query()
+                ->whereIn('id', $procesoIds)
+                ->delete();
+        });
+
+        return response()->json([
+            'success' => true,
+            'message' => "Folio {$proceso->folio_proceso} reseteado. Regresó a pendientes de lavar",
         ]);
     }
 
@@ -977,6 +1139,20 @@ class LavadoEmpaqueController extends Controller
     private function consolidarDuplicadosHidrotermico($temporadaId = null, $entityId = null): void
     {
         $this->consolidarDuplicadosPorStatus('hidrotermico', $temporadaId, $entityId);
+    }
+
+    /**
+     * Verifica si la base de datos ya tiene la columna para snapshot de lavado.
+     */
+    private function supportsLavadoSnapshot(): bool
+    {
+        static $hasColumn = null;
+
+        if ($hasColumn === null) {
+            $hasColumn = Schema::hasColumn('proceso_empaque', 'lavado_snapshot');
+        }
+
+        return $hasColumn;
     }
 
     /**

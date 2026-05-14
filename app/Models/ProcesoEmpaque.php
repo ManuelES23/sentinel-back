@@ -23,6 +23,7 @@ class ProcesoEmpaque extends Model
         'fecha_lavado', 'fecha_hidrotermico', 'fecha_enfriamiento', 'fecha_listo_produccion',
         'rezaga_lavado_kg', 'rezaga_lavado_cantidad',
         'rezaga_hidrotermico_kg', 'rezaga_hidrotermico_cantidad',
+        'lavado_snapshot',
         'linea_proceso', 'status', 'observaciones', 'created_by',
     ];
 
@@ -44,6 +45,7 @@ class ProcesoEmpaque extends Model
         'rezaga_lavado_cantidad' => 'integer',
         'rezaga_hidrotermico_kg' => 'decimal:2',
         'rezaga_hidrotermico_cantidad' => 'integer',
+        'lavado_snapshot' => 'array',
     ];
 
     public function temporada() { return $this->belongsTo(Temporada::class); }

@@ -585,6 +585,7 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::post('lavado/{proceso}/rezaga', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'registrarRezaga']);
                 Route::post('lavado/{proceso}/devolver-lavado', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'devolverALavado']);
                 Route::post('lavado/{proceso}/devolver-piso', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'devolverAPiso']);
+                Route::post('lavado/{proceso}/resetear-folio', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'resetearFolio']);
 
                 // Producción (cajas / pallets)
                 Route::get('produccion/next-pallet', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'nextPalletNumber']);
