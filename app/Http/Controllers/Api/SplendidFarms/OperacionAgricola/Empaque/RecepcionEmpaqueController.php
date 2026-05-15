@@ -73,7 +73,7 @@ class RecepcionEmpaqueController extends Controller
             'productor_id' => 'nullable|exists:productores,id',
             'lote_id' => 'nullable|exists:lotes,id',
             'etapa_id' => 'nullable|exists:etapas,id',
-            'variedad_id' => 'nullable|required_without:etapa_id|exists:variedades,id',
+            'variedad_id' => 'nullable|exists:variedades,id',
             'zona_cultivo_id' => 'nullable|exists:zonas_cultivo,id',
             'tipo_carga_id' => 'nullable|exists:tipos_carga,id',
             'cantidad_recibida' => 'nullable|integer|min:1',
@@ -101,6 +101,7 @@ class RecepcionEmpaqueController extends Controller
                 $validated['productor_id'] = $salida->productor_id;
                 $validated['lote_id'] = $salida->lote_id;
                 $validated['etapa_id'] = $salida->etapa_id;
+                $validated['variedad_id'] = $salida->variedad_id;
                 $validated['zona_cultivo_id'] = $salida->zona_cultivo_id;
                 $validated['tipo_carga_id'] = $salida->tipo_carga_id;
                 $validated['cantidad_recibida'] = $cantidadRecibida;
@@ -146,6 +147,18 @@ class RecepcionEmpaqueController extends Controller
             $etapa = Etapa::find($validated['etapa_id']);
             if ($etapa) {
                 $validated['variedad_id'] = $etapa->variedad_id;
+            }
+        }
+
+        // Fallback: si por algún motivo no llegó etapa válida, pero sí variedad desde salida/manual,
+        // mantenemos variedad para evitar rechazos innecesarios en recepciones con salida vinculada.
+        if (empty($validated['etapa_id']) && empty($validated['variedad_id']) && !empty($validated['salida_campo_id'])) {
+            $salidaVariedad = SalidaCampoCosecha::query()
+                ->whereKey($validated['salida_campo_id'])
+                ->value('variedad_id');
+
+            if (!empty($salidaVariedad)) {
+                $validated['variedad_id'] = $salidaVariedad;
             }
         }
 
