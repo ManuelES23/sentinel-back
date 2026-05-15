@@ -338,8 +338,16 @@ class RecepcionEmpaqueController extends Controller
 
     private function generarFolio(array $data): string
     {
-        $entityId = str_pad($data['entity_id'], 2, '0', STR_PAD_LEFT);
-        $prefix = "REC-{$entityId}-";
+        // Formato solicitado para entradas manuales:
+        // productor-zona_cultivo-lote-etapa+consecutivo
+        // Con etapa:    01-01-01-0101  (etapa=01, consecutivo=01)
+        // Sin etapa:    01-01-01-0001  (etapa=00, consecutivo=01)
+        $productor = str_pad((string) ((int) ($data['productor_id'] ?? 0)), 2, '0', STR_PAD_LEFT);
+        $zona = str_pad((string) ((int) ($data['zona_cultivo_id'] ?? 0)), 2, '0', STR_PAD_LEFT);
+        $lote = str_pad((string) ((int) ($data['lote_id'] ?? 0)), 2, '0', STR_PAD_LEFT);
+        $etapa = str_pad((string) ((int) ($data['etapa_id'] ?? 0)), 2, '0', STR_PAD_LEFT);
+
+        $prefix = "{$productor}-{$zona}-{$lote}-{$etapa}";
 
         $lastFolio = RecepcionEmpaque::withTrashed()
             ->where('temporada_id', $data['temporada_id'])
@@ -348,12 +356,11 @@ class RecepcionEmpaqueController extends Controller
             ->orderByDesc('folio_recepcion')
             ->value('folio_recepcion');
 
-        $nextNum = 1;
-        if ($lastFolio) {
-            $lastNum = (int) str_replace($prefix, '', $lastFolio);
-            $nextNum = $lastNum + 1;
+        $nextConsecutivo = 1;
+        if ($lastFolio && preg_match('/(\d{2})$/', $lastFolio, $matches)) {
+            $nextConsecutivo = ((int) $matches[1]) + 1;
         }
 
-        return $prefix . str_pad($nextNum, 4, '0', STR_PAD_LEFT);
+        return $prefix . str_pad((string) $nextConsecutivo, 2, '0', STR_PAD_LEFT);
     }
 }

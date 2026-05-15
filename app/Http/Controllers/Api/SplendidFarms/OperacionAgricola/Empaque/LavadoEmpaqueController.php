@@ -76,11 +76,34 @@ class LavadoEmpaqueController extends Controller
         foreach ($recepciones as $rec) {
             $procesosVinculados = ProcesoEmpaque::where('recepcion_id', $rec->id)
                 ->whereIn('status', $lavadoStates)
-                ->get(['cantidad_entrada', 'peso_entrada_kg', 'modo_kilos']);
+                ->get([
+                    'status',
+                    'cantidad_entrada',
+                    'peso_entrada_kg',
+                    'modo_kilos',
+                    'rezaga_lavado_kg',
+                    'rezaga_hidrotermico_kg',
+                ]);
 
             $usadasCajasLegacy = (int) $procesosVinculados->where('modo_kilos', false)->sum('cantidad_entrada');
             $usadasCajasModoKilos = (int) $procesosVinculados->where('modo_kilos', true)->sum('cantidad_entrada');
-            $usadasKgEnModoKilos = (float) $procesosVinculados->where('modo_kilos', true)->sum('peso_entrada_kg');
+            // En modo_kilos, al completar lavado el peso de entrada puede actualizarse
+            // a kg finales. Para no dejar "pendiente fantasma" igual a la rezaga,
+            // en estados posteriores a lavando se suma también la rezaga de proceso.
+            $usadasKgEnModoKilos = (float) $procesosVinculados
+                ->where('modo_kilos', true)
+                ->reduce(function ($carry, $proc) {
+                    $pesoEntrada = (float) ($proc->peso_entrada_kg ?? 0);
+
+                    if (($proc->status ?? '') === 'lavando') {
+                        return $carry + $pesoEntrada;
+                    }
+
+                    $rezagaLavado = (float) ($proc->rezaga_lavado_kg ?? 0);
+                    $rezagaHidro = (float) ($proc->rezaga_hidrotermico_kg ?? 0);
+
+                    return $carry + $pesoEntrada + $rezagaLavado + $rezagaHidro;
+                }, 0.0);
 
             $pesoBascula = (float) ($rec->peso_bascula ?? 0);
             $puedeModoKilos = ($rec->entity?->usa_hidrotermico ?? false) && $pesoBascula > 0;
