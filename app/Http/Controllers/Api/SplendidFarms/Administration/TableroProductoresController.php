@@ -145,6 +145,9 @@ class TableroProductoresController extends Controller
                     $rezagaLavadoKg += (float) ($proceso->rezaga_lavado_kg ?? 0);
                 }
 
+                // Validación: rezaga no puede ser mayor que peso recibido
+                $rezagaLavadoKg = min($rezagaLavadoKg, $pesoBascula);
+
                 // Calcular porcentaje de rezaga
                 $porcentajeRezaga = $pesoBascula > 0 
                     ? round(($rezagaLavadoKg / $pesoBascula) * 100, 2)
@@ -374,6 +377,9 @@ class TableroProductoresController extends Controller
                 }
             }
 
+            // Validación: rezaga no puede ser mayor que peso recibido
+            $rezagaLavadoKg = min($rezagaLavadoKg, $pesoBascula);
+
             $porcentajeRezaga = $pesoBascula > 0
                 ? round(($rezagaLavadoKg / $pesoBascula) * 100, 2)
                 : 0;
@@ -473,6 +479,9 @@ class TableroProductoresController extends Controller
                 $rezagaLavadoKg += (float) ($proceso->rezaga_lavado_kg ?? 0);
             }
 
+            // Validación: rezaga no puede ser mayor que peso recibido
+            $rezagaLavadoKg = min($rezagaLavadoKg, $pesoBascula);
+
             $porcentajeRezaga = $pesoBascula > 0
                 ? round(($rezagaLavadoKg / $pesoBascula) * 100, 2)
                 : 0;
@@ -542,6 +551,8 @@ class TableroProductoresController extends Controller
                 foreach ($recepcion->procesos as $proceso) {
                     $rezagaKg += (float) ($proceso->rezaga_lavado_kg ?? 0);
                 }
+                // Validación: rezaga no puede ser mayor que peso recibido
+                $rezagaKg = min($rezagaKg, $pesoBasculaRecepcion);
                 $totalRezagaKg += $rezagaKg;
 
                 if ($esPorKilos) {
@@ -693,6 +704,8 @@ class TableroProductoresController extends Controller
                 foreach ($recepcion->procesos as $proceso) {
                     $rezagaKg += (float) ($proceso->rezaga_lavado_kg ?? 0);
                 }
+                // Validación: rezaga no puede ser mayor que peso recibido
+                $rezagaKg = min($rezagaKg, $pesoBasculaRecepcion);
 
                 $producidoKg = $esPorKilos ? max(0, $pesoBasculaRecepcion - $rezagaKg) : 0;
 
