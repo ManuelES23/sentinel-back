@@ -22,9 +22,10 @@ class ProcesoEmpaqueController extends Controller
 {
     private array $eagerLoad = [
         'entity:id,name,code',
-        'recepcion:id,folio_recepcion,fecha_recepcion,cantidad_recibida,peso_recibido_kg,salida_campo_id,tipo_carga_id,lote_producto_terminado',
+        'recepcion:id,folio_recepcion,fecha_recepcion,cantidad_recibida,peso_recibido_kg,salida_campo_id,variedad_id,tipo_carga_id,lote_producto_terminado',
         'recepcion.salidaCampo:id,folio_salida,variedad_id',
         'recepcion.salidaCampo.variedad:id,nombre',
+        'recepcion.variedad:id,nombre',
         'recepcion.tipoCarga:id,nombre,categoria_caja,peso_estimado_kg',
         'tipoCarga:id,nombre,categoria_caja,peso_estimado_kg',
         'productor:id,nombre,apellido',
@@ -44,6 +45,7 @@ class ProcesoEmpaqueController extends Controller
         'lote.zonaCultivo:id,nombre',
         'etapa:id,nombre,variedad_id',
         'etapa.variedad:id,nombre',
+        'variedad:id,nombre',
         'tipoCarga:id,nombre,categoria_caja,peso_estimado_kg',
     ];
 
@@ -139,9 +141,10 @@ class ProcesoEmpaqueController extends Controller
             'lote.zonaCultivo:id,nombre',
             'etapa:id,nombre,variedad_id',
             'etapa.variedad:id,nombre',
-            'recepcion:id,salida_campo_id,tipo_carga_id,lote_producto_terminado',
+            'recepcion:id,salida_campo_id,variedad_id,tipo_carga_id,lote_producto_terminado',
             'recepcion.salidaCampo:id,variedad_id',
             'recepcion.salidaCampo.variedad:id,nombre',
+            'recepcion.variedad:id,nombre',
             'recepcion.tipoCarga:id,nombre,categoria_caja,peso_estimado_kg',
             'tipoCarga:id,nombre,categoria_caja,peso_estimado_kg',
         ])->where('status', 'en_proceso');
@@ -218,7 +221,7 @@ class ProcesoEmpaqueController extends Controller
 
             if ($disponible > 0) {
                 $pesoUnitario = $rec->tipoCarga ? (float) $rec->tipoCarga->peso_estimado_kg : 0;
-                $variedad = $rec->etapa?->variedad ?? $rec->salidaCampo?->variedad;
+                $variedad = $rec->etapa?->variedad ?? $rec->salidaCampo?->variedad ?? $rec->variedad;
 
                 $piso[] = [
                     'recepcion_id' => $rec->id,
@@ -271,7 +274,7 @@ class ProcesoEmpaqueController extends Controller
         $piso = [];
         foreach ($procesos as $p) {
             $pesoUnitario = $p->tipoCarga ? (float) $p->tipoCarga->peso_estimado_kg : 0;
-            $variedad = $p->etapa?->variedad ?? $p->recepcion?->salidaCampo?->variedad;
+            $variedad = $p->etapa?->variedad ?? $p->recepcion?->salidaCampo?->variedad ?? $p->recepcion?->variedad;
             $modoKilos = (bool) $p->modo_kilos;
             // Use cantidad_disponible (may be remainder if status=procesado, or full if listo_produccion)
             $cantidadDisponible = (int) $p->cantidad_disponible;
