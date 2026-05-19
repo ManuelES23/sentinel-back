@@ -91,7 +91,7 @@ class SalidaRezagaEmpaqueController extends Controller
         $precioKg = (float) ($validated['precio_kg'] ?? 0);
         if (($validated['tipo_salida'] ?? null) !== 'venta') {
             $precioKg = 0;
-            $validated['comprador'] = null;
+            $validated['comprador'] = $validated['comprador'] ?? '';
         }
 
         $detallesSolicitados = $validated['detalles'] ?? [];
@@ -252,7 +252,7 @@ class SalidaRezagaEmpaqueController extends Controller
         ]);
 
         if (($validated['tipo_salida'] ?? $salidaRezaga->tipo_salida) !== 'venta') {
-            $validated['comprador'] = null;
+            $validated['comprador'] = $validated['comprador'] ?? '';
             $validated['precio_kg'] = 0;
             $validated['monto_total'] = 0;
         }
