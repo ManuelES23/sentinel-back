@@ -43,6 +43,18 @@ class RecepcionEmpaqueController extends Controller
         if ($request->filled('status')) {
             $query->byStatus($request->status);
         }
+
+        $fechaInicio = $request->input('fecha_inicio', $request->input('from_date'));
+        $fechaFin = $request->input('fecha_fin', $request->input('to_date'));
+
+        if (!empty($fechaInicio)) {
+            $query->whereDate('fecha_recepcion', '>=', $fechaInicio);
+        }
+
+        if (!empty($fechaFin)) {
+            $query->whereDate('fecha_recepcion', '<=', $fechaFin);
+        }
+
         if ($request->filled('search')) {
             $search = $request->search;
             $query->where(function ($q) use ($search) {
