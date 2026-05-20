@@ -580,6 +580,68 @@ class HierarchicalPermissionController extends Controller
     }
 
     /**
+     * Crear permisos CRUD por defecto para TODOS los submódulos que no los tengan
+     */
+    public function createDefaultPermissionsForAll(): JsonResponse
+    {
+        $defaultPermissions = [
+            ['slug' => 'view',   'name' => 'Ver',      'description' => 'Permite ver registros',      'order' => 1],
+            ['slug' => 'create', 'name' => 'Crear',    'description' => 'Permite crear registros',    'order' => 2],
+            ['slug' => 'edit',   'name' => 'Editar',   'description' => 'Permite editar registros',   'order' => 3],
+            ['slug' => 'delete', 'name' => 'Eliminar', 'description' => 'Permite eliminar registros', 'order' => 4],
+        ];
+
+        // Obtener IDs de submódulos que ya tienen los 4 slugs CRUD
+        $completeSlugs = ['view', 'create', 'edit', 'delete'];
+
+        $submodulesWithAll = SubmodulePermissionType::whereIn('slug', $completeSlugs)
+            ->groupBy('submodule_id')
+            ->havingRaw('COUNT(DISTINCT slug) = ?', [count($completeSlugs)])
+            ->pluck('submodule_id');
+
+        $allSubmoduleIds = Submodule::pluck('id');
+        $incompleteIds = $allSubmoduleIds->diff($submodulesWithAll);
+
+        $totalCreated = 0;
+        $submodulesAffected = 0;
+
+        foreach ($incompleteIds as $submoduleId) {
+            $createdForThis = 0;
+            foreach ($defaultPermissions as $perm) {
+                $exists = SubmodulePermissionType::where('submodule_id', $submoduleId)
+                    ->where('slug', $perm['slug'])
+                    ->exists();
+
+                if (! $exists) {
+                    SubmodulePermissionType::create([
+                        'submodule_id' => $submoduleId,
+                        'slug'         => $perm['slug'],
+                        'name'         => $perm['name'],
+                        'description'  => $perm['description'],
+                        'order'        => $perm['order'],
+                        'is_active'    => true,
+                    ]);
+                    $createdForThis++;
+                    $totalCreated++;
+                }
+            }
+            if ($createdForThis > 0) {
+                $submodulesAffected++;
+            }
+        }
+
+        return response()->json([
+            'status'  => 'success',
+            'message' => "Se crearon $totalCreated permisos en $submodulesAffected submódulos",
+            'data'    => [
+                'total_created'       => $totalCreated,
+                'submodules_affected' => $submodulesAffected,
+                'submodules_skipped'  => $submodulesWithAll->count(),
+            ],
+        ]);
+    }
+
+    /**
      * Revocar acceso a todos los hijos de una empresa
      */
     private function revokeChildAccess($userId, $enterpriseId): void

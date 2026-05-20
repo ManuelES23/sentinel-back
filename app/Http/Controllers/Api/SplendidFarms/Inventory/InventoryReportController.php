@@ -13,6 +13,41 @@ use Illuminate\Support\Facades\DB;
 class InventoryReportController extends Controller
 {
     /**
+     * Kardex por productor: todos los movimientos de inventario asociados a un productor.
+     */
+    public function kardexProductor($productorId, Request $request): JsonResponse
+    {
+        $query = InventoryKardex::with([
+            'product:id,code,name,sku',
+            'movement:id,document_number,movement_type_id,movement_date',
+            'movement.movementType:id,code,name,direction,color,icon',
+        ])->where('productor_id', $productorId);
+
+        // Filtros opcionales
+        if ($request->filled('product_id')) {
+            $query->where('product_id', $request->product_id);
+        }
+        if ($request->filled('entity_id')) {
+            $query->where('entity_id', $request->entity_id);
+        }
+        if ($request->filled('date_from')) {
+            $query->whereDate('movement_date', '>=', $request->date_from);
+        }
+        if ($request->filled('date_to')) {
+            $query->whereDate('movement_date', '<=', $request->date_to);
+        }
+
+        $query->orderBy('movement_date', 'asc')->orderBy('id', 'asc');
+
+        $perPage = $request->input('per_page', 100);
+        $kardex = $query->paginate($perPage);
+
+        return response()->json([
+            'success' => true,
+            'data' => $kardex
+        ]);
+    }
+    /**
      * Get current stock report.
      */
     public function stock(Request $request): JsonResponse
@@ -254,7 +289,12 @@ class InventoryReportController extends Controller
             ->map(fn($p) => [
                 'type' => 'low_stock',
                 'severity' => 'warning',
-                'product' => $p->only(['id', 'code', 'name', 'min_stock']),
+                'product' => [
+                    'id' => $p->id,
+                    'code' => $p->code,
+                    'name' => $p->name,
+                    'min_stock' => $p->min_stock,
+                ],
                 'current_stock' => $p->total_stock,
                 'message' => "Stock bajo: {$p->name} ({$p->total_stock} de mínimo {$p->min_stock})",
             ]);
@@ -270,7 +310,11 @@ class InventoryReportController extends Controller
             ->map(fn($p) => [
                 'type' => 'no_stock',
                 'severity' => 'danger',
-                'product' => $p->only(['id', 'code', 'name']),
+                'product' => [
+                    'id' => $p->id,
+                    'code' => $p->code,
+                    'name' => $p->name,
+                ],
                 'current_stock' => 0,
                 'message' => "Sin stock: {$p->name}",
             ]);

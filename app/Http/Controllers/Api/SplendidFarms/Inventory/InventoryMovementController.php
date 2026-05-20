@@ -667,7 +667,6 @@ class InventoryMovementController extends Controller
         $quantity = $detail->base_quantity ?? $detail->quantity;
 
         // Actualizar o crear stock
-        // Firma: updateStock(productId, entityId, areaId, quantityChange, unitCost, lotNumber, expiryDate, movementId)
         InventoryStock::updateStock(
             $detail->product_id,
             $entityId,
@@ -679,8 +678,9 @@ class InventoryMovementController extends Controller
             $movement->id
         );
 
+        $productorId = $this->resolveProductorIdFromDetail($detail);
+
         // Registrar en kardex
-        // Firma: recordEntry(productId, entityId, entityType, movementId, transactionType, quantity, unitCost, lotNumber, serialNumber, areaId)
         InventoryKardex::recordEntry(
             $detail->product_id,
             $entityId,
@@ -691,7 +691,8 @@ class InventoryMovementController extends Controller
             $detail->unit_cost ?? 0,
             $detail->lot_number,
             $detail->serial_number,
-            null // area_id
+            null, // area_id
+            $productorId
         );
     }
 
@@ -703,7 +704,6 @@ class InventoryMovementController extends Controller
         $quantity = $detail->base_quantity ?? $detail->quantity;
 
         // Actualizar stock (cantidad negativa para decrementar)
-        // Firma: updateStock(productId, entityId, areaId, quantityChange, unitCost, lotNumber, expiryDate, movementId)
         InventoryStock::updateStock(
             $detail->product_id,
             $entityId,
@@ -715,8 +715,9 @@ class InventoryMovementController extends Controller
             $movement->id
         );
 
+        $productorId = $this->resolveProductorIdFromDetail($detail);
+
         // Registrar en kardex
-        // Firma: recordEntry(productId, entityId, entityType, movementId, transactionType, quantity, unitCost, lotNumber, serialNumber, areaId)
         InventoryKardex::recordEntry(
             $detail->product_id,
             $entityId,
@@ -727,7 +728,30 @@ class InventoryMovementController extends Controller
             $detail->unit_cost ?? 0,
             $detail->lot_number,
             $detail->serial_number,
-            null // area_id
+            null, // area_id
+            $productorId
         );
+    }
+
+    /**
+     * Intenta resolver productor_id para persistirlo en kardex.
+     */
+    private function resolveProductorIdFromDetail($detail): ?int
+    {
+        if (!empty($detail->productor_id)) {
+            return (int) $detail->productor_id;
+        }
+
+        if (!empty($detail->lote_id)) {
+            $lote = \App\Models\Lote::find($detail->lote_id);
+            return $lote?->productor_id ? (int) $lote->productor_id : null;
+        }
+
+        if (!empty($detail->lot_number) && is_numeric($detail->lot_number)) {
+            $lote = \App\Models\Lote::where('numero_lote', (int) $detail->lot_number)->first();
+            return $lote?->productor_id ? (int) $lote->productor_id : null;
+        }
+
+        return null;
     }
 }

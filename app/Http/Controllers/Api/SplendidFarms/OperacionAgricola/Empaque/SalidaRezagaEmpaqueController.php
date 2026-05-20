@@ -5,13 +5,18 @@ namespace App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque;
 use App\Http\Controllers\Controller;
 use App\Models\SalidaRezagaEmpaque;
 use App\Models\RezagaEmpaque;
+use App\Models\Submodule;
+use App\Models\UserSubmodulePermission;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
 
 class SalidaRezagaEmpaqueController extends Controller
 {
+    private ?int $submoduleId = null;
+
     private array $eagerLoad = [
         'entity:id,name,code',
         'detalles.rezaga:id,folio_rezaga,tipo_rezaga,cantidad_kg,proceso_id',
@@ -27,10 +32,15 @@ class SalidaRezagaEmpaqueController extends Controller
         'detalles.rezaga.proceso.recepcion.salidaCampo.productor:id,nombre,apellido',
         'detalles.rezaga.proceso.recepcion.salidaCampo.lote:id,nombre,numero_lote',
         'creador:id,name',
+        'revisadoPor:id,name',
     ];
 
     public function index(Request $request): JsonResponse
     {
+        if ($error = $this->ensurePermission($request, 'view', 'ver salidas de rezaga')) {
+            return $error;
+        }
+
         $query = SalidaRezagaEmpaque::with($this->eagerLoad);
 
         if ($request->filled('temporada_id')) {
@@ -71,12 +81,17 @@ class SalidaRezagaEmpaqueController extends Controller
         }
 
         $salidas = $query->orderByDesc('fecha_venta')->orderByDesc('id')->get();
+        $this->maskSensitiveReviewFields($salidas, $request);
 
         return response()->json(['success' => true, 'data' => $salidas]);
     }
 
     public function store(Request $request): JsonResponse
     {
+        if ($error = $this->ensurePermission($request, 'create', 'crear salidas de rezaga')) {
+            return $error;
+        }
+
         $validated = $request->validate([
             'temporada_id' => 'required|exists:temporadas,id',
             'entity_id' => 'required|exists:entities,id',
@@ -233,6 +248,7 @@ class SalidaRezagaEmpaqueController extends Controller
         });
 
         $salida->load($this->eagerLoad);
+        $this->maskSensitiveReviewFields($salida, $request);
 
         return response()->json([
             'success' => true,
@@ -241,15 +257,24 @@ class SalidaRezagaEmpaqueController extends Controller
         ], 201);
     }
 
-    public function show(SalidaRezagaEmpaque $salidaRezaga): JsonResponse
+    public function show(Request $request, SalidaRezagaEmpaque $salidaRezaga): JsonResponse
     {
+        if ($error = $this->ensurePermission($request, 'view', 'ver salidas de rezaga')) {
+            return $error;
+        }
+
         $salidaRezaga->load($this->eagerLoad);
+        $this->maskSensitiveReviewFields($salidaRezaga, $request);
 
         return response()->json(['success' => true, 'data' => $salidaRezaga]);
     }
 
     public function update(Request $request, SalidaRezagaEmpaque $salidaRezaga): JsonResponse
     {
+        if ($error = $this->ensurePermission($request, 'edit', 'editar salidas de rezaga')) {
+            return $error;
+        }
+
         $validated = $request->validate([
             'tipo_salida' => 'sometimes|in:venta,regalia,desecho',
             'comprador' => 'nullable|string|max:200',
@@ -271,6 +296,7 @@ class SalidaRezagaEmpaqueController extends Controller
 
         $salidaRezaga->update($validated);
         $salidaRezaga->load($this->eagerLoad);
+        $this->maskSensitiveReviewFields($salidaRezaga, $request);
 
         return response()->json([
             'success' => true,
@@ -279,8 +305,73 @@ class SalidaRezagaEmpaqueController extends Controller
         ]);
     }
 
-    public function destroy(SalidaRezagaEmpaque $salidaRezaga): JsonResponse
+    public function revisar(Request $request, SalidaRezagaEmpaque $salidaRezaga): JsonResponse
     {
+        if ($error = $this->ensurePermission($request, 'validar_salida_rezaga', 'validar salidas de rezaga')) {
+            return $error;
+        }
+
+        $validated = $request->validate([
+            'revision_kilos_ok' => 'required|boolean',
+            'revision_importe_ok' => 'required|boolean',
+            'revision_observaciones' => 'nullable|string',
+            'ticket_transferencia' => 'nullable|image|mimes:jpg,jpeg,png,webp|max:5120',
+        ]);
+
+        $revisionKilosOk = $request->boolean('revision_kilos_ok');
+        $revisionImporteOk = $request->boolean('revision_importe_ok');
+        $revisionObservaciones = trim((string) ($validated['revision_observaciones'] ?? ''));
+
+        if (!$request->hasFile('ticket_transferencia') && empty($salidaRezaga->ticket_transferencia_path)) {
+            throw ValidationException::withMessages([
+                'ticket_transferencia' => 'Debes adjuntar una foto del ticket de transferencia para completar la revisión.',
+            ]);
+        }
+
+        if ((!$revisionKilosOk || !$revisionImporteOk) && $revisionObservaciones === '') {
+            throw ValidationException::withMessages([
+                'revision_observaciones' => 'Agrega observaciones cuando existan diferencias de kilos o importe.',
+            ]);
+        }
+
+        DB::transaction(function () use ($request, $salidaRezaga, $revisionKilosOk, $revisionImporteOk, $revisionObservaciones) {
+            $ticketPath = $salidaRezaga->ticket_transferencia_path;
+
+            if ($request->hasFile('ticket_transferencia')) {
+                if ($ticketPath) {
+                    Storage::disk('public')->delete($ticketPath);
+                }
+
+                $ticketPath = $request->file('ticket_transferencia')
+                    ->store('salida-rezaga/tickets-transferencia', 'public');
+            }
+
+            $salidaRezaga->update([
+                'ticket_transferencia_path' => $ticketPath,
+                'revision_kilos_ok' => $revisionKilosOk,
+                'revision_importe_ok' => $revisionImporteOk,
+                'revision_observaciones' => $revisionObservaciones !== '' ? $revisionObservaciones : null,
+                'revision_revisado_por' => $request->user()?->id,
+                'revision_revisado_en' => now(),
+            ]);
+        });
+
+        $salidaRezaga->refresh()->load($this->eagerLoad);
+        $this->maskSensitiveReviewFields($salidaRezaga, $request);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Salida de rezaga revisada exitosamente',
+            'data' => $salidaRezaga,
+        ]);
+    }
+
+    public function destroy(Request $request, SalidaRezagaEmpaque $salidaRezaga): JsonResponse
+    {
+        if ($error = $this->ensurePermission($request, 'delete', 'eliminar salidas de rezaga')) {
+            return $error;
+        }
+
         DB::transaction(function () use ($salidaRezaga) {
             foreach ($salidaRezaga->detalles as $det) {
                 $rezaga = RezagaEmpaque::query()->lockForUpdate()->find($det->rezaga_id);
@@ -318,5 +409,86 @@ class SalidaRezagaEmpaqueController extends Controller
         }
 
         return $prefix . str_pad($nextNum, 4, '0', STR_PAD_LEFT);
+    }
+
+    private function ensurePermission(Request $request, string $permissionSlug, string $actionLabel): ?JsonResponse
+    {
+        $submoduleId = $this->getSubmoduleId();
+
+        if (!$submoduleId) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Submódulo salida de rezaga no encontrado',
+            ], 500);
+        }
+
+        $hasPermission = $this->userHasPermission($request, $permissionSlug);
+
+        if ($hasPermission) {
+            return null;
+        }
+
+        return response()->json([
+            'status' => 'error',
+            'message' => "No tienes permiso para {$actionLabel}",
+        ], 403);
+    }
+
+    private function userHasPermission(Request $request, string $permissionSlug): bool
+    {
+        $submoduleId = $this->getSubmoduleId();
+        $userId = $request->user()?->id;
+
+        if (!$submoduleId || !$userId) {
+            return false;
+        }
+
+        return UserSubmodulePermission::query()
+            ->where('user_id', $userId)
+            ->where('submodule_id', $submoduleId)
+            ->whereHas('permissionType', fn($q) => $q->where('slug', $permissionSlug))
+            ->where('is_granted', true)
+            ->exists();
+    }
+
+    private function maskSensitiveReviewFields($salidas, Request $request): void
+    {
+        $canViewTicket = $this->userHasPermission($request, 'ver_ticket_salida_rezaga');
+        $canViewObservaciones = $this->userHasPermission($request, 'ver_observaciones_salida_rezaga');
+
+        $applyMask = function (SalidaRezagaEmpaque $salida) use ($canViewTicket, $canViewObservaciones) {
+            if (!$canViewTicket) {
+                $salida->ticket_transferencia_path = null;
+            }
+
+            if (!$canViewObservaciones) {
+                $salida->revision_observaciones = null;
+            }
+        };
+
+        if ($salidas instanceof SalidaRezagaEmpaque) {
+            $applyMask($salidas);
+
+            return;
+        }
+
+        foreach ($salidas as $salida) {
+            if ($salida instanceof SalidaRezagaEmpaque) {
+                $applyMask($salida);
+            }
+        }
+    }
+
+    private function getSubmoduleId(): ?int
+    {
+        if (!is_null($this->submoduleId)) {
+            return $this->submoduleId;
+        }
+
+        $this->submoduleId = Submodule::query()
+            ->where('slug', 'salida-rezaga')
+            ->value('id');
+
+        return $this->submoduleId;
     }
 }

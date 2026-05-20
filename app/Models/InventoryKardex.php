@@ -14,6 +14,7 @@ class InventoryKardex extends Model
 
     protected $fillable = [
         'product_id',
+        'productor_id',
         'entity_id',
         'entity_type',
         'area_id',
@@ -46,6 +47,14 @@ class InventoryKardex extends Model
     public function product(): BelongsTo
     {
         return $this->belongsTo(Product::class, 'product_id');
+    }
+
+    /**
+     * Productor asociado (cuando aplica).
+     */
+    public function productor(): BelongsTo
+    {
+        return $this->belongsTo(Productor::class, 'productor_id');
     }
 
     /**
@@ -101,7 +110,8 @@ class InventoryKardex extends Model
         float $unitCost,
         ?string $lotNumber = null,
         ?string $serialNumber = null,
-        ?int $areaId = null
+        ?int $areaId = null,
+        ?int $productorId = null
     ): self {
         // Obtener el movimiento para extraer datos
         $movement = InventoryMovement::find($movementId);
@@ -139,6 +149,7 @@ class InventoryKardex extends Model
             'balance_value' => $newValueBalance,
             'lot_number' => $lotNumber,
             'serial_number' => $serialNumber,
+            'productor_id' => $productorId,
         ]);
     }
 }

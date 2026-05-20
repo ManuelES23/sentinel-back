@@ -136,6 +136,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/enterprises/{enterprise}/hierarchy', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'getEnterpriseHierarchy']);
 
     // Gestión de tipos de permisos de submódulos
+    Route::post('/submodules/permission-types/bulk-defaults', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'createDefaultPermissionsForAll']);
     Route::prefix('submodules/{submodule}/permission-types')->group(function () {
         Route::get('/', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'getSubmodulePermissionTypes']);
         Route::post('/', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'addPermissionType']);
@@ -419,6 +420,7 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::get('valorizado', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryReportController::class, 'valued']);
                 Route::get('alertas', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryReportController::class, 'alerts']);
                 Route::get('kardex/{product}', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryReportController::class, 'productKardex']);
+                Route::get('kardex-productor/{productor}', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryReportController::class, 'kardexProductor']);
             });
         });
 
@@ -635,6 +637,7 @@ Route::middleware('auth:sanctum')->group(function () {
                     ->parameters(['consignatarios' => 'consignatario']);
 
                 // Venta de Rezaga
+                Route::post('salida-rezaga/{salidaRezaga}/revisar', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\SalidaRezagaEmpaqueController::class, 'revisar']);
                 Route::apiResource('salida-rezaga', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\SalidaRezagaEmpaqueController::class)
                     ->parameters(['salida-rezaga' => 'salidaRezaga']);
 
@@ -803,6 +806,7 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::get('valorizado', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryReportController::class, 'valued']);
                 Route::get('alertas', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryReportController::class, 'alerts']);
                 Route::get('kardex/{product}', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryReportController::class, 'productKardex']);
+                Route::get('kardex-productor/{productor}', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryReportController::class, 'kardexProductor']);
             });
         });
 
