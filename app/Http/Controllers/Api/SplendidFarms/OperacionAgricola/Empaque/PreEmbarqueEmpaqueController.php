@@ -96,6 +96,10 @@ class PreEmbarqueEmpaqueController extends Controller
                 'proceso.etapa.variedad:id,nombre',
                 'proceso.recepcion.salidaCampo.variedad:id,nombre',
                 'variedad:id,nombre',
+                'detalles:id,produccion_id,numero_entrada,proceso_id,fecha_produccion,total_cajas,peso_neto_kg,turno',
+                'detalles.proceso:id,productor_id,lote_id',
+                'detalles.proceso.productor:id,nombre,apellido',
+                'detalles.proceso.lote:id,nombre,numero_lote',
             ]),
         ]);
         $preEmbarque->loadCount('detalles');
