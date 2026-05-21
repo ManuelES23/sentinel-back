@@ -23,7 +23,8 @@ class ProduccionEmpaqueController extends Controller
         'proceso:id,folio_proceso,productor_id,lote_id,recepcion_id',
         'proceso.productor:id,nombre,apellido',
         'proceso.lote:id,nombre,numero_lote',
-        'proceso.recepcion:id,salida_campo_id,lote_producto_terminado',
+        'proceso.recepcion:id,salida_campo_id,variedad_id,lote_producto_terminado',
+        'proceso.recepcion.variedad:id,nombre',
         'proceso.recepcion.salidaCampo:id,variedad_id',
         'proceso.recepcion.salidaCampo.variedad:id,nombre',
         'variedad:id,nombre',
@@ -31,15 +32,26 @@ class ProduccionEmpaqueController extends Controller
         'recipe.items:id,recipe_id,group_key,quantity',
         'recipe.outputProduct:id,name,brand_id',
         'recipe.outputProduct.brand:id,name,code',
+        'recipe.recipeCalibres:id,recipe_id,calibre_id',
+        'recipe.recipeCalibres.calibre:id,nombre,valor',
+        'recipe.recipeCalibres.plus:id,recipe_calibre_id,product_id,is_organic,notes',
+        'recipe.recipeCalibres.plus.product:id,code,name,brand_id',
+        'recipe.recipeCalibres.plus.product.brand:id,name,code',
         'creador:id,name',
         'detalles',
         'detalles.proceso:id,folio_proceso,productor_id,lote_id,recepcion_id',
         'detalles.proceso.productor:id,nombre,apellido',
         'detalles.proceso.lote:id,nombre,numero_lote',
-        'detalles.proceso.recepcion:id,salida_campo_id,lote_producto_terminado',
+        'detalles.proceso.recepcion:id,salida_campo_id,variedad_id,lote_producto_terminado',
+        'detalles.proceso.recepcion.variedad:id,nombre',
         'detalles.proceso.recepcion.salidaCampo:id,variedad_id',
         'detalles.proceso.recepcion.salidaCampo.variedad:id,nombre',
         'detalles.recipe:id,name,code,output_quantity,output_product_id',
+        'detalles.recipe.recipeCalibres:id,recipe_id,calibre_id',
+        'detalles.recipe.recipeCalibres.calibre:id,nombre,valor',
+        'detalles.recipe.recipeCalibres.plus:id,recipe_calibre_id,product_id,is_organic,notes',
+        'detalles.recipe.recipeCalibres.plus.product:id,code,name,brand_id',
+        'detalles.recipe.recipeCalibres.plus.product.brand:id,name,code',
         'detalles.recipe.items:id,recipe_id,group_key,quantity',
         'detalles.recipe.outputProduct:id,name,brand_id',
         'detalles.recipe.outputProduct.brand:id,name,code',
@@ -122,6 +134,8 @@ class ProduccionEmpaqueController extends Controller
 
         $producciones->each(function (ProduccionEmpaque $produccion) {
             $this->syncAggregateFieldsFromDetalles($produccion);
+            $this->hydrateDetalleLoteProductoTerminado($produccion);
+            $this->hydrateResolvedLoteProductoTerminado($produccion);
 
             if (! $produccion->is_cola) {
                 return;
@@ -237,6 +251,7 @@ class ProduccionEmpaqueController extends Controller
                     }
 
                     $produccion->load($this->eagerLoad);
+                    $this->hydrateResolvedLoteProductoTerminado($produccion);
 
                     return response()->json([
                         'success' => true,
@@ -288,6 +303,7 @@ class ProduccionEmpaqueController extends Controller
 
         $produccion->update($validated);
         $produccion->load($this->eagerLoad);
+        $this->hydrateResolvedLoteProductoTerminado($produccion);
 
         return response()->json([
             'success' => true,
@@ -1693,6 +1709,108 @@ class ProduccionEmpaqueController extends Controller
             'total_cajas' => $aggregateFields['total_cajas'],
             'peso_neto_kg' => $aggregateFields['peso_neto_kg'],
         ]);
+    }
+
+    private function hydrateResolvedLoteProductoTerminado(ProduccionEmpaque $produccion): void
+    {
+        if (! $produccion->is_mixto) {
+            return;
+        }
+
+        $resolvedLoteProductoTerminado = $this->resolveLoteProductoTerminadoFromMixture($produccion);
+        if (filled($resolvedLoteProductoTerminado)) {
+            $produccion->setAttribute('lote_producto_terminado', $resolvedLoteProductoTerminado);
+        }
+    }
+
+    private function hydrateDetalleLoteProductoTerminado(ProduccionEmpaque $produccion): void
+    {
+        if (! $produccion->is_mixto || $produccion->detalles->isEmpty()) {
+            return;
+        }
+
+        $sourceColaIds = $produccion->detalles
+            ->map(fn (ProduccionEmpaqueDetalle $detalle) => $this->extractMixSourceColaId($detalle->observaciones))
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($sourceColaIds->isEmpty()) {
+            return;
+        }
+
+        $lotesByColaId = ProduccionEmpaque::withTrashed()
+            ->whereIn('id', $sourceColaIds)
+            ->get(['id', 'lote_producto_terminado'])
+            ->mapWithKeys(fn (ProduccionEmpaque $cola) => [
+                (int) $cola->id => trim((string) ($cola->lote_producto_terminado ?? '')),
+            ]);
+
+        $produccion->detalles->each(function (ProduccionEmpaqueDetalle $detalle) use ($lotesByColaId) {
+            if (filled($detalle->lote_producto_terminado)) {
+                return;
+            }
+
+            $sourceColaId = $this->extractMixSourceColaId($detalle->observaciones);
+            if (! $sourceColaId) {
+                return;
+            }
+
+            $resolvedLote = $lotesByColaId->get($sourceColaId, '');
+            if (filled($resolvedLote)) {
+                $detalle->setAttribute('lote_producto_terminado', $resolvedLote);
+            }
+        });
+    }
+
+    private function resolveLoteProductoTerminadoFromMixture(ProduccionEmpaque $produccion): ?string
+    {
+        $directLote = trim((string) ($produccion->lote_producto_terminado ?? ''));
+        if ($directLote !== '') {
+            return $directLote;
+        }
+
+        $sourceColas = collect($this->extractSourceColasFromMixture($produccion->observaciones));
+
+        if ($sourceColas->isEmpty()) {
+            $sourceColaIds = $produccion->detalles
+                ->map(fn (ProduccionEmpaqueDetalle $detalle) => $this->extractMixSourceColaId($detalle->observaciones))
+                ->filter()
+                ->unique()
+                ->values();
+
+            if ($sourceColaIds->isNotEmpty()) {
+                $sourceColas = ProduccionEmpaque::withTrashed()
+                    ->whereIn('id', $sourceColaIds)
+                    ->get(['id', 'numero_pallet', 'lote_producto_terminado'])
+                    ->map(fn (ProduccionEmpaque $cola) => [
+                        'id' => (int) $cola->id,
+                        'numero_pallet' => $cola->numero_pallet,
+                        'lote_producto_terminado' => $cola->lote_producto_terminado,
+                    ]);
+            }
+        }
+
+        $sourceLotes = $sourceColas
+            ->pluck('lote_producto_terminado')
+            ->map(fn ($value) => trim((string) $value))
+            ->filter(fn ($value) => $value !== '')
+            ->unique()
+            ->values();
+
+        if ($sourceLotes->count() === 1) {
+            return $sourceLotes->first();
+        }
+
+        $detalleLote = $produccion->detalles
+            ->map(fn (ProduccionEmpaqueDetalle $detalle) => trim((string) (
+                $detalle->loteProductoTerminado
+                ?? $detalle->lote_producto_terminado
+                ?? ''
+            )))
+            ->first(fn ($value) => $value !== '');
+
+        return $detalleLote !== '' ? $detalleLote : null;
     }
 
     private function generarNumeroCola(int $entityId, int $temporadaId): string
