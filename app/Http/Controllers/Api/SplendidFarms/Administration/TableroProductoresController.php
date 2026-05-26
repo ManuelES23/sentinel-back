@@ -99,6 +99,9 @@ class TableroProductoresController extends Controller
                 'salidaCampo:id,variedad_id',
                 'salidaCampo.variedad:id,nombre',
                 'procesos:id,recepcion_id,rezaga_lavado_kg',
+            'procesos.producciones:id,proceso_id,peso_neto_kg,peso_bascula_kg',
+            'procesos.rezagas:id,proceso_id,tipo_rezaga,cantidad_kg',
+            'procesos.rezagas.ventaDetalles:id,rezaga_id,peso_kg',
             ])
             ->where('temporada_id', $request->temporada_id)
             ->whereNotNull('productor_id')
@@ -139,18 +142,18 @@ class TableroProductoresController extends Controller
 
                 $pesoBascula = (float) ($recepcion->peso_bascula ?? $recepcion->peso_recibido_kg ?? 0);
 
-                // Calcular rezaga de lavado desde procesos asociados
-                $rezagaLavadoKg = 0;
-                foreach ($recepcion->procesos as $proceso) {
-                    $rezagaLavadoKg += (float) ($proceso->rezaga_lavado_kg ?? 0);
-                }
-
-                // Validación: rezaga no puede ser mayor que peso recibido
-                $rezagaLavadoKg = min($rezagaLavadoKg, $pesoBascula);
+                $rezagaDesglose = $this->calcularDesgloseRezagaKg($recepcion, $pesoBascula);
+                $rezagaTotalKg = $rezagaDesglose['total_kg'];
+                $porcentajeRezagaLavado = $pesoBascula > 0
+                    ? round(($rezagaDesglose['lavado_kg'] / $pesoBascula) * 100, 2)
+                    : 0;
+                $porcentajeRezagaProduccion = $pesoBascula > 0
+                    ? round(($rezagaDesglose['produccion_kg'] / $pesoBascula) * 100, 2)
+                    : 0;
 
                 // Calcular porcentaje de rezaga
                 $porcentajeRezaga = $pesoBascula > 0 
-                    ? round(($rezagaLavadoKg / $pesoBascula) * 100, 2)
+                    ? round(($rezagaTotalKg / $pesoBascula) * 100, 2)
                     : 0;
 
                 // Obtener variedad desde salida de campo
@@ -163,7 +166,11 @@ class TableroProductoresController extends Controller
                     'variedad' => $variedad,
                     'cantidad' => $recepcion->cantidad_recibida ?? 0,
                     'peso_bascula_kg' => round($pesoBascula, 2),
-                    'rezaga_lavado_kg' => round($rezagaLavadoKg, 2),
+                    'rezaga_lavado_kg' => round($rezagaDesglose['lavado_kg'], 2),
+                    'rezaga_produccion_kg' => round($rezagaDesglose['produccion_kg'], 2),
+                    'rezaga_total_kg' => round($rezagaTotalKg, 2),
+                    'porcentaje_rezaga_lavado' => $porcentajeRezagaLavado,
+                    'porcentaje_rezaga_produccion' => $porcentajeRezagaProduccion,
                     'porcentaje_rezaga' => $porcentajeRezaga,
                     'tipo_carga' => $recepcion->tipoCarga?->nombre ?? 'N/A',
                     'lote' => $recepcion->lote?->nombre ?? '—',
@@ -323,6 +330,8 @@ class TableroProductoresController extends Controller
                 'procesos:id,recepcion_id,rezaga_lavado_kg',
                 'procesos.producciones:id,proceso_id,total_cajas,peso_neto_kg',
                 'procesos.producciones.embarqueDetalles:id,produccion_id,cajas',
+                'procesos.rezagas:id,proceso_id,tipo_rezaga,cantidad_kg',
+            'procesos.rezagas.ventaDetalles:id,rezaga_id,peso_kg',
             ])
             ->where('temporada_id', $request->temporada_id)
             ->where('productor_id', $productorId)
@@ -364,11 +373,9 @@ class TableroProductoresController extends Controller
             $pesoBascula = (float) ($recepcion->peso_bascula ?? $recepcion->peso_recibido_kg ?? 0);
             $cantidad = (int) ($recepcion->cantidad_recibida ?? 0);
 
-            $rezagaLavadoKg = 0;
             $producidoCajas = 0;
             $embarcadoCajas = 0;
             foreach ($recepcion->procesos as $proceso) {
-                $rezagaLavadoKg += (float) ($proceso->rezaga_lavado_kg ?? 0);
                 foreach ($proceso->producciones as $produccion) {
                     $producidoCajas += (int) ($produccion->total_cajas ?? 0);
                     foreach ($produccion->embarqueDetalles as $detalle) {
@@ -377,13 +384,19 @@ class TableroProductoresController extends Controller
                 }
             }
 
-            // Validación: rezaga no puede ser mayor que peso recibido
-            $rezagaLavadoKg = min($rezagaLavadoKg, $pesoBascula);
+            $rezagaDesglose = $this->calcularDesgloseRezagaKg($recepcion, $pesoBascula);
+            $rezagaTotalKg = $rezagaDesglose['total_kg'];
+            $porcentajeRezagaLavado = $pesoBascula > 0
+                ? round(($rezagaDesglose['lavado_kg'] / $pesoBascula) * 100, 2)
+                : 0;
+            $porcentajeRezagaProduccion = $pesoBascula > 0
+                ? round(($rezagaDesglose['produccion_kg'] / $pesoBascula) * 100, 2)
+                : 0;
 
             $porcentajeRezaga = $pesoBascula > 0
-                ? round(($rezagaLavadoKg / $pesoBascula) * 100, 2)
+                ? round(($rezagaTotalKg / $pesoBascula) * 100, 2)
                 : 0;
-            $producidoKg = max(0, $pesoBascula - $rezagaLavadoKg);
+            $producidoKg = max(0, $pesoBascula - $rezagaTotalKg);
 
             $precioUnitario = $convenioAsignado
                 ? $this->obtenerPrecio($convenioAsignado, $recepcion->tipo_carga_id, $fechaRecepcion)
@@ -395,7 +408,7 @@ class TableroProductoresController extends Controller
                 : ($cantidad * $precioUnitario);
 
             $porcentajeAceptadoRezaga = (float) ($convenioAsignado?->porcentaje_rezaga ?? 0);
-            $excedenteRezagaPct = max(0, $porcentajeRezaga - $porcentajeAceptadoRezaga);
+            $excedenteRezagaPct = max(0, $porcentajeRezagaLavado - $porcentajeAceptadoRezaga);
             $descuentoRezaga = round($subtotal * ($excedenteRezagaPct / 100), 2);
             $subtotalNeto = round($subtotal - $descuentoRezaga, 2);
 
@@ -416,7 +429,11 @@ class TableroProductoresController extends Controller
                 'producido_cajas' => $producidoCajas,
                 'producido_kg' => round($producidoKg, 2),
                 'embarcado_cajas' => $embarcadoCajas,
-                'rezaga_lavado_kg' => round($rezagaLavadoKg, 2),
+                'rezaga_lavado_kg' => round($rezagaDesglose['lavado_kg'], 2),
+                'rezaga_produccion_kg' => round($rezagaDesglose['produccion_kg'], 2),
+                'rezaga_total_kg' => round($rezagaTotalKg, 2),
+                'porcentaje_rezaga_lavado' => $porcentajeRezagaLavado,
+                'porcentaje_rezaga_produccion' => $porcentajeRezagaProduccion,
                 'porcentaje_rezaga' => $porcentajeRezaga,
                 'excedente_rezaga_pct' => round($excedenteRezagaPct, 2),
                 'precio_unitario' => (float) $precioUnitario,
@@ -432,7 +449,7 @@ class TableroProductoresController extends Controller
             $totales['total_producido_cajas'] += $producidoCajas;
             $totales['total_producido_kg'] += $producidoKg;
             $totales['total_embarcado_cajas'] += $embarcadoCajas;
-            $totales['total_rezaga_kg'] += $rezagaLavadoKg;
+            $totales['total_rezaga_kg'] += $rezagaTotalKg;
             $totales['monto_bruto'] += $subtotal;
             $totales['descuento_rezaga'] += $descuentoRezaga;
             $totales['monto_neto'] += $subtotalNeto;
@@ -457,6 +474,9 @@ class TableroProductoresController extends Controller
                 'salidaCampo:id,variedad_id',
                 'salidaCampo.variedad:id,nombre',
                 'procesos:id,recepcion_id,rezaga_lavado_kg',
+            'procesos.producciones:id,proceso_id,peso_neto_kg,peso_bascula_kg',
+                'procesos.rezagas:id,proceso_id,tipo_rezaga,cantidad_kg',
+            'procesos.rezagas.ventaDetalles:id,rezaga_id,peso_kg',
             ])
             ->where('temporada_id', $request->temporada_id)
             ->where('productor_id', $productorId)
@@ -474,16 +494,17 @@ class TableroProductoresController extends Controller
             $pesoBascula = (float) ($recepcion->peso_bascula ?? $recepcion->peso_recibido_kg ?? 0);
             $cantidad = (int) ($recepcion->cantidad_recibida ?? 0);
 
-            $rezagaLavadoKg = 0;
-            foreach ($recepcion->procesos as $proceso) {
-                $rezagaLavadoKg += (float) ($proceso->rezaga_lavado_kg ?? 0);
-            }
-
-            // Validación: rezaga no puede ser mayor que peso recibido
-            $rezagaLavadoKg = min($rezagaLavadoKg, $pesoBascula);
+            $rezagaDesglose = $this->calcularDesgloseRezagaKg($recepcion, $pesoBascula);
+            $rezagaTotalKg = $rezagaDesglose['total_kg'];
+            $porcentajeRezagaLavado = $pesoBascula > 0
+                ? round(($rezagaDesglose['lavado_kg'] / $pesoBascula) * 100, 2)
+                : 0;
+            $porcentajeRezagaProduccion = $pesoBascula > 0
+                ? round(($rezagaDesglose['produccion_kg'] / $pesoBascula) * 100, 2)
+                : 0;
 
             $porcentajeRezaga = $pesoBascula > 0
-                ? round(($rezagaLavadoKg / $pesoBascula) * 100, 2)
+                ? round(($rezagaTotalKg / $pesoBascula) * 100, 2)
                 : 0;
 
             $desglose[] = [
@@ -493,7 +514,11 @@ class TableroProductoresController extends Controller
                 'variedad' => $recepcion->salidaCampo?->variedad?->nombre ?? '—',
                 'cantidad' => $cantidad,
                 'peso_bascula_kg' => round($pesoBascula, 2),
-                'rezaga_lavado_kg' => round($rezagaLavadoKg, 2),
+                'rezaga_lavado_kg' => round($rezagaDesglose['lavado_kg'], 2),
+                'rezaga_produccion_kg' => round($rezagaDesglose['produccion_kg'], 2),
+                'rezaga_total_kg' => round($rezagaTotalKg, 2),
+                'porcentaje_rezaga_lavado' => $porcentajeRezagaLavado,
+                'porcentaje_rezaga_produccion' => $porcentajeRezagaProduccion,
                 'porcentaje_rezaga' => $porcentajeRezaga,
                 'tipo_carga' => $recepcion->tipoCarga?->nombre ?? 'N/A',
                 'lote' => $recepcion->lote?->nombre ?? '—',
@@ -504,7 +529,7 @@ class TableroProductoresController extends Controller
 
             $totalKilos += $pesoBascula;
             $totalCantidad += $cantidad;
-            $totalRezagaKg += $rezagaLavadoKg;
+            $totalRezagaKg += $rezagaTotalKg;
         }
 
         return [
@@ -547,12 +572,7 @@ class TableroProductoresController extends Controller
                 $pesoBasculaRecepcion = (float) ($recepcion->peso_bascula ?? $recepcion->peso_recibido_kg ?? 0);
                 $cantidad = (int) ($recepcion->cantidad_recibida ?? 0);
 
-                $rezagaKg = 0;
-                foreach ($recepcion->procesos as $proceso) {
-                    $rezagaKg += (float) ($proceso->rezaga_lavado_kg ?? 0);
-                }
-                // Validación: rezaga no puede ser mayor que peso recibido
-                $rezagaKg = min($rezagaKg, $pesoBasculaRecepcion);
+                $rezagaKg = $this->calcularRezagaLavadoKg($recepcion, $pesoBasculaRecepcion);
                 $totalRezagaKg += $rezagaKg;
 
                 if ($esPorKilos) {
@@ -594,7 +614,9 @@ class TableroProductoresController extends Controller
                 $pesoBasculaRecepcion += (float) ($recepcion->peso_bascula ?? 0);
                 foreach ($recepcion->procesos as $proceso) {
                     foreach ($proceso->rezagas as $rezaga) {
-                        $rezagaKg += (float) $rezaga->cantidad_kg;
+                        if (($rezaga->tipo_rezaga ?? null) === 'lavado') {
+                            $rezagaKg += (float) $rezaga->cantidad_kg;
+                        }
                     }
                 }
             }
@@ -700,12 +722,7 @@ class TableroProductoresController extends Controller
                 $pesoBasculaRecepcion = (float) ($recepcion->peso_bascula ?? $recepcion->peso_recibido_kg ?? 0);
                 $cantidad = (int) ($recepcion->cantidad_recibida ?? 0);
 
-                $rezagaKg = 0;
-                foreach ($recepcion->procesos as $proceso) {
-                    $rezagaKg += (float) ($proceso->rezaga_lavado_kg ?? 0);
-                }
-                // Validación: rezaga no puede ser mayor que peso recibido
-                $rezagaKg = min($rezagaKg, $pesoBasculaRecepcion);
+                $rezagaKg = $this->calcularRezagaLavadoKg($recepcion, $pesoBasculaRecepcion);
 
                 $producidoKg = $esPorKilos ? max(0, $pesoBasculaRecepcion - $rezagaKg) : 0;
 
@@ -783,7 +800,9 @@ class TableroProductoresController extends Controller
                     }
 
                     foreach ($proceso->rezagas as $rezaga) {
-                        $rezagaKg += (float) $rezaga->cantidad_kg;
+                        if (($rezaga->tipo_rezaga ?? null) === 'lavado') {
+                            $rezagaKg += (float) $rezaga->cantidad_kg;
+                        }
                     }
                 }
             }
@@ -908,6 +927,9 @@ class TableroProductoresController extends Controller
                 'salidaCampo:id,variedad_id',
                 'salidaCampo.variedad:id,nombre,cultivo_id',
                 'procesos:id,recepcion_id,rezaga_lavado_kg',
+            'procesos.producciones:id,proceso_id,peso_neto_kg,peso_bascula_kg',
+                'procesos.rezagas:id,proceso_id,tipo_rezaga,cantidad_kg',
+            'procesos.rezagas.ventaDetalles:id,rezaga_id,peso_kg',
             ])
             ->where('temporada_id', $convenio->temporada_id)
             ->where('productor_id', $convenio->productor_id);
@@ -1074,7 +1096,7 @@ class TableroProductoresController extends Controller
                     $q->select('id', 'produccion_id', 'cajas');
                 },
                 'recepciones.procesos.rezagas' => function ($q) {
-                    $q->select('id', 'proceso_id', 'cantidad_kg');
+                    $q->select('id', 'proceso_id', 'tipo_rezaga', 'cantidad_kg');
                 },
             ]);
         }
@@ -1125,5 +1147,90 @@ class TableroProductoresController extends Controller
         }
 
         return str_contains($nombreTipoCarga, 'kilo') || str_contains($nombreTipoCarga, 'kg');
+    }
+
+    /**
+     * Calcula desglose de rezaga para una recepción.
+     * Prioriza registros reales de rezaga por tipo (lavado/producción).
+     */
+    private function calcularDesgloseRezagaKg($recepcion, float $pesoBascula): array
+    {
+        $rezagaCapturadaKg = 0;
+        $rezagaLavadoRegistrosKg = 0;
+        $rezagaProduccionRegistrosKg = 0;
+        $produccionKg = 0;
+        $tieneProduccion = false;
+        $tieneRezagaRegistros = false;
+
+        foreach ($recepcion->procesos as $proceso) {
+            $rezagaCapturadaKg += (float) ($proceso->rezaga_lavado_kg ?? 0);
+
+            if ($proceso->relationLoaded('rezagas')) {
+                foreach ($proceso->rezagas as $rezaga) {
+                    $vendidoKg = 0;
+                    if ($rezaga->relationLoaded('ventaDetalles')) {
+                        $vendidoKg = (float) $rezaga->ventaDetalles->sum('peso_kg');
+                    }
+
+                    $historicaKg = (float) ($rezaga->cantidad_kg ?? 0) + $vendidoKg;
+                    if (($rezaga->tipo_rezaga ?? null) === 'produccion') {
+                        $rezagaProduccionRegistrosKg += $historicaKg;
+                    } else {
+                        $rezagaLavadoRegistrosKg += $historicaKg;
+                    }
+                    $tieneRezagaRegistros = true;
+                }
+            }
+
+            if ($proceso->relationLoaded('producciones')) {
+                foreach ($proceso->producciones as $produccion) {
+                    $pesoProduccion = (float) ($produccion->peso_neto_kg ?? $produccion->peso_bascula_kg ?? 0);
+                    $produccionKg += max(0, $pesoProduccion);
+                    $tieneProduccion = true;
+                }
+            }
+        }
+
+        if ($tieneRezagaRegistros) {
+            $totalRegistrosKg = $rezagaLavadoRegistrosKg + $rezagaProduccionRegistrosKg;
+
+            if ($totalRegistrosKg > 0) {
+                if ($pesoBascula > 0 && $totalRegistrosKg > $pesoBascula) {
+                    $factor = $pesoBascula / $totalRegistrosKg;
+                    $rezagaLavadoRegistrosKg *= $factor;
+                    $rezagaProduccionRegistrosKg *= $factor;
+                    $totalRegistrosKg = $pesoBascula;
+                }
+
+                return [
+                    'lavado_kg' => $rezagaLavadoRegistrosKg,
+                    'produccion_kg' => $rezagaProduccionRegistrosKg,
+                    'total_kg' => $totalRegistrosKg,
+                ];
+            }
+        }
+
+        if ($tieneProduccion && $pesoBascula > 0) {
+            $rezagaInferidaKg = max(0, $pesoBascula - $produccionKg);
+            $rezagaInferidaKg = min($rezagaInferidaKg, $pesoBascula);
+            return [
+                'lavado_kg' => $rezagaInferidaKg,
+                'produccion_kg' => 0,
+                'total_kg' => $rezagaInferidaKg,
+            ];
+        }
+
+        $rezagaCapturadaKg = min($rezagaCapturadaKg, $pesoBascula);
+        return [
+            'lavado_kg' => $rezagaCapturadaKg,
+            'produccion_kg' => 0,
+            'total_kg' => $rezagaCapturadaKg,
+        ];
+    }
+
+    private function calcularRezagaLavadoKg($recepcion, float $pesoBascula): float
+    {
+        $desglose = $this->calcularDesgloseRezagaKg($recepcion, $pesoBascula);
+        return (float) ($desglose['lavado_kg'] ?? 0);
     }
 }
