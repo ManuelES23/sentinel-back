@@ -277,6 +277,13 @@ class ProduccionEmpaqueController extends Controller
 
     public function update(Request $request, ProduccionEmpaque $produccion): JsonResponse
     {
+        if (($produccion->status ?? null) === 'embarcado') {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No se puede editar un pallet que ya está embarcado',
+            ], 422);
+        }
+
         $validated = $request->validate([
             'entity_id' => 'sometimes|exists:entities,id',
             'proceso_id' => 'nullable|exists:proceso_empaque,id',
@@ -2012,6 +2019,13 @@ class ProduccionEmpaqueController extends Controller
                 'status' => 'error',
                 'message' => 'El detalle no pertenece a esta producción',
             ], 404);
+        }
+
+        if (($produccion->status ?? null) === 'embarcado') {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No se puede editar un pallet que ya está embarcado',
+            ], 422);
         }
 
         $validated = $request->validate([
