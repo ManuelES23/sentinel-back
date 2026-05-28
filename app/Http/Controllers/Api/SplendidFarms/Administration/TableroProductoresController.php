@@ -13,6 +13,14 @@ use Illuminate\Http\Request;
 
 class TableroProductoresController extends Controller
 {
+    private function aplicarFiltroNoMaquila($query)
+    {
+        return $query->where(function ($q) {
+            $q->where('maquila', false)
+              ->orWhereNull('maquila');
+        });
+    }
+
     /**
      * Tablero general: resumen y desglose por productor
      * Incluye AMBOS: productores con convenios activos Y productores con recepciones sin convenio
@@ -49,6 +57,9 @@ class TableroProductoresController extends Controller
             ])
             ->where('temporada_id', $request->temporada_id)
             ->whereIn('status', [ConvenioCompra::STATUS_ACTIVO, ConvenioCompra::STATUS_BORRADOR])
+            ->whereHas('productor', function ($q) {
+                $this->aplicarFiltroNoMaquila($q);
+            })
             ->when($request->filled('productor_id'), fn($q) => $q->where('productor_id', $request->productor_id))
             ->get();
 
@@ -105,6 +116,9 @@ class TableroProductoresController extends Controller
             ])
             ->where('temporada_id', $request->temporada_id)
             ->whereNotNull('productor_id')
+            ->whereHas('productor', function ($q) {
+                $this->aplicarFiltroNoMaquila($q);
+            })
             ->when($request->filled('productor_id'), fn($q) => $q->where('productor_id', $request->productor_id))
             ->get();
 
@@ -212,6 +226,10 @@ class TableroProductoresController extends Controller
         ]);
 
         $productor = Productor::select('id', 'nombre', 'apellido', 'tipo', 'telefono', 'email', 'rfc')
+            ->where(function ($q) {
+                $q->where('maquila', false)
+                  ->orWhereNull('maquila');
+            })
             ->find($productorId);
 
         if (!$productor) {

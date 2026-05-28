@@ -177,13 +177,21 @@ class EmbarqueEmpaqueController extends Controller
             'variedad:id,nombre',
         ])->whereIn('id', $palletIds)->get();
 
+        $palletMetrics = $pallets->mapWithKeys(function (ProduccionEmpaque $pallet) {
+            return [$pallet->id => $this->resolvePalletSnapshotTotals($pallet)];
+        });
+
         // Calculate totals from actual pallet data
         $validated['total_pallets'] = $pallets->count();
-        $validated['total_cajas'] = $pallets->sum('total_cajas');
-        $validated['peso_total_kg'] = $pallets->sum('peso_neto_kg');
+        $validated['total_cajas'] = $pallets->sum(function (ProduccionEmpaque $pallet) use ($palletMetrics) {
+            return (int) ($palletMetrics[$pallet->id]['total_cajas'] ?? 0);
+        });
+        $validated['peso_total_kg'] = $pallets->sum(function (ProduccionEmpaque $pallet) use ($palletMetrics) {
+            return (float) ($palletMetrics[$pallet->id]['peso_neto_kg'] ?? 0);
+        });
         $validated['peso_bascula_total_kg'] = $pallets->sum('peso_bascula_kg');
 
-        $embarque = DB::transaction(function () use ($validated, $pallets) {
+        $embarque = DB::transaction(function () use ($validated, $pallets, $palletMetrics) {
             // Generar folio dentro de la transacción con lock para evitar duplicados por concurrencia
             $validated['folio_embarque'] = $this->generarFolio($validated);
 
@@ -198,6 +206,7 @@ class EmbarqueEmpaqueController extends Controller
                     ?? $proceso?->etapa?->variedad?->nombre
                     ?? $proceso?->recepcion?->salidaCampo?->variedad?->nombre;
                 $loteEmpaque = $this->resolverLoteEmpaque($pallet);
+                $metric = $palletMetrics[$pallet->id] ?? ['total_cajas' => 0, 'peso_neto_kg' => 0.0];
 
                 $embarque->detalles()->create([
                     'produccion_id' => $pallet->id,
@@ -213,15 +222,20 @@ class EmbarqueEmpaqueController extends Controller
                     'etiqueta' => $pallet->etiqueta,
                     'calibre' => $pallet->calibre,
                     'fecha_produccion' => $pallet->fecha_produccion,
-                    'cajas' => $pallet->total_cajas,
-                    'peso_kg' => $pallet->peso_neto_kg,
+                    'cajas' => (int) ($metric['total_cajas'] ?? 0),
+                    'peso_kg' => (float) ($metric['peso_neto_kg'] ?? 0),
                     'peso_bascula_kg' => $pallet->peso_bascula_kg,
                     'is_cola' => $pallet->is_cola,
                     'posicion_carga' => $posiciones[$pallet->id]['posicion_carga'] ?? null,
                 ]);
 
                 // Mark production as shipped and out of cuarto frío
-                $pallet->update(['status' => 'embarcado', 'en_cuarto_frio' => false]);
+                $pallet->update([
+                    'status' => 'embarcado',
+                    'en_cuarto_frio' => false,
+                    'total_cajas' => (int) ($metric['total_cajas'] ?? 0),
+                    'peso_neto_kg' => (float) ($metric['peso_neto_kg'] ?? 0),
+                ]);
             }
 
             return $embarque;
@@ -410,6 +424,28 @@ class EmbarqueEmpaqueController extends Controller
         }
 
         return $pallet->proceso?->lote?->nombre;
+    }
+
+    private function resolvePalletSnapshotTotals(ProduccionEmpaque $pallet): array
+    {
+        $detalles = $pallet->relationLoaded('detalles')
+            ? $pallet->detalles
+            : $pallet->detalles()->get();
+
+        if ($detalles->isEmpty()) {
+            return [
+                'total_cajas' => (int) ($pallet->total_cajas ?? 0),
+                'peso_neto_kg' => round((float) ($pallet->peso_neto_kg ?? 0), 2),
+            ];
+        }
+
+        return [
+            'total_cajas' => (int) $detalles->sum(fn (ProduccionEmpaqueDetalle $detalle) => (int) ($detalle->total_cajas ?? 0)),
+            'peso_neto_kg' => round(
+                (float) $detalles->sum(fn (ProduccionEmpaqueDetalle $detalle) => (float) ($detalle->peso_neto_kg ?? 0)),
+                2,
+            ),
+        ];
     }
 
     private function hydrateEmbarqueLots(EmbarqueEmpaque $embarque): void

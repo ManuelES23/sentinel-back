@@ -43,7 +43,7 @@ class ProductorSimpleController extends Controller
         }
 
         $productores = $query
-            ->select('productores.id', 'productores.tipo', 'productores.nombre', 'productores.apellido', 'productores.telefono', 'productores.is_active', 'productores.created_at')
+            ->select('productores.id', 'productores.tipo', 'productores.nombre', 'productores.apellido', 'productores.telefono', 'productores.maquila', 'productores.is_active', 'productores.created_at')
             ->distinct()
             ->orderBy('productores.nombre')
             ->get();
@@ -58,6 +58,7 @@ class ProductorSimpleController extends Controller
             'nombre' => 'required|string|max:255',
             'apellido' => 'nullable|string|max:255',
             'telefono' => 'nullable|string|max:20',
+            'maquila' => 'boolean',
             'temporada_id' => 'nullable|exists:temporadas,id',
         ]);
 
@@ -90,7 +91,7 @@ class ProductorSimpleController extends Controller
     {
         return response()->json([
             'success' => true,
-            'data' => $productor->only(['id', 'tipo', 'nombre', 'apellido', 'telefono', 'is_active', 'created_at']),
+            'data' => $productor->only(['id', 'tipo', 'nombre', 'apellido', 'telefono', 'maquila', 'is_active', 'created_at']),
         ]);
     }
 
@@ -101,6 +102,7 @@ class ProductorSimpleController extends Controller
             'nombre' => 'sometimes|required|string|max:255',
             'apellido' => 'nullable|string|max:255',
             'telefono' => 'nullable|string|max:20',
+            'maquila' => 'boolean',
         ]);
 
         $productor->update($validated);

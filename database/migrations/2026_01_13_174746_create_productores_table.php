@@ -20,6 +20,7 @@ return new class extends Migration
             $table->string('direccion')->nullable();
             $table->string('rfc')->nullable();
             $table->text('notas')->nullable();
+            $table->boolean('maquila')->default(false);
             $table->boolean('is_active')->default(true);
             $table->timestamps();
             $table->softDeletes();

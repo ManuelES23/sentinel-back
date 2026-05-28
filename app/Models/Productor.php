@@ -33,6 +33,7 @@ class Productor extends Model
         'direccion',
         'rfc',
         'notas',
+        'maquila',
         'is_active',
     ];
 
@@ -48,6 +49,7 @@ class Productor extends Model
      * @var array<string, string>
      */
     protected $casts = [
+        'maquila' => 'boolean',
         'is_active' => 'boolean',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
