@@ -585,11 +585,13 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::post('lavado/{proceso}/completar-hidrotermico', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'completarHidrotermico']);
                 Route::post('lavado/{proceso}/completar-enfriamiento', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'completarEnfriamiento']);
                 Route::post('lavado/{proceso}/rezaga', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'registrarRezaga']);
+                Route::patch('lavado/{proceso}/actualizar-captura', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'actualizarCaptura']);
                 Route::post('lavado/{proceso}/devolver-lavado', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'devolverALavado']);
                 Route::post('lavado/{proceso}/devolver-piso', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'devolverAPiso']);
                 Route::post('lavado/{proceso}/resetear-folio', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'resetearFolio']);
 
                 // Producción (cajas / pallets)
+                Route::get('recorrido-folios', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\RecorridoFoliosEmpaqueController::class, 'show']);
                 Route::get('produccion/next-pallet', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'nextPalletNumber']);
                 Route::get('produccion/next-cola', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'nextColaNumber']);
                 Route::get('produccion/cola-pallets', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'colaPallets']);

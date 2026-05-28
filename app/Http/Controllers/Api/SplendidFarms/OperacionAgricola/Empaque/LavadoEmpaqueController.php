@@ -816,6 +816,104 @@ class LavadoEmpaqueController extends Controller
     }
 
     /**
+     * PATCH /lavado/{proceso}/actualizar-captura
+     *
+     * Permite corregir captura histórica de lavado (kg/cajas/fecha/tipo de carga)
+     * manteniendo la consistencia de cantidades disponibles vs consumidas.
+     */
+    public function actualizarCaptura(Request $request, ProcesoEmpaque $proceso): JsonResponse
+    {
+        $gate = $this->ensureLavadoEnabledForEntity($proceso->entity_id);
+        if ($gate) {
+            return $gate;
+        }
+
+        $allowedStatuses = [
+            'lavando',
+            'lavado',
+            'hidrotermico',
+            'enfriando',
+            'listo_produccion',
+            'en_proceso',
+            'procesado',
+        ];
+
+        if (!in_array($proceso->status, $allowedStatuses, true)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'El folio no se puede editar desde lavado en su estado actual',
+            ], 422);
+        }
+
+        $validated = $request->validate([
+            'peso_entrada_kg' => 'required|numeric|min:0.01',
+            'cantidad_entrada' => 'nullable|integer|min:1',
+            'fecha_lavado' => 'nullable|date',
+            'tipo_carga_id' => 'nullable|exists:tipos_carga,id',
+        ]);
+
+        $pesoEntradaKg = round((float) $validated['peso_entrada_kg'], 2);
+
+        $cantidadEntradaActual = (int) ($proceso->cantidad_entrada ?? 0);
+        $cantidadDisponibleActual = (int) ($proceso->cantidad_disponible ?? 0);
+        $cajasConsumidas = max(0, $cantidadEntradaActual - $cantidadDisponibleActual);
+
+        $cantidadEntradaNueva = array_key_exists('cantidad_entrada', $validated)
+            ? (int) $validated['cantidad_entrada']
+            : $cantidadEntradaActual;
+
+        if ($cantidadEntradaNueva < $cajasConsumidas) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'La cantidad de entrada no puede ser menor que las cajas ya consumidas en producción',
+            ], 422);
+        }
+
+        $cantidadDisponibleNueva = max(0, $cantidadEntradaNueva - $cajasConsumidas);
+        $pesoDisponibleNuevo = $cantidadEntradaNueva > 0
+            ? round(($pesoEntradaKg / $cantidadEntradaNueva) * $cantidadDisponibleNueva, 2)
+            : 0;
+
+        $payload = [
+            'peso_entrada_kg' => $pesoEntradaKg,
+            'cantidad_entrada' => $cantidadEntradaNueva,
+            'cantidad_disponible' => $cantidadDisponibleNueva,
+            'peso_disponible_kg' => $pesoDisponibleNuevo,
+        ];
+
+        if (array_key_exists('fecha_lavado', $validated)) {
+            $payload['fecha_lavado'] = $validated['fecha_lavado'];
+        }
+
+        if (array_key_exists('tipo_carga_id', $validated)) {
+            $payload['tipo_carga_id'] = $validated['tipo_carga_id'];
+        }
+
+        if (
+            $this->supportsLavadoSnapshot()
+            && $proceso->status === 'lavado'
+            && is_array($proceso->lavado_snapshot)
+        ) {
+            $snapshot = $proceso->lavado_snapshot;
+            $snapshot['tipo_carga_id'] = $payload['tipo_carga_id'] ?? ($snapshot['tipo_carga_id'] ?? $proceso->tipo_carga_id);
+            $snapshot['cantidad_entrada'] = $cantidadEntradaNueva;
+            $snapshot['peso_entrada_kg'] = $pesoEntradaKg;
+            $snapshot['cantidad_disponible'] = $cantidadDisponibleNueva;
+            $snapshot['peso_disponible_kg'] = $pesoDisponibleNuevo;
+            $payload['lavado_snapshot'] = $snapshot;
+        }
+
+        $proceso->update($payload);
+        $proceso->load($this->eagerLoad);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Captura de lavado actualizada correctamente',
+            'data' => $proceso,
+        ]);
+    }
+
+    /**
      * POST /lavado/{proceso}/devolver-piso — Undo: remove from lavado pipeline
      */
     public function devolverAPiso(ProcesoEmpaque $proceso): JsonResponse
