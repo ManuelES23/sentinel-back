@@ -50,6 +50,7 @@ class LavadoEmpaqueController extends Controller
                 'status',
             ])
                 ->where('tipo_rezaga', 'lavado')
+                ->with(['ventaDetalles:id,rezaga_id,peso_kg'])
                 ->orderByDesc('id');
         };
 
@@ -435,21 +436,76 @@ class LavadoEmpaqueController extends Controller
             'procesado',
         ];
 
-        $query = ProcesoEmpaque::with($this->withLavadoRezagas($this->eagerLoad))
+        $historico = ProcesoEmpaque::with($this->withLavadoRezagas($this->eagerLoad))
             ->whereNotNull('fecha_lavado')
-            ->whereIn('status', $statuses);
-
-        if ($request->filled('temporada_id')) {
-            $query->byTemporada($request->temporada_id);
-        }
-        if ($request->filled('entity_id')) {
-            $query->where('entity_id', $request->entity_id);
-        }
-
-        $historico = $query
+            ->whereIn('status', $statuses)
+            ->when($request->filled('temporada_id'), fn ($q) => $q->where('temporada_id', $request->temporada_id))
+            ->when($request->filled('entity_id'), fn ($q) => $q->where('entity_id', $request->entity_id))
             ->orderByDesc('fecha_lavado')
             ->orderByDesc('id')
             ->get();
+
+        $procesoIds = $historico->pluck('id')->filter()->unique()->values();
+        $folios = $historico->pluck('folio_proceso')->filter()->unique()->values();
+
+        $rezagasPorProceso = collect();
+        $rezagasPorFolio = collect();
+
+        if ($procesoIds->isNotEmpty()) {
+            $rezagasPorProceso = RezagaEmpaque::query()
+                ->with(['proceso:id,folio_proceso,temporada_id,entity_id'])
+                ->where('tipo_rezaga', 'lavado')
+                ->whereIn('proceso_id', $procesoIds)
+                ->orderByDesc('id')
+                ->get()
+                ->groupBy('proceso_id')
+                ->map(fn ($items) => $items->first());
+        }
+
+        if ($folios->isNotEmpty()) {
+            $rezagasPorFolio = RezagaEmpaque::query()
+                ->with(['proceso:id,folio_proceso,temporada_id,entity_id'])
+                ->where('tipo_rezaga', 'lavado')
+                ->whereHas('proceso', function ($q) use ($folios, $request) {
+                    $q->whereIn('folio_proceso', $folios);
+
+                    if ($request->filled('temporada_id')) {
+                        $q->where('temporada_id', $request->temporada_id);
+                    }
+                    if ($request->filled('entity_id')) {
+                        $q->where('entity_id', $request->entity_id);
+                    }
+                })
+                ->orderByDesc('id')
+                ->get()
+                ->filter(fn ($rezaga) => !empty($rezaga->proceso?->folio_proceso))
+                ->groupBy(fn ($rezaga) => strtoupper(trim((string) $rezaga->proceso->folio_proceso)))
+                ->map(fn ($items) => $items->first());
+        }
+
+        $historico = $historico->map(function ($item) use ($rezagasPorProceso, $rezagasPorFolio) {
+            $folioKey = strtoupper(trim((string) ($item->folio_proceso ?? '')));
+
+            $rezaga = $rezagasPorProceso->get($item->id)
+                ?? ($folioKey !== '' ? $rezagasPorFolio->get($folioKey) : null)
+                ?? $item->rezagas->first();
+
+            if ($rezaga) {
+                $kgActual = round((float) ($rezaga->cantidad_kg ?? 0), 2);
+                $kgConsumido = round((float) ($rezaga->ventaDetalles?->sum('peso_kg') ?? 0), 2);
+                $kgHistorico = round($kgActual + $kgConsumido, 2);
+
+                $item->setRelation('rezagas', collect([$rezaga]));
+                $item->rezaga_lavado_kg = $kgActual;
+                $item->rezaga_lavado_cantidad = (int) ($rezaga->cantidad_unidades_pequenas ?? 0);
+                $item->setAttribute('rezaga_empaque_id', $rezaga->id);
+                $item->setAttribute('rezaga_lavado_historica_kg', $kgHistorico);
+
+                $rezaga->setAttribute('cantidad_historica_kg', $kgHistorico);
+            }
+
+            return $item;
+        })->values();
 
         return response()->json([
             'success' => true,
@@ -1032,9 +1088,52 @@ class LavadoEmpaqueController extends Controller
                 ->orderByDesc('id')
                 ->first();
 
+            // Fallback por folio: algunos flujos mueven/duplican proceso y la
+            // rezaga puede haber quedado ligada a otro proceso del mismo folio.
+            if (! $rezagaLavado && ! empty($proceso->folio_proceso)) {
+                $procesoIdsFolio = ProcesoEmpaque::withTrashed()
+                    ->where('folio_proceso', $proceso->folio_proceso)
+                    ->where('temporada_id', $proceso->temporada_id)
+                    ->where('entity_id', $proceso->entity_id)
+                    ->pluck('id');
+
+                if ($procesoIdsFolio->isNotEmpty()) {
+                    $rezagaLavado = RezagaEmpaque::query()
+                        ->whereIn('proceso_id', $procesoIdsFolio)
+                        ->where('tipo_rezaga', 'lavado')
+                        ->orderByDesc('id')
+                        ->first();
+                }
+            }
+
+            $kgYaVendido = 0.0;
+            if ($rezagaLavado) {
+                $kgYaVendido = round((float) DB::table('venta_rezaga_empaque_detalles')
+                    ->where('rezaga_id', $rezagaLavado->id)
+                    ->sum('peso_kg'), 2);
+            }
+
+            if ($kgYaVendido > 0 && $rezagaKg < $kgYaVendido) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'La rezaga no puede ser menor a los kilos ya vendidos',
+                ], 422);
+            }
+
+            $rezagaKgPersistir = $kgYaVendido > 0
+                ? max(round($rezagaKg - $kgYaVendido, 2), 0)
+                : $rezagaKg;
+
             if ($rezagaKg <= 0) {
                 if ($rezagaLavado) {
-                    $rezagaLavado->delete();
+                    if ($kgYaVendido <= 0) {
+                        $rezagaLavado->delete();
+                    } else {
+                        $rezagaLavado->update([
+                            'cantidad_kg' => 0,
+                            'cantidad_unidades_pequenas' => $rezagaUnidades,
+                        ]);
+                    }
                 }
             } else {
                 if (! $rezagaLavado) {
@@ -1046,7 +1145,7 @@ class LavadoEmpaqueController extends Controller
                         'tipo_rezaga' => 'lavado',
                         'subtipo_rezaga' => $validated['subtipo_rezaga'] ?? 'producto',
                         'fecha' => $validated['fecha_lavado'] ?? now('America/Mexico_City')->toDateString(),
-                        'cantidad_kg' => $rezagaKg,
+                        'cantidad_kg' => $rezagaKgPersistir,
                         'cantidad_unidades_pequenas' => $rezagaUnidades,
                         'motivo' => $validated['rezaga_motivo'] ?? null,
                         'status' => 'pendiente',
@@ -1055,7 +1154,7 @@ class LavadoEmpaqueController extends Controller
                     ]);
                 } else {
                     $rezagaUpdate = [
-                        'cantidad_kg' => $rezagaKg,
+                        'cantidad_kg' => $rezagaKgPersistir,
                         'cantidad_unidades_pequenas' => $rezagaUnidades,
                     ];
 

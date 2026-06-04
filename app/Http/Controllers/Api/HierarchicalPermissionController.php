@@ -44,7 +44,7 @@ class HierarchicalPermissionController extends Controller
                     'name' => $access->enterprise->name ?? null,
                     'slug' => $access->enterprise->slug ?? null,
                     'description' => $access->enterprise->description ?? null,
-                    'logo' => $access->enterprise->logo ? asset('storage/' . $access->enterprise->logo) : null,
+                    'logo' => $access->enterprise->logo ? asset('storage/'.$access->enterprise->logo) : null,
                     'color' => $access->enterprise->color ?? null,
                     'is_active' => $access->is_active && ($access->enterprise->is_active ?? false),
                     'granted_at' => $access->granted_at,
@@ -615,11 +615,11 @@ class HierarchicalPermissionController extends Controller
                 if (! $exists) {
                     SubmodulePermissionType::create([
                         'submodule_id' => $submoduleId,
-                        'slug'         => $perm['slug'],
-                        'name'         => $perm['name'],
-                        'description'  => $perm['description'],
-                        'order'        => $perm['order'],
-                        'is_active'    => true,
+                        'slug' => $perm['slug'],
+                        'name' => $perm['name'],
+                        'description' => $perm['description'],
+                        'order' => $perm['order'],
+                        'is_active' => true,
                     ]);
                     $createdForThis++;
                     $totalCreated++;
@@ -631,12 +631,12 @@ class HierarchicalPermissionController extends Controller
         }
 
         return response()->json([
-            'status'  => 'success',
+            'status' => 'success',
             'message' => "Se crearon $totalCreated permisos en $submodulesAffected submódulos",
-            'data'    => [
-                'total_created'       => $totalCreated,
+            'data' => [
+                'total_created' => $totalCreated,
                 'submodules_affected' => $submodulesAffected,
-                'submodules_skipped'  => $submodulesWithAll->count(),
+                'submodules_skipped' => $submodulesWithAll->count(),
             ],
         ]);
     }
