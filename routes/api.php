@@ -579,6 +579,7 @@ Route::middleware('auth:sanctum')->group(function () {
                 // Lavado (pipeline: lavando → lavado → hidrotérmico → enfriando → listo)
                 Route::get('lavado/pendientes', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'pendientes']);
                 Route::get('lavado/pipeline', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'pipeline']);
+                Route::get('lavado/historico', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'historico']);
                 Route::post('lavado/mover-a-lavado', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'moverALavado']);
                 Route::post('lavado/{proceso}/completar-lavado', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'completarLavado']);
                 Route::post('lavado/{proceso}/iniciar-hidrotermico', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\LavadoEmpaqueController::class, 'iniciarHidrotermico']);

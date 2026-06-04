@@ -556,6 +556,8 @@ class MasterStructureSeeder extends Seeder
             ['slug' => 'salida-rezaga', 'name' => 'Salida de Rezaga',  'icon' => 'ShoppingCart',   'order' => 7],
             ['slug' => 'calidad',      'name' => 'Calidad',          'icon' => 'ClipboardCheck', 'order' => 8],
             ['slug' => 'reportes',     'name' => 'Reportes',         'icon' => 'FileText',       'order' => 9],
+            ['slug' => 'ajuste-peso-rezaga', 'name' => 'Ajuste de Peso Rezaga', 'icon' => 'TrendingDown', 'order' => 10],
+            ['slug' => 'recorrido-folios', 'name' => 'Recorrido de Folios', 'icon' => 'Route', 'order' => 11],
         ];
 
         foreach ($empaqueSubmodules as $sub) {
@@ -564,7 +566,57 @@ class MasterStructureSeeder extends Seeder
                 ['name' => $sub['name'], 'icon' => $sub['icon'], 'order' => $sub['order'], 'is_active' => true]
             );
         }
-        $this->command->info("    → Empaque: Dashboard, Recepciones, Lavado, Proceso, Producción, Rezaga, Embarques, Salida Rezaga, Calidad, Reportes");
+        $this->ensureSubmodulePermissionTypes($oaEmpaque, 'recorrido-folios', [
+            ['slug' => 'view', 'name' => 'Ver', 'description' => 'Permite ver el submodulo'],
+            ['slug' => 'create', 'name' => 'Crear', 'description' => 'Permite crear registros en el submodulo'],
+            ['slug' => 'edit', 'name' => 'Editar', 'description' => 'Permite editar registros en el submodulo'],
+            ['slug' => 'delete', 'name' => 'Eliminar', 'description' => 'Permite eliminar registros en el submodulo'],
+        ]);
+        $this->ensureSubmodulePermissionTypes($oaEmpaque, 'lavado', [
+            ['slug' => 'reiniciar_recorrido', 'name' => 'Reiniciar recorrido', 'description' => 'Permite reiniciar el folio y regresarlo a pendiente de lavar'],
+            ['slug' => 'ver_historico_lavado', 'name' => 'Ver historico de lavado', 'description' => 'Permite visualizar el apartado historico del submodulo lavado'],
+        ]);
+        $this->ensureSubmodulePermissionTypes($oaEmpaque, 'salida-rezaga', [
+            ['slug' => 'validar_salida_rezaga', 'name' => 'Validar salida de rezaga', 'description' => 'Permite revisar y validar salidas de rezaga con ticket de transferencia'],
+            ['slug' => 'ver_ticket_salida_rezaga', 'name' => 'Ver ticket de revisión', 'description' => 'Permite visualizar el ticket de transferencia cargado en la revisión de salida de rezaga'],
+            ['slug' => 'ver_observaciones_salida_rezaga', 'name' => 'Ver observaciones de revisión', 'description' => 'Permite visualizar las observaciones capturadas durante la revisión de salida de rezaga'],
+        ]);
+
+        $this->command->info("    → Empaque: Dashboard, Recepciones, Lavado, Proceso, Producción, Rezaga, Embarques, Salida Rezaga, Calidad, Reportes, Ajuste de Peso Rezaga, Recorrido de Folios");
+    }
+
+    private function ensureSubmodulePermissionTypes(Module $module, string $submoduleSlug, array $types): void
+    {
+        $submodule = Submodule::where('module_id', $module->id)
+            ->where('slug', $submoduleSlug)
+            ->first();
+
+        if (! $submodule) {
+            return;
+        }
+
+        $order = (int) (SubmodulePermissionType::where('submodule_id', $submodule->id)->max('order') ?? 0);
+
+        foreach ($types as $type) {
+            $exists = SubmodulePermissionType::where('submodule_id', $submodule->id)
+                ->where('slug', $type['slug'])
+                ->exists();
+
+            if ($exists) {
+                continue;
+            }
+
+            $order++;
+
+            SubmodulePermissionType::create([
+                'submodule_id' => $submodule->id,
+                'slug' => $type['slug'],
+                'name' => $type['name'],
+                'description' => $type['description'],
+                'order' => $order,
+                'is_active' => true,
+            ]);
+        }
     }
 
     /**

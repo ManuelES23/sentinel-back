@@ -27,6 +27,7 @@ class RecorridoFoliosEmpaqueController extends Controller
             ->with([
                 'productor:id,nombre,apellido',
                 'lote:id,nombre,numero_lote',
+                'zonaCultivo:id,nombre',
                 'variedad:id,nombre',
                 'tipoCarga:id,nombre,peso_estimado_kg',
                 'entity:id,name,code',
@@ -47,6 +48,7 @@ class RecorridoFoliosEmpaqueController extends Controller
                 ->with([
                     'productor:id,nombre,apellido',
                     'lote:id,nombre,numero_lote',
+                    'zonaCultivo:id,nombre',
                     'variedad:id,nombre',
                     'tipoCarga:id,nombre,peso_estimado_kg',
                     'entity:id,name,code',
@@ -70,7 +72,8 @@ class RecorridoFoliosEmpaqueController extends Controller
                 'etapa:id,nombre,variedad_id',
                 'etapa.variedad:id,nombre',
                 'tipoCarga:id,nombre,peso_estimado_kg',
-                'recepcion:id,folio_recepcion,lote_producto_terminado,variedad_id,cantidad_recibida,peso_bascula,peso_recibido_kg',
+                'recepcion:id,folio_recepcion,lote_producto_terminado,variedad_id,zona_cultivo_id,cantidad_recibida,peso_bascula,peso_recibido_kg',
+                'recepcion.zonaCultivo:id,nombre',
                 'recepcion.variedad:id,nombre',
             ])
             ->when(isset($validated['temporada_id']), fn ($q) => $q->where('temporada_id', $validated['temporada_id']))
@@ -114,7 +117,7 @@ class RecorridoFoliosEmpaqueController extends Controller
                 'proceso.productor:id,nombre,apellido',
                 'proceso.lote:id,nombre,numero_lote',
                 'variedad:id,nombre',
-                'detalles:id,produccion_id,proceso_id,numero_entrada,presentacion,total_cajas,peso_neto_kg',
+                'detalles:id,produccion_id,proceso_id,numero_entrada,fecha_produccion,presentacion,total_cajas,peso_neto_kg',
                 'detalles.proceso:id,folio_proceso',
             ])
             ->when(isset($validated['temporada_id']), fn ($q) => $q->where('temporada_id', $validated['temporada_id']))

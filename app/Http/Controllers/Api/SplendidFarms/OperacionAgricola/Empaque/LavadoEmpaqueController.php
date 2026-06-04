@@ -34,6 +34,28 @@ class LavadoEmpaqueController extends Controller
         'creador:id,name',
     ];
 
+    private function withLavadoRezagas(array $relations): array
+    {
+        $relations['rezagas'] = function ($query) {
+            $query->select([
+                'id',
+                'proceso_id',
+                'tipo_rezaga',
+                'subtipo_rezaga',
+                'fecha',
+                'cantidad_kg',
+                'cantidad_unidades_pequenas',
+                'motivo',
+                'observaciones',
+                'status',
+            ])
+                ->where('tipo_rezaga', 'lavado')
+                ->orderByDesc('id');
+        };
+
+        return $relations;
+    }
+
     private array $recepcionEagerLoad = [
         'entity:id,name,code,usa_hidrotermico',
         'variedad:id,nombre',
@@ -336,7 +358,7 @@ class LavadoEmpaqueController extends Controller
             $request->input('entity_id')
         );
 
-        $query = ProcesoEmpaque::with($this->eagerLoad)
+        $query = ProcesoEmpaque::with($this->withLavadoRezagas($this->eagerLoad))
             ->whereIn('status', ['lavando', 'lavado', 'hidrotermico', 'enfriando', 'listo_produccion']);
 
         if ($request->filled('temporada_id')) {
@@ -367,6 +389,71 @@ class LavadoEmpaqueController extends Controller
             'success' => true,
             'data' => $grouped,
             'usa_hidrotermico' => $usaHidrotermico,
+        ]);
+    }
+
+    /**
+     * GET /lavado/historico — Folios de lavado de toda la temporada/planta
+     * Incluye pipeline actual y cerrados para permitir corrección histórica.
+     */
+    public function historico(Request $request): JsonResponse
+    {
+        $gate = $this->ensureLavadoEnabledForEntity($request->input('entity_id'));
+        if ($gate) {
+            return $gate;
+        }
+
+        $submodule = Submodule::query()->where('slug', 'lavado')->first();
+        if (!$submodule) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Submódulo lavado no encontrado',
+            ], 500);
+        }
+
+        $hasPermission = UserSubmodulePermission::query()
+            ->where('user_id', $request->user()->id)
+            ->where('submodule_id', $submodule->id)
+            ->whereHas('permissionType', fn($q) => $q->where('slug', 'ver_historico_lavado'))
+            ->where('is_granted', true)
+            ->exists();
+
+        if (!$hasPermission) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No tienes permiso para ver el histórico de lavado',
+            ], 403);
+        }
+
+        $statuses = [
+            'lavando',
+            'lavado',
+            'hidrotermico',
+            'enfriando',
+            'listo_produccion',
+            'en_proceso',
+            'procesado',
+        ];
+
+        $query = ProcesoEmpaque::with($this->withLavadoRezagas($this->eagerLoad))
+            ->whereNotNull('fecha_lavado')
+            ->whereIn('status', $statuses);
+
+        if ($request->filled('temporada_id')) {
+            $query->byTemporada($request->temporada_id);
+        }
+        if ($request->filled('entity_id')) {
+            $query->where('entity_id', $request->entity_id);
+        }
+
+        $historico = $query
+            ->orderByDesc('fecha_lavado')
+            ->orderByDesc('id')
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'data' => $historico,
         ]);
     }
 
@@ -850,6 +937,11 @@ class LavadoEmpaqueController extends Controller
             'cantidad_entrada' => 'nullable|integer|min:1',
             'fecha_lavado' => 'nullable|date',
             'tipo_carga_id' => 'nullable|exists:tipos_carga,id',
+            'rezaga_kg' => 'nullable|numeric|min:0',
+            'rezaga_unidades' => 'nullable|integer|min:0',
+            'subtipo_rezaga' => 'nullable|in:hoja,producto',
+            'rezaga_motivo' => 'nullable|string|max:500',
+            'rezaga_observaciones' => 'nullable|string|max:1000',
         ]);
 
         $pesoEntradaKg = round((float) $validated['peso_entrada_kg'], 2);
@@ -889,6 +981,14 @@ class LavadoEmpaqueController extends Controller
             $payload['tipo_carga_id'] = $validated['tipo_carga_id'];
         }
 
+        if (array_key_exists('rezaga_kg', $validated)) {
+            $payload['rezaga_lavado_kg'] = round((float) $validated['rezaga_kg'], 2);
+        }
+
+        if (array_key_exists('rezaga_unidades', $validated)) {
+            $payload['rezaga_lavado_cantidad'] = (int) $validated['rezaga_unidades'];
+        }
+
         if (
             $this->supportsLavadoSnapshot()
             && $proceso->status === 'lavado'
@@ -900,10 +1000,83 @@ class LavadoEmpaqueController extends Controller
             $snapshot['peso_entrada_kg'] = $pesoEntradaKg;
             $snapshot['cantidad_disponible'] = $cantidadDisponibleNueva;
             $snapshot['peso_disponible_kg'] = $pesoDisponibleNuevo;
+            $snapshot['rezaga_lavado_kg'] = isset($payload['rezaga_lavado_kg'])
+                ? round((float) $payload['rezaga_lavado_kg'], 2)
+                : (isset($snapshot['rezaga_lavado_kg']) ? round((float) $snapshot['rezaga_lavado_kg'], 2) : round((float) ($proceso->rezaga_lavado_kg ?? 0), 2));
+            $snapshot['rezaga_lavado_cantidad'] = isset($payload['rezaga_lavado_cantidad'])
+                ? (int) $payload['rezaga_lavado_cantidad']
+                : (isset($snapshot['rezaga_lavado_cantidad']) ? (int) $snapshot['rezaga_lavado_cantidad'] : (int) ($proceso->rezaga_lavado_cantidad ?? 0));
             $payload['lavado_snapshot'] = $snapshot;
         }
 
         $proceso->update($payload);
+
+        $syncRezaga =
+            array_key_exists('rezaga_kg', $validated)
+            || array_key_exists('rezaga_unidades', $validated)
+            || array_key_exists('subtipo_rezaga', $validated)
+            || array_key_exists('rezaga_motivo', $validated)
+            || array_key_exists('rezaga_observaciones', $validated);
+
+        if ($syncRezaga) {
+            $rezagaKg = isset($payload['rezaga_lavado_kg'])
+                ? round((float) $payload['rezaga_lavado_kg'], 2)
+                : round((float) ($proceso->rezaga_lavado_kg ?? 0), 2);
+            $rezagaUnidades = isset($payload['rezaga_lavado_cantidad'])
+                ? (int) $payload['rezaga_lavado_cantidad']
+                : (int) ($proceso->rezaga_lavado_cantidad ?? 0);
+
+            $rezagaLavado = RezagaEmpaque::query()
+                ->where('proceso_id', $proceso->id)
+                ->where('tipo_rezaga', 'lavado')
+                ->orderByDesc('id')
+                ->first();
+
+            if ($rezagaKg <= 0) {
+                if ($rezagaLavado) {
+                    $rezagaLavado->delete();
+                }
+            } else {
+                if (! $rezagaLavado) {
+                    $rezagaLavado = RezagaEmpaque::create([
+                        'temporada_id' => $proceso->temporada_id,
+                        'entity_id' => $proceso->entity_id,
+                        'proceso_id' => $proceso->id,
+                        'folio_rezaga' => $this->generarFolioRezaga($proceso->temporada_id, $proceso->entity_id),
+                        'tipo_rezaga' => 'lavado',
+                        'subtipo_rezaga' => $validated['subtipo_rezaga'] ?? 'producto',
+                        'fecha' => $validated['fecha_lavado'] ?? now('America/Mexico_City')->toDateString(),
+                        'cantidad_kg' => $rezagaKg,
+                        'cantidad_unidades_pequenas' => $rezagaUnidades,
+                        'motivo' => $validated['rezaga_motivo'] ?? null,
+                        'status' => 'pendiente',
+                        'observaciones' => $validated['rezaga_observaciones'] ?? null,
+                        'created_by' => $request->user()->id,
+                    ]);
+                } else {
+                    $rezagaUpdate = [
+                        'cantidad_kg' => $rezagaKg,
+                        'cantidad_unidades_pequenas' => $rezagaUnidades,
+                    ];
+
+                    if (array_key_exists('subtipo_rezaga', $validated)) {
+                        $rezagaUpdate['subtipo_rezaga'] = $validated['subtipo_rezaga'];
+                    }
+                    if (array_key_exists('rezaga_motivo', $validated)) {
+                        $rezagaUpdate['motivo'] = $validated['rezaga_motivo'];
+                    }
+                    if (array_key_exists('rezaga_observaciones', $validated)) {
+                        $rezagaUpdate['observaciones'] = $validated['rezaga_observaciones'];
+                    }
+                    if (array_key_exists('fecha_lavado', $validated)) {
+                        $rezagaUpdate['fecha'] = $validated['fecha_lavado'];
+                    }
+
+                    $rezagaLavado->update($rezagaUpdate);
+                }
+            }
+        }
+
         $proceso->load($this->eagerLoad);
 
         return response()->json([
