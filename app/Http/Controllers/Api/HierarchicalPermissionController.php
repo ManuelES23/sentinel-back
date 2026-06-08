@@ -38,19 +38,23 @@ class HierarchicalPermissionController extends Controller
             ->with('enterprise:id,name,slug,description,logo,color,is_active')
             ->get()
             ->map(function ($access) {
+                $enterprise = $access->enterprise;
+
                 return [
                     'id' => $access->enterprise_id,
                     'access_id' => $access->id,
-                    'name' => $access->enterprise->name ?? null,
-                    'slug' => $access->enterprise->slug ?? null,
-                    'description' => $access->enterprise->description ?? null,
-                    'logo' => $access->enterprise->logo ? asset('storage/'.$access->enterprise->logo) : null,
-                    'color' => $access->enterprise->color ?? null,
-                    'is_active' => $access->is_active && ($access->enterprise->is_active ?? false),
+                    'name' => $enterprise?->name,
+                    'slug' => $enterprise?->slug,
+                    'description' => $enterprise?->description,
+                    'logo' => $enterprise?->logo ? asset('storage/'.$enterprise->logo) : null,
+                    'color' => $enterprise?->color,
+                    'is_active' => (bool) $access->is_active && (bool) ($enterprise?->is_active ?? false),
                     'granted_at' => $access->granted_at,
                     'expires_at' => $access->expires_at,
                 ];
-            });
+            })
+            ->filter(fn ($enterprise) => ! empty($enterprise['slug']))
+            ->values();
 
         // Obtener accesos a aplicaciones
         $applications = UserApplicationAccess::where('user_id', $userId)
