@@ -2029,11 +2029,18 @@ class ProduccionEmpaqueController extends Controller
         }
 
         $validated = $request->validate([
+            'proceso_id' => 'nullable|exists:proceso_empaque,id',
+            'recipe_id' => 'nullable|exists:recipes,id',
             'fecha_produccion' => 'sometimes|date',
             'total_cajas' => 'sometimes|integer|min:1',
             'peso_neto_kg' => 'nullable|numeric|min:0',
             'turno' => 'nullable|string|max:50',
+            'tipo_empaque' => 'nullable|string|max:100',
+            'marca' => 'nullable|string|max:150',
+            'presentacion' => 'nullable|string|max:150',
+            'etiqueta' => 'nullable|string|max:100',
             'calibre' => 'nullable|string|max:50',
+            'categoria' => 'nullable|string|max:50',
             'observaciones' => 'nullable|string',
         ]);
 

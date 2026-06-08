@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Api\SplendidFarms\Administration;
 use App\Http\Controllers\Controller;
 use App\Models\SfAttendanceRecord;
 use App\Models\SfEmployee;
+use App\Models\SfPosition;
+use App\Models\SfPositionAssignment;
 use App\Services\AttendanceSpreadsheetService;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -184,6 +186,107 @@ class SfAttendanceController extends Controller
                     'gross_pay' => round(collect($rows)->sum('gross_pay'), 2),
                 ],
             ],
+        ]);
+    }
+
+    /**
+     * Listar asignaciones de puesto por fecha (operativa diaria de personal temporal).
+     */
+    public function positionAssignments(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'enterprise_id' => 'required|exists:enterprises,id',
+            'assignment_date' => 'nullable|date',
+        ]);
+
+        $assignmentDate = $validated['assignment_date'] ?? now()->toDateString();
+
+        $items = SfPositionAssignment::query()
+            ->with([
+                'employee:id,enterprise_id,code,checker_key,first_name,last_name,second_last_name',
+                'position:id,enterprise_id,code,name,department',
+                'assignedBy:id,name',
+            ])
+            ->where('assignment_date', $assignmentDate)
+            ->whereHas('employee', fn($q) => $q->where('enterprise_id', $validated['enterprise_id']))
+            ->orderByDesc('assigned_at')
+            ->orderByDesc('id')
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'data' => $items,
+        ]);
+    }
+
+    /**
+     * Escanear QR/llave de checador y asignar puesto del día.
+     */
+    public function assignPositionByQr(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'enterprise_id' => 'required|exists:enterprises,id',
+            'sf_position_id' => 'required|exists:sf_positions,id',
+            'qr_code' => 'required|string|max:120',
+            'assignment_date' => 'nullable|date',
+            'source_device' => 'nullable|string|max:100',
+        ]);
+
+        $position = SfPosition::query()
+            ->where('id', $validated['sf_position_id'])
+            ->where('enterprise_id', $validated['enterprise_id'])
+            ->first();
+
+        if (! $position) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'El puesto seleccionado no pertenece a la empresa activa',
+            ], 422);
+        }
+
+        $qrCode = strtoupper(trim($validated['qr_code']));
+
+        $employee = SfEmployee::query()
+            ->where('enterprise_id', $validated['enterprise_id'])
+            ->where(function ($query) use ($qrCode) {
+                $query->whereRaw('UPPER(checker_key) = ?', [$qrCode])
+                    ->orWhereRaw('UPPER(code) = ?', [$qrCode]);
+            })
+            ->first();
+
+        if (! $employee) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No se encontró personal con ese QR/ID checador en la empresa seleccionada',
+            ], 404);
+        }
+
+        $assignmentDate = $validated['assignment_date'] ?? now()->toDateString();
+
+        $assignment = SfPositionAssignment::updateOrCreate(
+            [
+                'sf_employee_id' => $employee->id,
+                'assignment_date' => $assignmentDate,
+            ],
+            [
+                'sf_position_id' => $position->id,
+                'assigned_at' => now(),
+                'assigned_by_user_id' => $request->user()?->id,
+                'source_device' => $validated['source_device'] ?? null,
+                'qr_code_raw' => $qrCode,
+            ]
+        );
+
+        $assignment->load([
+            'employee:id,enterprise_id,code,checker_key,first_name,last_name,second_last_name',
+            'position:id,enterprise_id,code,name,department',
+            'assignedBy:id,name',
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Asignación de puesto registrada correctamente',
+            'data' => $assignment,
         ]);
     }
 }
