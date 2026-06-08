@@ -30,10 +30,47 @@ class SfAttendanceController extends Controller
             ->orderBy('date', 'desc');
 
         $perPage = (int) $request->get('per_page', 50);
+        $records = $query->paginate($perPage);
+
+        $collection = $records->getCollection();
+        $employeeIds = $collection->pluck('sf_employee_id')->filter()->unique()->values();
+        $dates = $collection->map(function (SfAttendanceRecord $record) {
+            return $record->date?->toDateString();
+        })->filter()->unique()->values();
+
+        $assignmentMap = [];
+        if ($employeeIds->isNotEmpty() && $dates->isNotEmpty()) {
+            $assignments = SfPositionAssignment::query()
+                ->with('position:id,code,name')
+                ->whereIn('sf_employee_id', $employeeIds)
+                ->whereIn('assignment_date', $dates)
+                ->get();
+
+            foreach ($assignments as $assignment) {
+                $key = $assignment->sf_employee_id . '|' . $assignment->assignment_date?->toDateString();
+                $assignmentMap[$key] = [
+                    'code' => $assignment->position?->code,
+                    'name' => $assignment->position?->name,
+                ];
+            }
+        }
+
+        $records->setCollection(
+            $collection->map(function (SfAttendanceRecord $record) use ($assignmentMap) {
+                $dateKey = $record->date?->toDateString();
+                $mapKey = $record->sf_employee_id . '|' . $dateKey;
+                $position = $assignmentMap[$mapKey] ?? null;
+
+                $record->setAttribute('assigned_position_code', $position['code'] ?? null);
+                $record->setAttribute('assigned_position_name', $position['name'] ?? null);
+
+                return $record;
+            })
+        );
 
         return response()->json([
             'success' => true,
-            'data' => $query->paginate($perPage),
+            'data' => $records,
         ]);
     }
 
