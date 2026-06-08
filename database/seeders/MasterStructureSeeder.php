@@ -558,6 +558,7 @@ class MasterStructureSeeder extends Seeder
             ['slug' => 'reportes',     'name' => 'Reportes',         'icon' => 'FileText',       'order' => 9],
             ['slug' => 'ajuste-peso-rezaga', 'name' => 'Ajuste de Peso Rezaga', 'icon' => 'TrendingDown', 'order' => 10],
             ['slug' => 'recorrido-folios', 'name' => 'Recorrido de Folios', 'icon' => 'Route', 'order' => 11],
+            ['slug' => 'balance-masas', 'name' => 'Balance de Masas', 'icon' => 'Scale', 'order' => 12],
         ];
 
         foreach ($empaqueSubmodules as $sub) {
@@ -567,6 +568,12 @@ class MasterStructureSeeder extends Seeder
             );
         }
         $this->ensureSubmodulePermissionTypes($oaEmpaque, 'recorrido-folios', [
+            ['slug' => 'view', 'name' => 'Ver', 'description' => 'Permite ver el submodulo'],
+            ['slug' => 'create', 'name' => 'Crear', 'description' => 'Permite crear registros en el submodulo'],
+            ['slug' => 'edit', 'name' => 'Editar', 'description' => 'Permite editar registros en el submodulo'],
+            ['slug' => 'delete', 'name' => 'Eliminar', 'description' => 'Permite eliminar registros en el submodulo'],
+        ]);
+        $this->ensureSubmodulePermissionTypes($oaEmpaque, 'balance-masas', [
             ['slug' => 'view', 'name' => 'Ver', 'description' => 'Permite ver el submodulo'],
             ['slug' => 'create', 'name' => 'Crear', 'description' => 'Permite crear registros en el submodulo'],
             ['slug' => 'edit', 'name' => 'Editar', 'description' => 'Permite editar registros en el submodulo'],
@@ -582,7 +589,7 @@ class MasterStructureSeeder extends Seeder
             ['slug' => 'ver_observaciones_salida_rezaga', 'name' => 'Ver observaciones de revisión', 'description' => 'Permite visualizar las observaciones capturadas durante la revisión de salida de rezaga'],
         ]);
 
-        $this->command->info("    → Empaque: Dashboard, Recepciones, Lavado, Proceso, Producción, Rezaga, Embarques, Salida Rezaga, Calidad, Reportes, Ajuste de Peso Rezaga, Recorrido de Folios");
+        $this->command->info("    → Empaque: Dashboard, Recepciones, Lavado, Proceso, Producción, Rezaga, Embarques, Salida Rezaga, Calidad, Reportes, Ajuste de Peso Rezaga, Recorrido de Folios, Balance de Masas");
     }
 
     private function ensureSubmodulePermissionTypes(Module $module, string $submoduleSlug, array $types): void

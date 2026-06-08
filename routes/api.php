@@ -593,6 +593,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
                 // Producción (cajas / pallets)
                 Route::get('recorrido-folios', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\RecorridoFoliosEmpaqueController::class, 'show']);
+                Route::get('balance-masas', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\BalanceMasasEmpaqueController::class, 'index']);
                 Route::get('produccion/next-pallet', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'nextPalletNumber']);
                 Route::get('produccion/next-cola', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'nextColaNumber']);
                 Route::get('produccion/cola-pallets', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\ProduccionEmpaqueController::class, 'colaPallets']);

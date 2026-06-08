@@ -53,6 +53,7 @@ class EmpaqueModuleSeeder extends Seeder
             ['slug' => 'salida-rezaga', 'name' => 'Salida de Rezaga',  'icon' => 'ShoppingCart',   'order' => 7],
             ['slug' => 'calidad',      'name' => 'Calidad',          'icon' => 'ClipboardCheck', 'order' => 8],
             ['slug' => 'reportes',     'name' => 'Reportes',         'icon' => 'FileText',       'order' => 9],
+            ['slug' => 'balance-masas', 'name' => 'Balance de Masas', 'icon' => 'Scale',          'order' => 10],
         ];
 
         $createdSubmodules = [];
@@ -114,6 +115,6 @@ class EmpaqueModuleSeeder extends Seeder
         }
 
         $this->command->info('');
-        $this->command->info('✅ Módulo Empaque creado exitosamente con 10 submódulos');
+        $this->command->info('✅ Módulo Empaque creado exitosamente con 11 submódulos');
     }
 }
