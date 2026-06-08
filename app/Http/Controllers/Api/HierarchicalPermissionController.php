@@ -24,97 +24,123 @@ class HierarchicalPermissionController extends Controller
      */
     public function getUserPermissions($userId): JsonResponse
     {
-        $user = User::find($userId);
+        try {
+            $user = User::find($userId);
 
-        if (! $user) {
+            if (! $user) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Usuario no encontrado',
+                ], 404);
+            }
+
+            // Obtener accesos a empresas con datos de la empresa
+            $enterprises = UserEnterpriseAccess::where('user_id', $userId)
+                ->with('enterprise:id,name,slug,description,logo,color,is_active')
+                ->get()
+                ->map(function ($access) {
+                    $enterprise = $access->enterprise;
+
+                    return [
+                        'id' => $access->enterprise_id,
+                        'access_id' => $access->id,
+                        'name' => $enterprise?->name,
+                        'slug' => $enterprise?->slug,
+                        'description' => $enterprise?->description,
+                        'logo' => $enterprise?->logo ? asset('storage/'.$enterprise->logo) : null,
+                        'color' => $enterprise?->color,
+                        'is_active' => (bool) $access->is_active && (bool) ($enterprise?->is_active ?? false),
+                        'granted_at' => $access->granted_at,
+                        'expires_at' => $access->expires_at,
+                    ];
+                })
+                ->filter(fn ($enterprise) => ! empty($enterprise['slug']))
+                ->values();
+
+            // Obtener accesos a aplicaciones
+            $applications = UserApplicationAccess::where('user_id', $userId)
+                ->get()
+                ->map(function ($access) {
+                    return [
+                        'id' => $access->application_id,
+                        'access_id' => $access->id,
+                        'is_active' => $access->is_active,
+                        'granted_at' => $access->granted_at,
+                        'expires_at' => $access->expires_at,
+                    ];
+                });
+
+            // Obtener accesos a módulos
+            $modules = UserModuleAccess::where('user_id', $userId)
+                ->get()
+                ->map(function ($access) {
+                    return [
+                        'id' => $access->module_id,
+                        'access_id' => $access->id,
+                        'is_active' => $access->is_active,
+                        'granted_at' => $access->granted_at,
+                        'expires_at' => $access->expires_at,
+                    ];
+                });
+
+            // Obtener accesos a submódulos
+            $submodules = UserSubmoduleAccess::where('user_id', $userId)
+                ->get()
+                ->map(function ($access) {
+                    return [
+                        'id' => $access->submodule_id,
+                        'access_id' => $access->id,
+                        'is_active' => $access->is_active,
+                        'granted_at' => $access->granted_at,
+                        'expires_at' => $access->expires_at,
+                    ];
+                });
+
+            // Compatibilidad con esquemas mixtos: slug/key y is_granted/granted.
+            $submodulePermissions = UserSubmodulePermission::where('user_id', $userId)
+                ->with('permissionType')
+                ->get()
+                ->map(function ($permission) {
+                    $permissionType = $permission->permissionType;
+
+                    return [
+                        'id' => $permission->id,
+                        'submodule_id' => $permission->submodule_id,
+                        'permission_type_id' => $permission->permission_type_id,
+                        'is_granted' => (bool) ($permission->is_granted ?? $permission->granted ?? false),
+                        'permission_type' => [
+                            'id' => $permissionType?->id,
+                            'slug' => $permissionType?->slug ?? $permissionType?->key,
+                            'name' => $permissionType?->name,
+                        ],
+                    ];
+                })
+                ->values();
+
+            return response()->json([
+                'status' => 'success',
+                'data' => [
+                    'user' => [
+                        'id' => $user->id,
+                        'name' => $user->name,
+                        'email' => $user->email,
+                    ],
+                    'enterprises' => $enterprises,
+                    'applications' => $applications,
+                    'modules' => $modules,
+                    'submodules' => $submodules,
+                    'submodule_permissions' => $submodulePermissions,
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            report($e);
+
             return response()->json([
                 'status' => 'error',
-                'message' => 'Usuario no encontrado',
-            ], 404);
+                'message' => 'Error al cargar permisos jerárquicos',
+                'detail' => config('app.debug') ? $e->getMessage() : null,
+            ], 500);
         }
-
-        // Obtener accesos a empresas con datos de la empresa
-        $enterprises = UserEnterpriseAccess::where('user_id', $userId)
-            ->with('enterprise:id,name,slug,description,logo,color,is_active')
-            ->get()
-            ->map(function ($access) {
-                $enterprise = $access->enterprise;
-
-                return [
-                    'id' => $access->enterprise_id,
-                    'access_id' => $access->id,
-                    'name' => $enterprise?->name,
-                    'slug' => $enterprise?->slug,
-                    'description' => $enterprise?->description,
-                    'logo' => $enterprise?->logo ? asset('storage/'.$enterprise->logo) : null,
-                    'color' => $enterprise?->color,
-                    'is_active' => (bool) $access->is_active && (bool) ($enterprise?->is_active ?? false),
-                    'granted_at' => $access->granted_at,
-                    'expires_at' => $access->expires_at,
-                ];
-            })
-            ->filter(fn ($enterprise) => ! empty($enterprise['slug']))
-            ->values();
-
-        // Obtener accesos a aplicaciones
-        $applications = UserApplicationAccess::where('user_id', $userId)
-            ->get()
-            ->map(function ($access) {
-                return [
-                    'id' => $access->application_id,
-                    'access_id' => $access->id,
-                    'is_active' => $access->is_active,
-                    'granted_at' => $access->granted_at,
-                    'expires_at' => $access->expires_at,
-                ];
-            });
-
-        // Obtener accesos a módulos
-        $modules = UserModuleAccess::where('user_id', $userId)
-            ->get()
-            ->map(function ($access) {
-                return [
-                    'id' => $access->module_id,
-                    'access_id' => $access->id,
-                    'is_active' => $access->is_active,
-                    'granted_at' => $access->granted_at,
-                    'expires_at' => $access->expires_at,
-                ];
-            });
-
-        // Obtener accesos a submódulos
-        $submodules = UserSubmoduleAccess::where('user_id', $userId)
-            ->get()
-            ->map(function ($access) {
-                return [
-                    'id' => $access->submodule_id,
-                    'access_id' => $access->id,
-                    'is_active' => $access->is_active,
-                    'granted_at' => $access->granted_at,
-                    'expires_at' => $access->expires_at,
-                ];
-            });
-
-        // Obtener permisos específicos de submódulos
-        $submodulePermissions = UserSubmodulePermission::where('user_id', $userId)
-            ->with('permissionType:id,slug,name')
-            ->get(['id', 'submodule_id', 'permission_type_id', 'is_granted']);
-
-        return response()->json([
-            'status' => 'success',
-            'data' => [
-                'user' => [
-                    'id' => $user->id,
-                    'name' => $user->name,
-                    'email' => $user->email,
-                ],
-                'enterprises' => $enterprises,
-                'applications' => $applications,
-                'modules' => $modules,
-                'submodules' => $submodules,
-                'submodule_permissions' => $submodulePermissions,
-            ],
-        ]);
     }
 
     /**
