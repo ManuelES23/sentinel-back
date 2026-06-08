@@ -3,9 +3,8 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Enterprise;
 use App\Models\User;
-use App\Models\Module;
-use App\Models\Submodule;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
@@ -357,7 +356,7 @@ class UserPermissionController extends Controller
      */
     public function getAvailablePermissions($userId): JsonResponse
     {
-        $user = User::with(['enterprises.applications.modules.submodules'])->find($userId);
+        $user = User::find($userId);
 
         if (!$user) {
             return response()->json([
@@ -379,8 +378,33 @@ class UserPermissionController extends Controller
             ->pluck('submodule_id')
             ->toArray();
 
+        // Obtener empresas asignadas desde el nuevo sistema jerárquico
+        $enterpriseIds = DB::table('user_enterprise_access')
+            ->where('user_id', $userId)
+            ->where('is_active', true)
+            ->pluck('enterprise_id')
+            ->toArray();
+
+        $enterprises = Enterprise::query()
+            ->whereIn('id', $enterpriseIds)
+            ->where('is_active', true)
+            ->with(['applications' => function ($query) {
+                $query->where('is_active', true)
+                    ->orderBy('name')
+                    ->with(['modules' => function ($moduleQuery) {
+                        $moduleQuery->where('is_active', true)
+                            ->orderBy('order')
+                            ->with(['submodules' => function ($submoduleQuery) {
+                                $submoduleQuery->where('is_active', true)
+                                    ->orderBy('order');
+                            }]);
+                    }]);
+            }])
+            ->orderBy('name')
+            ->get();
+
         // Construir estructura jerárquica
-        $hierarchy = $user->enterprises->map(function ($enterprise) use ($currentModulePermissions, $currentSubmodulePermissions) {
+        $hierarchy = $enterprises->map(function ($enterprise) use ($currentModulePermissions, $currentSubmodulePermissions) {
             return [
                 'id' => $enterprise->id,
                 'name' => $enterprise->name,
