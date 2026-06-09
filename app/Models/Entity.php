@@ -6,6 +6,7 @@ use App\Traits\Loggable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class Entity extends Model
@@ -65,6 +66,37 @@ class Entity extends Model
                 $entity->slug = Str::slug($entity->name);
             }
         });
+
+        static::created(function ($entity) {
+            $entity->syncOwnerEnterpriseAccess();
+        });
+
+        static::updated(function ($entity) {
+            if ($entity->wasChanged('branch_id')) {
+                $entity->syncOwnerEnterpriseAccess();
+            }
+        });
+    }
+
+    private function syncOwnerEnterpriseAccess(): void
+    {
+        $branch = $this->branch()->select('id', 'enterprise_id')->first();
+
+        if (!$branch?->enterprise_id) {
+            return;
+        }
+
+        DB::table('enterprise_entity')->updateOrInsert(
+            [
+                'enterprise_id' => $branch->enterprise_id,
+                'entity_id' => $this->id,
+            ],
+            [
+                'access_level' => 'write',
+                'updated_at' => now(),
+                'created_at' => now(),
+            ]
+        );
     }
 
     // Relaciones

@@ -186,6 +186,9 @@ Route::middleware('auth:sanctum')->group(function () {
                     ->parameters(['tipos-entidades' => 'entityType']);
                 // Entidades externas disponibles para vincular
                 Route::get('entidades/disponibles-externas', [App\Http\Controllers\Api\SplendidFarms\Administration\EntityController::class, 'externalCandidates']);
+                // Vincular / desvincular entidad de otra empresa (sin crear copia)
+                Route::post('entidades/vincular', [App\Http\Controllers\Api\SplendidFarms\Administration\EntityController::class, 'vincular']);
+                Route::delete('entidades/{entity}/desvincular', [App\Http\Controllers\Api\SplendidFarms\Administration\EntityController::class, 'desvincular']);
                 // Entidades
                 Route::apiResource('entidades', App\Http\Controllers\Api\SplendidFarms\Administration\EntityController::class)
                     ->parameters(['entidades' => 'entity']);
@@ -714,6 +717,9 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::apiResource('tipos-entidades', App\Http\Controllers\Api\SplendidFarms\Administration\EntityTypeController::class)
                     ->parameters(['tipos-entidades' => 'entityType']);
                 Route::get('entidades/disponibles-externas', [App\Http\Controllers\Api\SplendidFarms\Administration\EntityController::class, 'externalCandidates']);
+                // Vincular / desvincular entidad de otra empresa (sin crear copia)
+                Route::post('entidades/vincular', [App\Http\Controllers\Api\SplendidFarms\Administration\EntityController::class, 'vincular']);
+                Route::delete('entidades/{entity}/desvincular', [App\Http\Controllers\Api\SplendidFarms\Administration\EntityController::class, 'desvincular']);
                 Route::apiResource('entidades', App\Http\Controllers\Api\SplendidFarms\Administration\EntityController::class)
                     ->parameters(['entidades' => 'entity']);
                 Route::apiResource('areas', App\Http\Controllers\Api\SplendidFarms\Administration\AreaController::class)

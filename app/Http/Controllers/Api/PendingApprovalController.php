@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Events\VacationRequestUpdated;
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController;
 use App\Models\ApprovalProcess;
 use App\Models\Employee;
 use App\Models\EmployeeIncident;
@@ -405,12 +406,27 @@ class PendingApprovalController extends Controller
 
     private function getInventoryMovementQuery(Employee $employee, string $scope)
     {
-        $query = InventoryMovement::where('status', 'pending')
-            ->where('created_by', '!=', $employee->user_id); // No sus propios movimientos
+        return InventoryMovement::where('status', 'pending')
+            ->where(function ($query) use ($employee, $scope) {
+                $query->where(function ($localQuery) use ($employee, $scope) {
+                    $localQuery->where('created_by', '!=', $employee->user_id)
+                        ->whereHas('creator', function ($creatorQuery) use ($employee) {
+                            $creatorQuery->whereHas('employee', function ($employeeQuery) use ($employee) {
+                                $employeeQuery->where('enterprise_id', $employee->enterprise_id);
+                            });
+                        })
+                        ->where(function ($metadataQuery) {
+                            $metadataQuery->whereNull('metadata->requires_external_validation')
+                                ->orWhere('metadata->requires_external_validation', false);
+                        });
 
-        $this->applyScopeFilterByCreator($query, $employee, $scope, 'creator');
-
-        return $query;
+                    $this->applyScopeFilterByCreator($localQuery, $employee, $scope, 'creator');
+                })->orWhere(function ($externalQuery) use ($employee) {
+                    $externalQuery->where('created_by', '!=', $employee->user_id)
+                        ->where('metadata->requires_external_validation', true)
+                        ->where('metadata->approval_enterprise_id', $employee->enterprise_id);
+                });
+            });
     }
 
     private function countPendingInventoryMovements(Employee $employee, string $scope): int
@@ -945,17 +961,7 @@ class PendingApprovalController extends Controller
             return response()->json(['success' => false, 'message' => 'Solo se pueden aprobar movimientos pendientes'], 422);
         }
 
-        $movement->update([
-            'status' => 'approved',
-            'approved_by' => $user->id,
-            'approved_at' => now(),
-        ]);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Movimiento aprobado exitosamente',
-            'data' => $movement->fresh(),
-        ]);
+        return app(InventoryMovementController::class)->approve(request(), $movement);
     }
 
     private function rejectInventoryMovement(int $id, $user, string $reason): JsonResponse
@@ -971,9 +977,9 @@ class PendingApprovalController extends Controller
         }
 
         $movement->update([
-            'status' => 'rejected',
-            'approved_by' => $user->id,
-            'approved_at' => now(),
+            'status' => 'cancelled',
+            'cancelled_by' => $user->id,
+            'cancelled_at' => now(),
             'cancellation_reason' => $reason,
         ]);
 

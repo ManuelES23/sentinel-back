@@ -38,7 +38,73 @@ class InventoryMovementController extends Controller
     }
 
     /**
+     * IDs de entidades propias (la sucursal pertenece a la empresa actual).
+     */
+    private function getOwnEntityIds(Request $request): array
+    {
+        $enterprise = $this->getEnterprise($request);
+        if (!$enterprise) return [];
+
+        return Entity::whereHas('branch', function ($q) use ($enterprise) {
+            $q->where('enterprise_id', $enterprise->id);
+        })->pluck('id')->toArray();
+    }
+
+    private function getEntityOwnerEnterprise(?int $entityId): ?Enterprise
+    {
+        if (!$entityId) {
+            return null;
+        }
+
+        $entity = Entity::with('branch.enterprise:id,name,slug')->find($entityId);
+
+        return $entity?->branch?->enterprise;
+    }
+
+    private function buildApprovalMetadata(
+        Request $request,
+        ?int $sourceEntityId,
+        ?int $destinationEntityId,
+        ?array $existingMetadata = null
+    ): array {
+        $currentEnterprise = $this->getEnterprise($request);
+        $metadata = $existingMetadata ?? [];
+
+        if (!$currentEnterprise) {
+            return $metadata;
+        }
+
+        $sourceOwner = $this->getEntityOwnerEnterprise($sourceEntityId);
+        $destinationOwner = $this->getEntityOwnerEnterprise($destinationEntityId);
+
+        $approvalEnterprise = collect([$sourceOwner, $destinationOwner])
+            ->filter(fn ($enterprise) => $enterprise && (int) $enterprise->id !== (int) $currentEnterprise->id)
+            ->first();
+
+        $approvalMetadata = [
+            'requires_external_validation' => (bool) $approvalEnterprise,
+            'requesting_enterprise_id' => $currentEnterprise->id,
+            'requesting_enterprise_slug' => $currentEnterprise->slug,
+            'requesting_enterprise_name' => $currentEnterprise->name,
+            'source_owner_enterprise_id' => $sourceOwner?->id,
+            'source_owner_enterprise_slug' => $sourceOwner?->slug,
+            'source_owner_enterprise_name' => $sourceOwner?->name,
+            'destination_owner_enterprise_id' => $destinationOwner?->id,
+            'destination_owner_enterprise_slug' => $destinationOwner?->slug,
+            'destination_owner_enterprise_name' => $destinationOwner?->name,
+            'approval_enterprise_id' => $approvalEnterprise?->id,
+            'approval_enterprise_slug' => $approvalEnterprise?->slug,
+            'approval_enterprise_name' => $approvalEnterprise?->name,
+        ];
+
+        return array_merge($metadata, $approvalMetadata);
+    }
+
+    /**
      * Entidades accesibles para selects del frontend.
+     * Devuelve:
+     *  - Entidades propias (isOwn: true)  → usables en entradas, salidas, ajustes y como origen de transferencias
+     *  - Entidades vinculadas (isOwn: false) → solo como destino de transferencias y lectura de stock
      */
     public function accessibleEntities(Request $request): JsonResponse
     {
@@ -47,29 +113,55 @@ class InventoryMovementController extends Controller
             return response()->json(['success' => true, 'data' => []]);
         }
 
-        $entities = $enterprise->accessibleEntities()
-            ->with(['branch:id,name,enterprise_id', 'branch.enterprise:id,name,slug', 'entityType:id,name,icon,color'])
+        // 1. Entidades propias
+        $ownEntities = Entity::with(['branch:id,name,enterprise_id', 'branch.enterprise:id,name,slug', 'entityType:id,name,icon,color'])
             ->active()
+            ->whereHas('branch', fn ($q) => $q->where('enterprise_id', $enterprise->id))
             ->get()
-            ->map(function ($entity) use ($enterprise) {
-                $isOwn = $entity->branch && $entity->branch->enterprise_id === $enterprise->id;
-                return [
-                    'id' => $entity->id,
-                    'code' => $entity->code,
-                    'name' => $entity->name,
-                    'branch' => $entity->branch?->name,
+            ->map(fn ($entity) => [
+                'id'             => $entity->id,
+                'code'           => $entity->code,
+                'name'           => $entity->name,
+                'branch'         => $entity->branch?->name,
+                'ownerEnterprise' => $entity->branch?->enterprise?->name,
+                'entityType'     => $entity->entityType?->name,
+                'entityTypeIcon' => $entity->entityType?->icon,
+                'entityTypeColor'=> $entity->entityType?->color,
+                'isOwn'          => true,
+                'accessLevel'    => 'write',
+            ]);
+
+        // 2. Entidades vinculadas (pivot enterprise_entity, de otras empresas)
+        $linkedIds = DB::table('enterprise_entity')
+            ->where('enterprise_id', $enterprise->id)
+            ->pluck('entity_id');
+
+        $linkedEntities = collect();
+        if ($linkedIds->isNotEmpty()) {
+            $linkedEntities = Entity::with(['branch:id,name,enterprise_id', 'branch.enterprise:id,name,slug', 'entityType:id,name,icon,color'])
+                ->active()
+                ->whereIn('id', $linkedIds)
+                ->whereHas('branch', fn ($q) => $q->where('enterprise_id', '!=', $enterprise->id))
+                ->get()
+                ->map(fn ($entity) => [
+                    'id'             => $entity->id,
+                    'code'           => $entity->code,
+                    'name'           => $entity->name,
+                    'branch'         => $entity->branch?->name,
                     'ownerEnterprise' => $entity->branch?->enterprise?->name,
-                    'entityType' => $entity->entityType?->name,
+                    'entityType'     => $entity->entityType?->name,
                     'entityTypeIcon' => $entity->entityType?->icon,
-                    'entityTypeColor' => $entity->entityType?->color,
-                    'isOwn' => $isOwn,
-                    'accessLevel' => $entity->pivot->access_level,
-                ];
-            });
+                    'entityTypeColor'=> $entity->entityType?->color,
+                    'isOwn'          => false,
+                    'accessLevel'    => 'read',
+                ]);
+        }
+
+        $all = $ownEntities->concat($linkedEntities)->sortBy('name')->values();
 
         return response()->json([
             'success' => true,
-            'data' => $entities,
+            'data'    => $all,
         ]);
     }
 
@@ -243,10 +335,46 @@ class InventoryMovementController extends Controller
             }
         }
 
+        // ── Restricciones de ownership por dirección ─────────────────────────
+        // entradas/salidas/ajustes: la entidad operada debe ser propia.
+        // transferencias: origen debe ser propio; destino puede ser propio o vinculada.
+        $ownIds = $this->getOwnEntityIds($request);
+
+        if (in_array($movementType->direction, ['in', 'out', 'adjustment'])) {
+            $operatedEntityId = $movementType->direction === 'in'
+                ? ($validated['destination_entity_id'] ?? null)
+                : ($validated['source_entity_id'] ?? null);
+
+            if ($operatedEntityId && !in_array((int) $operatedEntityId, array_map('intval', $ownIds))) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Las entradas, salidas y ajustes solo pueden realizarse en entidades propias de la empresa. Las entidades vinculadas son de solo lectura.',
+                ], 422);
+            }
+        }
+
+        if ($movementType->direction === 'transfer') {
+            $sourceId = $validated['source_entity_id'] ?? null;
+            if ($sourceId && !in_array((int) $sourceId, array_map('intval', $ownIds))) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'El origen de una transferencia debe ser una entidad propia.',
+                ], 422);
+            }
+        }
+        // ─────────────────────────────────────────────────────────────────────
+
         DB::beginTransaction();
 
         try {
             // Crear movimiento
+            $movementMetadata = $this->buildApprovalMetadata(
+                $request,
+                $validated['source_entity_id'] ?? null,
+                $validated['destination_entity_id'] ?? null,
+                $validated['metadata'] ?? null,
+            );
+
             $movement = InventoryMovement::create([
                 'document_number' => InventoryMovement::generateDocumentNumber($movementType->direction),
                 'movement_type_id' => $validated['movement_type_id'],
@@ -259,7 +387,7 @@ class InventoryMovementController extends Controller
                 'description' => $validated['description'] ?? null,
                 'status' => 'pending',
                 'created_by' => Auth::id(),
-                'metadata' => $validated['metadata'] ?? null,
+                'metadata' => $movementMetadata,
             ]);
 
             // Crear detalles
@@ -354,10 +482,66 @@ class InventoryMovementController extends Controller
             'details.*.notes' => 'nullable|string',
         ]);
 
+        // Validar que las entidades finales sean accesibles por la empresa actual
+        $entityIds = $this->getAccessibleEntityIds($request);
+        if (!empty($entityIds)) {
+            $sourceId = $validated['source_entity_id'] ?? $movement->source_entity_id;
+            $destinationId = $validated['destination_entity_id'] ?? $movement->destination_entity_id;
+
+            if (!empty($sourceId) && !in_array((int) $sourceId, array_map('intval', $entityIds))) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'No tienes acceso a la entidad origen seleccionada',
+                ], 403);
+            }
+
+            if (!empty($destinationId) && !in_array((int) $destinationId, array_map('intval', $entityIds))) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'No tienes acceso a la entidad destino seleccionada',
+                ], 403);
+            }
+        }
+
+        // ── Restricciones de ownership en update ─────────────────────────────
+        $ownIds = $this->getOwnEntityIds($request);
+        $movementType = $movement->movementType;
+
+        if ($movementType && in_array($movementType->direction, ['in', 'out', 'adjustment'])) {
+            $operatedEntityId = $movementType->direction === 'in'
+                ? ($validated['destination_entity_id'] ?? $movement->destination_entity_id)
+                : ($validated['source_entity_id'] ?? $movement->source_entity_id);
+
+            if ($operatedEntityId && !in_array((int) $operatedEntityId, array_map('intval', $ownIds))) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Las entradas, salidas y ajustes solo pueden realizarse en entidades propias.',
+                ], 422);
+            }
+        }
+
+        if ($movementType && $movementType->direction === 'transfer') {
+            $sourceId = $validated['source_entity_id'] ?? $movement->source_entity_id;
+            if ($sourceId && !in_array((int) $sourceId, array_map('intval', $ownIds))) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'El origen de una transferencia debe ser una entidad propia.',
+                ], 422);
+            }
+        }
+        // ─────────────────────────────────────────────────────────────────────
+
         DB::beginTransaction();
 
         try {
             // Actualizar movimiento
+            $movementMetadata = $this->buildApprovalMetadata(
+                $request,
+                $validated['source_entity_id'] ?? $movement->source_entity_id,
+                $validated['destination_entity_id'] ?? $movement->destination_entity_id,
+                $validated['metadata'] ?? $movement->metadata,
+            );
+
             $movement->update([
                 'source_entity_id' => $validated['source_entity_id'] ?? $movement->source_entity_id,
                 'source_entity_type' => $validated['source_entity_type'] ?? $movement->source_entity_type,
@@ -366,7 +550,7 @@ class InventoryMovementController extends Controller
                 'reference_number' => $validated['reference_number'] ?? $movement->reference_number,
                 'movement_date' => $validated['movement_date'] ?? $movement->movement_date,
                 'description' => $validated['description'] ?? $movement->description,
-                'metadata' => $validated['metadata'] ?? $movement->metadata,
+                'metadata' => $movementMetadata,
             ]);
 
             // Actualizar detalles si se proporcionan
@@ -469,13 +653,24 @@ class InventoryMovementController extends Controller
     /**
      * Approve and execute the movement.
      */
-    public function approve(InventoryMovement $movement): JsonResponse
+    public function approve(Request $request, InventoryMovement $movement): JsonResponse
     {
         if ($movement->status !== 'pending') {
             return response()->json([
                 'status' => 'error',
                 'message' => 'Solo se pueden aprobar movimientos pendientes'
             ], 422);
+        }
+
+        $userEnterpriseId = Auth::user()?->employee?->enterprise_id;
+        $requiresExternalValidation = (bool) data_get($movement->metadata, 'requires_external_validation', false);
+        $approvalEnterpriseId = data_get($movement->metadata, 'approval_enterprise_id');
+
+        if ($requiresExternalValidation && $approvalEnterpriseId && (int) $userEnterpriseId !== (int) $approvalEnterpriseId) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Este movimiento debe validarse por la empresa propietaria de la entidad externa',
+            ], 403);
         }
 
         DB::beginTransaction();

@@ -26,6 +26,13 @@ class EntityController extends Controller
         return Enterprise::where('slug', $slug)->first();
     }
 
+    private function entityBelongsToEnterprise(Entity $entity, int $enterpriseId): bool
+    {
+        $entity->loadMissing('branch:id,enterprise_id');
+
+        return (int) $entity->branch?->enterprise_id === $enterpriseId;
+    }
+
     /**
      * Entidades externas disponibles (otras empresas) para vincular como externa.
      * Solo tipos BODEGA/EMPAQUE.
@@ -55,6 +62,12 @@ class EntityController extends Controller
             })
             ->whereHas('entityType', function ($q) {
                 $q->whereIn('code', ['BODEGA', 'EMPAQUE']);
+            })
+            // Excluir entidades ya vinculadas a la empresa actual
+            ->whereNotIn('id', function ($sub) use ($currentEnterprise) {
+                $sub->select('entity_id')
+                    ->from('enterprise_entity')
+                    ->where('enterprise_id', $currentEnterprise->id);
             });
 
         if (!empty($validated['entity_type_id'])) {
@@ -101,45 +114,183 @@ class EntityController extends Controller
 
     /**
      * Display a listing of the resource.
+     * Returns own entities + externally linked entities (via enterprise_entity pivot).
      */
     public function index(Request $request): JsonResponse
     {
-        $query = Entity::with(['branch', 'entityType', 'areas', 'cultivos:id,nombre']);
+        $currentEnterprise = $this->getCurrentEnterprise($request);
+        if (!$currentEnterprise) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No se pudo determinar la empresa actual desde el header X-Enterprise-Slug',
+            ], 422);
+        }
+
+        $relations = ['branch.enterprise:id,name,slug', 'entityType', 'areas', 'cultivos:id,nombre'];
+
+        // ── 1. Entidades propias ──────────────────────────────────────────
+        $ownQuery = Entity::with($relations)
+            ->whereHas('branch', fn ($q) => $q->where('enterprise_id', $currentEnterprise->id));
 
         if ($request->has('branch_id')) {
-            $query->byBranch($request->branch_id);
+            $ownQuery->byBranch($request->branch_id);
         }
-
         if ($request->has('entity_type_id')) {
-            $query->byType($request->entity_type_id);
+            $ownQuery->byType($request->entity_type_id);
         }
-
         if ($request->boolean('active_only')) {
-            $query->active();
+            $ownQuery->active();
         }
-
-        // Filtrar por cultivo (para EmpaqueSelectorOA)
         if ($request->has('cultivo_id') && $request->cultivo_id) {
-            $query->whereHas('cultivos', fn ($q) => $q->where('cultivos.id', $request->cultivo_id));
+            $ownQuery->whereHas('cultivos', fn ($q) => $q->where('cultivos.id', $request->cultivo_id));
         }
 
-        $entities = $query->orderBy('name')->get();
+        $ownEntities = $ownQuery->orderBy('name')->get()
+            ->map(fn (Entity $e) => array_merge($e->toArray(), ['is_linked_external' => false]));
+
+        // ── 2. Entidades vinculadas de otras empresas (pivot) ─────────────
+        $linkedIds = DB::table('enterprise_entity')
+            ->where('enterprise_id', $currentEnterprise->id)
+            ->pluck('entity_id');
+
+        $linkedEntities = collect();
+        if ($linkedIds->isNotEmpty()) {
+            $linkedEntities = Entity::with($relations)
+                ->whereIn('id', $linkedIds)
+                ->whereHas('branch', fn ($q) => $q->where('enterprise_id', '!=', $currentEnterprise->id))
+                ->orderBy('name')
+                ->get()
+                ->map(fn (Entity $e) => array_merge($e->toArray(), ['is_linked_external' => true]));
+        }
+
+        $all = $ownEntities->concat($linkedEntities)->sortBy('name')->values();
 
         return response()->json([
             'success' => true,
-            'data' => $entities
+            'data' => $all,
+        ]);
+    }
+
+    /**
+     * Vincular una entidad de otra empresa a la empresa actual mediante pivot.
+     * No crea registros duplicados: reutiliza la entidad existente.
+     */
+    public function vincular(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'entity_id'    => 'required|exists:entities,id',
+            'access_level' => 'nullable|in:read,write',
+        ]);
+
+        $currentEnterprise = $this->getCurrentEnterprise($request);
+        if (!$currentEnterprise) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No se pudo determinar la empresa actual desde el header X-Enterprise-Slug',
+            ], 422);
+        }
+
+        $entity = Entity::with(['branch.enterprise:id,name,slug', 'entityType', 'areas', 'cultivos:id,nombre'])
+            ->findOrFail($validated['entity_id']);
+
+        // Debe pertenecer a una empresa diferente
+        if ((int) $entity->branch?->enterprise_id === (int) $currentEnterprise->id) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'La entidad ya pertenece a la empresa actual',
+            ], 422);
+        }
+
+        // Solo tipos BODEGA / EMPAQUE
+        $allowedTypes = ['BODEGA', 'EMPAQUE'];
+        if (!in_array($entity->entityType?->code, $allowedTypes, true)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Solo se pueden vincular entidades tipo Bodega o Empaque',
+            ], 422);
+        }
+
+        // Ya vinculada?
+        $alreadyLinked = DB::table('enterprise_entity')
+            ->where('enterprise_id', $currentEnterprise->id)
+            ->where('entity_id', $entity->id)
+            ->exists();
+
+        if ($alreadyLinked) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Esta entidad ya está vinculada a la empresa actual',
+            ], 422);
+        }
+
+        DB::table('enterprise_entity')->insert([
+            'enterprise_id' => $currentEnterprise->id,
+            'entity_id'     => $entity->id,
+            'access_level'  => $validated['access_level'] ?? 'write',
+            'created_at'    => now(),
+            'updated_at'    => now(),
+        ]);
+
+        $entityData = array_merge($entity->toArray(), ['is_linked_external' => true]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Entidad vinculada exitosamente',
+            'data'    => $entityData,
+        ], 201);
+    }
+
+    /**
+     * Eliminar el vínculo de una entidad externa de la empresa actual.
+     * No elimina la entidad: solo quita la entrada del pivot.
+     */
+    public function desvincular(Request $request, Entity $entity): JsonResponse
+    {
+        $currentEnterprise = $this->getCurrentEnterprise($request);
+        if (!$currentEnterprise) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No se pudo determinar la empresa actual desde el header X-Enterprise-Slug',
+            ], 422);
+        }
+
+        $entity->loadMissing('branch:id,enterprise_id');
+
+        // Solo se pueden desvincular entidades de otras empresas
+        if ((int) $entity->branch?->enterprise_id === (int) $currentEnterprise->id) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No puedes desvincular una entidad propia',
+            ], 422);
+        }
+
+        $deleted = DB::table('enterprise_entity')
+            ->where('enterprise_id', $currentEnterprise->id)
+            ->where('entity_id', $entity->id)
+            ->delete();
+
+        if (!$deleted) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'El vínculo no existe',
+            ], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Vínculo eliminado exitosamente',
         ]);
     }
 
     /**
      * Store a newly created resource in storage.
+     * Para vincular entidades externas, usa POST /entidades/vincular en su lugar.
      */
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
             'branch_id' => 'required|exists:branches,id',
             'entity_type_id' => 'required|exists:entity_types,id',
-            'external_source_entity_id' => 'nullable|exists:entities,id',
             'code' => 'nullable|string|max:50|unique:entities,code',
             'abbreviation' => 'nullable|string|max:10',
             'name' => 'required|string|max:255',
@@ -164,66 +315,24 @@ class EntityController extends Controller
             'usa_hidrotermico' => 'boolean',
         ]);
 
+        $currentEnterprise = $this->getCurrentEnterprise($request);
+        if (!$currentEnterprise) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No se pudo determinar la empresa actual desde el header X-Enterprise-Slug',
+            ], 422);
+        }
+
         $targetBranch = Branch::with('enterprise')->findOrFail($validated['branch_id']);
-        $sourceEntity = null;
-
-        if (!empty($validated['external_source_entity_id'])) {
-            $sourceEntity = Entity::with(['branch.enterprise', 'entityType'])->findOrFail($validated['external_source_entity_id']);
-
-            if ($sourceEntity->branch?->enterprise_id === $targetBranch->enterprise_id) {
-                return response()->json([
-                    'status' => 'error',
-                    'message' => 'La entidad origen debe pertenecer a otra empresa',
-                ], 422);
-            }
-
-            $allowedTypes = ['BODEGA', 'EMPAQUE'];
-            if (!in_array($sourceEntity->entityType?->code, $allowedTypes, true)) {
-                return response()->json([
-                    'status' => 'error',
-                    'message' => 'Solo se pueden vincular entidades externas tipo Bodega o Empaque',
-                ], 422);
-            }
-
-            $alreadyLinked = Entity::with('branch')
-                ->whereHas('branch', function ($q) use ($targetBranch) {
-                    $q->where('enterprise_id', $targetBranch->enterprise_id);
-                })
-                ->get()
-                ->first(function ($entity) use ($sourceEntity) {
-                    $meta = $entity->metadata ?? [];
-                    return (int) ($meta['external_source_entity_id'] ?? 0) === (int) $sourceEntity->id;
-                });
-
-            if ($alreadyLinked) {
-                return response()->json([
-                    'status' => 'error',
-                    'message' => 'Esta entidad externa ya fue vinculada en la empresa actual',
-                ], 422);
-            }
-
-            $validated['entity_type_id'] = $sourceEntity->entity_type_id;
-            $validated['is_external'] = true;
-            $validated['owner_company'] = $sourceEntity->branch?->enterprise?->name;
-            $validated['name'] = $validated['name'] ?: $sourceEntity->name;
-            $validated['description'] = $validated['description'] ?: $sourceEntity->description;
-            $validated['location'] = $validated['location'] ?: $sourceEntity->location;
-            $validated['responsible'] = $validated['responsible'] ?: $sourceEntity->responsible;
-            $validated['area_m2'] = $validated['area_m2'] ?: $sourceEntity->area_m2;
-            $validated['usa_hidrotermico'] = $validated['usa_hidrotermico'] ?? (bool) $sourceEntity->usa_hidrotermico;
-
-            $metadata = $validated['metadata'] ?? [];
-            $validated['metadata'] = array_merge($metadata, [
-                'external_source_entity_id' => $sourceEntity->id,
-                'external_source_entity_code' => $sourceEntity->code,
-                'external_source_enterprise_id' => $sourceEntity->branch?->enterprise?->id,
-                'external_source_enterprise_slug' => $sourceEntity->branch?->enterprise?->slug,
-                'external_source_enterprise_name' => $sourceEntity->branch?->enterprise?->name,
-            ]);
+        if ((int) $targetBranch->enterprise_id !== (int) $currentEnterprise->id) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'La sucursal seleccionada no pertenece a la empresa actual',
+            ], 422);
         }
 
         $cultivoIds = $validated['cultivo_ids'] ?? [];
-        unset($validated['cultivo_ids'], $validated['external_source_entity_id']);
+        unset($validated['cultivo_ids']);
 
         $isAutoCode = empty($validated['code']);
         $maxAttempts = $isAutoCode ? 5 : 1;
@@ -315,7 +424,7 @@ class EntityController extends Controller
             ], 422);
         }
 
-        $entity->load(['branch', 'entityType', 'areas', 'cultivos:id,nombre']);
+        $entity->load(['branch.enterprise:id,name,slug', 'entityType', 'areas', 'cultivos:id,nombre']);
 
         // Broadcast evento en tiempo real
         broadcast(new EntityUpdated('created', $entity->toArray()));
@@ -330,9 +439,24 @@ class EntityController extends Controller
     /**
      * Display the specified resource.
      */
-    public function show(Entity $entity): JsonResponse
+    public function show(Request $request, Entity $entity): JsonResponse
     {
-        $entity->load(['branch', 'entityType', 'areas', 'cultivos:id,nombre']);
+        $currentEnterprise = $this->getCurrentEnterprise($request);
+        if (!$currentEnterprise) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No se pudo determinar la empresa actual desde el header X-Enterprise-Slug',
+            ], 422);
+        }
+
+        if (!$this->entityBelongsToEnterprise($entity, $currentEnterprise->id)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'La entidad solicitada no pertenece a la empresa actual',
+            ], 404);
+        }
+
+        $entity->load(['branch.enterprise:id,name,slug', 'entityType', 'areas', 'cultivos:id,nombre']);
 
         return response()->json([
             'success' => true,
@@ -345,6 +469,28 @@ class EntityController extends Controller
      */
     public function update(Request $request, Entity $entity): JsonResponse
     {
+        $currentEnterprise = $this->getCurrentEnterprise($request);
+        if (!$currentEnterprise) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No se pudo determinar la empresa actual desde el header X-Enterprise-Slug',
+            ], 422);
+        }
+
+        if (!$this->entityBelongsToEnterprise($entity, $currentEnterprise->id)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'La entidad que intentas editar no pertenece a la empresa actual',
+            ], 404);
+        }
+
+        if ((bool) $entity->is_external) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Las entidades vinculadas desde otra empresa son de solo lectura',
+            ], 422);
+        }
+
         $validated = $request->validate([
             'branch_id' => 'sometimes|exists:branches,id',
             'entity_type_id' => 'sometimes|exists:entity_types,id',
@@ -372,6 +518,16 @@ class EntityController extends Controller
             'usa_hidrotermico' => 'boolean',
         ]);
 
+        if (isset($validated['branch_id'])) {
+            $targetBranch = Branch::findOrFail($validated['branch_id']);
+            if ((int) $targetBranch->enterprise_id !== (int) $currentEnterprise->id) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'La sucursal seleccionada no pertenece a la empresa actual',
+                ], 422);
+            }
+        }
+
         $cultivoIds = $validated['cultivo_ids'] ?? null;
         unset($validated['cultivo_ids']);
 
@@ -383,7 +539,7 @@ class EntityController extends Controller
         }
 
         // Recargar la entidad con sus relaciones
-        $entity = $entity->fresh(['branch', 'entityType', 'areas', 'cultivos:id,nombre']);
+        $entity = $entity->fresh(['branch.enterprise:id,name,slug', 'entityType', 'areas', 'cultivos:id,nombre']);
 
         // Broadcast evento en tiempo real
         broadcast(new EntityUpdated('updated', $entity->toArray()));
@@ -398,8 +554,30 @@ class EntityController extends Controller
     /**
      * Remove the specified resource from storage.
      */
-    public function destroy(Entity $entity): JsonResponse
+    public function destroy(Request $request, Entity $entity): JsonResponse
     {
+        $currentEnterprise = $this->getCurrentEnterprise($request);
+        if (!$currentEnterprise) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No se pudo determinar la empresa actual desde el header X-Enterprise-Slug',
+            ], 422);
+        }
+
+        if (!$this->entityBelongsToEnterprise($entity, $currentEnterprise->id)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'La entidad que intentas eliminar no pertenece a la empresa actual',
+            ], 404);
+        }
+
+        if ((bool) $entity->is_external) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Las entidades vinculadas desde otra empresa no se pueden eliminar desde este catálogo',
+            ], 422);
+        }
+
         // Verificar si tiene áreas asociadas
         if ($entity->areas()->count() > 0) {
             return response()->json([
