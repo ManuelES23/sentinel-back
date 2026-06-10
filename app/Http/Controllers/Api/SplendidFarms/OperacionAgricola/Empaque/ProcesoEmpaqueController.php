@@ -462,6 +462,27 @@ class ProcesoEmpaqueController extends Controller
             ], 422);
         }
 
+        $rezagasActivas = $proceso->rezagas()->count();
+        $rezagasEliminadas = $proceso->rezagas()->onlyTrashed()->count();
+
+        if ($rezagasActivas > 0) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No se puede devolver a piso: el folio tiene rezagas asociadas. Elimínalas o reasígnalas primero.',
+                'details' => [
+                    'rezagas_activas' => $rezagasActivas,
+                    'rezagas_eliminadas' => $rezagasEliminadas,
+                ],
+            ], 422);
+        }
+
+        // Si solo hay rezagas en papelera (soft-deleted), purgarlas para liberar FK.
+        if ($rezagasEliminadas > 0) {
+            RezagaEmpaque::onlyTrashed()
+                ->where('proceso_id', $proceso->id)
+                ->forceDelete();
+        }
+
         // If came from lavado pipeline, revert to listo_produccion
         if ($proceso->fecha_lavado) {
             $proceso->update([
@@ -471,7 +492,17 @@ class ProcesoEmpaqueController extends Controller
             return response()->json(['success' => true, 'message' => 'Folio devuelto a lavado (listo para producción)']);
         }
 
-        $proceso->forceDelete();
+        try {
+            $proceso->forceDelete();
+        } catch (\Throwable $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No se pudo devolver a piso por dependencias asociadas',
+                'details' => [
+                    'exception' => class_basename($e),
+                ],
+            ], 422);
+        }
 
         return response()->json(['success' => true, 'message' => 'Folio devuelto a piso']);
     }
