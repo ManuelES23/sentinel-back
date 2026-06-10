@@ -663,6 +663,9 @@ class ProcesoEmpaqueController extends Controller
             'rezaga_kg' => 'nullable|numeric|min:0.01',
             'subtipo_rezaga' => 'required_with:rezaga_kg|in:hoja,producto',
             'rezaga_observaciones' => 'nullable|string|max:1000',
+            'usar_rezagas_tarima' => 'nullable|boolean',
+            'rezaga_tarima_produccion_kg' => 'nullable|numeric|min:0',
+            'rezaga_tarima_lavado_kg' => 'nullable|numeric|min:0',
         ]);
 
         $cuartoFrio = $validated['cantidad_cuarto_frio'];
@@ -700,8 +703,11 @@ class ProcesoEmpaqueController extends Controller
 
         $remainder = $proceso->cantidad_disponible - $totalProcesado;
 
-        // Register production rezaga if provided
-        if ($request->filled('rezaga_kg')) {
+        $crearRezaga = function (string $tipoRezaga, float $kg, ?string $subtipo, ?string $observaciones) use ($proceso, $request) {
+            if ($kg <= 0) {
+                return;
+            }
+
             $folioRezaga = $this->generarFolioRezaga($proceso->entity_id);
 
             RezagaEmpaque::create([
@@ -709,15 +715,52 @@ class ProcesoEmpaqueController extends Controller
                 'entity_id' => $proceso->entity_id,
                 'proceso_id' => $proceso->id,
                 'folio_rezaga' => $folioRezaga,
-                'tipo_rezaga' => 'produccion',
-                'subtipo_rezaga' => $validated['subtipo_rezaga'],
+                'tipo_rezaga' => $tipoRezaga,
+                'subtipo_rezaga' => $subtipo ?: 'producto',
                 'fecha' => now('America/Mexico_City')->toDateString(),
-                'cantidad_kg' => $validated['rezaga_kg'],
+                'cantidad_kg' => $kg,
                 'motivo' => null,
                 'status' => 'pendiente',
-                'observaciones' => $validated['rezaga_observaciones'] ?? null,
+                'observaciones' => $observaciones,
                 'created_by' => $request->user()->id,
             ]);
+        };
+
+        // Automatic mode: consume rezagas capturadas por tarima del folio.
+        // If a total is provided but no tarima exists for that type, create one consolidated record.
+        if ($request->boolean('usar_rezagas_tarima')) {
+            $tarimaProduccionKg = (float) RezagaEmpaque::query()
+                ->where('proceso_id', $proceso->id)
+                ->where('modo_registro', 'tarima')
+                ->where('tipo_rezaga', 'produccion')
+                ->sum('cantidad_kg');
+
+            $tarimaLavadoKg = (float) RezagaEmpaque::query()
+                ->where('proceso_id', $proceso->id)
+                ->where('modo_registro', 'tarima')
+                ->where('tipo_rezaga', 'lavado')
+                ->sum('cantidad_kg');
+
+            $fallbackProduccionKg = (float) ($validated['rezaga_tarima_produccion_kg'] ?? 0);
+            $fallbackLavadoKg = (float) ($validated['rezaga_tarima_lavado_kg'] ?? 0);
+
+            if ($tarimaProduccionKg <= 0 && $fallbackProduccionKg > 0) {
+                $crearRezaga('produccion', $fallbackProduccionKg, 'producto', 'Auto-generada al cierre desde control por tarimas');
+            }
+
+            if ($tarimaLavadoKg <= 0 && $fallbackLavadoKg > 0) {
+                $crearRezaga('lavado', $fallbackLavadoKg, 'producto', 'Auto-generada al cierre desde control por tarimas');
+            }
+        }
+
+        // Register production rezaga if provided
+        if ($request->filled('rezaga_kg')) {
+            $crearRezaga(
+                'produccion',
+                (float) $validated['rezaga_kg'],
+                $validated['subtipo_rezaga'] ?? 'producto',
+                $validated['rezaga_observaciones'] ?? null,
+            );
         }
 
         // peso_entrada_kg and cantidad_entrada stay original (full folio entry).

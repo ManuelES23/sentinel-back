@@ -22,7 +22,7 @@ class RezagaEmpaqueController extends Controller
         'proceso.recepcion.variedad:id,nombre',
         'proceso.recepcion.salidaCampo:id,variedad_id,folio_salida,cantidad',
         'proceso.recepcion.salidaCampo.variedad:id,nombre',
-        'tipoCarga:id,nombre,code,peso_estimado_kg,categoria_caja',
+        'tipoCarga:id,nombre,peso_estimado_kg,categoria_caja',
         'ventaDetalles:id,rezaga_id,peso_kg',
         'creador:id,name',
     ];
