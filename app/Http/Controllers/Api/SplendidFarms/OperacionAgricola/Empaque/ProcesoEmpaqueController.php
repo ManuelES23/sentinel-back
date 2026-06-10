@@ -229,6 +229,8 @@ class ProcesoEmpaqueController extends Controller
                     'fecha_recepcion' => $rec->fecha_recepcion,
                     'productor' => $rec->productor,
                     'lote' => $rec->lote,
+                    'lote_producto_terminado' => $rec->lote_producto_terminado,
+                    'loteProductoTerminado' => $rec->lote_producto_terminado,
                     'etapa' => $rec->etapa,
                     'salida_campo' => $rec->salidaCampo,
                     'variedad' => $variedad,
