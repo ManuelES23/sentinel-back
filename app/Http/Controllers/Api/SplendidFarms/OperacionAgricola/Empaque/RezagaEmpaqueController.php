@@ -22,6 +22,7 @@ class RezagaEmpaqueController extends Controller
         'proceso.recepcion.variedad:id,nombre',
         'proceso.recepcion.salidaCampo:id,variedad_id,folio_salida,cantidad',
         'proceso.recepcion.salidaCampo.variedad:id,nombre',
+        'tipoCarga:id,nombre,code,peso_estimado_kg,categoria_caja',
         'ventaDetalles:id,rezaga_id,peso_kg',
         'creador:id,name',
     ];
@@ -161,12 +162,37 @@ class RezagaEmpaqueController extends Controller
             'tipo_rezaga' => 'required|in:produccion,cuarto_frio,lavado,hidrotermico',
             'subtipo_rezaga' => 'required|in:hoja,producto',
             'fecha' => 'required|date',
-            'cantidad_kg' => 'required|numeric|min:0.01',
+            'cantidad_kg' => 'nullable|numeric|min:0.01',
+            'modo_registro' => 'nullable|in:general,tarima',
+            'tipo_carga_id' => 'nullable|exists:tipos_carga,id',
+            'total_cajas' => 'nullable|integer|min:1',
+            'peso_bascula_kg' => 'nullable|numeric|min:0.01',
             'cantidad_unidades_pequenas' => 'nullable|integer|min:0',
             'motivo' => 'nullable|string',
             'status' => 'nullable|in:pendiente,vendida,destruida',
             'observaciones' => 'nullable|string',
         ]);
+
+        $modoRegistro = $validated['modo_registro'] ?? 'general';
+        $validated['modo_registro'] = $modoRegistro;
+
+        if ($modoRegistro === 'tarima') {
+            if (empty($validated['tipo_carga_id']) || empty($validated['total_cajas']) || empty($validated['peso_bascula_kg'])) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Para registro por tarima se requiere tipo de carga, total de cajas y peso báscula.',
+                ], 422);
+            }
+
+            $validated['cantidad_kg'] = (float) $validated['peso_bascula_kg'];
+        }
+
+        if (empty($validated['cantidad_kg'])) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'La cantidad en kg es obligatoria.',
+            ], 422);
+        }
 
         $validated['status'] = $validated['status'] ?? 'pendiente';
         $validated['created_by'] = $request->user()->id;
@@ -198,11 +224,20 @@ class RezagaEmpaqueController extends Controller
             'subtipo_rezaga' => 'sometimes|in:hoja,producto',
             'fecha' => 'sometimes|date',
             'cantidad_kg' => 'sometimes|numeric|min:0.01',
+            'modo_registro' => 'sometimes|in:general,tarima',
+            'tipo_carga_id' => 'nullable|exists:tipos_carga,id',
+            'total_cajas' => 'nullable|integer|min:1',
+            'peso_bascula_kg' => 'nullable|numeric|min:0.01',
             'cantidad_unidades_pequenas' => 'nullable|integer|min:0',
             'motivo' => 'nullable|string',
             'status' => 'nullable|in:pendiente,vendida,destruida',
             'observaciones' => 'nullable|string',
         ]);
+
+        $modoRegistroUpdate = $validated['modo_registro'] ?? $rezaga->modo_registro;
+        if ($modoRegistroUpdate === 'tarima' && array_key_exists('peso_bascula_kg', $validated) && !array_key_exists('cantidad_kg', $validated)) {
+            $validated['cantidad_kg'] = $validated['peso_bascula_kg'];
+        }
 
         $rezaga->update($validated);
         $rezaga->load($this->eagerLoad);

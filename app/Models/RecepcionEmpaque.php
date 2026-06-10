@@ -19,6 +19,7 @@ class RecepcionEmpaque extends Model
         'etapa_id', 'variedad_id', 'zona_cultivo_id', 'tipo_carga_id', 'cantidad_recibida',
         'peso_recibido_kg', 'peso_bascula', 'folio_ticket_bascula', 'clave_we', 'lote_origen',
         'lote_producto_terminado',
+        'clasificacion',
         'temperatura', 'transportista', 'vehiculo',
         'chofer', 'es_batanga', 'status', 'observaciones', 'recibido_por', 'created_by',
     ];

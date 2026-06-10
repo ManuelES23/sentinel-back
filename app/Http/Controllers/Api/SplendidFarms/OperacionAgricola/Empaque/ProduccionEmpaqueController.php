@@ -170,6 +170,7 @@ class ProduccionEmpaqueController extends Controller
             'etiqueta' => 'nullable|string|max:100',
             'calibre' => 'nullable|string|max:50',
             'categoria' => 'nullable|string|max:50',
+            'clasificacion' => 'nullable|in:convencional,organico',
             'status' => 'nullable|in:empacado,en_almacen,embarcado',
             'is_cola' => 'nullable|boolean',
             'observaciones' => 'nullable|string',
@@ -182,6 +183,7 @@ class ProduccionEmpaqueController extends Controller
                 return DB::transaction(function () use ($validated, $request) {
                     $validated['status'] = $validated['status'] ?? 'empacado';
                     $validated['is_cola'] = $validated['is_cola'] ?? false;
+                    $validated['clasificacion'] = $validated['clasificacion'] ?? 'convencional';
                     $validated['en_cuarto_frio'] = false;
                     $validated['created_by'] = $request->user()->id;
                     $validated['folio_produccion'] = $this->generarFolio($validated);
@@ -303,6 +305,7 @@ class ProduccionEmpaqueController extends Controller
             'etiqueta' => 'nullable|string|max:100',
             'calibre' => 'nullable|string|max:50',
             'categoria' => 'nullable|string|max:50',
+            'clasificacion' => 'nullable|in:convencional,organico',
             'status' => 'nullable|in:empacado,en_almacen,embarcado',
             'is_cola' => 'nullable|boolean',
             'observaciones' => 'nullable|string',
@@ -1071,6 +1074,7 @@ class ProduccionEmpaqueController extends Controller
             'etiqueta' => 'nullable|string|max:100',
             'calibre' => 'nullable|string|max:50',
             'categoria' => 'nullable|string|max:50',
+            'clasificacion' => 'nullable|in:convencional,organico',
             'turno' => 'nullable|string|max:50',
             'marcar_completo' => 'nullable|boolean',
             'observaciones' => 'nullable|string',
@@ -1161,6 +1165,10 @@ class ProduccionEmpaqueController extends Controller
                 'peso_neto_kg' => $totalPeso,
                 'is_mixto' => $isMixto,
             ];
+
+            if (array_key_exists('clasificacion', $validated)) {
+                $updateData['clasificacion'] = $validated['clasificacion'] ?? 'convencional';
+            }
 
             // Marcar completo si lo indica el usuario, o si alcanzó el objetivo
             $marcarCompleto = $validated['marcar_completo'] ?? false;

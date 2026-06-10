@@ -16,12 +16,15 @@ class RezagaEmpaque extends Model
     protected $fillable = [
         'temporada_id', 'entity_id', 'proceso_id', 'folio_rezaga',
         'tipo_rezaga', 'subtipo_rezaga', 'fecha', 'cantidad_kg',
+        'modo_registro', 'tipo_carga_id', 'total_cajas', 'peso_bascula_kg',
         'cantidad_unidades_pequenas', 'motivo',
         'status', 'observaciones', 'created_by',
     ];
 
     protected $casts = [
         'cantidad_kg' => 'decimal:2',
+        'peso_bascula_kg' => 'decimal:2',
+        'total_cajas' => 'integer',
         'cantidad_unidades_pequenas' => 'integer',
         'fecha' => 'date:Y-m-d',
     ];
@@ -29,6 +32,7 @@ class RezagaEmpaque extends Model
     public function temporada() { return $this->belongsTo(Temporada::class); }
     public function entity() { return $this->belongsTo(Entity::class); }
     public function proceso() { return $this->belongsTo(ProcesoEmpaque::class, 'proceso_id'); }
+    public function tipoCarga() { return $this->belongsTo(TipoCarga::class, 'tipo_carga_id'); }
     public function creador() { return $this->belongsTo(User::class, 'created_by'); }
     public function ventaDetalles() { return $this->hasMany(SalidaRezagaEmpaqueDetalle::class, 'rezaga_id'); }
     public function salidaDetalles() { return $this->hasMany(SalidaRezagaEmpaqueDetalle::class, 'rezaga_id'); }
