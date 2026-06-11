@@ -6,8 +6,10 @@ use App\Http\Controllers\Controller;
 use App\Models\CalidadEmpaque;
 use App\Models\CalidadEmpaqueMuestra;
 use App\Models\CalidadEmpaqueMuestraPlaga;
+use App\Models\Entity;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
@@ -19,11 +21,12 @@ class CalidadEmpaqueController extends Controller
         'evaluadoPor:id,name',
         'creador:id,name',
         'muestras',
-        'muestras.recepcion:id,folio_recepcion,hora_recepcion,productor_id,lote_id,etapa_id,tipo_carga_id,salida_campo_id',
+        'muestras.recepcion:id,folio_recepcion,hora_recepcion,productor_id,lote_id,etapa_id,variedad_id,tipo_carga_id,salida_campo_id',
         'muestras.recepcion.productor:id,nombre,apellido',
         'muestras.recepcion.lote:id,nombre,numero_lote',
         'muestras.recepcion.etapa:id,nombre,variedad_id',
         'muestras.recepcion.etapa.variedad:id,nombre',
+        'muestras.recepcion.variedad:id,nombre',
         'muestras.recepcion.tipoCarga:id,nombre',
         'muestras.recepcion.salidaCampo:id,variedad_id',
         'muestras.recepcion.salidaCampo.variedad:id,nombre',
@@ -85,28 +88,60 @@ class CalidadEmpaqueController extends Controller
             'muestras.*.plagas.*.cantidad' => 'required_with:muestras.*.plagas|numeric|min:0',
         ]);
 
-        $calidad = DB::transaction(function () use ($validated, $request) {
-            $header = [
-                'temporada_id' => $validated['temporada_id'],
-                'entity_id' => $validated['entity_id'],
-                'tipo_evaluacion' => $validated['tipo_evaluacion'],
-                'fecha_evaluacion' => $validated['fecha_evaluacion'],
-                'responsable' => $validated['responsable'] ?? null,
-                'piezas_por_caja' => $validated['piezas_por_caja'] ?? null,
-                'observaciones' => $validated['observaciones'] ?? null,
-                'evaluado_por' => $request->user()->id,
-                'created_by' => $request->user()->id,
-                'folio_evaluacion' => $this->generarFolio($validated),
-                'resultado' => 'aprobada',
-            ];
+        $calidad = null;
+        $maxAttempts = 5;
 
-            $calidad = CalidadEmpaque::create($header);
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            try {
+                $calidad = DB::transaction(function () use ($validated, $request) {
+                    Entity::query()
+                        ->whereKey($validated['entity_id'])
+                        ->lockForUpdate()
+                        ->firstOrFail();
 
-            $this->sincronizarMuestras($calidad, $validated['muestras']);
-            $this->recalcularTotales($calidad);
+                    $header = [
+                        'temporada_id' => $validated['temporada_id'],
+                        'entity_id' => $validated['entity_id'],
+                        'tipo_evaluacion' => $validated['tipo_evaluacion'],
+                        'fecha_evaluacion' => $validated['fecha_evaluacion'],
+                        'responsable' => $validated['responsable'] ?? null,
+                        'piezas_por_caja' => $validated['piezas_por_caja'] ?? null,
+                        'observaciones' => $validated['observaciones'] ?? null,
+                        'evaluado_por' => $request->user()->id,
+                        'created_by' => $request->user()->id,
+                        'folio_evaluacion' => $this->generarFolio($validated),
+                        'resultado' => 'aprobada',
+                    ];
 
-            return $calidad;
-        });
+                    $calidad = CalidadEmpaque::create($header);
+
+                    $this->sincronizarMuestras($calidad, $validated['muestras']);
+                    $this->recalcularTotales($calidad);
+
+                    return $calidad;
+                });
+
+                break;
+            } catch (QueryException $e) {
+                if ((int) $e->getCode() !== 23000) {
+                    throw $e;
+                }
+
+                if ($attempt >= $maxAttempts) {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'No se pudo generar un folio único para la evaluación de calidad. Intenta nuevamente.',
+                    ], 422);
+                }
+            }
+        }
+
+        if (!$calidad) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No se pudo registrar la evaluación de calidad.',
+            ], 422);
+        }
 
         $calidad->load($this->eagerLoad);
 
@@ -269,6 +304,7 @@ class CalidadEmpaqueController extends Controller
             ->where('temporada_id', $data['temporada_id'])
             ->where('entity_id', $data['entity_id'])
             ->where('folio_evaluacion', 'like', "{$fullPrefix}%")
+            ->lockForUpdate()
             ->orderByDesc('folio_evaluacion')
             ->value('folio_evaluacion');
 

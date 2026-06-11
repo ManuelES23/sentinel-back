@@ -11,6 +11,11 @@ class CalidadEmpaqueMuestra extends Model
 
     protected $table = 'calidad_empaque_muestras';
 
+    protected $appends = [
+        'variedad_nombre',
+        'porcentaje_no_cumple',
+    ];
+
     protected $fillable = [
         'calidad_id', 'recepcion_id', 'empleado_id', 'empacador_nombre',
         'hora', 'muestra', 'conteo', 'cumple', 'no_cumple',
@@ -43,5 +48,26 @@ class CalidadEmpaqueMuestra extends Model
     public function plagas()
     {
         return $this->hasMany(CalidadEmpaqueMuestraPlaga::class, 'muestra_id');
+    }
+
+    public function getVariedadNombreAttribute(): ?string
+    {
+        $variedad = $this->recepcion?->variedad?->nombre
+            ?? $this->recepcion?->etapa?->variedad?->nombre
+            ?? $this->recepcion?->salidaCampo?->variedad?->nombre;
+
+        return $variedad ?: null;
+    }
+
+    public function getPorcentajeNoCumpleAttribute(): ?float
+    {
+        $base = (float) ($this->conteo ?: $this->muestra ?: 0);
+        if ($base <= 0) {
+            return null;
+        }
+
+        $cumple = (float) ($this->cumple ?? 0);
+
+        return round(max(0, 100 - (($cumple / $base) * 100)), 2);
     }
 }
