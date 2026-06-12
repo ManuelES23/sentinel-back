@@ -637,6 +637,7 @@ Route::middleware('auth:sanctum')->group(function () {
                     ->except(['update']);
                 Route::post('pre-embarques/{preEmbarque}/scan', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\PreEmbarqueEmpaqueController::class, 'scanPallet']);
                 Route::delete('pre-embarques/{preEmbarque}/pallets/{produccion}', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\PreEmbarqueEmpaqueController::class, 'removePallet']);
+                Route::post('pre-embarques/{preEmbarque}/swap-pallets', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\PreEmbarqueEmpaqueController::class, 'swapPallets']);
                 Route::get('pre-embarques/{preEmbarque}/convertir-datos', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\PreEmbarqueEmpaqueController::class, 'convertirDatos']);
                 Route::post('pre-embarques/{preEmbarque}/completar', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\PreEmbarqueEmpaqueController::class, 'completar']);
 

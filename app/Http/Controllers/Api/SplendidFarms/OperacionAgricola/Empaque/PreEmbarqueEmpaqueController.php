@@ -212,7 +212,7 @@ class PreEmbarqueEmpaqueController extends Controller
     }
 
     /**
-     * Quitar un pallet del pre-embarque y reordenar posiciones.
+     * Quitar un pallet del pre-embarque sin compactar posiciones.
      */
     public function removePallet(PreEmbarqueEmpaque $preEmbarque, $produccionId)
     {
@@ -234,19 +234,76 @@ class PreEmbarqueEmpaqueController extends Controller
         $removedPos = $detalle->posicion_carga;
         $detalle->delete();
 
-        // Reordenar posiciones superiores
-        $preEmbarque->detalles()
-            ->where('posicion_carga', '>', $removedPos)
-            ->orderBy('posicion_carga')
-            ->get()
-            ->each(function ($d) {
-                $d->decrement('posicion_carga');
-            });
-
         return response()->json([
             'success' => true,
             'message' => 'Pallet removido del pre-embarque',
             'data' => [
+                'total_escaneados' => $preEmbarque->detalles()->count(),
+                'posicion_libre' => $removedPos,
+            ],
+        ]);
+    }
+
+    /**
+     * Intercambiar posiciones de dos pallets dentro del mismo pre-embarque.
+     */
+    public function swapPallets(Request $request, PreEmbarqueEmpaque $preEmbarque)
+    {
+        if ($preEmbarque->status !== 'abierto') {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Este pre-embarque ya no está abierto',
+            ], 422);
+        }
+
+        $validated = $request->validate([
+            'produccion_id_1' => 'required|integer|different:produccion_id_2',
+            'produccion_id_2' => 'required|integer',
+        ]);
+
+        $result = DB::transaction(function () use ($preEmbarque, $validated) {
+            $detalle1 = $preEmbarque->detalles()
+                ->where('produccion_id', $validated['produccion_id_1'])
+                ->lockForUpdate()
+                ->first();
+
+            $detalle2 = $preEmbarque->detalles()
+                ->where('produccion_id', $validated['produccion_id_2'])
+                ->lockForUpdate()
+                ->first();
+
+            if (!$detalle1 || !$detalle2) {
+                return null;
+            }
+
+            $posicion1 = $detalle1->posicion_carga;
+            $posicion2 = $detalle2->posicion_carga;
+
+            // Usar posición temporal para evitar violación del constraint único
+            $tempPosition = -9999;
+            $detalle1->update(['posicion_carga' => $tempPosition]);
+            $detalle2->update(['posicion_carga' => $posicion1]);
+            $detalle1->update(['posicion_carga' => $posicion2]);
+
+            return [
+                'detalle_1' => $detalle1->fresh(),
+                'detalle_2' => $detalle2->fresh(),
+            ];
+        });
+
+        if (!$result) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Uno de los pallets no está en este pre-embarque',
+            ], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Posiciones de pallets intercambiadas correctamente',
+            'data' => [
+                'detalle_1' => $result['detalle_1'],
+                'detalle_2' => $result['detalle_2'],
                 'total_escaneados' => $preEmbarque->detalles()->count(),
             ],
         ]);

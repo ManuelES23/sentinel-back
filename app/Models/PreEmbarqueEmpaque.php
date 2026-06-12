@@ -60,8 +60,21 @@ class PreEmbarqueEmpaque extends Model
 
     public function nextPosition(): int
     {
-        $maxPos = $this->detalles()->max('posicion_carga');
-        return ($maxPos ?? 0) + 1;
+        $occupiedPositions = $this->detalles()
+            ->pluck('posicion_carga')
+            ->filter()
+            ->map(fn ($position) => (int) $position)
+            ->unique()
+            ->sort()
+            ->values();
+
+        for ($position = 1; $position <= $this->espacios_caja; $position++) {
+            if (!$occupiedPositions->contains($position)) {
+                return $position;
+            }
+        }
+
+        return ($occupiedPositions->last() ?? 0) + 1;
     }
 
     public function isFull(): bool
