@@ -311,6 +311,25 @@ class ProduccionEmpaqueController extends Controller
             'observaciones' => 'nullable|string',
         ]);
 
+        // Re-resolver variedad_id cuando cambia el proceso
+        if (array_key_exists('proceso_id', $validated) && !empty($validated['proceso_id'])) {
+            if (empty($validated['variedad_id'])) {
+                $proceso = ProcesoEmpaque::with([
+                    'etapa:id,variedad_id',
+                    'recepcion:id,salida_campo_id,variedad_id',
+                    'recepcion.salidaCampo:id,variedad_id',
+                ])->find($validated['proceso_id']);
+
+                $variedadId = $proceso?->etapa?->variedad_id
+                    ?? $proceso?->recepcion?->variedad_id
+                    ?? $proceso?->recepcion?->salidaCampo?->variedad_id;
+
+                if ($variedadId) {
+                    $validated['variedad_id'] = $variedadId;
+                }
+            }
+        }
+
         $produccion->update($validated);
         $produccion->load($this->eagerLoad);
         $this->hydrateResolvedLoteProductoTerminado($produccion);
