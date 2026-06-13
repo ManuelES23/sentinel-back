@@ -147,6 +147,127 @@ class ProduccionEmpaqueController extends Controller
         return response()->json(['success' => true, 'data' => $producciones]);
     }
 
+    public function store(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'temporada_id' => 'required|exists:temporadas,id',
+            'entity_id' => 'required|exists:entities,id',
+            'proceso_id' => 'nullable|exists:proceso_empaque,id',
+            'recipe_id' => 'nullable|exists:recipes,id',
+            'fecha_produccion' => 'nullable|date',
+            'turno' => 'nullable|string|max:50',
+            'variedad_id' => 'nullable|exists:variedades,id',
+            'linea_empaque' => 'nullable|string|max:100',
+            'numero_pallet' => 'nullable|string|max:100',
+            'lote_producto_terminado' => 'nullable|string|max:100',
+            'pallet_qr_id' => 'nullable|string|max:100',
+            'total_cajas' => 'required|integer|min:1',
+            'peso_neto_kg' => 'nullable|numeric|min:0',
+            'peso_bascula_kg' => 'nullable|numeric|min:0',
+            'tipo_empaque' => 'nullable|string|max:100',
+            'marca' => 'nullable|string|max:150',
+            'presentacion' => 'nullable|string|max:150',
+            'etiqueta' => 'nullable|string|max:100',
+            'calibre' => 'nullable|string|max:50',
+            'categoria' => 'nullable|string|max:50',
+            'clasificacion' => 'nullable|in:convencional,organico',
+            'status' => 'nullable|in:empacado,en_almacen,embarcado',
+            'is_cola' => 'nullable|boolean',
+            'observaciones' => 'nullable|string',
+        ]);
+
+        if (array_key_exists('proceso_id', $validated) && filled($validated['proceso_id']) && empty($validated['variedad_id'])) {
+            $proceso = ProcesoEmpaque::with([
+                'etapa:id,variedad_id',
+                'recepcion:id,salida_campo_id,variedad_id',
+                'recepcion.salidaCampo:id,variedad_id',
+            ])->find($validated['proceso_id']);
+
+            $variedadId = $proceso?->etapa?->variedad_id
+                ?? $proceso?->recepcion?->variedad_id
+                ?? $proceso?->recepcion?->salidaCampo?->variedad_id;
+
+            if ($variedadId) {
+                $validated['variedad_id'] = $variedadId;
+            }
+        }
+
+        $validated['fecha_produccion'] = $validated['fecha_produccion'] ?? now()->toDateString();
+        $validated['status'] = $validated['status'] ?? 'empacado';
+        $validated['is_cola'] = (bool) ($validated['is_cola'] ?? false);
+
+        if (empty($validated['peso_neto_kg']) && !empty($validated['recipe_id'])) {
+            $recipe = Recipe::find($validated['recipe_id']);
+            if ($recipe && (float) $recipe->peso_pieza > 0) {
+                $validated['peso_neto_kg'] = round(((int) $validated['total_cajas']) * (float) $recipe->peso_pieza, 2);
+            }
+        }
+
+        return DB::transaction(function () use ($validated, $request) {
+            $entity = Entity::findOrFail($validated['entity_id']);
+
+            $numeroPalletManual = $this->normalizePalletName($validated['numero_pallet'] ?? null);
+            $numeroPalletFinal = $numeroPalletManual !== ''
+                ? $numeroPalletManual
+                : $this->generarNumeroPallet((int) $validated['entity_id']);
+
+            $palletExiste = ProduccionEmpaque::withTrashed()
+                ->where('entity_id', $validated['entity_id'])
+                ->get(['numero_pallet'])
+                ->contains(fn (ProduccionEmpaque $pallet) => $this->normalizePalletName($pallet->numero_pallet) === $numeroPalletFinal);
+
+            if ($palletExiste) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => "El número de pallet {$numeroPalletFinal} ya existe. Captura uno diferente.",
+                ], 422);
+            }
+
+            $produccion = ProduccionEmpaque::create([
+                'temporada_id' => $validated['temporada_id'],
+                'entity_id' => $validated['entity_id'],
+                'proceso_id' => $validated['proceso_id'] ?? null,
+                'recipe_id' => $validated['recipe_id'] ?? null,
+                'folio_produccion' => $this->generarFolio([
+                    'entity_id' => $validated['entity_id'],
+                ]),
+                'fecha_produccion' => $validated['fecha_produccion'],
+                'turno' => $validated['turno'] ?? null,
+                'variedad_id' => $validated['variedad_id'] ?? null,
+                'linea_empaque' => $validated['linea_empaque'] ?? null,
+                'numero_pallet' => $numeroPalletFinal,
+                'lote_producto_terminado' => $validated['lote_producto_terminado'] ?? null,
+                'pallet_qr_id' => $validated['pallet_qr_id'] ?? (string) Str::uuid(),
+                'total_cajas' => $validated['total_cajas'],
+                'peso_neto_kg' => isset($validated['peso_neto_kg']) ? round((float) $validated['peso_neto_kg'], 2) : null,
+                'peso_bascula_kg' => isset($validated['peso_bascula_kg']) ? round((float) $validated['peso_bascula_kg'], 2) : null,
+                'tipo_empaque' => $validated['tipo_empaque'] ?? null,
+                'marca' => $validated['marca'] ?? null,
+                'presentacion' => $validated['presentacion'] ?? null,
+                'etiqueta' => $validated['etiqueta'] ?? null,
+                'calibre' => $validated['calibre'] ?? null,
+                'categoria' => $validated['categoria'] ?? null,
+                'clasificacion' => $validated['clasificacion'] ?? null,
+                'status' => $validated['status'],
+                'is_cola' => $validated['is_cola'],
+                'is_mixto' => false,
+                'en_cuarto_frio' => false,
+                'observaciones' => $validated['observaciones'] ?? null,
+                'created_by' => $request->user()->id,
+            ]);
+
+            $produccion->load($this->eagerLoad);
+            $this->hydrateDetalleLoteProductoTerminado($produccion);
+            $this->hydrateResolvedLoteProductoTerminado($produccion);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Producción creada correctamente',
+                'data' => $produccion,
+            ], 201);
+        });
+    }
+
     public function update(Request $request, ProduccionEmpaque $produccion): JsonResponse
     {
         if (($produccion->status ?? null) === 'embarcado') {
@@ -1569,6 +1690,34 @@ class ProduccionEmpaqueController extends Controller
             : 1;
 
         return $prefix . str_pad($nextNumber, 4, '0', STR_PAD_LEFT);
+    }
+
+    private function generarNumeroPallet(int $entityId): string
+    {
+        $entity = Entity::find($entityId);
+        $abbreviation = $entity?->abbreviation ?: 'PLT';
+
+        $lastPallet = ProduccionEmpaque::withTrashed()
+            ->where('entity_id', $entityId)
+            ->where('numero_pallet', 'like', $abbreviation . '-%')
+            ->selectRaw("MAX(CAST(SUBSTRING(numero_pallet, ?) AS UNSIGNED)) as max_num", [strlen($abbreviation) + 2])
+            ->value('max_num');
+
+        $nextNum = ($lastPallet ?? 0) + 1;
+
+        return $abbreviation . '-' . str_pad($nextNum, 4, '0', STR_PAD_LEFT);
+    }
+
+    private function normalizePalletName(?string $value): string
+    {
+        $normalized = trim((string) $value);
+        if ($normalized === '') {
+            return '';
+        }
+
+        $normalized = preg_replace('/\s+/', ' ', $normalized);
+
+        return $normalized !== null ? strtoupper($normalized) : '';
     }
 
     private function resolveCajasObjetivo(ProduccionEmpaque $produccion): int
