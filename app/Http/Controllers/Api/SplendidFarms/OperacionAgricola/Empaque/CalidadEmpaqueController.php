@@ -123,7 +123,7 @@ class CalidadEmpaqueController extends Controller
 
                 break;
             } catch (QueryException $e) {
-                if ((int) $e->getCode() !== 23000) {
+                if (!$this->isFolioDuplicateError($e)) {
                     throw $e;
                 }
 
@@ -301,7 +301,6 @@ class CalidadEmpaqueController extends Controller
         $fullPrefix = "{$prefix}-{$entityId}-";
 
         $lastFolio = CalidadEmpaque::withTrashed()
-            ->where('temporada_id', $data['temporada_id'])
             ->where('entity_id', $data['entity_id'])
             ->where('folio_evaluacion', 'like', "{$fullPrefix}%")
             ->lockForUpdate()
@@ -314,5 +313,17 @@ class CalidadEmpaqueController extends Controller
         }
 
         return $fullPrefix . str_pad((string) $nextNum, 4, '0', STR_PAD_LEFT);
+    }
+
+    private function isFolioDuplicateError(QueryException $e): bool
+    {
+        if ((int) $e->getCode() !== 23000) {
+            return false;
+        }
+
+        $message = $e->getMessage();
+
+        return str_contains($message, 'folio_evaluacion')
+            || str_contains($message, 'calidad_empaque_folio_evaluacion_unique');
     }
 }

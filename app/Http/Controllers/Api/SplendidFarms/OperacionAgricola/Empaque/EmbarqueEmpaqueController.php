@@ -191,7 +191,7 @@ class EmbarqueEmpaqueController extends Controller
         });
         $validated['peso_bascula_total_kg'] = $pallets->sum('peso_bascula_kg');
 
-        $embarque = DB::transaction(function () use ($validated, $pallets, $palletMetrics) {
+        $embarque = DB::transaction(function () use ($validated, $pallets, $palletMetrics, $posiciones) {
             // Generar folio dentro de la transacción con lock para evitar duplicados por concurrencia
             $validated['folio_embarque'] = $this->generarFolio($validated);
 

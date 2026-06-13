@@ -50,7 +50,11 @@ class EmbarqueEmpaque extends Model
     public function temporada() { return $this->belongsTo(Temporada::class); }
     public function entity() { return $this->belongsTo(Entity::class); }
     public function creador() { return $this->belongsTo(User::class, 'created_by'); }
-    public function detalles() { return $this->hasMany(EmbarqueEmpaqueDetalle::class, 'embarque_id'); }
+    public function detalles()
+    {
+        return $this->hasMany(EmbarqueEmpaqueDetalle::class, 'embarque_id')
+            ->orderByRaw('ISNULL(posicion_carga), posicion_carga ASC');
+    }
     public function consignatario() { return $this->belongsTo(Consignatario::class); }
     public function destinoConsignatario() { return $this->belongsTo(Consignatario::class, 'destino_consignatario_id'); }
 

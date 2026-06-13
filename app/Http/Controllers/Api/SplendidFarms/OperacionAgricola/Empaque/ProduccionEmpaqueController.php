@@ -147,136 +147,6 @@ class ProduccionEmpaqueController extends Controller
         return response()->json(['success' => true, 'data' => $producciones]);
     }
 
-    public function store(Request $request): JsonResponse
-    {
-        $validated = $request->validate([
-            'temporada_id' => 'required|exists:temporadas,id',
-            'entity_id' => 'required|exists:entities,id',
-            'proceso_id' => 'required|exists:proceso_empaque,id',
-            'recipe_id' => 'nullable|exists:recipes,id',
-            'fecha_produccion' => 'required|date',
-            'turno' => 'nullable|string|max:50',
-            'variedad_id' => 'nullable|exists:variedades,id',
-            'linea_empaque' => 'nullable|string|max:100',
-            'numero_pallet' => 'nullable|string|max:100',
-            'lote_producto_terminado' => 'nullable|string|max:100',
-            'pallet_qr_id' => 'nullable|string|max:36',
-            'total_cajas' => 'required|integer|min:1',
-            'cajas_objetivo' => 'nullable|integer|min:1',
-            'peso_neto_kg' => 'nullable|numeric|min:0',
-            'tipo_empaque' => 'nullable|string|max:100',
-            'marca' => 'nullable|string|max:150',
-            'presentacion' => 'nullable|string|max:150',
-            'etiqueta' => 'nullable|string|max:100',
-            'calibre' => 'nullable|string|max:50',
-            'categoria' => 'nullable|string|max:50',
-            'clasificacion' => 'nullable|in:convencional,organico',
-            'status' => 'nullable|in:empacado,en_almacen,embarcado',
-            'is_cola' => 'nullable|boolean',
-            'observaciones' => 'nullable|string',
-        ]);
-
-        $maxAttempts = 3;
-
-        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
-            try {
-                return DB::transaction(function () use ($validated, $request) {
-                    $validated['status'] = $validated['status'] ?? 'empacado';
-                    $validated['is_cola'] = $validated['is_cola'] ?? false;
-                    $validated['clasificacion'] = $validated['clasificacion'] ?? 'convencional';
-                    $validated['en_cuarto_frio'] = false;
-                    $validated['created_by'] = $request->user()->id;
-                    $validated['folio_produccion'] = $this->generarFolio($validated);
-
-                    // Auto-resolver variedad_id desde el proceso si no viene
-                    if (empty($validated['variedad_id']) && !empty($validated['proceso_id'])) {
-                        $proceso = ProcesoEmpaque::with([
-                            'etapa:id,variedad_id',
-                            'recepcion:id,salida_campo_id',
-                            'recepcion.salidaCampo:id,variedad_id',
-                        ])->find($validated['proceso_id']);
-
-                        $variedadId = $proceso?->etapa?->variedad_id
-                            ?? $proceso?->recepcion?->salidaCampo?->variedad_id;
-
-                        if ($variedadId) {
-                            $validated['variedad_id'] = $variedadId;
-                        }
-                    }
-
-                    // Si es cola, usar nomenclatura COLA-XXXX
-                    if ($validated['is_cola'] && (empty($validated['numero_pallet']) || str_starts_with($validated['numero_pallet'], 'COLA-'))) {
-                        $validated['numero_pallet'] = $this->generarNumeroCola($validated['entity_id'], $validated['temporada_id']);
-                    }
-
-                    // Generar UUID para QR del pallet si no viene
-                    if (empty($validated['pallet_qr_id'])) {
-                        $validated['pallet_qr_id'] = (string) Str::uuid();
-                    }
-
-                    // Si es cola y tiene receta, auto-set cajas_objetivo desde el item grupo 'caja'
-                    if ($validated['is_cola'] && !empty($validated['recipe_id']) && empty($validated['cajas_objetivo'])) {
-                        $recipe = Recipe::with('items')->find($validated['recipe_id']);
-                        if ($recipe) {
-                            $cajaItem = $recipe->items->firstWhere('group_key', 'caja');
-                            if ($cajaItem && (int) $cajaItem->quantity > 0) {
-                                $validated['cajas_objetivo'] = (int) $cajaItem->quantity;
-                            } elseif ($recipe->output_quantity > 1) {
-                                $validated['cajas_objetivo'] = (int) $recipe->output_quantity;
-                            }
-                        }
-                    }
-
-                    // Auto-calcular peso neto si hay receta con peso_pieza y no se envió peso manual
-                    if (!empty($validated['recipe_id']) && empty($validated['peso_neto_kg'])) {
-                        $recipe = $recipe ?? Recipe::find($validated['recipe_id']);
-                        if ($recipe && $recipe->peso_pieza > 0) {
-                            $validated['peso_neto_kg'] = round($validated['total_cajas'] * (float) $recipe->peso_pieza, 2);
-                        }
-                    }
-
-                    $produccion = ProduccionEmpaque::create($validated);
-
-                    // Si es cola, crear el primer detalle automáticamente
-                    if ($validated['is_cola']) {
-                        $produccion->detalles()->create([
-                            'numero_entrada' => 1,
-                            'proceso_id' => $validated['proceso_id'],
-                            'recipe_id' => $validated['recipe_id'] ?? null,
-                            'fecha_produccion' => $validated['fecha_produccion'],
-                            'total_cajas' => $validated['total_cajas'],
-                            'peso_neto_kg' => $validated['peso_neto_kg'] ?? null,
-                            'turno' => $validated['turno'] ?? null,
-                            'observaciones' => $validated['observaciones'] ?? null,
-                            'created_by' => $request->user()->id,
-                        ]);
-                    }
-
-                    $produccion->load($this->eagerLoad);
-                    $this->hydrateResolvedLoteProductoTerminado($produccion);
-
-                    return response()->json([
-                        'success' => true,
-                        'message' => 'Producción creada correctamente',
-                        'data' => $produccion,
-                    ], 201);
-                });
-            } catch (QueryException $e) {
-                $isDuplicateFolio = (int) ($e->errorInfo[1] ?? 0) === 1062
-                    && str_contains(strtolower($e->getMessage()), 'folio_produccion');
-
-                if (!$isDuplicateFolio || $attempt === $maxAttempts) {
-                    throw $e;
-                }
-            }
-        }
-
-        return response()->json([
-            'status' => 'error',
-            'message' => 'No fue posible generar un folio único de producción. Intenta nuevamente.',
-        ], 409);
-    }
-
     public function update(Request $request, ProduccionEmpaque $produccion): JsonResponse
     {
         if (($produccion->status ?? null) === 'embarcado') {
@@ -331,6 +201,12 @@ class ProduccionEmpaqueController extends Controller
         }
 
         $produccion->update($validated);
+        $produccion->loadMissing('detalles');
+
+        if ($produccion->detalles->isNotEmpty()) {
+            $produccion->update($this->buildAggregateFieldsFromDetalles($produccion));
+        }
+
         $produccion->load($this->eagerLoad);
         $this->hydrateResolvedLoteProductoTerminado($produccion);
 
@@ -691,6 +567,7 @@ class ProduccionEmpaqueController extends Controller
             $produccion->update([
                 'total_cajas' => $aggregateFields['total_cajas'],
                 'peso_neto_kg' => $aggregateFields['peso_neto_kg'],
+                'marca' => $aggregateFields['marca'],
                 'is_mixto' => $isMixto,
                 'observaciones' => $this->buildMixtureStructure(
                     $sourceColas,
@@ -1212,8 +1089,13 @@ class ProduccionEmpaqueController extends Controller
             }
 
             $produccion->update($updateData);
+            $produccion->loadMissing('detalles');
+
+            if ($produccion->detalles->isNotEmpty()) {
+                $produccion->update($this->buildAggregateFieldsFromDetalles($produccion));
+            }
+
             $produccion->load($this->eagerLoad);
-            $this->syncAggregateFieldsFromDetalles($produccion);
 
             $mixtoMsg = $isMixto ? ' (Pallet mixto)' : '';
             $message = $produccion->is_cola
@@ -1598,8 +1480,13 @@ class ProduccionEmpaqueController extends Controller
                 ]);
             }
 
+            $nuevoPallet->loadMissing('detalles');
+
+            if ($nuevoPallet->detalles->isNotEmpty()) {
+                $nuevoPallet->update($this->buildAggregateFieldsFromDetalles($nuevoPallet));
+            }
+
             $nuevoPallet->load($this->eagerLoad);
-            $this->syncAggregateFieldsFromDetalles($nuevoPallet);
 
             return response()->json([
                 'success' => true,
@@ -1723,8 +1610,18 @@ class ProduccionEmpaqueController extends Controller
             return [
                 'total_cajas' => (int) ($produccion->total_cajas ?? 0),
                 'peso_neto_kg' => round((float) ($produccion->peso_neto_kg ?? 0), 2),
+                'marca' => $produccion->marca ?? null,
             ];
         }
+
+        $marcas = $detalles
+            ->map(function (ProduccionEmpaqueDetalle $detalle) {
+                $marca = trim((string) ($detalle->marca ?? ''));
+                return $marca !== '' ? $marca : null;
+            })
+            ->filter()
+            ->unique()
+            ->values();
 
         return [
             'total_cajas' => (int) $detalles->sum(fn (ProduccionEmpaqueDetalle $detalle) => (int) ($detalle->total_cajas ?? 0)),
@@ -1732,6 +1629,7 @@ class ProduccionEmpaqueController extends Controller
                 (float) $detalles->sum(fn (ProduccionEmpaqueDetalle $detalle) => (float) ($detalle->peso_neto_kg ?? 0)),
                 2,
             ),
+            'marca' => $marcas->count() === 1 ? $marcas->first() : ($produccion->marca ?? null),
         ];
     }
 
@@ -1742,6 +1640,7 @@ class ProduccionEmpaqueController extends Controller
         $produccion->forceFill([
             'total_cajas' => $aggregateFields['total_cajas'],
             'peso_neto_kg' => $aggregateFields['peso_neto_kg'],
+            'marca' => $aggregateFields['marca'] ?? $produccion->marca,
         ]);
     }
 
@@ -1797,6 +1696,55 @@ class ProduccionEmpaqueController extends Controller
         });
     }
 
+    private function generarNumeroCola(int $entityId, int $temporadaId): string
+    {
+        $lastCola = ProduccionEmpaque::withTrashed()
+            ->where('entity_id', $entityId)
+            ->where('temporada_id', $temporadaId)
+            ->where('numero_pallet', 'like', 'COLA-%')
+            ->selectRaw("MAX(CAST(SUBSTRING(numero_pallet, 6) AS UNSIGNED)) as max_num")
+            ->value('max_num');
+
+        $nextNum = ($lastCola ?? 0) + 1;
+
+        return 'COLA-' . str_pad($nextNum, 4, '0', STR_PAD_LEFT);
+    }
+
+    private function extractSourceColasFromMixture(?string $observaciones): array
+    {
+        if (! str_contains($observaciones, 'mixteo de colas:')) {
+            return [];
+        }
+
+        $parts = explode('mixteo de colas:', $observaciones, 2);
+        $raw = trim($parts[1] ?? '');
+
+        if ($raw === '') {
+            return [];
+        }
+
+        return collect(explode(',', $raw))
+            ->map(fn ($item) => trim($item))
+            ->filter()
+            ->values()
+            ->all();
+    }
+
+    private function extractMixSourceColaId(?string $observaciones): ?int
+    {
+        if (! $observaciones) {
+            return null;
+        }
+
+        if (! preg_match('/MIXSRC:(\d+)/', $observaciones, $matches)) {
+            return null;
+        }
+
+        $id = (int) ($matches[1] ?? 0);
+
+        return $id > 0 ? $id : null;
+    }
+
     private function resolveLoteProductoTerminadoFromMixture(ProduccionEmpaque $produccion): ?string
     {
         $directLote = trim((string) ($produccion->lote_producto_terminado ?? ''));
@@ -1847,194 +1795,6 @@ class ProduccionEmpaqueController extends Controller
         return $detalleLote !== '' ? $detalleLote : null;
     }
 
-    private function generarNumeroCola(int $entityId, int $temporadaId): string
-    {
-        $lastCola = ProduccionEmpaque::withTrashed()
-            ->where('entity_id', $entityId)
-            ->where('temporada_id', $temporadaId)
-            ->where('numero_pallet', 'like', 'COLA-%')
-            ->selectRaw("MAX(CAST(SUBSTRING(numero_pallet, 6) AS UNSIGNED)) as max_num")
-            ->value('max_num');
-
-        $nextNum = ($lastCola ?? 0) + 1;
-
-        return 'COLA-' . str_pad($nextNum, 4, '0', STR_PAD_LEFT);
-    }
-
-    private function generarNumeroPallet(int $entityId): string
-    {
-        $entity = Entity::find($entityId);
-        $abbreviation = $entity?->abbreviation ?: 'PLT';
-
-        $lastPallet = ProduccionEmpaque::withTrashed()
-            ->where('entity_id', $entityId)
-            ->where('numero_pallet', 'like', $abbreviation . '-%')
-            ->selectRaw("MAX(CAST(SUBSTRING(numero_pallet, ?) AS UNSIGNED)) as max_num", [strlen($abbreviation) + 2])
-            ->value('max_num');
-
-        $nextNum = ($lastPallet ?? 0) + 1;
-
-        return $abbreviation . '-' . str_pad($nextNum, 4, '0', STR_PAD_LEFT);
-    }
-
-    private function appendMixSourceTag(?string $observaciones, int $sourceColaId): string
-    {
-        $base = trim((string) ($observaciones ?? ''));
-        $tag = "MIXSRC:{$sourceColaId}";
-
-        if ($base === '') {
-            return $tag;
-        }
-
-        if (str_contains($base, $tag)) {
-            return $base;
-        }
-
-        return $base . ' | ' . $tag;
-    }
-
-    private function extractMixSourceColaId(?string $observaciones): ?int
-    {
-        if (! $observaciones) {
-            return null;
-        }
-
-        if (! preg_match('/MIXSRC:(\d+)/', $observaciones, $matches)) {
-            return null;
-        }
-
-        $id = (int) ($matches[1] ?? 0);
-
-        return $id > 0 ? $id : null;
-    }
-
-    private function stripMixSourceTag(?string $observaciones): ?string
-    {
-        if ($observaciones === null) {
-            return null;
-        }
-
-        $clean = preg_replace('/\s*\|?\s*MIXSRC:\d+\s*/', ' ', $observaciones);
-        $clean = trim((string) $clean);
-
-        return $clean === '' ? null : $clean;
-    }
-
-    /**
-     * Construir estructura JSON de mixteo con todas las colas origen
-     * @param array $colasMixteadas Array de colas con metadatos de origen
-     * @param array $calibreBreakdown Resumen de cajas por calibre
-     * @return string JSON con estructura de mixteo
-     */
-    private function buildMixtureStructure(array $colasMixteadas, array $calibreBreakdown = []): string
-    {
-        $structure = [
-            'type' => 'mixture',
-            'created_at' => now()->toIso8601String(),
-            'source_colas' => $colasMixteadas,
-            'calibre_breakdown' => $calibreBreakdown,
-        ];
-        return json_encode($structure, JSON_UNESCAPED_UNICODE);
-    }
-
-    /**
-     * Construye el resumen de cajas por calibre a partir de los detalles del nuevo pallet mixto.
-     *
-     * @param array $detalles
-     * @return array<int,array{calibre:string,cajas:int}>
-     */
-    private function buildCalibreBreakdownFromDetalles(array $detalles): array
-    {
-        $breakdown = [];
-
-        foreach ($detalles as $detalle) {
-            $calibre = trim((string) ($detalle['calibre'] ?? ''));
-            $key = $calibre !== '' ? $calibre : 'SIN_CALIBRE';
-            $cajas = (int) ($detalle['total_cajas'] ?? 0);
-
-            if (! isset($breakdown[$key])) {
-                $breakdown[$key] = 0;
-            }
-
-            $breakdown[$key] += $cajas;
-        }
-
-        return collect($breakdown)
-            ->map(fn ($cajas, $calibre) => [
-                'calibre' => (string) $calibre,
-                'cajas' => (int) $cajas,
-            ])
-            ->values()
-            ->all();
-    }
-
-    private function normalizePalletName(?string $value): string
-    {
-        $normalized = preg_replace('/\s+/u', ' ', trim((string) ($value ?? '')));
-
-        return trim((string) $normalized);
-    }
-
-    /**
-     * Extraer estructura JSON de mixteo desde observaciones
-     * @param ?string $observaciones Campo observaciones del pallet mixto
-     * @return ?array Array con estructura de mixteo o null
-     */
-    private function extractMixtureStructure(?string $observaciones): ?array
-    {
-        if (!$observaciones || !str_contains($observaciones, '"type":"mixture"')) {
-            return null;
-        }
-
-        // Buscar JSON entre llaves
-        if (preg_match('/\{.*"type"\s*:\s*"mixture".*\}/', $observaciones, $matches)) {
-            $decoded = json_decode($matches[0], true);
-            if ($decoded && isset($decoded['source_colas'])) {
-                return $decoded;
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Extraer colas origen desde observaciones del pallet mixto
-     * @param ?string $observaciones Campo observaciones
-     * @return array Array de colas [['id' => int, 'numero_pallet' => string, 'cajas' => int, 'peso_neto_kg' => float], ...]
-     */
-    private function extractSourceColasFromMixture(?string $observaciones): array
-    {
-        $mixture = $this->extractMixtureStructure($observaciones);
-        if (!$mixture || !isset($mixture['source_colas'])) {
-            return [];
-        }
-        return $mixture['source_colas'];
-    }
-
-    private function extractMixSourceNumeroPallets(?string $observaciones): array
-    {
-        if (! $observaciones) {
-            return [];
-        }
-
-        if (! str_contains($observaciones, 'mixteo de colas:')) {
-            return [];
-        }
-
-        $parts = explode('mixteo de colas:', $observaciones, 2);
-        $raw = trim($parts[1] ?? '');
-
-        if ($raw === '') {
-            return [];
-        }
-
-        return collect(explode(',', $raw))
-            ->map(fn ($item) => trim($item))
-            ->filter()
-            ->values()
-            ->all();
-    }
-
     /**
      * Actualizar un detalle específico de una producción (entrada).
      */
@@ -2073,17 +1833,11 @@ class ProduccionEmpaqueController extends Controller
 
         $detalle->update($validated);
 
-        // Recalcular totales del pallet padre si es necesario
+        // Recalcular totales y marca del pallet padre si es necesario
         $produccion->loadMissing('detalles');
-        $totalCajasDetalles = $produccion->detalles->sum('total_cajas');
-        $totalPesoDetalles = $produccion->detalles->sum('peso_neto_kg');
 
-        // Si el pallet tiene detalles, actualizar sus totales también
         if ($produccion->detalles->isNotEmpty()) {
-            $produccion->update([
-                'total_cajas' => $totalCajasDetalles,
-                'peso_neto_kg' => $totalPesoDetalles,
-            ]);
+            $produccion->update($this->buildAggregateFieldsFromDetalles($produccion));
         }
 
         $produccion->load($this->eagerLoad);
@@ -2119,12 +1873,16 @@ class ProduccionEmpaqueController extends Controller
 
             $detalle->delete();
 
-            $remainingCajas = (int) $produccion->detalles()->sum('total_cajas');
-            $remainingPeso = (float) $produccion->detalles()->sum('peso_neto_kg');
+            $produccion->unsetRelation('detalles');
+            $produccion->load('detalles');
+
+            $remainingCajas = (int) $produccion->detalles->sum('total_cajas');
+            $remainingPeso = (float) $produccion->detalles->sum('peso_neto_kg');
 
             $produccion->update([
                 'total_cajas' => $baseCajas + $remainingCajas,
                 'peso_neto_kg' => round($basePeso + $remainingPeso, 2),
+                'marca' => $this->buildAggregateFieldsFromDetalles($produccion)['marca'],
             ]);
 
             $produccion->load($this->eagerLoad);
