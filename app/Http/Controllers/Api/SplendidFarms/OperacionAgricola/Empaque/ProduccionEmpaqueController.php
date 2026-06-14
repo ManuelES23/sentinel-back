@@ -192,7 +192,8 @@ class ProduccionEmpaqueController extends Controller
             }
         }
 
-        $validated['fecha_produccion'] = $validated['fecha_produccion'] ?? now()->toDateString();
+        $validated['fecha_produccion'] = $validated['fecha_produccion']
+            ?? Carbon::now('America/Mexico_City')->toDateString();
         $validated['status'] = $validated['status'] ?? 'empacado';
         $validated['is_cola'] = (bool) ($validated['is_cola'] ?? false);
 
@@ -1553,7 +1554,7 @@ class ProduccionEmpaqueController extends Controller
                 'folio_produccion' => $this->generarFolio([
                     'entity_id' => $base->entity_id,
                 ]),
-                'fecha_produccion' => now()->toDateString(),
+                'fecha_produccion' => Carbon::now('America/Mexico_City')->toDateString(),
                 'turno' => $base->turno,
                 'variedad_id' => $variedadUnica->count() === 1 ? $variedadUnica->first() : null,
                 'numero_pallet' => $numeroPalletFinal,
