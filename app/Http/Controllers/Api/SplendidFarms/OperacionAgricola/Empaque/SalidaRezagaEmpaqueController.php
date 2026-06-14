@@ -7,6 +7,7 @@ use App\Models\SalidaRezagaEmpaque;
 use App\Models\RezagaEmpaque;
 use App\Models\Submodule;
 use App\Models\UserSubmodulePermission;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -113,7 +114,6 @@ class SalidaRezagaEmpaqueController extends Controller
 
         $validated['status'] = $validated['status'] ?? 'pendiente';
         $validated['created_by'] = $request->user()->id;
-        $validated['folio_venta'] = $this->generarFolio($validated);
 
         $precioKg = (float) ($validated['precio_kg'] ?? 0);
         if (($validated['tipo_salida'] ?? null) !== 'venta') {
@@ -139,113 +139,130 @@ class SalidaRezagaEmpaqueController extends Controller
         $validated['precio_kg'] = $precioKg;
         $validated['monto_total'] = $cantidadSolicitada * $precioKg;
 
-        $salida = DB::transaction(function () use ($validated, $cantidadSolicitada, $precioKg, $detallesSolicitados) {
-            $rezagaPendiente = RezagaEmpaque::query()
-                ->where('temporada_id', $validated['temporada_id'])
-                ->where('entity_id', $validated['entity_id'])
-                ->where('status', 'pendiente')
-                ->where('cantidad_kg', '>', 0)
-                ->orderBy('fecha')
-                ->orderBy('id')
-                ->lockForUpdate()
-                ->get();
+        $salida = null;
+        $maxAttempts = 5;
 
-            $acumuladoDisponible = (float) $rezagaPendiente->sum('cantidad_kg');
-            if ($acumuladoDisponible < $cantidadSolicitada) {
-                throw ValidationException::withMessages([
-                    'total_peso_kg' => 'La cantidad solicitada excede la rezaga acumulada disponible.',
-                ]);
-            }
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            try {
+                $salida = DB::transaction(function () use ($validated, $cantidadSolicitada, $precioKg, $detallesSolicitados) {
+                    $rezagaPendiente = RezagaEmpaque::query()
+                        ->where('temporada_id', $validated['temporada_id'])
+                        ->where('entity_id', $validated['entity_id'])
+                        ->where('status', 'pendiente')
+                        ->where('cantidad_kg', '>', 0)
+                        ->orderBy('fecha')
+                        ->orderBy('id')
+                        ->lockForUpdate()
+                        ->get();
 
-            $salida = SalidaRezagaEmpaque::create($validated);
-
-            if (!empty($detallesSolicitados)) {
-                $rezagaPendienteMap = $rezagaPendiente->keyBy('id');
-
-                $ids = collect($detallesSolicitados)->pluck('rezaga_id');
-                if ($ids->count() !== $ids->unique()->count()) {
-                    throw ValidationException::withMessages([
-                        'detalles' => 'No se puede repetir el mismo folio de rezaga en el detalle.',
-                    ]);
-                }
-
-                foreach ($detallesSolicitados as $det) {
-                    $rezaga = $rezagaPendienteMap->get((int) $det['rezaga_id']);
-                    if (!$rezaga) {
+                    $acumuladoDisponible = (float) $rezagaPendiente->sum('cantidad_kg');
+                    if ($acumuladoDisponible < $cantidadSolicitada) {
                         throw ValidationException::withMessages([
-                            'detalles' => 'Uno o más folios de rezaga no están disponibles para esta salida.',
+                            'total_peso_kg' => 'La cantidad solicitada excede la rezaga acumulada disponible.',
                         ]);
                     }
 
-                    $consumo = (float) $det['peso_kg'];
-                    $disponible = (float) $rezaga->cantidad_kg;
-                    if ($consumo > $disponible + 0.0001) {
-                        throw ValidationException::withMessages([
-                            'detalles' => "La cantidad para el folio {$rezaga->folio_rezaga} excede lo disponible.",
-                        ]);
-                    }
+                    $payload = $validated;
+                    $payload['folio_venta'] = $this->generarFolio($validated);
 
-                    $salida->detalles()->create([
-                        'venta_rezaga_id' => $salida->id,
-                        'rezaga_id' => $rezaga->id,
-                        'peso_kg' => $consumo,
-                        'precio_kg' => $precioKg,
-                        'monto' => $consumo * $precioKg,
-                    ]);
+                    $salida = SalidaRezagaEmpaque::create($payload);
 
-                    $restante = $disponible - $consumo;
-                    if ($restante <= 0.0001) {
-                        $nuevoStatus = $validated['tipo_salida'] === 'desecho' ? 'destruida' : 'vendida';
-                        RezagaEmpaque::where('id', $rezaga->id)->update([
-                            'status' => $nuevoStatus,
-                            'cantidad_kg' => 0,
-                        ]);
+                    if (!empty($detallesSolicitados)) {
+                        $rezagaPendienteMap = $rezagaPendiente->keyBy('id');
+
+                        $ids = collect($detallesSolicitados)->pluck('rezaga_id');
+                        if ($ids->count() !== $ids->unique()->count()) {
+                            throw ValidationException::withMessages([
+                                'detalles' => 'No se puede repetir el mismo folio de rezaga en el detalle.',
+                            ]);
+                        }
+
+                        foreach ($detallesSolicitados as $det) {
+                            $rezaga = $rezagaPendienteMap->get((int) $det['rezaga_id']);
+                            if (!$rezaga) {
+                                throw ValidationException::withMessages([
+                                    'detalles' => 'Uno o más folios de rezaga no están disponibles para esta salida.',
+                                ]);
+                            }
+
+                            $consumo = (float) $det['peso_kg'];
+                            $disponible = (float) $rezaga->cantidad_kg;
+                            if ($consumo > $disponible + 0.0001) {
+                                throw ValidationException::withMessages([
+                                    'detalles' => "La cantidad para el folio {$rezaga->folio_rezaga} excede lo disponible.",
+                                ]);
+                            }
+
+                            $salida->detalles()->create([
+                                'venta_rezaga_id' => $salida->id,
+                                'rezaga_id' => $rezaga->id,
+                                'peso_kg' => $consumo,
+                                'precio_kg' => $precioKg,
+                                'monto' => $consumo * $precioKg,
+                            ]);
+
+                            $restante = $disponible - $consumo;
+                            if ($restante <= 0.0001) {
+                                $nuevoStatus = $validated['tipo_salida'] === 'desecho' ? 'destruida' : 'vendida';
+                                RezagaEmpaque::where('id', $rezaga->id)->update([
+                                    'status' => $nuevoStatus,
+                                    'cantidad_kg' => 0,
+                                ]);
+                            } else {
+                                RezagaEmpaque::where('id', $rezaga->id)->update([
+                                    'cantidad_kg' => $restante,
+                                ]);
+                            }
+                        }
                     } else {
-                        RezagaEmpaque::where('id', $rezaga->id)->update([
-                            'cantidad_kg' => $restante,
-                        ]);
+                        $pendiente = $cantidadSolicitada;
+                        foreach ($rezagaPendiente as $rezaga) {
+                            if ($pendiente <= 0) {
+                                break;
+                            }
+
+                            $disponible = (float) $rezaga->cantidad_kg;
+                            if ($disponible <= 0) {
+                                continue;
+                            }
+
+                            $consumo = min($pendiente, $disponible);
+                            $pendiente -= $consumo;
+
+                            $salida->detalles()->create([
+                                'venta_rezaga_id' => $salida->id,
+                                'rezaga_id' => $rezaga->id,
+                                'peso_kg' => $consumo,
+                                'precio_kg' => $precioKg,
+                                'monto' => $consumo * $precioKg,
+                            ]);
+
+                            $restante = $disponible - $consumo;
+                            if ($restante <= 0.0001) {
+                                $nuevoStatus = $validated['tipo_salida'] === 'desecho' ? 'destruida' : 'vendida';
+                                RezagaEmpaque::where('id', $rezaga->id)->update([
+                                    'status' => $nuevoStatus,
+                                    'cantidad_kg' => 0,
+                                ]);
+                            } else {
+                                RezagaEmpaque::where('id', $rezaga->id)->update([
+                                    'cantidad_kg' => $restante,
+                                ]);
+                            }
+                        }
                     }
+
+                    return $salida;
+                });
+
+                break;
+            } catch (QueryException $e) {
+                if ($this->isFolioDuplicateError($e) && $attempt < $maxAttempts) {
+                    continue;
                 }
-            } else {
-                $pendiente = $cantidadSolicitada;
-                foreach ($rezagaPendiente as $rezaga) {
-                    if ($pendiente <= 0) {
-                        break;
-                    }
-
-                    $disponible = (float) $rezaga->cantidad_kg;
-                    if ($disponible <= 0) {
-                        continue;
-                    }
-
-                    $consumo = min($pendiente, $disponible);
-                    $pendiente -= $consumo;
-
-                    $salida->detalles()->create([
-                        'venta_rezaga_id' => $salida->id,
-                        'rezaga_id' => $rezaga->id,
-                        'peso_kg' => $consumo,
-                        'precio_kg' => $precioKg,
-                        'monto' => $consumo * $precioKg,
-                    ]);
-
-                    $restante = $disponible - $consumo;
-                    if ($restante <= 0.0001) {
-                        $nuevoStatus = $validated['tipo_salida'] === 'desecho' ? 'destruida' : 'vendida';
-                        RezagaEmpaque::where('id', $rezaga->id)->update([
-                            'status' => $nuevoStatus,
-                            'cantidad_kg' => 0,
-                        ]);
-                    } else {
-                        RezagaEmpaque::where('id', $rezaga->id)->update([
-                            'cantidad_kg' => $restante,
-                        ]);
-                    }
-                }
+                throw $e;
             }
-
-            return $salida;
-        });
+        }
 
         $salida->load($this->eagerLoad);
         $this->maskSensitiveReviewFields($salida, $request);
@@ -397,7 +414,6 @@ class SalidaRezagaEmpaqueController extends Controller
         $prefix = "SREZ-{$entityId}-";
 
         $lastFolio = SalidaRezagaEmpaque::withTrashed()
-            ->where('temporada_id', $data['temporada_id'])
             ->where('entity_id', $data['entity_id'])
             ->where('folio_venta', 'like', "{$prefix}%")
             ->orderByDesc('folio_venta')
@@ -409,6 +425,14 @@ class SalidaRezagaEmpaqueController extends Controller
         }
 
         return $prefix . str_pad($nextNum, 4, '0', STR_PAD_LEFT);
+    }
+
+    private function isFolioDuplicateError(QueryException $e): bool
+    {
+        $message = $e->getMessage();
+
+        return $e->getCode() === '23000'
+            && str_contains($message, 'venta_rezaga_empaque_folio_venta_unique');
     }
 
     private function ensurePermission(Request $request, string $permissionSlug, string $actionLabel): ?JsonResponse
