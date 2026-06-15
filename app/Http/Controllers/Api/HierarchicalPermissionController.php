@@ -16,6 +16,7 @@ use App\Models\UserSubmodulePermission;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class HierarchicalPermissionController extends Controller
 {
@@ -98,9 +99,27 @@ class HierarchicalPermissionController extends Controller
                     ];
                 });
 
+            // Cargar solo el estado efectivo por (submodulo, tipo) para evitar
+            // respuestas gigantes cuando existen historiales duplicados.
+            $latestPermissionIds = UserSubmodulePermission::query()
+                ->where('user_id', $userId)
+                ->selectRaw('MAX(id) as id')
+                ->groupBy('submodule_id', 'permission_type_id');
+
             // Compatibilidad con esquemas mixtos: slug/key y is_granted/granted.
-            $submodulePermissions = UserSubmodulePermission::where('user_id', $userId)
-                ->with('permissionType')
+            $submodulePermissionsQuery = UserSubmodulePermission::query()
+                ->whereIn('id', $latestPermissionIds)
+                ->with('permissionType:id,slug,name')
+                ->orderBy('submodule_id')
+                ->orderBy('permission_type_id');
+
+            if (Schema::hasColumn('user_submodule_permissions', 'is_granted')) {
+                $submodulePermissionsQuery->where('is_granted', true);
+            } elseif (Schema::hasColumn('user_submodule_permissions', 'granted')) {
+                $submodulePermissionsQuery->where('granted', true);
+            }
+
+            $submodulePermissions = $submodulePermissionsQuery
                 ->get()
                 ->map(function ($permission) {
                     $permissionType = $permission->permissionType;
