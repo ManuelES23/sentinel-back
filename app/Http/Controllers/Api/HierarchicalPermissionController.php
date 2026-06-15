@@ -36,7 +36,9 @@ class HierarchicalPermissionController extends Controller
 
             // Obtener accesos a empresas con datos de la empresa
             $enterprises = UserEnterpriseAccess::where('user_id', $userId)
-                ->with('enterprise:id,name,slug,description,logo,color,is_active')
+                // Evita fallas por diferencias de esquema entre ambientes
+                // (por ejemplo, columnas opcionales como icon/color).
+                ->with('enterprise')
                 ->get()
                 ->map(function ($access) {
                     $enterprise = $access->enterprise;
