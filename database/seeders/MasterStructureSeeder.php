@@ -547,6 +547,7 @@ class MasterStructureSeeder extends Seeder
 
         $empaqueSubmodules = [
             ['slug' => 'dashboard',    'name' => 'Dashboard',        'icon' => 'LayoutDashboard','order' => 0],
+            ['slug' => 'dashboard-daniella', 'name' => 'Dashboard Daniella', 'icon' => 'LayoutDashboard','order' => 1],
             ['slug' => 'recepciones',  'name' => 'Recepciones',      'icon' => 'Download',       'order' => 1],
             ['slug' => 'lavado',       'name' => 'Lavado',           'icon' => 'Droplets',       'order' => 2],
             ['slug' => 'proceso',      'name' => 'Proceso',          'icon' => 'Layers',         'order' => 3],
@@ -579,6 +580,12 @@ class MasterStructureSeeder extends Seeder
             ['slug' => 'edit', 'name' => 'Editar', 'description' => 'Permite editar registros en el submodulo'],
             ['slug' => 'delete', 'name' => 'Eliminar', 'description' => 'Permite eliminar registros en el submodulo'],
         ]);
+        $this->ensureSubmodulePermissionTypes($oaEmpaque, 'dashboard-daniella', [
+            ['slug' => 'view', 'name' => 'Ver', 'description' => 'Permite ver el submodulo'],
+            ['slug' => 'create', 'name' => 'Crear', 'description' => 'Permite crear registros en el submodulo'],
+            ['slug' => 'edit', 'name' => 'Editar', 'description' => 'Permite editar registros en el submodulo'],
+            ['slug' => 'delete', 'name' => 'Eliminar', 'description' => 'Permite eliminar registros en el submodulo'],
+        ]);
         $this->ensureSubmodulePermissionTypes($oaEmpaque, 'lavado', [
             ['slug' => 'reiniciar_recorrido', 'name' => 'Reiniciar recorrido', 'description' => 'Permite reiniciar el folio y regresarlo a pendiente de lavar'],
             ['slug' => 'ver_historico_lavado', 'name' => 'Ver historico de lavado', 'description' => 'Permite visualizar el apartado historico del submodulo lavado'],
@@ -589,7 +596,7 @@ class MasterStructureSeeder extends Seeder
             ['slug' => 'ver_observaciones_salida_rezaga', 'name' => 'Ver observaciones de revisión', 'description' => 'Permite visualizar las observaciones capturadas durante la revisión de salida de rezaga'],
         ]);
 
-        $this->command->info("    → Empaque: Dashboard, Recepciones, Lavado, Proceso, Producción, Rezaga, Embarques, Salida Rezaga, Calidad, Reportes, Ajuste de Peso Rezaga, Recorrido de Folios, Balance de Masas");
+        $this->command->info("    → Empaque: Dashboard, Dashboard Daniella, Recepciones, Lavado, Proceso, Producción, Rezaga, Embarques, Salida Rezaga, Calidad, Reportes, Ajuste de Peso Rezaga, Recorrido de Folios, Balance de Masas");
     }
 
     private function ensureSubmodulePermissionTypes(Module $module, string $submoduleSlug, array $types): void

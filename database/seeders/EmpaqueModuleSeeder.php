@@ -44,6 +44,7 @@ class EmpaqueModuleSeeder extends Seeder
         // Crear submódulos
         $submodules = [
             ['slug' => 'dashboard',    'name' => 'Dashboard',        'icon' => 'LayoutDashboard','order' => 0],
+            ['slug' => 'dashboard-daniella', 'name' => 'Dashboard Daniella', 'icon' => 'LayoutDashboard','order' => 1],
             ['slug' => 'recepciones',  'name' => 'Recepciones',      'icon' => 'Download',       'order' => 1],
             ['slug' => 'lavado',       'name' => 'Lavado',           'icon' => 'Droplets',       'order' => 2],
             ['slug' => 'proceso',      'name' => 'Proceso',          'icon' => 'Layers',         'order' => 3],
@@ -115,6 +116,6 @@ class EmpaqueModuleSeeder extends Seeder
         }
 
         $this->command->info('');
-        $this->command->info('✅ Módulo Empaque creado exitosamente con 11 submódulos');
+        $this->command->info('✅ Módulo Empaque creado exitosamente con 12 submódulos');
     }
 }

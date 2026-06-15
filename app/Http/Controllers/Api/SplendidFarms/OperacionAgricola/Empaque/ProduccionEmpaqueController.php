@@ -1126,6 +1126,8 @@ class ProduccionEmpaqueController extends Controller
         }
 
         return DB::transaction(function () use ($produccion, $validated, $request) {
+            $this->ensureBaseDetalleForColaCompletion($produccion, (int) $request->user()->id);
+
             // Determinar número de entrada
             $maxEntrada = $produccion->detalles()->max('numero_entrada') ?? 0;
             $numeroEntrada = $maxEntrada + 1;
@@ -1781,6 +1783,34 @@ class ProduccionEmpaqueController extends Controller
             ),
             'marca' => $marcas->count() === 1 ? $marcas->first() : ($produccion->marca ?? null),
         ];
+    }
+
+    private function ensureBaseDetalleForColaCompletion(ProduccionEmpaque $produccion, int $fallbackUserId): void
+    {
+        if ($produccion->detalles()->exists()) {
+            return;
+        }
+
+        $produccion->detalles()->create([
+            'numero_entrada' => 1,
+            'proceso_id' => $produccion->proceso_id,
+            'recipe_id' => $produccion->recipe_id,
+            'tipo_empaque' => $produccion->tipo_empaque,
+            'marca' => $produccion->marca,
+            'presentacion' => $produccion->presentacion,
+            'etiqueta' => $produccion->etiqueta,
+            'calibre' => $produccion->calibre,
+            'categoria' => $produccion->categoria,
+            'fecha_produccion' => $produccion->fecha_produccion?->toDateString()
+                ?? Carbon::now('America/Mexico_City')->toDateString(),
+            'total_cajas' => (int) ($produccion->total_cajas ?? 0),
+            'peso_neto_kg' => isset($produccion->peso_neto_kg)
+                ? round((float) $produccion->peso_neto_kg, 2)
+                : null,
+            'turno' => $produccion->turno,
+            'observaciones' => $produccion->observaciones,
+            'created_by' => $produccion->created_by ?? $fallbackUserId,
+        ]);
     }
 
     private function syncAggregateFieldsFromDetalles(ProduccionEmpaque $produccion): void
