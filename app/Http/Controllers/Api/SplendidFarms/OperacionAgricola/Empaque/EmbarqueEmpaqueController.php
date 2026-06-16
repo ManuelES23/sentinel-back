@@ -24,6 +24,7 @@ class EmbarqueEmpaqueController extends Controller
         'detalles.produccion.recipe.outputProduct:id,name,brand_id',
         'detalles.produccion.recipe.outputProduct.brand:id,name,code',
         'detalles.produccion.detalles',
+        'detalles.produccion.detalles.recipe:id,name,code,output_product_id',
         'detalles.produccion.detalles.proceso:id,folio_proceso,etapa_id,recepcion_id,productor_id,lote_id,fecha_proceso,fecha_entrada',
         'detalles.produccion.detalles.proceso.recepcion:id,folio_recepcion,variedad_id,lote_producto_terminado',
         'detalles.produccion.detalles.proceso.recepcion.variedad:id,nombre',
