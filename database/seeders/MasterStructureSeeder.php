@@ -354,6 +354,18 @@ class MasterStructureSeeder extends Seeder
         }
         $this->command->info("    → Personal: Empleados, Puestos, Grupos Salariales, Contratos, Nómina");
 
+        // Módulo: Reportes
+        $reportesAdmin = Module::firstOrCreate(
+            ['slug' => 'reportes', 'application_id' => $administration->id],
+            ['name' => 'Reportes', 'icon' => 'BarChart3', 'order' => 6, 'is_active' => true]
+        );
+
+        Submodule::firstOrCreate(
+            ['slug' => 'embarques', 'module_id' => $reportesAdmin->id],
+            ['name' => 'Embarques', 'icon' => 'Truck', 'order' => 1, 'is_active' => true]
+        );
+        $this->command->info("    → Reportes: Embarques");
+
         // ========================================
         // APLICACIÓN: INVENTARIO
         // ========================================

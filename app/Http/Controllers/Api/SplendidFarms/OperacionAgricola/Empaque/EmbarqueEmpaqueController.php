@@ -14,9 +14,17 @@ use Illuminate\Support\Facades\DB;
 class EmbarqueEmpaqueController extends Controller
 {
     private array $eagerLoad = [
+        'temporada:id,cultivo_id,nombre',
+        'temporada.cultivo:id,nombre',
         'entity:id,name,code',
         'detalles.produccion:id,proceso_id,numero_pallet,is_cola,is_mixto,variedad_id,marca,presentacion,calibre,tipo_empaque,recipe_id,total_cajas,peso_bascula_kg,fecha_produccion,lote_producto_terminado,observaciones',
+        'detalles.produccion.temporada:id,cultivo_id,nombre',
+        'detalles.produccion.temporada.cultivo:id,nombre',
         'detalles.produccion.proceso:id,folio_proceso,recepcion_id,lote_id,fecha_proceso,fecha_entrada',
+        'detalles.produccion.proceso.temporada:id,cultivo_id,nombre',
+        'detalles.produccion.proceso.temporada.cultivo:id,nombre',
+        'detalles.produccion.proceso.productor:id,nombre,apellido',
+        'detalles.produccion.proceso.lote:id,nombre,codigo,numero_lote',
         'detalles.produccion.proceso.recepcion:id,folio_recepcion,variedad_id,lote_producto_terminado',
         'detalles.produccion.proceso.recepcion.variedad:id,nombre',
         'detalles.produccion.variedad:id,nombre',
@@ -29,7 +37,7 @@ class EmbarqueEmpaqueController extends Controller
         'detalles.produccion.detalles.proceso.recepcion:id,folio_recepcion,variedad_id,lote_producto_terminado',
         'detalles.produccion.detalles.proceso.recepcion.variedad:id,nombre',
         'detalles.produccion.detalles.proceso.productor:id,nombre,apellido',
-        'detalles.produccion.detalles.proceso.lote:id,nombre,numero_lote',
+        'detalles.produccion.detalles.proceso.lote:id,nombre,codigo,numero_lote',
         'detalles.produccion.detalles.proceso.etapa:id,nombre,variedad_id',
         'detalles.produccion.detalles.proceso.etapa.variedad:id,nombre',
         'creador:id,name',
@@ -75,7 +83,7 @@ class EmbarqueEmpaqueController extends Controller
     {
         $query = ProduccionEmpaque::with([
             'proceso.productor:id,nombre,apellido',
-            'proceso.lote:id,nombre,numero_lote',
+            'proceso.lote:id,nombre,codigo,numero_lote',
             'proceso.etapa.variedad:id,nombre',
             'proceso.recepcion:id,variedad_id,lote_producto_terminado',
             'proceso.recepcion.variedad:id,nombre',
@@ -171,7 +179,7 @@ class EmbarqueEmpaqueController extends Controller
         /** @var \Illuminate\Database\Eloquent\Collection<int, \App\Models\ProduccionEmpaque> $pallets */
         $pallets = ProduccionEmpaque::with([
             'proceso.productor:id,nombre,apellido',
-            'proceso.lote:id,nombre,numero_lote',
+            'proceso.lote:id,nombre,codigo,numero_lote',
             'proceso.etapa.variedad:id,nombre',
             'proceso.recepcion.salidaCampo.variedad:id,nombre',
             'detalles.proceso.recepcion:id,lote_producto_terminado',
@@ -417,6 +425,11 @@ class EmbarqueEmpaqueController extends Controller
 
         if ($subLotes && $subLotes->isNotEmpty()) {
             return $subLotes->implode(',');
+        }
+
+        $codigoLote = $pallet->proceso?->lote?->codigo;
+        if ($codigoLote !== null && $codigoLote !== '') {
+            return (string) $codigoLote;
         }
 
         $numeroLote = $pallet->proceso?->lote?->numero_lote;
