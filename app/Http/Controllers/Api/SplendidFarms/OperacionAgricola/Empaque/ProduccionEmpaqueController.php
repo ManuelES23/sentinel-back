@@ -1892,6 +1892,98 @@ class ProduccionEmpaqueController extends Controller
 
     private function extractSourceColasFromMixture(?string $observaciones): array
     {
+        if (! $observaciones) {
+            return [];
+        }
+
+        // Formato JSON (nuevo): {"mixteo_colas":[{"id":1,"numero_pallet":"...", ...}]}
+        $decoded = json_decode($observaciones, true);
+        if (is_array($decoded) && isset($decoded['mixteo_colas']) && is_array($decoded['mixteo_colas'])) {
+            return $decoded['mixteo_colas'];
+        }
+
+        // Formato texto legacy: "mixteo de colas: COLA-001, COLA-002"
+        if (! str_contains($observaciones, 'mixteo de colas:')) {
+            return [];
+        }
+
+        $parts = explode('mixteo de colas:', $observaciones, 2);
+        $raw = trim($parts[1] ?? '');
+
+        if ($raw === '') {
+            return [];
+        }
+
+        return collect(explode(',', $raw))
+            ->map(fn ($item) => ['numero_pallet' => trim($item)])
+            ->filter(fn ($item) => $item['numero_pallet'] !== '')
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Construye el string de observaciones para un pallet mixto, guardando las colas origen en JSON.
+     *
+     * @param array  $sourceColas       Array de colas con id, numero_pallet, cajas, etc.
+     * @param string $calibreBreakdown  Resumen de cajas por calibre.
+     */
+    private function buildMixtureStructure(array $sourceColas, string $calibreBreakdown): string
+    {
+        return (string) json_encode([
+            'mixteo_colas' => array_values($sourceColas),
+            'calibre_breakdown' => $calibreBreakdown,
+        ], JSON_UNESCAPED_UNICODE);
+    }
+
+    /**
+     * Construye un resumen legible de cajas por calibre a partir de un array de detalles.
+     *
+     * @param array $detalles  Array de arrays con claves 'calibre' y 'total_cajas'.
+     */
+    private function buildCalibreBreakdownFromDetalles(array $detalles): string
+    {
+        return collect($detalles)
+            ->groupBy(fn (array $d) => trim((string) ($d['calibre'] ?? '')) ?: 'Sin calibre')
+            ->map(fn ($items, string $calibre) => $calibre . ': ' . $items->sum('total_cajas') . ' cajas')
+            ->values()
+            ->implode(', ');
+    }
+
+    /**
+     * Elimina el tag MIXSRC:{id} de las observaciones de un detalle al revertir el mixteo.
+     */
+    private function stripMixSourceTag(?string $observaciones): ?string
+    {
+        if (! $observaciones) {
+            return $observaciones;
+        }
+
+        $cleaned = trim((string) preg_replace('/\s*MIXSRC:\d+/', '', $observaciones));
+
+        return $cleaned !== '' ? $cleaned : null;
+    }
+
+    /**
+     * Extrae los números de pallet de las colas origen guardadas en observaciones de un pallet mixto.
+     * Soporta formato JSON (nuevo) y texto legacy "mixteo de colas: ...".
+     */
+    private function extractMixSourceNumeroPallets(?string $observaciones): array
+    {
+        if (! $observaciones) {
+            return [];
+        }
+
+        // Formato JSON (nuevo)
+        $decoded = json_decode($observaciones, true);
+        if (is_array($decoded) && isset($decoded['mixteo_colas'])) {
+            return collect($decoded['mixteo_colas'])
+                ->pluck('numero_pallet')
+                ->filter()
+                ->values()
+                ->all();
+        }
+
+        // Formato texto legacy: "mixteo de colas: COLA-001, COLA-002"
         if (! str_contains($observaciones, 'mixteo de colas:')) {
             return [];
         }
@@ -2027,6 +2119,22 @@ class ProduccionEmpaqueController extends Controller
             'message' => 'Detalle actualizado',
             'data' => $produccion,
         ]);
+    }
+
+    /**
+     * Añade el tag MIXSRC:{colaId} a las observaciones de un detalle para trazabilidad del mixteo.
+     */
+    private function appendMixSourceTag(?string $observaciones, int $colaId): string
+    {
+        $base = trim((string) $observaciones);
+        $tag = "MIXSRC:{$colaId}";
+
+        // No duplicar el tag si ya existe
+        if (str_contains($base, $tag)) {
+            return $base;
+        }
+
+        return $base !== '' ? "{$base} {$tag}" : $tag;
     }
 
     /**
