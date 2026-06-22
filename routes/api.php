@@ -383,6 +383,7 @@ Route::middleware('auth:sanctum')->group(function () {
                 // Movimientos generales
                 Route::apiResource('movimientos', App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class)
                     ->parameters(['movimientos' => 'movement']);
+                Route::get('movimientos/{movement}/pdf', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'pdf']);
                 Route::post('movimientos/{movement}/approve', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'approve']);
                 Route::post('movimientos/{movement}/cancel', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'cancel']);
             });

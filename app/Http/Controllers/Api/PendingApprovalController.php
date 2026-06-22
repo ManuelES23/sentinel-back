@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController
 use App\Models\ApprovalProcess;
 use App\Models\Employee;
 use App\Models\EmployeeIncident;
+use App\Models\Enterprise;
 use App\Models\InventoryMovement;
 use App\Models\PurchaseOrder;
 use App\Models\VacationBalance;
@@ -15,6 +16,8 @@ use App\Models\VacationRequest;
 use App\Services\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class PendingApprovalController extends Controller
 {
@@ -25,15 +28,45 @@ class PendingApprovalController extends Controller
     {
         $user = $request->user();
         $employee = $user->employee;
+        $hasTransferPermission = $this->hasTransferApprovalPermission($request, $user);
 
-        // Si no tiene empleado vinculado, no puede aprobar nada
-        if (! $employee) {
+        // Sin empleado solo se habilita validación de transferencias por permiso explícito del submódulo.
+        if (! $employee && ! $hasTransferPermission) {
             return response()->json([
                 'success' => true,
                 'data' => [
                     'total_pending' => 0,
                     'processes' => [],
                     'can_approve' => false,
+                ],
+            ]);
+        }
+
+        if (! $employee && $hasTransferPermission) {
+            $process = $this->getInventoryApprovalProcess();
+            $count = $this->countPendingTransferReceptionsByPermission($request, $user);
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'total_pending' => $count,
+                    'processes' => [[
+                        'process_id' => $process?->id,
+                        'code' => ApprovalProcess::INVENTORY_MOVEMENTS,
+                        'name' => $process?->name ?? 'Movimientos de inventario',
+                        'module' => $process?->module ?? 'inventario',
+                        'description' => $process?->description ?? 'Validación de transferencias entre entidades',
+                        'pending_count' => $count,
+                        'scope' => 'enterprise',
+                        'route' => $this->getProcessRoute(ApprovalProcess::INVENTORY_MOVEMENTS),
+                    ]],
+                    'can_approve' => $count > 0,
+                    'approver_info' => [
+                        'position' => null,
+                        'department' => null,
+                        'hierarchy_level' => null,
+                        'approval_scope' => 'enterprise',
+                    ],
                 ],
             ]);
         }
@@ -59,13 +92,22 @@ class PendingApprovalController extends Controller
 
         /** @var ApprovalProcess $process */
         foreach ($processes as $process) {
-            // Verificar si el empleado puede aprobar este proceso
-            if (! $process->canBeApprovedBy($employee, $enterpriseId)) {
+            $canApproveProcess = $this->canApproveProcess(
+                $request,
+                $user,
+                $employee,
+                $enterpriseId,
+                $process
+            );
+
+            if (! $canApproveProcess) {
                 continue;
             }
 
             // Determinar el alcance (scope) del empleado para este proceso
-            $scope = $this->getEmployeeScope($process, $employee);
+            $scope = $process->code === ApprovalProcess::INVENTORY_MOVEMENTS && $hasTransferPermission
+                ? 'enterprise'
+                : $this->getEmployeeScope($process, $employee);
 
             // Contar pendientes según el tipo de proceso
             $count = $this->countPendingItems($process->code, $employee, $scope);
@@ -108,13 +150,37 @@ class PendingApprovalController extends Controller
     {
         $user = $request->user();
         $employee = $user->employee;
+        $hasTransferPermission = $this->hasTransferApprovalPermission($request, $user);
 
-        if (! $employee) {
+        if (! $employee && ! $hasTransferPermission) {
             return response()->json([
                 'success' => true,
                 'data' => [
                     'total_pending' => 0,
                     'processes' => [],
+                ],
+            ]);
+        }
+
+        if (! $employee && $hasTransferPermission) {
+            $process = $this->getInventoryApprovalProcess();
+            $items = $this->getPendingTransferReceptionsByPermission($request, $user);
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'total_pending' => count($items),
+                    'processes' => [[
+                        'process_id' => $process?->id,
+                        'code' => ApprovalProcess::INVENTORY_MOVEMENTS,
+                        'name' => $process?->name ?? 'Movimientos de inventario',
+                        'module' => $process?->module ?? 'inventario',
+                        'description' => $process?->description ?? 'Validación de transferencias entre entidades',
+                        'pending_count' => count($items),
+                        'items' => $items,
+                        'scope' => 'enterprise',
+                        'route' => $this->getProcessRoute(ApprovalProcess::INVENTORY_MOVEMENTS),
+                    ]],
                 ],
             ]);
         }
@@ -133,11 +199,21 @@ class PendingApprovalController extends Controller
 
         /** @var ApprovalProcess $process */
         foreach ($processes as $process) {
-            if (! $process->canBeApprovedBy($employee, $enterpriseId)) {
+            $canApproveProcess = $this->canApproveProcess(
+                $request,
+                $user,
+                $employee,
+                $enterpriseId,
+                $process
+            );
+
+            if (! $canApproveProcess) {
                 continue;
             }
 
-            $scope = $this->getEmployeeScope($process, $employee);
+            $scope = $process->code === ApprovalProcess::INVENTORY_MOVEMENTS && $hasTransferPermission
+                ? 'enterprise'
+                : $this->getEmployeeScope($process, $employee);
             $items = $this->getPendingItems($process->code, $employee, $scope);
 
             $result[] = [
@@ -543,6 +619,17 @@ class PendingApprovalController extends Controller
         $user = $request->user();
         $employee = $user->employee;
 
+        if (in_array($type, ['inventory_movement', 'inventory_movements'], true)) {
+            if (! $this->canApproveInventoryMovement($request, $user, $employee)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No tiene permiso para validar transferencias',
+                ], 403);
+            }
+
+            return $this->approveInventoryMovement($id, $user);
+        }
+
         if (! $employee) {
             return response()->json(['success' => false, 'message' => 'No tiene empleado vinculado'], 403);
         }
@@ -551,7 +638,7 @@ class PendingApprovalController extends Controller
             'vacation_request' => $this->approveVacation($id, $user),
             'incident' => $this->approveIncident($id, $user),
             'purchase_order' => $this->approvePurchaseOrder($id, $user),
-            'inventory_movement' => $this->approveInventoryMovement($id, $user),
+            'inventory_movement', 'inventory_movements' => $this->approveInventoryMovement($id, $user),
             default => response()->json(['success' => false, 'message' => 'Tipo no válido'], 400),
         };
     }
@@ -576,7 +663,7 @@ class PendingApprovalController extends Controller
             'vacation_request' => $this->rejectVacation($id, $user, $validated['rejection_reason']),
             'incident' => $this->rejectIncident($id, $user, $validated['rejection_reason']),
             'purchase_order' => $this->rejectPurchaseOrder($id, $user, $validated['rejection_reason']),
-            'inventory_movement' => $this->rejectInventoryMovement($id, $user, $validated['rejection_reason']),
+            'inventory_movement', 'inventory_movements' => $this->rejectInventoryMovement($id, $user, $validated['rejection_reason']),
             default => response()->json(['success' => false, 'message' => 'Tipo no válido'], 400),
         };
     }
@@ -604,9 +691,9 @@ class PendingApprovalController extends Controller
                 'details.product:id,name,sku',
                 'details.unit:id,name,abbreviation',
             ])->find($id),
-            'inventory_movement' => InventoryMovement::with([
+            'inventory_movement', 'inventory_movements' => InventoryMovement::with([
                 'creator:id,name',
-                'movementType:id,name,code',
+                'movementType:id,name,code,direction',
                 'details.product:id,name,sku',
                 'details.unit:id,name,abbreviation',
             ])->find($id),
@@ -621,7 +708,7 @@ class PendingApprovalController extends Controller
             'vacation_request' => $this->formatVacationDetail($item),
             'incident' => $this->formatIncidentDetail($item),
             'purchase_order' => $this->formatPurchaseOrderDetail($item),
-            'inventory_movement' => $this->formatInventoryMovementDetail($item),
+            'inventory_movement', 'inventory_movements' => $this->formatInventoryMovementDetail($item),
             default => [],
         };
 
@@ -1092,11 +1179,20 @@ class PendingApprovalController extends Controller
     private function formatInventoryMovementDetail($item): array
     {
         $lines = ($item->details ?? collect())->map(fn ($d) => [
+            'id' => $d->id,
             'product' => $d->product->name ?? 'N/D',
             'sku' => $d->product->sku ?? '',
-            'quantity' => $d->quantity,
+            'quantity' => (float) ($d->quantity ?? 0) > 0
+                ? (float) $d->quantity
+                : (float) ($d->base_quantity ?? 0),
+            'quantity_requested' => (float) ($d->quantity ?? 0) > 0
+                ? (float) $d->quantity
+                : (float) ($d->base_quantity ?? 0),
             'unit' => $d->unit->abbreviation ?? $d->unit->name ?? '',
         ]);
+
+        $requiresExternalValidation = (bool) data_get($item->metadata, 'requires_external_validation', false);
+        $isTransfer = ($item->movementType->direction ?? null) === 'transfer';
 
         return [
             'id' => $item->id,
@@ -1113,10 +1209,12 @@ class PendingApprovalController extends Controller
             'details' => [
                 ['label' => 'Referencia', 'value' => $item->reference_number ?? "MOV-{$item->id}"],
                 ['label' => 'Tipo', 'value' => $item->movementType->name ?? 'N/D'],
+                ['label' => 'Validación externa', 'value' => $requiresExternalValidation ? 'Sí' : 'No'],
                 ['label' => 'Observaciones', 'value' => $item->notes ?: 'Sin observaciones'],
                 ['label' => 'Fecha de creación', 'value' => $item->created_at?->format('d/m/Y H:i')],
             ],
             'lines' => $lines,
+            'can_validate_reception' => $requiresExternalValidation && $isTransfer && $item->status === 'pending',
             'rejection_reason' => $item->cancellation_reason ?? null,
             'created_at' => $item->created_at?->toISOString(),
         ];
@@ -1128,5 +1226,185 @@ class PendingApprovalController extends Controller
     private function getProcessRoute(string $code): string
     {
         return '/profile?tab=approvals';
+    }
+
+    private function canApproveProcess(Request $request, $user, Employee $employee, ?int $enterpriseId, ApprovalProcess $process): bool
+    {
+        if ($process->code === ApprovalProcess::INVENTORY_MOVEMENTS) {
+            return $this->canApproveInventoryMovement($request, $user, $employee);
+        }
+
+        return $process->canBeApprovedBy($employee, $enterpriseId);
+    }
+
+    private function canApproveInventoryMovement(Request $request, $user, ?Employee $employee): bool
+    {
+        if ($this->hasTransferApprovalPermission($request, $user)) {
+            return true;
+        }
+
+        if (! $employee) {
+            return false;
+        }
+
+        $process = $this->getInventoryApprovalProcess();
+        if (! $process) {
+            return false;
+        }
+
+        return $process->canBeApprovedBy($employee, $employee->enterprise_id);
+    }
+
+    private function getInventoryApprovalProcess(): ?ApprovalProcess
+    {
+        return ApprovalProcess::active()
+            ->requiresApproval()
+            ->where('code', ApprovalProcess::INVENTORY_MOVEMENTS)
+            ->first();
+    }
+
+    private function countPendingTransferReceptionsByPermission(Request $request, $user): int
+    {
+        return $this->getPendingTransferReceptionQueryByPermission($request, $user)->count();
+    }
+
+    private function getPendingTransferReceptionsByPermission(Request $request, $user): array
+    {
+        return $this->getPendingTransferReceptionQueryByPermission($request, $user)
+            ->with(['creator:id,name', 'movementType:id,name'])
+            ->orderBy('created_at', 'desc')
+            ->limit(50)
+            ->get()
+            ->map(fn ($item) => [
+                'id' => $item->id,
+                'type' => 'inventory_movement',
+                'title' => $item->reference_number ?? "MOV-{$item->id}",
+                'subtitle' => $item->movementType->name ?? 'Movimiento',
+                'description' => ($item->notes ?? 'Sin observaciones').
+                    ' - '.($item->creator->name ?? 'Usuario'),
+                'creator_name' => $item->creator->name ?? null,
+                'department' => null,
+                'photo' => null,
+                'date' => $item->created_at?->toISOString(),
+            ])
+            ->toArray();
+    }
+
+    private function getPendingTransferReceptionQueryByPermission(Request $request, $user)
+    {
+        $enterpriseId = $this->resolveEnterpriseIdForInventoryApproval($request, $user);
+
+        return InventoryMovement::where('status', 'pending')
+            ->where('created_by', '!=', $user->id)
+            ->where('metadata->requires_external_validation', true)
+            ->when($enterpriseId, fn ($q) => $q->where('metadata->approval_enterprise_id', $enterpriseId));
+    }
+
+    private function hasTransferApprovalPermission(Request $request, $user): bool
+    {
+        $enterpriseId = $this->resolveEnterpriseIdForInventoryApproval($request, $user);
+
+        if (! $enterpriseId || ! Schema::hasTable('user_submodule_access')) {
+            return false;
+        }
+
+        $transferSubmoduleIds = DB::table('submodules')
+            ->join('modules', 'submodules.module_id', '=', 'modules.id')
+            ->join('applications', 'modules.application_id', '=', 'applications.id')
+            ->where('applications.enterprise_id', $enterpriseId)
+            ->where('applications.slug', 'inventario')
+            ->where('modules.slug', 'operaciones')
+            ->where('submodules.slug', 'transferencias')
+            ->pluck('submodules.id');
+
+        if ($transferSubmoduleIds->isEmpty()) {
+            return false;
+        }
+
+        $hasSubmoduleAccess = DB::table('user_submodule_access')
+            ->where('user_id', $user->id)
+            ->whereIn('submodule_id', $transferSubmoduleIds)
+            ->where('is_active', true)
+            ->exists();
+
+        if (! $hasSubmoduleAccess) {
+            return false;
+        }
+
+        if (! Schema::hasTable('user_submodule_permissions') || ! Schema::hasTable('submodule_permission_types')) {
+            return true;
+        }
+
+        $permissionRows = DB::table('user_submodule_permissions as usp')
+            ->leftJoin('submodule_permission_types as spt', 'usp.permission_type_id', '=', 'spt.id')
+            ->where('usp.user_id', $user->id)
+            ->whereIn('usp.submodule_id', $transferSubmoduleIds)
+            ->orderByDesc('usp.id')
+            ->get([
+                'usp.id',
+                'usp.submodule_id',
+                'usp.permission_type_id',
+                'usp.is_granted',
+                'usp.granted',
+                'spt.slug',
+                'spt.key',
+            ]);
+
+        if ($permissionRows->isEmpty()) {
+            return true;
+        }
+
+        $acceptedSlugs = [
+            'validar',
+            'validate',
+            'aceptar',
+            'accept',
+            'aprobar',
+            'approve',
+            'validar_transferencia',
+            'validar_transferencias',
+            'aceptar_transferencia',
+            'aceptar_transferencias',
+            'aprobar_transferencia',
+            'aprobar_transferencias',
+            'edit',
+        ];
+
+        $seen = [];
+        foreach ($permissionRows as $row) {
+            $key = (int) $row->submodule_id.'-'.(int) ($row->permission_type_id ?? 0);
+            if (isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+
+            $isGranted = true;
+            if (Schema::hasColumn('user_submodule_permissions', 'is_granted')) {
+                $isGranted = (bool) $row->is_granted;
+            } elseif (Schema::hasColumn('user_submodule_permissions', 'granted')) {
+                $isGranted = (bool) $row->granted;
+            }
+
+            $slug = strtolower((string) ($row->slug ?? $row->key ?? ''));
+            if ($isGranted && $slug !== '' && in_array($slug, $acceptedSlugs, true)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function resolveEnterpriseIdForInventoryApproval(Request $request, $user): ?int
+    {
+        if ($user->employee?->enterprise_id) {
+            return (int) $user->employee->enterprise_id;
+        }
+
+        $slug = strtolower((string) ($request->header('X-Enterprise-Slug') ?? ''));
+        if ($slug === '') {
+            return null;
+        }
+
+        return Enterprise::where('slug', $slug)->value('id');
     }
 }

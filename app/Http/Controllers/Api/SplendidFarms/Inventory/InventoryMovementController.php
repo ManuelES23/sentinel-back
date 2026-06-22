@@ -10,10 +10,12 @@ use App\Models\InventoryMovementDetail;
 use App\Models\InventoryStock;
 use App\Models\InventoryKardex;
 use App\Models\MovementType;
+use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Symfony\Component\HttpFoundation\Response;
 
 class InventoryMovementController extends Controller
 {
@@ -203,7 +205,7 @@ class InventoryMovementController extends Controller
             'sourceEntity:id,name,code',
             'destinationEntity:id,name,code',
             'createdBy:id,name'
-        ]);
+        ])->withCount('details');
 
         // Filtrar por entidades accesibles de la empresa actual
         $entityIds = $this->getAccessibleEntityIds($request);
@@ -662,7 +664,7 @@ class InventoryMovementController extends Controller
             ], 422);
         }
 
-        $userEnterpriseId = Auth::user()?->employee?->enterprise_id;
+        $userEnterpriseId = $this->resolveUserEnterpriseId($request);
         $requiresExternalValidation = (bool) data_get($movement->metadata, 'requires_external_validation', false);
         $approvalEnterpriseId = data_get($movement->metadata, 'approval_enterprise_id');
 
@@ -673,10 +675,92 @@ class InventoryMovementController extends Controller
             ], 403);
         }
 
+        $validated = $request->validate([
+            'received_quantities' => 'nullable|array',
+            'received_quantities.*.detail_id' => 'required_with:received_quantities|integer|exists:inventory_movement_details,id',
+            'received_quantities.*.quantity' => 'required_with:received_quantities|numeric|min:0',
+        ]);
+
         DB::beginTransaction();
 
         try {
             $movementType = $movement->movementType;
+            $movement->loadMissing('details.product:id,name');
+
+            $receivedQuantities = collect($validated['received_quantities'] ?? [])
+                ->keyBy(fn ($row) => (int) ($row['detail_id'] ?? 0));
+
+            $allowsReceptionValidation =
+                $movementType?->direction === 'transfer' &&
+                $requiresExternalValidation;
+
+            if ($receivedQuantities->isNotEmpty()) {
+                if (! $allowsReceptionValidation) {
+                    DB::rollBack();
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'Solo las transferencias con validación externa permiten registrar recepción por cantidades',
+                    ], 422);
+                }
+
+                $movementDetailIds = $movement->details->pluck('id')->map(fn ($id) => (int) $id);
+                $unknownIds = $receivedQuantities->keys()->diff($movementDetailIds);
+
+                if ($unknownIds->isNotEmpty()) {
+                    DB::rollBack();
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'Se recibieron detalles inválidos para esta transferencia',
+                    ], 422);
+                }
+            }
+
+            $receptionSummaryLines = [];
+
+            foreach ($movement->details as $detail) {
+                $requestedQuantity = (float) ($detail->quantity ?? 0);
+                $requestedBaseQuantity = (float) ($detail->base_quantity ?? 0);
+
+                if ($requestedQuantity <= 0 && $requestedBaseQuantity > 0) {
+                    $requestedQuantity = $requestedBaseQuantity;
+                }
+
+                $receivedQuantity = $requestedQuantity;
+
+                if ($allowsReceptionValidation && $receivedQuantities->has((int) $detail->id)) {
+                    $receivedQuantity = (float) ($receivedQuantities->get((int) $detail->id)['quantity'] ?? 0);
+
+                    if ($receivedQuantity > $requestedQuantity) {
+                        $productName = $detail->product?->name ?? "ID:{$detail->product_id}";
+                        DB::rollBack();
+                        return response()->json([
+                            'status' => 'error',
+                            'message' => "La cantidad recibida de {$productName} no puede exceder lo transferido ({$requestedQuantity})",
+                        ], 422);
+                    }
+                }
+
+                $conversionFactor = (float) ($detail->conversion_factor ?? 1);
+                $receivedBaseQuantity = round($receivedQuantity * ($conversionFactor > 0 ? $conversionFactor : 1), 4);
+
+                // Persistir cantidades validadas de recepción para trazabilidad y reportes.
+                if ($allowsReceptionValidation && abs($receivedQuantity - $requestedQuantity) > 0.0001) {
+                    $detail->forceFill([
+                        'quantity' => $receivedQuantity,
+                        'base_quantity' => $receivedBaseQuantity,
+                        'total_cost' => round($receivedBaseQuantity * (float) ($detail->unit_cost ?? 0), 4),
+                        'notes' => trim(((string) ($detail->notes ?? '')) . " | Recibido: {$receivedQuantity} de {$requestedQuantity}"),
+                    ])->save();
+                }
+
+                $receptionSummaryLines[] = [
+                    'detail_id' => (int) $detail->id,
+                    'product_id' => (int) $detail->product_id,
+                    'quantity_requested' => $requestedQuantity,
+                    'quantity_received' => $receivedQuantity,
+                    'difference' => round($requestedQuantity - $receivedQuantity, 4),
+                ];
+            }
 
             // Validar stock suficiente para salidas y transferencias
             if (in_array($movementType->direction, ['out', 'transfer']) ||
@@ -705,6 +789,9 @@ class InventoryMovementController extends Controller
                     ], 422);
                 }
             }
+
+            // Recargar detalles por si hubo ajuste de cantidades recibido/transferido.
+            $movement->load('details.product:id,name');
 
             foreach ($movement->details as $detail) {
                 // Procesar según dirección y efecto
@@ -743,6 +830,18 @@ class InventoryMovementController extends Controller
                 }
             }
 
+            if ($allowsReceptionValidation) {
+                $movementMetadata = $movement->metadata ?? [];
+                $movementMetadata['external_reception'] = [
+                    'validated_at' => now()->toISOString(),
+                    'validated_by_user_id' => Auth::id(),
+                    'validated_by_enterprise_id' => $userEnterpriseId,
+                    'lines' => $receptionSummaryLines,
+                ];
+
+                $movement->metadata = $movementMetadata;
+            }
+
             // Actualizar estado del movimiento
             $movement->update([
                 'status' => 'approved',
@@ -765,6 +864,60 @@ class InventoryMovementController extends Controller
                 'message' => 'Error al aprobar el movimiento: ' . $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * Descargar PDF del movimiento con detalle de líneas.
+     */
+    public function pdf(Request $request, InventoryMovement $movement): Response
+    {
+        $entityIds = $this->getAccessibleEntityIds($request);
+        if (!empty($entityIds)) {
+            $sourceId = (int) ($movement->source_entity_id ?? 0);
+            $destinationId = (int) ($movement->destination_entity_id ?? 0);
+            $hasAccess = in_array($sourceId, $entityIds, true) || in_array($destinationId, $entityIds, true);
+
+            if (!$hasAccess) {
+                abort(403, 'No tienes acceso a este movimiento');
+            }
+        }
+
+        $movement->load([
+            'movementType:id,code,name,direction,effect',
+            'sourceEntity:id,name,code',
+            'destinationEntity:id,name,code',
+            'details.product:id,code,name,sku',
+            'details.unit:id,name,abbreviation',
+            'createdBy:id,name',
+            'approvedBy:id,name',
+        ]);
+
+        $pdf = Pdf::loadView('pdf.inventory.movement', [
+            'movement' => $movement,
+        ])->setPaper('a4', 'portrait');
+
+        $safeNumber = preg_replace('/[^A-Za-z0-9\-_]/', '-', (string) ($movement->document_number ?? $movement->id));
+        return $pdf->download("movimiento-{$safeNumber}.pdf");
+    }
+
+    private function resolveUserEnterpriseId(Request $request): ?int
+    {
+        $user = Auth::user();
+        $headerEnterprise = $this->getEnterprise($request);
+
+        if ($user && $headerEnterprise) {
+            $hasAccess = DB::table('user_enterprise_access')
+                ->where('user_id', $user->id)
+                ->where('enterprise_id', $headerEnterprise->id)
+                ->where('is_active', true)
+                ->exists();
+
+            if ($hasAccess) {
+                return (int) $headerEnterprise->id;
+            }
+        }
+
+        return $user?->employee?->enterprise_id;
     }
 
     /**

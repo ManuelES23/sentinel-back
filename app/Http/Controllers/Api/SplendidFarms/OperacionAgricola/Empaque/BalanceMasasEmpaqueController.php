@@ -328,7 +328,7 @@ class BalanceMasasEmpaqueController extends Controller
 
         foreach ($producciones as $produccion) {
             $attributionNeta = $this->getProduccionAtribuidaPorFolio($produccion, $procesoToFolio, 'peso_neto_kg', 'peso_bascula_kg');
-            $attributionBascula = $this->getProduccionAtribuidaPorFolio($produccion, $procesoToFolio, 'peso_bascula_kg', 'peso_neto_kg');
+            $attributionBascula = $this->getProduccionAtribuidaPorFolio($produccion, $procesoToFolio, 'peso_bascula_kg', null);
 
             foreach ($attributionNeta as $folio => $pesoKg) {
                 $produccionNetaByFolio[$folio] = round((float) ($produccionNetaByFolio[$folio] ?? 0) + $pesoKg, 2);
@@ -342,11 +342,11 @@ class BalanceMasasEmpaqueController extends Controller
         return [$produccionNetaByFolio, $produccionBasculaByFolio];
     }
 
-    private function getProduccionAtribuidaPorFolio(ProduccionEmpaque $produccion, array $procesoToFolio, string $mainField, string $fallbackField): array
+    private function getProduccionAtribuidaPorFolio(ProduccionEmpaque $produccion, array $procesoToFolio, string $mainField, ?string $fallbackField = null): array
     {
         $atribucion = [];
         $pesoPrincipal = (float) ($produccion->{$mainField} ?? 0);
-        $pesoFallback = (float) ($produccion->{$fallbackField} ?? 0);
+        $pesoFallback = $fallbackField ? (float) ($produccion->{$fallbackField} ?? 0) : 0.0;
         $pesoPallet = max($pesoPrincipal, $pesoFallback, 0);
         $detalles = $produccion->detalles ?? collect();
 
