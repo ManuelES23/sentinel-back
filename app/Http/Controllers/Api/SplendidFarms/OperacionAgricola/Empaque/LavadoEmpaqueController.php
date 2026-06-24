@@ -34,6 +34,7 @@ class LavadoEmpaqueController extends Controller
         'creador:id,name',
     ];
 
+    private const KG_PENDING_EPSILON = 0.01;
     private function withLavadoRezagas(array $relations): array
     {
         $relations['rezagas'] = function ($query) {
@@ -142,6 +143,21 @@ class LavadoEmpaqueController extends Controller
             // Cajas disponibles: total menos consumidas en cualquier modo (modo_kilos descuenta cajas equivalentes)
             $disponibleCajas = max(0, $totalCajas - $usadasCajasLegacy - $usadasCajasModoKilos);
 
+            // En modo kilos pueden quedar residuales minimos por redondeo al convertir
+            // entre peso bascula real y cajas equivalentes. Si el remanente no alcanza
+            // media caja real, se considera agotado y no debe mostrarse como pendiente.
+            $pesoPromedioCajaReal = ($pesoBascula > 0 && $totalCajas > 0)
+                ? ($pesoBascula / $totalCajas)
+                : 0.0;
+            $cajasEquivalentesResiduales = ($pesoPromedioCajaReal > 0)
+                ? ($pesoBasculaDisponibleKg / $pesoPromedioCajaReal)
+                : 0.0;
+
+            if ($puedeModoKilos && $pesoBasculaDisponibleKg > self::KG_PENDING_EPSILON && $cajasEquivalentesResiduales < 0.5) {
+                $pesoBasculaDisponibleKg = 0.0;
+                $disponibleCajas = 0;
+            }
+
             // Reglas de visibilidad:
             //  - Si la recepción es candidata a modo_kilos: aparece pendiente solo si quedan kg disponibles.
             //  - Si no: aparece pendiente solo si quedan cajas disponibles.
@@ -238,7 +254,25 @@ class LavadoEmpaqueController extends Controller
             $usadasKgTotal = $usadasKgEnModoKilos + $usadasKgEnModoCajas;
             $disponibleKg = max(0, round($pesoBascula - $usadasKgTotal, 2));
             $disponibleCajas = max(0, $totalCajas - $usadasCajasLegacy - $usadasCajasModoKilos);
+            $pesoPromedioCajaReal = ($pesoBascula > 0 && $totalCajas > 0)
+                ? ($pesoBascula / $totalCajas)
+                : 0.0;
+            $cajasEquivalentesResiduales = ($pesoPromedioCajaReal > 0)
+                ? ($disponibleKg / $pesoPromedioCajaReal)
+                : 0.0;
+
+            if ($disponibleKg > self::KG_PENDING_EPSILON && $cajasEquivalentesResiduales < 0.5) {
+                $disponibleKg = 0.0;
+                $disponibleCajas = 0;
+            }
             $solicitadoKg = (float) $validated['cantidad_kg'];
+
+            if ($disponibleKg <= self::KG_PENDING_EPSILON) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Este folio ya no tiene kilos disponibles para lavar; el remanente restante es solo un residuo de redondeo',
+                ], 422);
+            }
 
             if ($solicitadoKg > $disponibleKg) {
                 return response()->json([
