@@ -119,11 +119,10 @@ trait CreatesReporteProductoresFixtures
             'is_active' => true,
         ]);
 
-        // ZonaCultivo requiere productor_id (NOT NULL) pero no está en su
-        // $fillable — se asigna directo para no depender de mass-assignment.
-        $this->zonaCultivo = new ZonaCultivo(['nombre' => 'Zona Norte', 'is_active' => true]);
-        $this->zonaCultivo->productor_id = $this->productorPrincipal->id;
-        $this->zonaCultivo->save();
+        // ZonaCultivo ya NO tiene productor_id (columna eliminada por la
+        // migración 2026_01_18_033918_remove_productor_from_zonas_cultivo —
+        // el productor se relaciona vía Lote.productor_id, columna directa).
+        $this->zonaCultivo = ZonaCultivo::create(['nombre' => 'Zona Norte', 'is_active' => true]);
 
         $this->lote = Lote::create([
             'zona_cultivo_id' => $this->zonaCultivo->id,
