@@ -585,6 +585,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::prefix('cosecha')->group(function () {
 
                 // Salidas de Campo
+                Route::post('salidas-campo/{salida}/asignar-precio', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Cosecha\SalidaCampoCosechaController::class, 'asignarPrecio']);
                 Route::apiResource('salidas-campo', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Cosecha\SalidaCampoCosechaController::class)
                     ->parameters(['salidas-campo' => 'salida']);
 

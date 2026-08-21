@@ -19,6 +19,7 @@ class SalidaCampoCosecha extends Model
         'etapa_id',
         'variedad_id',
         'convenio_compra_id',
+        'es_compra_directa',
         'lote_id',
         'tipo_carga_id',
         'productor_id',
@@ -30,6 +31,10 @@ class SalidaCampoCosecha extends Model
         'peso_neto_kg',
         'peso_bascula',
         'folio_ticket_bascula',
+        'precio_asignado',
+        'foto_ticket_bascula_path',
+        'precio_asignado_por',
+        'precio_asignado_en',
         'folio_salida',
         'vehiculo',
         'chofer',
@@ -44,6 +49,9 @@ class SalidaCampoCosecha extends Model
         'cantidad' => 'integer',
         'peso_neto_kg' => 'decimal:2',
         'peso_bascula' => 'decimal:2',
+        'precio_asignado' => 'decimal:2',
+        'precio_asignado_en' => 'datetime',
+        'es_compra_directa' => 'boolean',
         'es_batanga' => 'boolean',
         'eliminado' => 'boolean',
         'fecha' => 'date:Y-m-d',
@@ -103,6 +111,11 @@ class SalidaCampoCosecha extends Model
         return $this->belongsTo(User::class, 'created_by');
     }
 
+    public function asignadoPrecioPor(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'precio_asignado_por');
+    }
+
     public function recepciones(): HasMany
     {
         return $this->hasMany(RecepcionEmpaque::class, 'salida_campo_id');
@@ -121,6 +134,17 @@ class SalidaCampoCosecha extends Model
             return $this->cantidad * $this->tipoCarga->peso_estimado_kg;
         }
         return $this->peso_neto_kg;
+    }
+
+    /**
+     * Fruta de compra directa: o bien la marca manual en la salida (para
+     * cultivos/temporadas que todavía no manejan convenios de compra, ej.
+     * Elote), o bien tiene un convenio de compra asignado en modalidad
+     * "compra_directa" (no consignación, no sin convenio).
+     */
+    public function esCompraDirecta(): bool
+    {
+        return (bool) $this->es_compra_directa || (bool) $this->convenioCompra?->esCompraDirecta();
     }
 
     // ── Scopes ──────────────────────────────────────────

@@ -10,14 +10,19 @@ use App\Models\SalidaCampoCosecha;
 use App\Models\ConvenioCompra;
 use App\Models\Lote;
 use App\Models\Etapa;
+use App\Models\Submodule;
 use App\Models\TipoCarga;
+use App\Models\UserSubmodulePermission;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 
 class SalidaCampoCosechaController extends Controller
 {
+    private ?int $submoduleId = null;
+
     private array $eagerLoad = [
         'etapa:id,nombre,orden,lote_id,variedad_id,tipo_variedad_id',
         'etapa.variedad:id,nombre',
@@ -90,6 +95,7 @@ class SalidaCampoCosechaController extends Controller
             'productor_id' => 'required|exists:productores,id',
             'destino_entity_id' => 'nullable|exists:entities,id',
             'fecha' => 'required|date',
+            'es_compra_directa' => 'nullable|boolean',
             'cantidad' => 'required|integer|min:1',
             'peso_bascula' => 'nullable|numeric|min:0',
             'folio_ticket_bascula' => 'nullable|string|max:100',
@@ -241,6 +247,7 @@ class SalidaCampoCosechaController extends Controller
             'productor_id' => 'sometimes|exists:productores,id',
             'destino_entity_id' => 'nullable|exists:entities,id',
             'fecha' => 'sometimes|date',
+            'es_compra_directa' => 'nullable|boolean',
             'cantidad' => 'sometimes|integer|min:1',
             'peso_bascula' => 'nullable|numeric|min:0',
             'folio_ticket_bascula' => 'nullable|string|max:100',
@@ -287,6 +294,75 @@ class SalidaCampoCosechaController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Salida de campo actualizada',
+            'data' => $salida,
+        ]);
+    }
+
+    public function asignarPrecio(Request $request, SalidaCampoCosecha $salida): JsonResponse
+    {
+        if ($error = $this->ensurePermission($request, 'asignar_precio_compra_directa', 'asignar precio a salidas de compra directa')) {
+            return $error;
+        }
+
+        if ($salida->eliminado) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No se puede editar un registro eliminado',
+            ], 404);
+        }
+
+        $salida->loadMissing('convenioCompra:id,folio_convenio,modalidad,status');
+
+        if (!$salida->esCompraDirecta()) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Esta salida no es de compra directa: no se le puede asignar precio',
+            ], 422);
+        }
+
+        $validated = $request->validate([
+            'precio_asignado' => 'required|numeric|min:0',
+            'foto_ticket_bascula' => [
+                $salida->foto_ticket_bascula_path ? 'nullable' : 'required',
+                'image',
+                'mimes:jpg,jpeg,png,webp',
+                'max:5120',
+            ],
+        ]);
+
+        DB::transaction(function () use ($request, $salida, $validated) {
+            $fotoPath = $salida->foto_ticket_bascula_path;
+
+            if ($request->hasFile('foto_ticket_bascula')) {
+                if ($fotoPath) {
+                    Storage::disk('public')->delete($fotoPath);
+                }
+
+                $fotoPath = $request->file('foto_ticket_bascula')
+                    ->store('salidas-campo/tickets-bascula', 'public');
+            }
+
+            $salida->update([
+                'precio_asignado' => $validated['precio_asignado'],
+                'foto_ticket_bascula_path' => $fotoPath,
+                'precio_asignado_por' => $request->user()?->id,
+                'precio_asignado_en' => now(),
+            ]);
+        });
+
+        $salida->refresh()->load($this->eagerLoad);
+
+        broadcast(new SalidaCampoUpdated(
+            'updated',
+            $salida->toArray(),
+            'splendidfarms',
+            'operacion-agricola',
+            'cosecha'
+        ))->toOthers();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Precio asignado exitosamente',
             'data' => $salida,
         ]);
     }
@@ -409,5 +485,56 @@ class SalidaCampoCosechaController extends Controller
     {
         return $e->getCode() === '23000'
             && str_contains($e->getMessage(), 'salidas_campo_cosecha_folio_salida_unique');
+    }
+
+    private function ensurePermission(Request $request, string $permissionSlug, string $actionLabel): ?JsonResponse
+    {
+        $submoduleId = $this->getSubmoduleId();
+
+        if (!$submoduleId) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Submódulo salidas de campo no encontrado',
+            ], 500);
+        }
+
+        if ($this->userHasPermission($request, $permissionSlug)) {
+            return null;
+        }
+
+        return response()->json([
+            'status' => 'error',
+            'message' => "No tienes permiso para {$actionLabel}",
+        ], 403);
+    }
+
+    private function userHasPermission(Request $request, string $permissionSlug): bool
+    {
+        $submoduleId = $this->getSubmoduleId();
+        $userId = $request->user()?->id;
+
+        if (!$submoduleId || !$userId) {
+            return false;
+        }
+
+        return UserSubmodulePermission::query()
+            ->where('user_id', $userId)
+            ->where('submodule_id', $submoduleId)
+            ->whereHas('permissionType', fn($q) => $q->where('slug', $permissionSlug))
+            ->where('is_granted', true)
+            ->exists();
+    }
+
+    private function getSubmoduleId(): ?int
+    {
+        if (!is_null($this->submoduleId)) {
+            return $this->submoduleId;
+        }
+
+        $this->submoduleId = Submodule::query()
+            ->where('slug', 'salidas-campo')
+            ->value('id');
+
+        return $this->submoduleId;
     }
 }

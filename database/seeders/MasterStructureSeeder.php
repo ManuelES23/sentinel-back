@@ -554,6 +554,10 @@ class MasterStructureSeeder extends Seeder
         }
         $this->command->info("    → Cosecha: Dashboard, Salidas de Campo, Cierres, Ventas, Calidad");
 
+        $this->ensureSubmodulePermissionTypes($oaCosecha, 'salidas-campo', [
+            ['slug' => 'asignar_precio_compra_directa', 'name' => 'Asignar precio (compra directa)', 'description' => 'Permite asignar el precio pactado y subir la foto del ticket de báscula en salidas de campo de compra directa'],
+        ]);
+
         // Módulo: Empaque
         $oaEmpaque = Module::firstOrCreate(
             ['slug' => 'empaque', 'application_id' => $operacionAgricola->id],
