@@ -53,7 +53,7 @@ class EmbarqueEmpaque extends Model
     public function detalles()
     {
         return $this->hasMany(EmbarqueEmpaqueDetalle::class, 'embarque_id')
-            ->orderByRaw('ISNULL(posicion_carga), posicion_carga ASC');
+            ->orderByRaw('CASE WHEN posicion_carga IS NULL THEN 1 ELSE 0 END, posicion_carga ASC');
     }
     public function consignatario() { return $this->belongsTo(Consignatario::class); }
     public function destinoConsignatario() { return $this->belongsTo(Consignatario::class, 'destino_consignatario_id'); }

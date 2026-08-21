@@ -139,6 +139,9 @@ class RezagaEmpaqueController extends Controller
         if ($request->filled('tipo_rezaga')) {
             $query->where('tipo_rezaga', $request->tipo_rezaga);
         }
+        if ($request->filled('productor_id')) {
+            $query->whereHas('proceso', fn ($q) => $q->where('productor_id', $request->productor_id));
+        }
         if ($request->filled('search')) {
             $search = $request->search;
             $query->where(function ($q) use ($search) {

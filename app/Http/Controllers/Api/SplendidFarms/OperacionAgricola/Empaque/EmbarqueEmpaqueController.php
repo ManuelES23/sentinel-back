@@ -59,6 +59,13 @@ class EmbarqueEmpaqueController extends Controller
         if ($request->filled('tipo_venta')) {
             $query->where('tipo_venta', $request->tipo_venta);
         }
+        if ($request->filled('productor_id')) {
+            $productorId = $request->productor_id;
+            $query->where(function ($q) use ($productorId) {
+                $q->whereHas('detalles.produccion.proceso', fn ($sub) => $sub->where('productor_id', $productorId))
+                  ->orWhereHas('detalles.produccion.detalles.proceso', fn ($sub) => $sub->where('productor_id', $productorId));
+            });
+        }
         if ($request->filled('search')) {
             $search = $request->search;
             $query->where(function ($q) use ($search) {

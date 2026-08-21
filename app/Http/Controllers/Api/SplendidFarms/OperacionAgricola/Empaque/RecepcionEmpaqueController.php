@@ -45,6 +45,9 @@ class RecepcionEmpaqueController extends Controller
         if ($request->filled('status')) {
             $query->byStatus($request->status);
         }
+        if ($request->filled('productor_id')) {
+            $query->where('productor_id', $request->productor_id);
+        }
 
         $fechaInicio = $request->input('fecha_inicio', $request->input('from_date'));
         $fechaFin = $request->input('fecha_fin', $request->input('to_date'));
