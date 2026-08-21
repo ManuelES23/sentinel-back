@@ -337,6 +337,12 @@ Route::middleware('auth:sanctum')->group(function () {
                     Route::post('procesar-archivo', [App\Http\Controllers\Api\SplendidFarms\Administration\SfPayrollController::class, 'processFile']);
                 });
             });
+
+            // Módulo Reportes (operativo — para reportes financieros ver
+            // TableroProductoresController en compras-agricolas)
+            Route::prefix('reportes')->group(function () {
+                Route::get('productores', [App\Http\Controllers\Api\SplendidFarms\Administration\ReporteProductoresController::class, 'index']);
+            });
         });
 
         // =====================================================
