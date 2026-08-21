@@ -1586,6 +1586,7 @@ class ProduccionEmpaqueController extends Controller
                     'tipo_empaque' => $cola->tipo_empaque,
                     'presentacion' => $cola->presentacion,
                     'lote_producto_terminado' => $cola->lote_producto_terminado,
+                    'clasificacion' => $cola->clasificacion,
                 ];
 
                 if ($cajasRestantesCola <= 0) {
@@ -1623,6 +1624,20 @@ class ProduccionEmpaqueController extends Controller
                 ? $numeroPalletManual
                 : $this->generarNumeroPallet($base->entity_id);
 
+            // Clasificación del mixto derivada de las colas origen: si todas comparten
+            // la misma clasificación se hereda tal cual; si combinan orgánico y
+            // convencional, el mixto queda marcado como 'mixto'.
+            $clasificacionesUnicas = collect($colasMixteadas)
+                ->pluck('clasificacion')
+                ->filter(fn ($v) => filled($v))
+                ->unique()
+                ->values();
+            $clasificacionMixto = match (true) {
+                $clasificacionesUnicas->count() === 1 => $clasificacionesUnicas->first(),
+                $clasificacionesUnicas->count() > 1 => 'mixto',
+                default => 'convencional',
+            };
+
             $palletExiste = ProduccionEmpaque::withTrashed()
                 ->where('entity_id', $base->entity_id)
                 ->get(['numero_pallet'])
@@ -1658,6 +1673,7 @@ class ProduccionEmpaqueController extends Controller
                 'calibre' => $calibresUnicos->count() === 1 ? $calibresUnicos->first() : null,
                 'lote_producto_terminado' => $lotesPtUnicos->count() === 1 ? $lotesPtUnicos->first() : null,
                 'categoria' => $base->categoria,
+                'clasificacion' => $clasificacionMixto,
                 'status' => 'en_almacen',
                 'en_cuarto_frio' => $allEnCuartoFrio,
                 'is_cola' => false,

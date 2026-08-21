@@ -12,10 +12,16 @@ return new class extends Migration
      */
     public function up(): void
     {
-        // El índice compuesto original sobre zona_cultivo_id debe quitarse
-        // antes de la FK y la columna: MySQL lo hace implícito al hacer
-        // dropColumn, pero SQLite (usado en tests) reconstruye la tabla
-        // preservando índices y falla con "no such column" si sigue ahí.
+        // La FK sobre zona_cultivo_id debe quitarse antes que el índice
+        // compuesto que la respalda: MySQL rechaza dropIndex() con
+        // "needed in a foreign key constraint" si el índice sigue
+        // soportando la FK. SQLite (usado en tests) es más permisivo pero
+        // igual reconstruye la tabla, así que el mismo orden funciona ahí.
+        Schema::table('lotes', function (Blueprint $table) {
+            // Quitar la constraint de zona_cultivo_id
+            $table->dropForeign(['zona_cultivo_id']);
+        });
+
         Schema::table('lotes', function (Blueprint $table) {
             $table->dropIndex(['zona_cultivo_id', 'is_active']);
         });
@@ -29,8 +35,7 @@ return new class extends Migration
             $table->foreignId('cultivo_id')->nullable()->after('numero_lote')
                 ->constrained('cultivos')->onDelete('set null');
 
-            // Quitar la constraint de zona_cultivo_id
-            $table->dropForeign(['zona_cultivo_id']);
+            // Quitar la columna zona_cultivo_id (FK e índice ya se quitaron arriba)
             $table->dropColumn('zona_cultivo_id');
 
             // Actualizar índice
