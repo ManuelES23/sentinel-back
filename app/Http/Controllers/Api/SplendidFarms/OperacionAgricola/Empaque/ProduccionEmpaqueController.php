@@ -96,7 +96,11 @@ class ProduccionEmpaqueController extends Controller
             $query->byStatus($request->status);
         }
         if ($request->filled('productor_id')) {
-            $query->whereHas('proceso', fn ($q) => $q->where('productor_id', $request->productor_id));
+            $productorId = $request->productor_id;
+            $query->where(function ($q) use ($productorId) {
+                $q->whereHas('proceso', fn ($sub) => $sub->where('productor_id', $productorId))
+                  ->orWhereHas('detalles.proceso', fn ($sub) => $sub->where('productor_id', $productorId));
+            });
         }
         if ($request->filled('search')) {
             $search = $request->search;

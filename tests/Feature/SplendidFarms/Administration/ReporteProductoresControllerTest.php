@@ -134,4 +134,48 @@ class ReporteProductoresControllerTest extends TestCase
         $this->assertSame(0, $fila['metricas']['total_cajas_embarcadas']);
         $this->assertSame(0, $fila['metricas']['porcentaje_rezaga']);
     }
+
+    public function test_filtra_por_cultivo_id(): void
+    {
+        $this->crearMovimientosCompletos($this->productorPrincipal, 'CULT');
+
+        $response = $this->getJson(self::BASE_URL.'?cultivo_id='.$this->cultivo->id);
+        $response->assertOk();
+        $ids = collect($response->json('data.productores'))->pluck('productor.id');
+        $this->assertTrue($ids->contains($this->productorPrincipal->id));
+
+        $otroCultivo = \App\Models\Cultivo::create(['nombre' => 'Cultivo Ajeno']);
+        $response = $this->getJson(self::BASE_URL.'?cultivo_id='.$otroCultivo->id);
+        $response->assertOk();
+        $ids = collect($response->json('data.productores'))->pluck('productor.id');
+        $this->assertFalse($ids->contains($this->productorPrincipal->id));
+    }
+
+    public function test_metricas_incluyen_pallets_mixtos(): void
+    {
+        $movimientos = $this->crearMovimientosCompletos($this->productorPrincipal, 'MIX');
+
+        // Simula un pallet mixto: el proceso_id del pallet queda NULL
+        // (como hace ProduccionEmpaqueController::mixtear()), y el
+        // productor real vive en produccion_empaque_detalles.
+        $movimientos['produccion']->update(['proceso_id' => null]);
+        \App\Models\ProduccionEmpaqueDetalle::create([
+            'produccion_id' => $movimientos['produccion']->id,
+            'numero_entrada' => 1,
+            'proceso_id' => $movimientos['proceso']->id,
+            'fecha_produccion' => '2026-02-02',
+            'total_cajas' => 50,
+            'peso_neto_kg' => 500,
+        ]);
+
+        $response = $this->getJson(self::BASE_URL);
+
+        $response->assertOk();
+        $fila = collect($response->json('data.productores'))
+            ->firstWhere('productor.id', $this->productorPrincipal->id);
+
+        $this->assertNotNull($fila);
+        $this->assertSame(50, $fila['metricas']['total_cajas_producidas']);
+        $this->assertSame(50, $fila['metricas']['total_cajas_embarcadas']);
+    }
 }

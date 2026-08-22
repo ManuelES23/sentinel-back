@@ -7,6 +7,7 @@ use App\Models\Productor;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class ReporteProductoresController extends Controller
 {
@@ -58,13 +59,10 @@ class ReporteProductoresController extends Controller
             )
             ->selectSub(
                 fn (QueryBuilder $q) => $this->scopeAggregateByPeriod(
-                    $q->from('produccion_empaque')
-                        ->selectRaw('COALESCE(SUM(produccion_empaque.total_cajas), 0)')
-                        ->join('proceso_empaque', 'proceso_empaque.id', '=', 'produccion_empaque.proceso_id')
-                        ->whereColumn('proceso_empaque.productor_id', 'productores.id')
-                        ->whereNull('produccion_empaque.deleted_at')
-                        ->whereNull('proceso_empaque.deleted_at'),
-                    'produccion_empaque',
+                    $q->fromSub($this->produccionCajasPorProductor(), 'produccion_cajas')
+                        ->selectRaw('COALESCE(SUM(produccion_cajas.cajas), 0)')
+                        ->whereColumn('produccion_cajas.productor_id', 'productores.id'),
+                    'produccion_cajas',
                     $temporadaId,
                     $cultivoId,
                 ),
@@ -72,16 +70,10 @@ class ReporteProductoresController extends Controller
             )
             ->selectSub(
                 fn (QueryBuilder $q) => $this->scopeAggregateByPeriod(
-                    $q->from('embarque_empaque_detalles')
-                        ->selectRaw('COALESCE(SUM(embarque_empaque_detalles.cajas), 0)')
-                        ->join('produccion_empaque', 'produccion_empaque.id', '=', 'embarque_empaque_detalles.produccion_id')
-                        ->join('proceso_empaque', 'proceso_empaque.id', '=', 'produccion_empaque.proceso_id')
-                        ->join('embarques_empaque', 'embarques_empaque.id', '=', 'embarque_empaque_detalles.embarque_id')
-                        ->whereColumn('proceso_empaque.productor_id', 'productores.id')
-                        ->whereNull('produccion_empaque.deleted_at')
-                        ->whereNull('proceso_empaque.deleted_at')
-                        ->whereNull('embarques_empaque.deleted_at'),
-                    'produccion_empaque',
+                    $q->fromSub($this->embarqueCajasPorProductor(), 'embarque_cajas')
+                        ->selectRaw('COALESCE(SUM(embarque_cajas.cajas), 0)')
+                        ->whereColumn('embarque_cajas.productor_id', 'productores.id'),
+                    'embarque_cajas',
                     $temporadaId,
                     $cultivoId,
                 ),
@@ -185,5 +177,82 @@ class ReporteProductoresController extends Controller
         }
 
         return $subQuery;
+    }
+
+    /**
+     * Resuelve (productor_id, temporada_id, cajas) por cada fila de
+     * producción, cubriendo pallets normales (proceso_id directo) y
+     * pallets mixtos (ProduccionEmpaqueController::mixtear() deja
+     * proceso_id NULL en el pallet y coloca el productor real de cada
+     * pieza en produccion_empaque_detalles) — sin esta unión, las cajas
+     * de pallets mixtos desaparecen de las métricas agregadas.
+     */
+    private function produccionCajasPorProductor(): QueryBuilder
+    {
+        $normal = DB::table('produccion_empaque')
+            ->join('proceso_empaque', 'proceso_empaque.id', '=', 'produccion_empaque.proceso_id')
+            ->whereNull('produccion_empaque.deleted_at')
+            ->whereNull('proceso_empaque.deleted_at')
+            ->select([
+                'produccion_empaque.id as produccion_id',
+                'produccion_empaque.temporada_id',
+                'proceso_empaque.productor_id',
+                'produccion_empaque.total_cajas as cajas',
+            ]);
+
+        $mixto = DB::table('produccion_empaque')
+            ->join('produccion_empaque_detalles', 'produccion_empaque_detalles.produccion_id', '=', 'produccion_empaque.id')
+            ->join('proceso_empaque', 'proceso_empaque.id', '=', 'produccion_empaque_detalles.proceso_id')
+            ->whereNull('produccion_empaque.proceso_id')
+            ->whereNull('produccion_empaque.deleted_at')
+            ->whereNull('proceso_empaque.deleted_at')
+            ->select([
+                'produccion_empaque.id as produccion_id',
+                'produccion_empaque.temporada_id',
+                'proceso_empaque.productor_id',
+                'produccion_empaque_detalles.total_cajas as cajas',
+            ]);
+
+        return $normal->unionAll($mixto);
+    }
+
+    /**
+     * Igual que produccionCajasPorProductor() pero para lo efectivamente
+     * embarcado: en pallets mixtos, cada pieza (produccion_empaque_detalles)
+     * aporta sus propias cajas al total embarcado — mismo criterio que ya
+     * usa el frontend (rowBuilders.js::buildEmbarqueRows) para el detalle,
+     * así la métrica de la lista y las filas del detalle quedan consistentes.
+     */
+    private function embarqueCajasPorProductor(): QueryBuilder
+    {
+        $normal = DB::table('embarque_empaque_detalles')
+            ->join('produccion_empaque', 'produccion_empaque.id', '=', 'embarque_empaque_detalles.produccion_id')
+            ->join('proceso_empaque', 'proceso_empaque.id', '=', 'produccion_empaque.proceso_id')
+            ->join('embarques_empaque', 'embarques_empaque.id', '=', 'embarque_empaque_detalles.embarque_id')
+            ->whereNull('produccion_empaque.deleted_at')
+            ->whereNull('proceso_empaque.deleted_at')
+            ->whereNull('embarques_empaque.deleted_at')
+            ->select([
+                'embarques_empaque.temporada_id',
+                'proceso_empaque.productor_id',
+                'embarque_empaque_detalles.cajas',
+            ]);
+
+        $mixto = DB::table('embarque_empaque_detalles')
+            ->join('produccion_empaque', 'produccion_empaque.id', '=', 'embarque_empaque_detalles.produccion_id')
+            ->join('produccion_empaque_detalles', 'produccion_empaque_detalles.produccion_id', '=', 'produccion_empaque.id')
+            ->join('proceso_empaque', 'proceso_empaque.id', '=', 'produccion_empaque_detalles.proceso_id')
+            ->join('embarques_empaque', 'embarques_empaque.id', '=', 'embarque_empaque_detalles.embarque_id')
+            ->whereNull('produccion_empaque.proceso_id')
+            ->whereNull('produccion_empaque.deleted_at')
+            ->whereNull('proceso_empaque.deleted_at')
+            ->whereNull('embarques_empaque.deleted_at')
+            ->select([
+                'embarques_empaque.temporada_id',
+                'proceso_empaque.productor_id',
+                'produccion_empaque_detalles.total_cajas as cajas',
+            ]);
+
+        return $normal->unionAll($mixto);
     }
 }
