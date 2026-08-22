@@ -115,6 +115,32 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
         ->parameters(['oportunidades' => 'oportunidad']);
 
     // -------------------------------------------------
+    // COTIZACIONES
+    // Anidadas a una Oportunidad — CRUD + enviar/aprobar/rechazar
+    // -------------------------------------------------
+    Route::get('oportunidades/{oportunidad}/cotizaciones', [
+        App\Http\Controllers\Api\CRM\CotizacionController::class, 'index'
+    ]);
+    Route::post('oportunidades/{oportunidad}/cotizaciones', [
+        App\Http\Controllers\Api\CRM\CotizacionController::class, 'store'
+    ]);
+    Route::get('cotizaciones/{cotizacion}', [
+        App\Http\Controllers\Api\CRM\CotizacionController::class, 'show'
+    ]);
+    Route::put('cotizaciones/{cotizacion}', [
+        App\Http\Controllers\Api\CRM\CotizacionController::class, 'update'
+    ]);
+    Route::patch('cotizaciones/{cotizacion}/enviar', [
+        App\Http\Controllers\Api\CRM\CotizacionController::class, 'enviar'
+    ]);
+    Route::patch('cotizaciones/{cotizacion}/aprobar', [
+        App\Http\Controllers\Api\CRM\CotizacionController::class, 'aprobar'
+    ]);
+    Route::patch('cotizaciones/{cotizacion}/rechazar', [
+        App\Http\Controllers\Api\CRM\CotizacionController::class, 'rechazar'
+    ]);
+
+    // -------------------------------------------------
     // PRESUPUESTOS
     // CRUD + resumen meta vs real + comparativo anual
     // -------------------------------------------------

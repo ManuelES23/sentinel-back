@@ -81,6 +81,11 @@ class CrmOportunidad extends Model
         return $this->hasMany(CrmOportunidadProducto::class, 'oportunidad_id');
     }
 
+    public function cotizaciones(): HasMany
+    {
+        return $this->hasMany(CrmCotizacion::class, 'oportunidad_id');
+    }
+
     public function actividades(): MorphMany
     {
         return $this->morphMany(CrmActividad::class, 'entidad');
