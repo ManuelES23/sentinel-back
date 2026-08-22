@@ -175,6 +175,11 @@ class CotizacionController extends CrmBaseController
         }
 
         DB::transaction(function () use ($cotizacion) {
+            // Bloquea la fila de la oportunidad para que un aprobar() concurrente
+            // sobre una cotización hermana no pueda intercalar su propio
+            // supersede+approve dentro de esta misma ventana de transacción.
+            CrmOportunidad::whereKey($cotizacion->oportunidad_id)->lockForUpdate()->first();
+
             // Un solo aprobado a la vez por oportunidad: el que ya estaba aprobado pasa a superado.
             CrmCotizacion::where('oportunidad_id', $cotizacion->oportunidad_id)
                 ->where('id', '!=', $cotizacion->id)
