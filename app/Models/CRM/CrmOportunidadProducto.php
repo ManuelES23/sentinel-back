@@ -16,7 +16,9 @@ class CrmOportunidadProducto extends Model
 
     protected $fillable = [
         'oportunidad_id',
+        'cotizacion_id',
         'producto_id',
+        'descripcion',
         'cantidad',
         'precio_unitario',
     ];
@@ -26,13 +28,25 @@ class CrmOportunidadProducto extends Model
         'precio_unitario' => 'decimal:2',
     ];
 
+    protected $appends = ['importe'];
+
     public function oportunidad(): BelongsTo
     {
         return $this->belongsTo(CrmOportunidad::class, 'oportunidad_id');
     }
 
+    public function cotizacion(): BelongsTo
+    {
+        return $this->belongsTo(CrmCotizacion::class, 'cotizacion_id');
+    }
+
     public function producto(): BelongsTo
     {
         return $this->belongsTo(CrmProducto::class, 'producto_id');
+    }
+
+    public function getImporteAttribute(): float
+    {
+        return round((float) $this->cantidad * (float) $this->precio_unitario, 2);
     }
 }
