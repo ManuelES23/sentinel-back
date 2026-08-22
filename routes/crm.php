@@ -41,6 +41,22 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::apiResource('productos', App\Http\Controllers\Api\CRM\ProductoController::class)
         ->parameters(['productos' => 'producto']);
 
+    // Configuración comercial (descuento global + impuestos), un registro por empresa
+    Route::get('configuracion-comercial', [
+        App\Http\Controllers\Api\CRM\ConfiguracionComercialController::class, 'show'
+    ]);
+    Route::put('configuracion-comercial', [
+        App\Http\Controllers\Api\CRM\ConfiguracionComercialController::class, 'update'
+    ]);
+    Route::post('configuracion-comercial/impuestos', [
+        App\Http\Controllers\Api\CRM\ConfiguracionComercialController::class, 'storeImpuesto'
+    ]);
+    Route::put('configuracion-comercial/impuestos/{impuesto}', [
+        App\Http\Controllers\Api\CRM\ConfiguracionComercialController::class, 'updateImpuesto'
+    ]);
+    Route::delete('configuracion-comercial/impuestos/{impuesto}', [
+        App\Http\Controllers\Api\CRM\ConfiguracionComercialController::class, 'destroyImpuesto'
+    ]);
 
     // -------------------------------------------------
     // PROSPECTOS
