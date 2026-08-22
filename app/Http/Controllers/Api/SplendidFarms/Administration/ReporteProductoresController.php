@@ -181,18 +181,36 @@ class ReporteProductoresController extends Controller
 
     /**
      * Resuelve (productor_id, temporada_id, cajas) por cada fila de
-     * producción, cubriendo pallets normales (proceso_id directo) y
-     * pallets mixtos (ProduccionEmpaqueController::mixtear() deja
-     * proceso_id NULL en el pallet y coloca el productor real de cada
-     * pieza en produccion_empaque_detalles) — sin esta unión, las cajas
-     * de pallets mixtos desaparecen de las métricas agregadas.
+     * producción, cubriendo pallets simples (sin filas en
+     * produccion_empaque_detalles → cajas = produccion_empaque.total_cajas,
+     * atribuidas al proceso_id directo del pallet) y pallets con desglose
+     * por productor (con filas en produccion_empaque_detalles → cajas =
+     * SUM de cada fila de detalle, atribuidas a su propio proceso_id).
+     *
+     * El criterio de "tiene desglose" es *existencia de filas en
+     * produccion_empaque_detalles*, no el flag is_mixto ni que proceso_id
+     * sea NULL — eso deja fuera dos casos reales:
+     *   - pallets "multi-entrada": is_mixto=0, proceso_id NOT NULL, pero
+     *     con detalles de ≥2 procesos distintos (varias entradas al mismo
+     *     pallet). Antes se atribuían 100% al proceso primario.
+     *   - pallets marcados is_mixto=1 pero con proceso_id NOT NULL (dato
+     *     inconsistente) — antes caían en la rama "simple" por el mismo motivo.
+     * Este es el mismo criterio que ya usa el frontend
+     * (rowBuilders.js::buildEmbarqueRows: usa produccion.detalles cuando
+     * tiene longitud, sin mirar proceso_id ni is_mixto), así que además
+     * mantiene consistente la métrica agregada con las filas de detalle.
      */
     private function produccionCajasPorProductor(): QueryBuilder
     {
-        $normal = DB::table('produccion_empaque')
+        $simple = DB::table('produccion_empaque')
             ->join('proceso_empaque', 'proceso_empaque.id', '=', 'produccion_empaque.proceso_id')
             ->whereNull('produccion_empaque.deleted_at')
             ->whereNull('proceso_empaque.deleted_at')
+            ->whereNotExists(function ($sub) {
+                $sub->select(DB::raw(1))
+                    ->from('produccion_empaque_detalles')
+                    ->whereColumn('produccion_empaque_detalles.produccion_id', 'produccion_empaque.id');
+            })
             ->select([
                 'produccion_empaque.id as produccion_id',
                 'produccion_empaque.temporada_id',
@@ -200,10 +218,9 @@ class ReporteProductoresController extends Controller
                 'produccion_empaque.total_cajas as cajas',
             ]);
 
-        $mixto = DB::table('produccion_empaque')
+        $conDetalle = DB::table('produccion_empaque')
             ->join('produccion_empaque_detalles', 'produccion_empaque_detalles.produccion_id', '=', 'produccion_empaque.id')
             ->join('proceso_empaque', 'proceso_empaque.id', '=', 'produccion_empaque_detalles.proceso_id')
-            ->whereNull('produccion_empaque.proceso_id')
             ->whereNull('produccion_empaque.deleted_at')
             ->whereNull('proceso_empaque.deleted_at')
             ->select([
@@ -213,37 +230,42 @@ class ReporteProductoresController extends Controller
                 'produccion_empaque_detalles.total_cajas as cajas',
             ]);
 
-        return $normal->unionAll($mixto);
+        return $simple->unionAll($conDetalle);
     }
 
     /**
      * Igual que produccionCajasPorProductor() pero para lo efectivamente
-     * embarcado: en pallets mixtos, cada pieza (produccion_empaque_detalles)
-     * aporta sus propias cajas al total embarcado — mismo criterio que ya
-     * usa el frontend (rowBuilders.js::buildEmbarqueRows) para el detalle,
-     * así la métrica de la lista y las filas del detalle quedan consistentes.
+     * embarcado: en pallets con desglose por productor (ver criterio arriba),
+     * cada fila de produccion_empaque_detalles aporta sus propias cajas al
+     * total embarcado — mismo criterio que ya usa el frontend
+     * (rowBuilders.js::buildEmbarqueRows) para el detalle, así la métrica
+     * de la lista y las filas del detalle quedan consistentes.
      */
     private function embarqueCajasPorProductor(): QueryBuilder
     {
-        $normal = DB::table('embarque_empaque_detalles')
+        $simple = DB::table('embarque_empaque_detalles')
             ->join('produccion_empaque', 'produccion_empaque.id', '=', 'embarque_empaque_detalles.produccion_id')
             ->join('proceso_empaque', 'proceso_empaque.id', '=', 'produccion_empaque.proceso_id')
             ->join('embarques_empaque', 'embarques_empaque.id', '=', 'embarque_empaque_detalles.embarque_id')
             ->whereNull('produccion_empaque.deleted_at')
             ->whereNull('proceso_empaque.deleted_at')
             ->whereNull('embarques_empaque.deleted_at')
+            ->whereNotExists(function ($sub) {
+                $sub->select(DB::raw(1))
+                    ->from('produccion_empaque_detalles')
+                    ->whereColumn('produccion_empaque_detalles.produccion_id', 'produccion_empaque.id');
+            })
             ->select([
                 'embarques_empaque.temporada_id',
                 'proceso_empaque.productor_id',
                 'embarque_empaque_detalles.cajas',
             ]);
 
-        $mixto = DB::table('embarque_empaque_detalles')
+        $conDetalle = DB::table('embarque_empaque_detalles')
             ->join('produccion_empaque', 'produccion_empaque.id', '=', 'embarque_empaque_detalles.produccion_id')
             ->join('produccion_empaque_detalles', 'produccion_empaque_detalles.produccion_id', '=', 'produccion_empaque.id')
             ->join('proceso_empaque', 'proceso_empaque.id', '=', 'produccion_empaque_detalles.proceso_id')
             ->join('embarques_empaque', 'embarques_empaque.id', '=', 'embarque_empaque_detalles.embarque_id')
-            ->whereNull('produccion_empaque.proceso_id')
             ->whereNull('produccion_empaque.deleted_at')
             ->whereNull('proceso_empaque.deleted_at')
             ->whereNull('embarques_empaque.deleted_at')
@@ -253,6 +275,6 @@ class ReporteProductoresController extends Controller
                 'produccion_empaque_detalles.total_cajas as cajas',
             ]);
 
-        return $normal->unionAll($mixto);
+        return $simple->unionAll($conDetalle);
     }
 }

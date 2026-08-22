@@ -178,4 +178,49 @@ class ReporteProductoresControllerTest extends TestCase
         $this->assertSame(50, $fila['metricas']['total_cajas_producidas']);
         $this->assertSame(50, $fila['metricas']['total_cajas_embarcadas']);
     }
+
+    public function test_metricas_atribuyen_cajas_de_pallets_multi_entrada_por_detalle(): void
+    {
+        // Pallet "multi-entrada": a diferencia de un pallet mixto, NO tiene
+        // proceso_id NULL ni is_mixto=1 — sigue apuntando directo al proceso
+        // del productor principal, pero recibió una segunda entrada de otro
+        // productor y por eso también tiene filas en produccion_empaque_detalles
+        // para >=2 procesos distintos.
+        $principal = $this->crearMovimientosCompletos($this->productorPrincipal, 'MULTIA');
+        $secundario = $this->crearMovimientosCompletos($this->productorSecundario, 'MULTIB');
+
+        \App\Models\ProduccionEmpaqueDetalle::create([
+            'produccion_id' => $principal['produccion']->id,
+            'numero_entrada' => 1,
+            'proceso_id' => $principal['proceso']->id,
+            'fecha_produccion' => '2026-02-02',
+            'total_cajas' => 30,
+            'peso_neto_kg' => 300,
+        ]);
+        \App\Models\ProduccionEmpaqueDetalle::create([
+            'produccion_id' => $principal['produccion']->id,
+            'numero_entrada' => 2,
+            'proceso_id' => $secundario['proceso']->id,
+            'fecha_produccion' => '2026-02-02',
+            'total_cajas' => 20,
+            'peso_neto_kg' => 200,
+        ]);
+        // El pallet del principal sigue con proceso_id NOT NULL e is_mixto
+        // en su valor por defecto (no es un pallet "mixto" clásico).
+        $this->assertNotNull($principal['produccion']->fresh()->proceso_id);
+
+        $response = $this->getJson(self::BASE_URL);
+        $response->assertOk();
+        $porId = collect($response->json('data.productores'))->keyBy('productor.id');
+
+        // Su propio pallet (50 cajas) se reparte 30/20 por el desglose de
+        // detalles — ya no se le atribuyen las 50 completas al primario.
+        $this->assertSame(30, $porId[$this->productorPrincipal->id]['metricas']['total_cajas_producidas']);
+        $this->assertSame(30, $porId[$this->productorPrincipal->id]['metricas']['total_cajas_embarcadas']);
+
+        // El secundario recibe su propio pallet (50) más su porción (20) del
+        // pallet multi-entrada del principal.
+        $this->assertSame(70, $porId[$this->productorSecundario->id]['metricas']['total_cajas_producidas']);
+        $this->assertSame(70, $porId[$this->productorSecundario->id]['metricas']['total_cajas_embarcadas']);
+    }
 }
