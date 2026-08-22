@@ -144,4 +144,46 @@ class OportunidadController extends CrmBaseController
             abort(404, 'Oportunidad no encontrada');
         }
     }
+
+    /** PATCH /crm/oportunidades/{oportunidad}/cambiar-etapa */
+    public function cambiarEtapa(Request $request, CrmOportunidad $oportunidad): JsonResponse
+    {
+        $this->verificarEmpresa($oportunidad);
+
+        $validated = $request->validate([
+            'etapa' => 'required|in:prospecto,calificado,propuesta,negociacion,cerrado_ganado,cerrado_perdido',
+            'motivo_perdida' => 'required_if:etapa,cerrado_perdido|nullable|string',
+            'forzar' => 'sometimes|boolean',
+        ]);
+
+        $nuevaEtapa = $validated['etapa'];
+
+        if ($nuevaEtapa !== 'cerrado_perdido' && ! $oportunidad->puedeAvanzarA($nuevaEtapa)) {
+            return $this->jsonError('No se puede regresar una oportunidad a una etapa anterior.', 422);
+        }
+
+        if ($nuevaEtapa === 'cerrado_ganado' && ! ($validated['forzar'] ?? false)) {
+            $tieneCotizacionAprobada = $oportunidad->cotizaciones()->where('estado', 'aprobado')->exists();
+            if (! $tieneCotizacionAprobada) {
+                return $this->jsonError(
+                    'Esta oportunidad no tiene una cotización aprobada. Aprueba una cotización o fuerza el cierre manual con "forzar".',
+                    422
+                );
+            }
+        }
+
+        $oportunidad->etapa = $nuevaEtapa;
+        if ($nuevaEtapa === 'cerrado_perdido') {
+            $oportunidad->motivo_perdida = $validated['motivo_perdida'];
+            $oportunidad->fecha_cierre_real = now();
+        } elseif ($nuevaEtapa === 'cerrado_ganado') {
+            $oportunidad->fecha_cierre_real = now();
+        }
+        $oportunidad->save();
+        $oportunidad->load(self::RELACIONES);
+
+        broadcast(new OportunidadUpdated('updated', $oportunidad->toArray()));
+
+        return $this->jsonSuccess($oportunidad, 'Etapa actualizada correctamente');
+    }
 }
