@@ -33,6 +33,13 @@ enum CrmPermiso: string
     case OPORTUNIDADES_ELIMINAR = 'crm.oportunidades.eliminar';
     case OPORTUNIDADES_CERRAR   = 'crm.oportunidades.cerrar';
 
+    // --- Cotizaciones ---
+    case COTIZACIONES_VER      = 'crm.cotizaciones.ver';
+    case COTIZACIONES_CREAR    = 'crm.cotizaciones.crear';
+    case COTIZACIONES_EDITAR   = 'crm.cotizaciones.editar';
+    case COTIZACIONES_APROBAR  = 'crm.cotizaciones.aprobar';
+    case COTIZACIONES_RECHAZAR = 'crm.cotizaciones.rechazar';
+
     // --- Actividades ---
     case ACTIVIDADES_VER    = 'crm.actividades.ver';
     case ACTIVIDADES_CREAR  = 'crm.actividades.crear';
@@ -57,6 +64,8 @@ enum CrmPermiso: string
     // --- Catálogos ---
     case CATALOGOS_VER    = 'crm.catalogos.ver';
     case CATALOGOS_EDITAR = 'crm.catalogos.editar';
+    case CATALOGOS_CONFIGURACION_COMERCIAL_VER    = 'crm.catalogos.configuracion_comercial.ver';
+    case CATALOGOS_CONFIGURACION_COMERCIAL_EDITAR = 'crm.catalogos.configuracion_comercial.editar';
 
     // --- Integraciones ---
     case INTEGRACIONES_DIALPAD = 'crm.integraciones.dialpad';

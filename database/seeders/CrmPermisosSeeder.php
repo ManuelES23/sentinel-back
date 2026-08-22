@@ -27,7 +27,9 @@ class CrmPermisosSeeder extends Seeder
             $this->crearEstructuraCrm($enterprise);
         }
 
-        $this->command->info("CRM: estructura de permisos creada para {$enterprises->count()} empresa(s).");
+        if ($this->command) {
+            $this->command->info("CRM: estructura de permisos creada para {$enterprises->count()} empresa(s).");
+        }
     }
 
     private function crearEstructuraCrm(Enterprise $enterprise): void
@@ -51,6 +53,10 @@ class CrmPermisosSeeder extends Seeder
             ['slug' => 'zonas',       'name' => 'Zonas',       'icon' => 'MapPin',      'order' => 3, 'permisos' => $this->permisosBase()],
             ['slug' => 'bodegas',     'name' => 'Bodegas',     'icon' => 'Warehouse',   'order' => 4, 'permisos' => $this->permisosBase()],
             ['slug' => 'productos',   'name' => 'Productos',   'icon' => 'Package',     'order' => 5, 'permisos' => $this->permisosBase()],
+            ['slug' => 'configuracion-comercial', 'name' => 'Configuración Comercial', 'icon' => 'Percent', 'order' => 6, 'permisos' => [
+                ['slug' => 'ver',    'name' => 'Ver configuración comercial',    'order' => 1],
+                ['slug' => 'editar', 'name' => 'Editar configuración comercial', 'order' => 2],
+            ]],
         ]);
 
         $this->crearModulo($app, 'prospectos', 'Prospectos', 'UserPlus', 2, [
@@ -85,7 +91,17 @@ class CrmPermisosSeeder extends Seeder
             )],
         ]);
 
-        $this->crearModulo($app, 'presupuestos', 'Presupuestos', 'Target', 7, [
+        $this->crearModulo($app, 'cotizaciones', 'Cotizaciones', 'FileText', 7, [
+            ['slug' => 'cotizaciones', 'name' => 'Cotizaciones', 'icon' => 'FileText', 'order' => 1, 'permisos' => [
+                ['slug' => 'ver',       'name' => 'Ver cotizaciones',       'order' => 1],
+                ['slug' => 'crear',     'name' => 'Crear cotización',       'order' => 2],
+                ['slug' => 'editar',    'name' => 'Editar cotización',      'order' => 3],
+                ['slug' => 'aprobar',   'name' => 'Aprobar cotización',     'order' => 4],
+                ['slug' => 'rechazar',  'name' => 'Rechazar cotización',    'order' => 5],
+            ]],
+        ]);
+
+        $this->crearModulo($app, 'presupuestos', 'Presupuestos', 'Target', 8, [
             ['slug' => 'presupuestos', 'name' => 'Presupuestos', 'icon' => 'Target', 'order' => 1, 'permisos' => [
                 ['slug' => 'ver',    'name' => 'Ver presupuestos',    'order' => 1],
                 ['slug' => 'crear',  'name' => 'Crear presupuesto',   'order' => 2],
@@ -93,18 +109,18 @@ class CrmPermisosSeeder extends Seeder
             ]],
         ]);
 
-        $this->crearModulo($app, 'agenda', 'Agenda', 'CalendarDays', 8, [
+        $this->crearModulo($app, 'agenda', 'Agenda', 'CalendarDays', 9, [
             ['slug' => 'agenda', 'name' => 'Agenda', 'icon' => 'CalendarDays', 'order' => 1, 'permisos' => $this->permisosBase()],
         ]);
 
-        $this->crearModulo($app, 'dashboard', 'Dashboard', 'BarChart2', 9, [
+        $this->crearModulo($app, 'dashboard', 'Dashboard', 'BarChart2', 10, [
             ['slug' => 'dashboard', 'name' => 'Dashboard', 'icon' => 'BarChart2', 'order' => 1, 'permisos' => [
                 ['slug' => 'ver',       'name' => 'Ver dashboard',           'order' => 1],
                 ['slug' => 'ejecutivo', 'name' => 'Ver dashboard ejecutivo', 'order' => 2],
             ]],
         ]);
 
-        $this->crearModulo($app, 'integraciones', 'Integraciones', 'Plug', 10, [
+        $this->crearModulo($app, 'integraciones', 'Integraciones', 'Plug', 11, [
             ['slug' => 'dialpad', 'name' => 'Dialpad', 'icon' => 'Phone', 'order' => 1, 'permisos' => [
                 ['slug' => 'sync',   'name' => 'Sincronizar llamadas', 'order' => 1],
                 ['slug' => 'ver',    'name' => 'Ver llamadas',         'order' => 2],
