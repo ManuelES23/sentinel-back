@@ -109,9 +109,10 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
 
     // -------------------------------------------------
     // OPORTUNIDADES
-    // CRUD + cambio de etapa + sync de productos
+    // CRUD (cambio de etapa se agrega en la Tarea 6)
     // -------------------------------------------------
-
+    Route::apiResource('oportunidades', App\Http\Controllers\Api\CRM\OportunidadController::class)
+        ->parameters(['oportunidades' => 'oportunidad']);
 
     // -------------------------------------------------
     // PRESUPUESTOS

@@ -17,6 +17,10 @@ class CrmOportunidad extends Model
 
     protected $table = 'crm_oportunidades';
 
+    protected $attributes = [
+        'etapa' => 'prospecto',
+    ];
+
     /**
      * Orden numérico de etapas para validar avance unidireccional.
      * cerrado_perdido (-1) es la única regresión permitida desde cualquier etapa.
@@ -41,12 +45,15 @@ class CrmOportunidad extends Model
         'etapa',
         'fecha_cierre_esperada',
         'notas',
+        'motivo_perdida',
+        'fecha_cierre_real',
     ];
 
     protected $casts = [
         'monto_esperado'        => 'decimal:2',
         'probabilidad'          => 'integer',
         'fecha_cierre_esperada' => 'date',
+        'fecha_cierre_real'     => 'datetime',
     ];
 
     public function empresa(): BelongsTo
