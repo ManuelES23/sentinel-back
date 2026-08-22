@@ -33,7 +33,11 @@ class ReporteProductoresController extends Controller
             ->selectSub(
                 fn (QueryBuilder $q) => $this->scopeAggregateByPeriod(
                     $q->from('salidas_campo_cosecha')->selectRaw('COUNT(*)')
-                        ->whereColumn('salidas_campo_cosecha.productor_id', 'productores.id'),
+                        ->whereColumn('salidas_campo_cosecha.productor_id', 'productores.id')
+                        // salidas_campo_cosecha usa la columna `eliminado` (no SoftDeletes) — mismo
+                        // filtro que SalidaCampoCosecha::scopeActivos() y que ya usa
+                        // TableroProductoresController::index() para este mismo propósito.
+                        ->where('salidas_campo_cosecha.eliminado', false),
                     'salidas_campo_cosecha',
                     $temporadaId,
                     $cultivoId,
@@ -44,7 +48,8 @@ class ReporteProductoresController extends Controller
                 fn (QueryBuilder $q) => $this->scopeAggregateByPeriod(
                     $q->from('recepciones_empaque')
                         ->selectRaw('COALESCE(SUM(COALESCE(peso_bascula, peso_recibido_kg, 0)), 0)')
-                        ->whereColumn('recepciones_empaque.productor_id', 'productores.id'),
+                        ->whereColumn('recepciones_empaque.productor_id', 'productores.id')
+                        ->whereNull('recepciones_empaque.deleted_at'),
                     'recepciones_empaque',
                     $temporadaId,
                     $cultivoId,
@@ -56,7 +61,9 @@ class ReporteProductoresController extends Controller
                     $q->from('produccion_empaque')
                         ->selectRaw('COALESCE(SUM(produccion_empaque.total_cajas), 0)')
                         ->join('proceso_empaque', 'proceso_empaque.id', '=', 'produccion_empaque.proceso_id')
-                        ->whereColumn('proceso_empaque.productor_id', 'productores.id'),
+                        ->whereColumn('proceso_empaque.productor_id', 'productores.id')
+                        ->whereNull('produccion_empaque.deleted_at')
+                        ->whereNull('proceso_empaque.deleted_at'),
                     'produccion_empaque',
                     $temporadaId,
                     $cultivoId,
@@ -69,7 +76,11 @@ class ReporteProductoresController extends Controller
                         ->selectRaw('COALESCE(SUM(embarque_empaque_detalles.cajas), 0)')
                         ->join('produccion_empaque', 'produccion_empaque.id', '=', 'embarque_empaque_detalles.produccion_id')
                         ->join('proceso_empaque', 'proceso_empaque.id', '=', 'produccion_empaque.proceso_id')
-                        ->whereColumn('proceso_empaque.productor_id', 'productores.id'),
+                        ->join('embarques_empaque', 'embarques_empaque.id', '=', 'embarque_empaque_detalles.embarque_id')
+                        ->whereColumn('proceso_empaque.productor_id', 'productores.id')
+                        ->whereNull('produccion_empaque.deleted_at')
+                        ->whereNull('proceso_empaque.deleted_at')
+                        ->whereNull('embarques_empaque.deleted_at'),
                     'produccion_empaque',
                     $temporadaId,
                     $cultivoId,
@@ -81,7 +92,9 @@ class ReporteProductoresController extends Controller
                     $q->from('rezaga_empaque')
                         ->selectRaw('COALESCE(SUM(rezaga_empaque.cantidad_kg), 0)')
                         ->join('proceso_empaque', 'proceso_empaque.id', '=', 'rezaga_empaque.proceso_id')
-                        ->whereColumn('proceso_empaque.productor_id', 'productores.id'),
+                        ->whereColumn('proceso_empaque.productor_id', 'productores.id')
+                        ->whereNull('rezaga_empaque.deleted_at')
+                        ->whereNull('proceso_empaque.deleted_at'),
                     'rezaga_empaque',
                     $temporadaId,
                     $cultivoId,

@@ -109,4 +109,29 @@ class ReporteProductoresControllerTest extends TestCase
         $this->assertTrue($ids->contains($this->productorSecundario->id));
         $this->assertFalse($ids->contains($this->productorPrincipal->id));
     }
+
+    public function test_excluye_registros_eliminados_de_las_metricas(): void
+    {
+        $movimientos = $this->crearMovimientosCompletos($this->productorPrincipal, 'DEL');
+
+        // salidas_campo_cosecha usa la columna `eliminado` (no SoftDeletes real).
+        $movimientos['salida']->update(['eliminado' => true]);
+        // Estas cuatro sí usan SoftDeletes real (deleted_at).
+        $movimientos['recepcion']->delete();
+        $movimientos['produccion']->delete();
+        $movimientos['rezaga']->delete();
+
+        $response = $this->getJson(self::BASE_URL);
+
+        $response->assertOk();
+        $fila = collect($response->json('data.productores'))
+            ->firstWhere('productor.id', $this->productorPrincipal->id);
+
+        $this->assertNotNull($fila);
+        $this->assertSame(0, $fila['metricas']['total_salidas_campo']);
+        $this->assertEquals(0, $fila['metricas']['total_kilos_recibidos']);
+        $this->assertSame(0, $fila['metricas']['total_cajas_producidas']);
+        $this->assertSame(0, $fila['metricas']['total_cajas_embarcadas']);
+        $this->assertSame(0, $fila['metricas']['porcentaje_rezaga']);
+    }
 }
