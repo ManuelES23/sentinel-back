@@ -371,7 +371,12 @@ class MasterStructureSeeder extends Seeder
             ['slug' => 'productores', 'module_id' => $reportesAdmin->id],
             ['name' => 'Productores', 'icon' => 'Users', 'order' => 2, 'is_active' => true]
         );
-        $this->command->info("    → Reportes: Embarques, Productores");
+
+        Submodule::firstOrCreate(
+            ['slug' => 'empaque', 'module_id' => $reportesAdmin->id],
+            ['name' => 'Empaque', 'icon' => 'ClipboardList', 'order' => 3, 'is_active' => true]
+        );
+        $this->command->info("    → Reportes: Embarques, Productores, Empaque");
 
         // ========================================
         // APLICACIÓN: INVENTARIO
