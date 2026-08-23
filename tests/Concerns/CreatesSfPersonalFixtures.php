@@ -5,6 +5,7 @@ namespace Tests\Concerns;
 use App\Models\Enterprise;
 use App\Models\SfEmployee;
 use App\Models\User;
+use App\Models\UserEnterpriseAccess;
 use Laravel\Sanctum\Sanctum;
 
 /**
@@ -34,13 +35,28 @@ trait CreatesSfPersonalFixtures
             'is_active' => true,
         ], $enterpriseOverrides));
 
-        // Sin esta fila en el pivot user_enterprises, User::hasEnterpriseAccess()/
-        // activeEnterprises() (usado por el guard de autorización de los
-        // endpoints de Plan 2) nunca vería a este usuario como miembro de la
-        // empresa que él mismo acaba de crear, y todos los tests "felices"
-        // recibirían 403 en vez del código de estado que en realidad prueban.
+        // Este fixture alimenta controllers que, hoy por hoy, validan acceso a
+        // empresa contra DOS fuentes distintas (inconsistencia real del
+        // proyecto, no un descuido de este fixture):
+        //   - SfFieldCheckController::authorizeEnterpriseAccess() usa
+        //     user_enterprise_access (UserEnterpriseAccess) — el fix de 57f8e87
+        //     movió la fuente de verdad ahí a propósito (ver el comentario de
+        //     ese método).
+        //   - SfFaceTemplateController::photo() todavía usa
+        //     User::activeEnterprises() (pivot legacy user_enterprises) y no
+        //     fue migrado en ese mismo fix.
+        // Hay que poblar ambas o los tests "felices" de uno de los dos
+        // controllers reciben 403 en vez del código de estado que en realidad
+        // prueban.
         $user->enterprises()->attach($enterprise->id, [
             'role' => 'admin',
+            'is_active' => true,
+            'granted_at' => now(),
+        ]);
+
+        UserEnterpriseAccess::create([
+            'user_id' => $user->id,
+            'enterprise_id' => $enterprise->id,
             'is_active' => true,
             'granted_at' => now(),
         ]);
