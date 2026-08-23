@@ -12,7 +12,7 @@ return new class extends Migration
             $table->id();
             $table->foreignId('empresa_id')->constrained('enterprises')->onDelete('cascade');
             $table->foreignId('oportunidad_id')->constrained('crm_oportunidades')->onDelete('cascade');
-            $table->string('folio')->unique();
+            $table->string('folio');
             $table->enum('estado', ['borrador', 'enviado', 'aprobado', 'rechazado', 'superado'])->default('borrador');
             $table->date('fecha_emision');
             $table->integer('vigencia_dias')->nullable();
@@ -22,6 +22,10 @@ return new class extends Migration
             $table->text('notas')->nullable();
             $table->timestamps();
             $table->softDeletes();
+
+            // El consecutivo de folio es por empresa, no global: dos tenants
+            // pueden tener su propio COT-00001 sin colisionar.
+            $table->unique(['empresa_id', 'folio']);
 
             $table->index('oportunidad_id');
             $table->index('estado');

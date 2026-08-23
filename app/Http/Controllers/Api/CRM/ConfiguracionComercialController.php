@@ -15,7 +15,9 @@ class ConfiguracionComercialController extends CrmBaseController
     /** GET /crm/configuracion-comercial */
     public function show(Request $request): JsonResponse
     {
-        $empresaId = $this->getEmpresaId($request);
+        $empresaId = $this->getEmpresaId();
+        abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
+
         $config = CrmConfiguracionComercial::paraEmpresa($empresaId);
         $impuestos = CrmConfiguracionImpuesto::where('empresa_id', $empresaId)->activos()->get();
 
@@ -28,7 +30,9 @@ class ConfiguracionComercialController extends CrmBaseController
     /** PUT /crm/configuracion-comercial */
     public function update(Request $request): JsonResponse
     {
-        $empresaId = $this->getEmpresaId($request);
+        $empresaId = $this->getEmpresaId();
+        abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
+
         $validated = $request->validate([
             'descuento_global_habilitado' => 'required|boolean',
         ]);
@@ -42,7 +46,9 @@ class ConfiguracionComercialController extends CrmBaseController
     /** POST /crm/configuracion-comercial/impuestos */
     public function storeImpuesto(Request $request): JsonResponse
     {
-        $empresaId = $this->getEmpresaId($request);
+        $empresaId = $this->getEmpresaId();
+        abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
+
         $validated = $request->validate([
             'nombre' => 'required|string|max:50',
             'tasa' => 'required|numeric|min:0|max:100',
@@ -59,7 +65,7 @@ class ConfiguracionComercialController extends CrmBaseController
     /** PUT /crm/configuracion-comercial/impuestos/{impuesto} */
     public function updateImpuesto(Request $request, CrmConfiguracionImpuesto $impuesto): JsonResponse
     {
-        $this->verificarEmpresa($request, $impuesto);
+        $this->verificarEmpresa($impuesto);
 
         $validated = $request->validate([
             'nombre' => 'sometimes|required|string|max:50',
@@ -75,15 +81,18 @@ class ConfiguracionComercialController extends CrmBaseController
     /** DELETE /crm/configuracion-comercial/impuestos/{impuesto} */
     public function destroyImpuesto(Request $request, CrmConfiguracionImpuesto $impuesto): JsonResponse
     {
-        $this->verificarEmpresa($request, $impuesto);
+        $this->verificarEmpresa($impuesto);
         $impuesto->delete();
 
         return $this->jsonSuccess(null, 'Impuesto eliminado correctamente');
     }
 
-    protected function verificarEmpresa(Request $request, CrmConfiguracionImpuesto $impuesto): void
+    protected function verificarEmpresa(CrmConfiguracionImpuesto $impuesto): void
     {
-        if ((int) $impuesto->empresa_id !== (int) $this->getEmpresaId($request)) {
+        $empresaId = $this->getEmpresaId();
+        abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
+
+        if ((int) $impuesto->empresa_id !== (int) $empresaId) {
             abort(404, 'Impuesto no encontrado');
         }
     }

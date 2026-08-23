@@ -115,4 +115,74 @@ class OportunidadControllerTest extends TestCase
 
         $response->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('data.0.nombre', 'Propia');
     }
+
+    // --- Aislamiento multi-tenant en las FK (un id ajeno no debe pasar la validación) ---
+
+    public function test_rechaza_crear_una_oportunidad_con_un_cliente_de_otra_empresa(): void
+    {
+        $otraEmpresa = $this->crearOtraEmpresa();
+        $clienteAjeno = CrmCliente::create([
+            'empresa_id' => $otraEmpresa->id, 'nombre' => 'Cliente confidencial ajeno', 'estatus' => 'activo',
+        ]);
+
+        $response = $this->withHeaders($this->crmHeaders())->postJson(self::BASE_URL, [
+            'cliente_id' => $clienteAjeno->id,
+            'vendedor_id' => $this->vendedor->id,
+            'nombre' => 'Fuga cross-tenant',
+        ]);
+
+        $response->assertStatus(422)->assertJsonValidationErrors('cliente_id');
+        $this->assertDatabaseMissing('crm_oportunidades', ['nombre' => 'Fuga cross-tenant']);
+    }
+
+    public function test_rechaza_crear_una_oportunidad_con_un_prospecto_de_otra_empresa(): void
+    {
+        $otraEmpresa = $this->crearOtraEmpresa();
+        $prospectoAjeno = CrmProspecto::create([
+            'empresa_id' => $otraEmpresa->id, 'nombre' => 'Prospecto confidencial ajeno', 'estatus' => 'nuevo',
+        ]);
+
+        $response = $this->withHeaders($this->crmHeaders())->postJson(self::BASE_URL, [
+            'prospecto_id' => $prospectoAjeno->id,
+            'vendedor_id' => $this->vendedor->id,
+            'nombre' => 'Fuga cross-tenant',
+        ]);
+
+        $response->assertStatus(422)->assertJsonValidationErrors('prospecto_id');
+    }
+
+    public function test_rechaza_crear_una_oportunidad_con_un_vendedor_de_otra_empresa(): void
+    {
+        $otraEmpresa = $this->crearOtraEmpresa();
+        $vendedorAjeno = \App\Models\CRM\CrmVendedor::create([
+            'empresa_id' => $otraEmpresa->id, 'nombre' => 'Vendedor ajeno',
+            'email' => 'ajeno@example.com', 'activo' => true,
+        ]);
+
+        $response = $this->withHeaders($this->crmHeaders())->postJson(self::BASE_URL, [
+            'cliente_id' => $this->crearCliente()->id,
+            'vendedor_id' => $vendedorAjeno->id,
+            'nombre' => 'Fuga cross-tenant',
+        ]);
+
+        $response->assertStatus(422)->assertJsonValidationErrors('vendedor_id');
+    }
+
+    public function test_rechaza_actualizar_una_oportunidad_apuntandola_a_un_cliente_de_otra_empresa(): void
+    {
+        $oportunidad = CrmOportunidad::create([
+            'empresa_id' => $this->enterprise->id, 'cliente_id' => $this->crearCliente()->id,
+            'vendedor_id' => $this->vendedor->id, 'nombre' => 'Propia',
+        ]);
+        $otraEmpresa = $this->crearOtraEmpresa();
+        $clienteAjeno = CrmCliente::create([
+            'empresa_id' => $otraEmpresa->id, 'nombre' => 'Cliente confidencial ajeno', 'estatus' => 'activo',
+        ]);
+
+        $response = $this->withHeaders($this->crmHeaders())
+            ->putJson(self::BASE_URL."/{$oportunidad->id}", ['cliente_id' => $clienteAjeno->id]);
+
+        $response->assertStatus(422)->assertJsonValidationErrors('cliente_id');
+        $this->assertNotEquals($clienteAjeno->id, $oportunidad->fresh()->cliente_id);
+    }
 }

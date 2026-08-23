@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\CRM;
 
+use App\Events\CRM\OportunidadUpdated;
 use App\Models\CRM\CrmConfiguracionComercial;
 use App\Models\CRM\CrmCotizacion;
 use App\Models\CRM\CrmOportunidad;
@@ -44,13 +45,22 @@ class CotizacionController extends CrmBaseController
         $this->verificarEmpresaOportunidad($oportunidad);
         $empresaId = $this->getEmpresaId();
 
+        // Una oportunidad perdida ya no admite cotizaciones nuevas: la única
+        // razón para cotizar sería aprobarla, y aprobar sobre una perdida está
+        // prohibido (reabriría el cierre). Sobre una cerrado_ganado sí se
+        // permite: es como se arma la cotización que sustituye a la vigente
+        // (flujo "superado" del spec).
+        if ($oportunidad->estaPerdida()) {
+            return $this->jsonError('No se puede crear una cotización sobre una oportunidad cerrada como perdida.', 422);
+        }
+
         $validated = $request->validate([
             'fecha_emision' => 'required|date',
             'vigencia_dias' => 'nullable|integer|min:1',
             'descuento_global_pct' => 'nullable|numeric|min:0|max:100',
             'notas' => 'nullable|string',
             'lineas' => 'required|array|min:1',
-            'lineas.*.producto_id' => 'required|integer|exists:crm_productos,id',
+            'lineas.*.producto_id' => ['required', 'integer', $this->existeEnEmpresa('crm_productos', $empresaId)],
             'lineas.*.cantidad' => 'required|numeric|min:0.0001',
             'lineas.*.precio_unitario' => 'required|numeric|min:0',
         ]);
@@ -65,7 +75,7 @@ class CotizacionController extends CrmBaseController
             $cotizacion = CrmCotizacion::create([
                 'empresa_id' => $empresaId,
                 'oportunidad_id' => $oportunidad->id,
-                'folio' => $this->siguienteFolio(),
+                'folio' => $this->siguienteFolio($empresaId),
                 'estado' => 'borrador',
                 'fecha_emision' => $validated['fecha_emision'],
                 'vigencia_dias' => $validated['vigencia_dias'] ?? null,
@@ -74,7 +84,7 @@ class CotizacionController extends CrmBaseController
             ]);
 
             foreach ($validated['lineas'] as $linea) {
-                $producto = CrmProducto::find($linea['producto_id']);
+                $producto = CrmProducto::where('empresa_id', $empresaId)->find($linea['producto_id']);
                 CrmOportunidadProducto::create([
                     'oportunidad_id' => $oportunidad->id,
                     'cotizacion_id' => $cotizacion->id,
@@ -107,24 +117,33 @@ class CotizacionController extends CrmBaseController
             'descuento_global_pct' => 'nullable|numeric|min:0|max:100',
             'notas' => 'nullable|string',
             'lineas' => 'sometimes|required|array|min:1',
-            'lineas.*.producto_id' => 'required_with:lineas|integer|exists:crm_productos,id',
+            'lineas.*.producto_id' => ['required_with:lineas', 'integer', $this->existeEnEmpresa('crm_productos', $empresaId)],
             'lineas.*.cantidad' => 'required_with:lineas|numeric|min:0.0001',
             'lineas.*.precio_unitario' => 'required_with:lineas|numeric|min:0',
         ]);
 
-        $descuento = $validated['descuento_global_pct'] ?? $cotizacion->descuento_global_pct;
+        // `descuento_global_pct` es NOT NULL en BD y la regla es `nullable`, así que
+        // un null explícito en el body debe resolverse al valor ya guardado (no escribirse).
+        $descuentoActual = (float) $cotizacion->descuento_global_pct;
+        $descuentoNuevo = (float) ($validated['descuento_global_pct'] ?? $descuentoActual);
+
+        // Con el descuento global deshabilitado solo se bloquea SUBIRLO. Bajarlo o
+        // dejarlo igual sigue permitido, para no dejar inedizable un borrador que ya
+        // traía descuento de antes de que la empresa deshabilitara la opción.
         $config = CrmConfiguracionComercial::paraEmpresa($empresaId);
-        if ($descuento > 0 && ! $config->descuento_global_habilitado) {
+        if ($descuentoNuevo > $descuentoActual && ! $config->descuento_global_habilitado) {
             return $this->jsonError('Esta empresa no tiene habilitado el descuento global en cotizaciones.', 422);
         }
 
-        $cotizacion = DB::transaction(function () use ($validated, $cotizacion) {
-            $cotizacion->update(collect($validated)->except('lineas')->all());
+        $cotizacion = DB::transaction(function () use ($validated, $cotizacion, $empresaId, $descuentoNuevo) {
+            $datos = collect($validated)->except(['lineas', 'descuento_global_pct'])->all();
+            $datos['descuento_global_pct'] = $descuentoNuevo;
+            $cotizacion->update($datos);
 
             if (isset($validated['lineas'])) {
                 $cotizacion->lineas()->delete();
                 foreach ($validated['lineas'] as $linea) {
-                    $producto = CrmProducto::find($linea['producto_id']);
+                    $producto = CrmProducto::where('empresa_id', $empresaId)->find($linea['producto_id']);
                     CrmOportunidadProducto::create([
                         'oportunidad_id' => $cotizacion->oportunidad_id,
                         'cotizacion_id' => $cotizacion->id,
@@ -174,11 +193,29 @@ class CotizacionController extends CrmBaseController
             return $this->jsonError('Solo una cotización enviada se puede aprobar.', 422);
         }
 
-        DB::transaction(function () use ($cotizacion) {
+        // Aprobar cierra la oportunidad como ganada. Sobre una cerrado_perdido
+        // eso sería una reapertura encubierta (etapa perdido → ganado, con el
+        // motivo_perdida quedando obsoleto): se rechaza. Sobre una
+        // cerrado_ganado no hay cambio de etapa, es el flujo "superado".
+        $oportunidadActual = $cotizacion->oportunidad;
+        if (! $oportunidadActual || $oportunidadActual->estaPerdida()) {
+            return $this->jsonError(
+                'La oportunidad está cerrada como perdida; no se puede aprobar una cotización sobre ella.',
+                422
+            );
+        }
+
+        $oportunidad = DB::transaction(function () use ($cotizacion) {
             // Bloquea la fila de la oportunidad para que un aprobar() concurrente
             // sobre una cotización hermana no pueda intercalar su propio
             // supersede+approve dentro de esta misma ventana de transacción.
-            CrmOportunidad::whereKey($cotizacion->oportunidad_id)->lockForUpdate()->first();
+            $oportunidad = CrmOportunidad::whereKey($cotizacion->oportunidad_id)->lockForUpdate()->firstOrFail();
+
+            // Revalidación bajo el lock: un cambiarEtapa concurrente pudo marcarla
+            // como perdida entre el chequeo de arriba y la obtención del lock.
+            if ($oportunidad->estaPerdida()) {
+                return null;
+            }
 
             // Un solo aprobado a la vez por oportunidad: el que ya estaba aprobado pasa a superado.
             CrmCotizacion::where('oportunidad_id', $cotizacion->oportunidad_id)
@@ -188,18 +225,37 @@ class CotizacionController extends CrmBaseController
 
             $cotizacion->update(['estado' => 'aprobado']);
 
-            $oportunidad = $cotizacion->oportunidad;
             $oportunidad->etapa = 'cerrado_ganado';
             $oportunidad->fecha_cierre_real = now();
             $oportunidad->save();
+
+            return $oportunidad;
         });
+
+        if (! $oportunidad) {
+            return $this->jsonError(
+                'La oportunidad está cerrada como perdida; no se puede aprobar una cotización sobre ella.',
+                422
+            );
+        }
+
+        // El tablero Kanban se alimenta de este canal: sin este broadcast la
+        // tarjeta no se movería a "cerrado ganado" hasta un refresh manual.
+        broadcast(new OportunidadUpdated('updated', $oportunidad->load(CrmOportunidad::RELACIONES_API)->toArray()));
 
         return $this->jsonSuccess($cotizacion->fresh(), 'Cotización aprobada — la oportunidad se cerró como ganada');
     }
 
-    private function siguienteFolio(): string
+    /**
+     * Folio consecutivo POR EMPRESA: el número de cotización de un tenant no
+     * debe depender del volumen de otro (ni filtrarlo). La unicidad en BD es
+     * el índice compuesto (empresa_id, folio).
+     */
+    private function siguienteFolio(int $empresaId): string
     {
-        $ultimo = CrmCotizacion::withTrashed()->where('folio', 'like', 'COT-%')
+        $ultimo = CrmCotizacion::withTrashed()
+            ->where('empresa_id', $empresaId)
+            ->where('folio', 'like', 'COT-%')
             ->orderByRaw('CAST(SUBSTRING(folio, 5) AS UNSIGNED) DESC')->value('folio');
         $siguiente = $ultimo ? ((int) substr($ultimo, 4)) + 1 : 1;
 

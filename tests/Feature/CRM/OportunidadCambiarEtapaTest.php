@@ -96,4 +96,58 @@ class OportunidadCambiarEtapaTest extends TestCase
 
         $response->assertOk();
     }
+
+    // --- Etapas terminales: cerrado_ganado / cerrado_perdido no se reabren ---
+
+    public function test_rechaza_reabrir_una_oportunidad_cerrado_perdido_a_una_etapa_activa(): void
+    {
+        $this->oportunidad->update([
+            'etapa' => 'cerrado_perdido',
+            'motivo_perdida' => 'Precio',
+            'fecha_cierre_real' => now(),
+        ]);
+
+        $response = $this->cambiarEtapa(['etapa' => 'negociacion']);
+
+        $response->assertStatus(422);
+        $fresca = $this->oportunidad->fresh();
+        $this->assertEquals('cerrado_perdido', $fresca->etapa);
+        $this->assertEquals('Precio', $fresca->motivo_perdida);
+    }
+
+    public function test_rechaza_pasar_de_cerrado_perdido_a_cerrado_ganado(): void
+    {
+        $this->oportunidad->update([
+            'etapa' => 'cerrado_perdido',
+            'motivo_perdida' => 'Precio',
+            'fecha_cierre_real' => now(),
+        ]);
+
+        $response = $this->cambiarEtapa(['etapa' => 'cerrado_ganado', 'forzar' => true]);
+
+        $response->assertStatus(422);
+        $this->assertEquals('cerrado_perdido', $this->oportunidad->fresh()->etapa);
+    }
+
+    public function test_rechaza_pasar_de_cerrado_ganado_a_cerrado_perdido(): void
+    {
+        $this->oportunidad->update(['etapa' => 'cerrado_ganado', 'fecha_cierre_real' => now()]);
+
+        $response = $this->cambiarEtapa(['etapa' => 'cerrado_perdido', 'motivo_perdida' => 'Se arrepintió']);
+
+        $response->assertStatus(422);
+        $fresca = $this->oportunidad->fresh();
+        $this->assertEquals('cerrado_ganado', $fresca->etapa);
+        $this->assertNull($fresca->motivo_perdida);
+    }
+
+    public function test_rechaza_reabrir_una_oportunidad_cerrado_ganado_a_una_etapa_activa(): void
+    {
+        $this->oportunidad->update(['etapa' => 'cerrado_ganado', 'fecha_cierre_real' => now()]);
+
+        $response = $this->cambiarEtapa(['etapa' => 'propuesta']);
+
+        $response->assertStatus(422);
+        $this->assertEquals('cerrado_ganado', $this->oportunidad->fresh()->etapa);
+    }
 }

@@ -70,4 +70,17 @@ class ConfiguracionComercialControllerTest extends TestCase
             ->assertJsonPath('data.descuento_global_habilitado', true)
             ->assertJsonPath('data.impuestos', []);
     }
+
+    /**
+     * Sin contexto de empresa resoluble el endpoint debe responder 403 limpio,
+     * no un 500 por TypeError al pasar null a paraEmpresa().
+     */
+    public function test_responde_403_si_no_hay_contexto_de_empresa(): void
+    {
+        $this->getJson(self::BASE_URL)->assertStatus(403);
+
+        $this->putJson(self::BASE_URL, ['descuento_global_habilitado' => false])->assertStatus(403);
+
+        $this->postJson(self::BASE_URL.'/impuestos', ['nombre' => 'IVA', 'tasa' => 16])->assertStatus(403);
+    }
 }

@@ -12,7 +12,7 @@ class OportunidadController extends CrmBaseController
 {
     use FiltraPorEmpresa;
 
-    private const RELACIONES = ['prospecto:id,nombre', 'cliente:id,nombre', 'vendedor:id,nombre'];
+    private const RELACIONES = CrmOportunidad::RELACIONES_API;
 
     /** GET /crm/oportunidades */
     public function index(Request $request): JsonResponse
@@ -49,9 +49,9 @@ class OportunidadController extends CrmBaseController
         abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
 
         $validated = $request->validate([
-            'prospecto_id' => 'nullable|integer|exists:crm_prospectos,id',
-            'cliente_id' => 'nullable|integer|exists:crm_clientes,id',
-            'vendedor_id' => 'required|integer|exists:crm_vendedores,id',
+            'prospecto_id' => ['nullable', 'integer', $this->existeEnEmpresa('crm_prospectos', $empresaId)],
+            'cliente_id' => ['nullable', 'integer', $this->existeEnEmpresa('crm_clientes', $empresaId)],
+            'vendedor_id' => ['required', 'integer', $this->existeEnEmpresa('crm_vendedores', $empresaId)],
             'nombre' => 'required|string|max:255',
             'monto_esperado' => 'nullable|numeric|min:0',
             'probabilidad' => 'nullable|integer|min:0|max:100',
@@ -78,11 +78,12 @@ class OportunidadController extends CrmBaseController
     public function update(Request $request, CrmOportunidad $oportunidad): JsonResponse
     {
         $this->verificarEmpresa($oportunidad);
+        $empresaId = (int) $oportunidad->empresa_id;
 
         $validated = $request->validate([
-            'prospecto_id' => 'sometimes|nullable|integer|exists:crm_prospectos,id',
-            'cliente_id' => 'sometimes|nullable|integer|exists:crm_clientes,id',
-            'vendedor_id' => 'sometimes|required|integer|exists:crm_vendedores,id',
+            'prospecto_id' => ['sometimes', 'nullable', 'integer', $this->existeEnEmpresa('crm_prospectos', $empresaId)],
+            'cliente_id' => ['sometimes', 'nullable', 'integer', $this->existeEnEmpresa('crm_clientes', $empresaId)],
+            'vendedor_id' => ['sometimes', 'required', 'integer', $this->existeEnEmpresa('crm_vendedores', $empresaId)],
             'nombre' => 'sometimes|required|string|max:255',
             'monto_esperado' => 'sometimes|nullable|numeric|min:0',
             'probabilidad' => 'sometimes|nullable|integer|min:0|max:100',
@@ -158,7 +159,18 @@ class OportunidadController extends CrmBaseController
 
         $nuevaEtapa = $validated['etapa'];
 
-        if ($nuevaEtapa !== 'cerrado_perdido' && ! $oportunidad->puedeAvanzarA($nuevaEtapa)) {
+        // Terminal es terminal: una oportunidad ya cerrada (ganada o perdida)
+        // no se reabre ni se mueve a la otra etapa terminal. "forzar" solo
+        // sirve para saltarse el requisito de cotización aprobada al cerrar
+        // como ganada desde una etapa activa — nunca para reabrir un cierre.
+        if ($oportunidad->estaCerrada()) {
+            return $this->jsonError(
+                'Esta oportunidad ya está cerrada y su etapa no se puede volver a cambiar.',
+                422
+            );
+        }
+
+        if (! $oportunidad->puedeAvanzarA($nuevaEtapa)) {
             return $this->jsonError('No se puede regresar una oportunidad a una etapa anterior.', 422);
         }
 

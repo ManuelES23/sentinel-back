@@ -23,7 +23,9 @@ class CrmOportunidad extends Model
 
     /**
      * Orden numérico de etapas para validar avance unidireccional.
-     * cerrado_perdido (-1) es la única regresión permitida desde cualquier etapa.
+     * cerrado_perdido (-1) es la única regresión permitida desde una etapa activa.
+     * OJO: este orden solo aplica mientras la oportunidad NO esté cerrada —
+     * una vez en una etapa terminal no se sale de ella (ver estaCerrada()).
      */
     public const ORDEN_ETAPAS = [
         'prospecto'       => 0,
@@ -33,6 +35,19 @@ class CrmOportunidad extends Model
         'cerrado_ganado'  => 4,
         'cerrado_perdido' => -1,
     ];
+
+    /**
+     * Etapas terminales: una vez alcanzadas, la oportunidad queda cerrada
+     * de forma definitiva (no se reabre ni se mueve a ninguna otra etapa).
+     */
+    public const ETAPAS_TERMINALES = ['cerrado_ganado', 'cerrado_perdido'];
+
+    /**
+     * Relaciones que la API expone junto a una oportunidad. Centralizado aquí
+     * para que todos los emisores del evento OportunidadUpdated manden la
+     * misma forma de payload (OportunidadController y CotizacionController).
+     */
+    public const RELACIONES_API = ['prospecto:id,nombre', 'cliente:id,nombre', 'vendedor:id,nombre'];
 
     protected $fillable = [
         'empresa_id',
@@ -93,7 +108,7 @@ class CrmOportunidad extends Model
 
     public function scopeActivas($query)
     {
-        return $query->whereNotIn('etapa', ['cerrado_ganado', 'cerrado_perdido']);
+        return $query->whereNotIn('etapa', self::ETAPAS_TERMINALES);
     }
 
     public function scopePorVendedor($query, int $vendedorId)
@@ -107,10 +122,41 @@ class CrmOportunidad extends Model
     }
 
     /**
+     * Indica si la oportunidad ya llegó a una etapa terminal (cerrada).
+     * Fuente única de verdad para OportunidadController::cambiarEtapa() y
+     * CotizacionController::store()/aprobar().
+     */
+    public function estaCerrada(): bool
+    {
+        return in_array($this->etapa, self::ETAPAS_TERMINALES, true);
+    }
+
+    /**
+     * Indica si la oportunidad se cerró como PERDIDA.
+     *
+     * Se distingue de estaCerrada() porque las dos etapas terminales no son
+     * simétricas frente a la aprobación de cotizaciones:
+     *  - cerrado_perdido: aprobar una cotización la reabriría como ganada
+     *    (dejando además un motivo_perdida obsoleto) → se rechaza.
+     *  - cerrado_ganado: aprobar otra cotización NO cambia de etapa, es el
+     *    flujo de "supersede" que exige el spec (la anterior pasa a superado).
+     */
+    public function estaPerdida(): bool
+    {
+        return $this->etapa === 'cerrado_perdido';
+    }
+
+    /**
      * Indica si el cambio de etapa propuesto es válido.
      */
     public function puedeAvanzarA(string $nuevaEtapa): bool
     {
+        // Terminal es terminal: desde cerrado_ganado/cerrado_perdido no se
+        // avanza ni se retrocede a ninguna etapa, tampoco a la otra terminal.
+        if ($this->estaCerrada()) {
+            return false;
+        }
+
         if ($nuevaEtapa === 'cerrado_perdido') {
             return true;
         }
