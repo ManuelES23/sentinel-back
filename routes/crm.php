@@ -41,6 +41,22 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::apiResource('productos', App\Http\Controllers\Api\CRM\ProductoController::class)
         ->parameters(['productos' => 'producto']);
 
+    // Configuración comercial (descuento global + impuestos), un registro por empresa
+    Route::get('configuracion-comercial', [
+        App\Http\Controllers\Api\CRM\ConfiguracionComercialController::class, 'show'
+    ]);
+    Route::put('configuracion-comercial', [
+        App\Http\Controllers\Api\CRM\ConfiguracionComercialController::class, 'update'
+    ]);
+    Route::post('configuracion-comercial/impuestos', [
+        App\Http\Controllers\Api\CRM\ConfiguracionComercialController::class, 'storeImpuesto'
+    ]);
+    Route::put('configuracion-comercial/impuestos/{impuesto}', [
+        App\Http\Controllers\Api\CRM\ConfiguracionComercialController::class, 'updateImpuesto'
+    ]);
+    Route::delete('configuracion-comercial/impuestos/{impuesto}', [
+        App\Http\Controllers\Api\CRM\ConfiguracionComercialController::class, 'destroyImpuesto'
+    ]);
 
     // -------------------------------------------------
     // PROSPECTOS
@@ -93,9 +109,39 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
 
     // -------------------------------------------------
     // OPORTUNIDADES
-    // CRUD + cambio de etapa + sync de productos
+    // CRUD (cambio de etapa se agrega en la Tarea 6)
     // -------------------------------------------------
+    Route::patch('oportunidades/{oportunidad}/cambiar-etapa', [
+        App\Http\Controllers\Api\CRM\OportunidadController::class, 'cambiarEtapa'
+    ]);
+    Route::apiResource('oportunidades', App\Http\Controllers\Api\CRM\OportunidadController::class)
+        ->parameters(['oportunidades' => 'oportunidad']);
 
+    // -------------------------------------------------
+    // COTIZACIONES
+    // Anidadas a una Oportunidad — CRUD + enviar/aprobar/rechazar
+    // -------------------------------------------------
+    Route::get('oportunidades/{oportunidad}/cotizaciones', [
+        App\Http\Controllers\Api\CRM\CotizacionController::class, 'index'
+    ]);
+    Route::post('oportunidades/{oportunidad}/cotizaciones', [
+        App\Http\Controllers\Api\CRM\CotizacionController::class, 'store'
+    ]);
+    Route::get('cotizaciones/{cotizacion}', [
+        App\Http\Controllers\Api\CRM\CotizacionController::class, 'show'
+    ]);
+    Route::put('cotizaciones/{cotizacion}', [
+        App\Http\Controllers\Api\CRM\CotizacionController::class, 'update'
+    ]);
+    Route::patch('cotizaciones/{cotizacion}/enviar', [
+        App\Http\Controllers\Api\CRM\CotizacionController::class, 'enviar'
+    ]);
+    Route::patch('cotizaciones/{cotizacion}/aprobar', [
+        App\Http\Controllers\Api\CRM\CotizacionController::class, 'aprobar'
+    ]);
+    Route::patch('cotizaciones/{cotizacion}/rechazar', [
+        App\Http\Controllers\Api\CRM\CotizacionController::class, 'rechazar'
+    ]);
 
     // -------------------------------------------------
     // PRESUPUESTOS

@@ -3,6 +3,7 @@
 namespace App\Traits\CRM;
 
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Validation\Rules\Exists;
 
 trait FiltraPorEmpresa
 {
@@ -42,6 +43,20 @@ trait FiltraPorEmpresa
         }
 
         return null;
+    }
+
+    /**
+     * Regla de validación `exists` acotada a la empresa del contexto.
+     *
+     * Un `exists:tabla,id` pelado deja que un id de OTRO tenant pase la
+     * validación y que su nombre termine reflejado en la respuesta de la API
+     * (fuga cross-tenant). Toda FK de una tabla multi-tenant del CRM debe
+     * validarse con esta regla, no con la cadena `exists:` simple.
+     */
+    protected function existeEnEmpresa(string $tabla, ?int $empresaId, string $columna = 'id'): Exists
+    {
+        return \Illuminate\Validation\Rule::exists($tabla, $columna)
+            ->where('empresa_id', $empresaId);
     }
 
     /**
