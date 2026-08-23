@@ -30,6 +30,38 @@ class CotizacionController extends CrmBaseController
         return $this->jsonSuccess($cotizaciones);
     }
 
+    /**
+     * GET /crm/cotizaciones — listado global de la empresa (todas las
+     * oportunidades), para la vista de nivel superior del submódulo
+     * Cotizaciones. Distinto de index(): ahí se lista por UNA oportunidad;
+     * aquí se cruzan todas, con los mismos filtros que OportunidadController::index.
+     */
+    public function indexEmpresa(Request $request): JsonResponse
+    {
+        $empresaId = $this->getEmpresaId();
+        abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
+
+        $query = CrmCotizacion::query()
+            ->where('empresa_id', $empresaId)
+            ->with([
+                'oportunidad:id,nombre,prospecto_id,cliente_id,vendedor_id',
+                'oportunidad.prospecto:id,nombre',
+                'oportunidad.cliente:id,nombre',
+                'oportunidad.vendedor:id,nombre',
+            ])
+            ->when($request->estado, fn ($q, $estado) => $q->where('estado', $estado))
+            ->when($request->vendedor_id, fn ($q, $id) => $q->whereHas(
+                'oportunidad', fn ($oq) => $oq->where('vendedor_id', $id)
+            ))
+            ->when($request->folio, fn ($q, $folio) => $q->where('folio', 'like', "%{$folio}%"))
+            ->orderByDesc('created_at');
+
+        $perPage = (int) $request->query('per_page', 100);
+        $paginated = $query->paginate($perPage);
+
+        return $this->jsonPaginated($paginated);
+    }
+
     /** GET /crm/cotizaciones/{cotizacion} */
     public function show(Request $request, CrmCotizacion $cotizacion): JsonResponse
     {

@@ -291,4 +291,86 @@ class CotizacionControllerTest extends TestCase
             'empresa_id' => $this->enterprise->id, 'folio' => 'COT-00002',
         ]);
     }
+
+    // --- GET /crm/cotizaciones (listado global, todas las oportunidades) ---
+
+    public function test_el_listado_global_incluye_cotizaciones_de_varias_oportunidades_de_la_misma_empresa(): void
+    {
+        $this->crearCotizacion();
+
+        $otraOportunidad = CrmOportunidad::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+            'nombre' => 'Segunda oportunidad',
+        ]);
+        $this->withHeaders($this->crmHeaders())->postJson(
+            "/api/crm/oportunidades/{$otraOportunidad->id}/cotizaciones",
+            [
+                'fecha_emision' => now()->toDateString(),
+                'lineas' => [['producto_id' => $this->producto->id, 'cantidad' => 1, 'precio_unitario' => 250]],
+            ],
+        );
+
+        $response = $this->withHeaders($this->crmHeaders())->getJson('/api/crm/cotizaciones');
+
+        // Dos cotizaciones creadas casi al mismo tiempo pueden empatar en
+        // created_at (segundo de granularidad) -- se verifica el conjunto,
+        // no un orden exacto, para no depender de esa carrera.
+        $response->assertOk()->assertJsonCount(2, 'data');
+        $nombres = collect($response->json('data'))->pluck('oportunidad.nombre')->sort()->values();
+        $this->assertEquals(['Oportunidad de prueba', 'Segunda oportunidad'], $nombres->all());
+    }
+
+    public function test_el_listado_global_solo_incluye_cotizaciones_de_la_empresa_del_contexto(): void
+    {
+        $this->crearCotizacion();
+
+        $otraEmpresa = $this->crearOtraEmpresa();
+        $this->otorgarAccesoA($otraEmpresa);
+        $otraOportunidad = CrmOportunidad::create([
+            'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $this->vendedor->id,
+            'nombre' => 'Oportunidad ajena',
+        ]);
+        $otroProducto = CrmProducto::create([
+            'empresa_id' => $otraEmpresa->id, 'nombre' => 'Producto ajeno', 'precio' => 100,
+        ]);
+        $this->withHeaders($this->crmHeaders($otraEmpresa->id))->postJson(
+            "/api/crm/oportunidades/{$otraOportunidad->id}/cotizaciones",
+            [
+                'fecha_emision' => now()->toDateString(),
+                'lineas' => [['producto_id' => $otroProducto->id, 'cantidad' => 1, 'precio_unitario' => 100]],
+            ],
+        );
+
+        $response = $this->withHeaders($this->crmHeaders())->getJson('/api/crm/cotizaciones');
+
+        $response->assertOk()->assertJsonCount(1, 'data');
+    }
+
+    public function test_el_listado_global_filtra_por_estado_y_por_vendedor(): void
+    {
+        $data = $this->crearCotizacion();
+        $cotizacionId = $data['data']['id'];
+        $this->withHeaders($this->crmHeaders())
+            ->patchJson("/api/crm/cotizaciones/{$cotizacionId}/enviar");
+
+        $otraOportunidad = CrmOportunidad::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+            'nombre' => 'Segunda oportunidad',
+        ]);
+        $this->withHeaders($this->crmHeaders())->postJson(
+            "/api/crm/oportunidades/{$otraOportunidad->id}/cotizaciones",
+            [
+                'fecha_emision' => now()->toDateString(),
+                'lineas' => [['producto_id' => $this->producto->id, 'cantidad' => 1, 'precio_unitario' => 250]],
+            ],
+        );
+
+        $porEstado = $this->withHeaders($this->crmHeaders())
+            ->getJson('/api/crm/cotizaciones?estado=enviado');
+        $porEstado->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('data.0.estado', 'enviado');
+
+        $porVendedor = $this->withHeaders($this->crmHeaders())
+            ->getJson("/api/crm/cotizaciones?vendedor_id={$this->vendedor->id}");
+        $porVendedor->assertOk()->assertJsonCount(2, 'data');
+    }
 }

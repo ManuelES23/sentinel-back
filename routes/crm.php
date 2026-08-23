@@ -119,8 +119,13 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
 
     // -------------------------------------------------
     // COTIZACIONES
-    // Anidadas a una Oportunidad — CRUD + enviar/aprobar/rechazar
+    // Anidadas a una Oportunidad — CRUD + enviar/aprobar/rechazar.
+    // `GET cotizaciones` (sin oportunidad) es el listado global de la
+    // empresa, usado por la vista de nivel superior del submódulo.
     // -------------------------------------------------
+    Route::get('cotizaciones', [
+        App\Http\Controllers\Api\CRM\CotizacionController::class, 'indexEmpresa'
+    ]);
     Route::get('oportunidades/{oportunidad}/cotizaciones', [
         App\Http\Controllers\Api\CRM\CotizacionController::class, 'index'
     ]);
