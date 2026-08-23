@@ -342,6 +342,9 @@ Route::middleware('auth:sanctum')->group(function () {
             // TableroProductoresController en compras-agricolas)
             Route::prefix('reportes')->group(function () {
                 Route::get('productores', [App\Http\Controllers\Api\SplendidFarms\Administration\ReporteProductoresController::class, 'index']);
+                Route::prefix('empaque')->group(function () {
+                    Route::get('recepcion', [App\Http\Controllers\Api\SplendidFarms\Administration\ReporteEmpaqueController::class, 'recepcion']);
+                });
             });
         });
 
