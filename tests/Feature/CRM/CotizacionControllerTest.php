@@ -266,8 +266,11 @@ class CotizacionControllerTest extends TestCase
         $this->crearCotizacion();
         $this->crearCotizacion();
 
-        // Segunda empresa, con su propia oportunidad y producto.
+        // Segunda empresa, con su propia oportunidad y producto. El usuario
+        // necesita acceso explícito a esta empresa: getEmpresaId() ya no
+        // confía en el header sin verificar UserEnterpriseAccess.
         $otraEmpresa = $this->crearOtraEmpresa();
+        $this->otorgarAccesoA($otraEmpresa);
         $otraOportunidad = CrmOportunidad::create([
             'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $this->vendedor->id,
             'nombre' => 'Oportunidad ajena',

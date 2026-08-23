@@ -13,28 +13,50 @@ trait FiltraPorEmpresa
      *
      * Los controladores CRM deben llamar a getEmpresaId() para obtener el
      * scope de empresa y aplicarlo en todos los queries.
+     *
+     * IMPORTANTE: los headers X-Enterprise-Id / X-Enterprise-Slug son
+     * proporcionados por el cliente y NO son de confianza por sí solos —
+     * cualquier usuario autenticado podría mandar el ID de otra empresa.
+     * Antes de aceptarlos se verifica que el usuario autenticado tenga un
+     * UserEnterpriseAccess activo para esa empresa.
      */
     protected function getEmpresaId(): ?int
     {
         $request = request();
+        $user = Auth::user();
 
-        // Opción 1: header numérico directo (máxima eficiencia, sin lookup)
+        // Opción 1: header numérico directo
+        $headerEmpresaId = null;
         $fromHeader = $request->header('X-Enterprise-Id');
         if ($fromHeader && ctype_digit((string) $fromHeader)) {
-            return (int) $fromHeader;
-        }
-
-        // Opción 2: resolver empresa por slug desde header
-        $slug = $request->header('X-Enterprise-Slug');
-        if ($slug) {
-            $enterprise = \App\Models\Enterprise::where('slug', $slug)->value('id');
-            if ($enterprise) {
-                return $enterprise;
+            $headerEmpresaId = (int) $fromHeader;
+        } else {
+            // Opción 2: resolver empresa por slug desde header
+            $slug = $request->header('X-Enterprise-Slug');
+            if ($slug) {
+                $headerEmpresaId = \App\Models\Enterprise::where('slug', $slug)->value('id');
             }
         }
 
-        // Opción 3: empresa del usuario autenticado (primer acceso encontrado)
-        $user = Auth::user();
+        if ($headerEmpresaId !== null) {
+            // El header es un dato del cliente: solo se acepta si el usuario
+            // autenticado tiene acceso activo a esa empresa. Si no lo tiene,
+            // se rechaza explícitamente (no se cae a la Opción 3) para no
+            // devolver silenciosamente datos de una empresa distinta a la
+            // que el cliente pidió.
+            if (! $user) {
+                return null;
+            }
+
+            $tieneAcceso = \App\Models\UserEnterpriseAccess::where('user_id', $user->id)
+                ->where('enterprise_id', $headerEmpresaId)
+                ->where('is_active', true)
+                ->exists();
+
+            return $tieneAcceso ? (int) $headerEmpresaId : null;
+        }
+
+        // Opción 3: sin header, usar el primer acceso activo del usuario autenticado
         if ($user) {
             $enterpriseId = \App\Models\UserEnterpriseAccess::where('user_id', $user->id)
                 ->where('is_active', true)

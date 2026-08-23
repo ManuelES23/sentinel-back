@@ -59,7 +59,11 @@ class ConfiguracionComercialControllerTest extends TestCase
 
     public function test_la_configuracion_es_independiente_por_empresa(): void
     {
+        // El usuario necesita acceso explícito a la otra empresa:
+        // getEmpresaId() ya no confía en el header sin verificar
+        // UserEnterpriseAccess.
         $otraEmpresa = $this->crearOtraEmpresa();
+        $this->otorgarAccesoA($otraEmpresa);
 
         $this->withHeaders($this->crmHeaders())->putJson(self::BASE_URL, ['descuento_global_habilitado' => false]);
         $this->withHeaders($this->crmHeaders())->postJson(self::BASE_URL.'/impuestos', ['nombre' => 'IVA', 'tasa' => 16]);
@@ -73,10 +77,16 @@ class ConfiguracionComercialControllerTest extends TestCase
 
     /**
      * Sin contexto de empresa resoluble el endpoint debe responder 403 limpio,
-     * no un 500 por TypeError al pasar null a paraEmpresa().
+     * no un 500 por TypeError al pasar null a paraEmpresa(). Se usa un
+     * usuario SIN ningún UserEnterpriseAccess: $this->actingUser sí tiene
+     * acceso a $this->enterprise, así que con él getEmpresaId() resolvería
+     * la empresa por la Opción 3 aunque no se mande header.
      */
     public function test_responde_403_si_no_hay_contexto_de_empresa(): void
     {
+        $usuarioSinAcceso = \App\Models\User::factory()->create();
+        Sanctum::actingAs($usuarioSinAcceso);
+
         $this->getJson(self::BASE_URL)->assertStatus(403);
 
         $this->putJson(self::BASE_URL, ['descuento_global_habilitado' => false])->assertStatus(403);

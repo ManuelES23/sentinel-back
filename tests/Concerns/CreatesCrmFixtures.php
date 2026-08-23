@@ -8,6 +8,7 @@ use App\Models\CRM\CrmVendedor;
 use App\Models\CRM\CrmZona;
 use App\Models\Enterprise;
 use App\Models\User;
+use App\Models\UserEnterpriseAccess;
 
 /**
  * Fixtures mínimos para probar el módulo CRM. A diferencia de Activos Fijos
@@ -33,6 +34,15 @@ trait CreatesCrmFixtures
             'slug' => 'splendidfarms-crm',
             'description' => 'Empresa de prueba para CRM',
             'is_active' => true,
+        ]);
+
+        // getEmpresaId() valida que el usuario tenga acceso activo a la
+        // empresa del header X-Enterprise-Id antes de confiar en él.
+        UserEnterpriseAccess::create([
+            'user_id' => $this->actingUser->id,
+            'enterprise_id' => $this->enterprise->id,
+            'is_active' => true,
+            'granted_at' => now(),
         ]);
 
         $vendedorUser = User::factory()->create();
@@ -82,6 +92,20 @@ trait CreatesCrmFixtures
             'slug' => 'otra-empresa-crm-'.uniqid(),
             'description' => 'Segunda empresa de prueba (aislamiento)',
             'is_active' => true,
+        ]);
+    }
+
+    /**
+     * Otorga a $this->actingUser acceso activo a una empresa adicional,
+     * para probar el camino "con acceso" de getEmpresaId().
+     */
+    protected function otorgarAccesoA(Enterprise $empresa): void
+    {
+        UserEnterpriseAccess::create([
+            'user_id' => $this->actingUser->id,
+            'enterprise_id' => $empresa->id,
+            'is_active' => true,
+            'granted_at' => now(),
         ]);
     }
 }
