@@ -38,7 +38,7 @@ class AgendaController extends CrmBaseController
 
     protected const TIPOS_AGENDA = ['llamada', 'visita', 'reunion', 'tarea', 'correo'];
 
-    /** Agenda tiene 'tarea'; CrmActividad::TIPOS_ACTIVIDAD no -- se traduce a 'nota'. */
+    /** Agenda tiene 'tarea'; ActividadController::TIPOS_ACTIVIDAD no -- se traduce a 'nota'. */
     protected const TIPO_ACTIVIDAD_PARA = [
         'llamada' => 'llamada',
         'visita' => 'visita',
@@ -160,16 +160,34 @@ class AgendaController extends CrmBaseController
             'titulo' => 'sometimes|required|string|max:255',
             'descripcion' => 'sometimes|nullable|string',
             'fecha_inicio' => 'sometimes|required|date',
-            'fecha_fin' => 'sometimes|required|date|after_or_equal:fecha_inicio',
-            // Nota (deviación puntual respecto al brief): antes se usaba
-            // 'before_or_equal:fecha_inicio', pero Laravel evalúa esa regla
-            // contra el valor de fecha_inicio EN EL REQUEST, no contra el
-            // registro existente. Como update() usa 'sometimes' en todos los
-            // campos, un PUT que solo manda recordatorio_at (el caso de uso
-            // real: reprogramar solo el recordatorio) no incluye fecha_inicio
-            // en el payload, y la regla fallaba siempre con 422 aunque el
-            // valor fuera válido. El closure compara contra fecha_inicio del
-            // payload si vino, y si no contra $agenda->fecha_inicio actual.
+            // Nota (deviación puntual respecto al brief, ambos campos
+            // siguientes): antes se usaba 'after_or_equal:fecha_inicio' en
+            // fecha_fin y 'before_or_equal:fecha_inicio' en recordatorio_at,
+            // pero Laravel evalúa esas reglas contra el valor de
+            // fecha_inicio EN EL REQUEST, no contra el registro existente.
+            // Como update() usa 'sometimes' en todos los campos, un PUT que
+            // solo manda fecha_fin (o solo recordatorio_at) no incluye
+            // fecha_inicio en el payload:
+            // - before_or_equal (recordatorio_at) con el comparador ausente
+            //   resuelve a 0 y FALLA siempre (incluso con fechas válidas).
+            // - after_or_equal (fecha_fin) con el comparador ausente
+            //   también resuelve a 0, y como "$fechaFin >= 0" es casi
+            //   siempre true, la regla PASA silenciosamente para
+            //   cualquier fecha, permitiendo persistir fecha_fin anterior
+            //   a fecha_inicio.
+            // Ambos closures comparan contra fecha_inicio del payload si
+            // vino, y si no contra $agenda->fecha_inicio actual.
+            'fecha_fin' => [
+                'sometimes',
+                'required',
+                'date',
+                function (string $attribute, $value, $fail) use ($request, $agenda) {
+                    $fechaInicio = $request->input('fecha_inicio') ?? optional($agenda->fecha_inicio)->toDateTimeString();
+                    if ($fechaInicio && strtotime($value) < strtotime($fechaInicio)) {
+                        $fail('La fecha de fin debe ser posterior o igual a la fecha de inicio.');
+                    }
+                },
+            ],
             'recordatorio_at' => [
                 'sometimes',
                 'nullable',
@@ -181,8 +199,6 @@ class AgendaController extends CrmBaseController
                     }
                 },
             ],
-        ], [
-            'fecha_fin.after_or_equal' => 'La fecha de fin debe ser posterior o igual a la fecha de inicio.',
         ]);
 
         // Si cambia el recordatorio, se resetea recordatorio_enviado_at para
@@ -190,9 +206,20 @@ class AgendaController extends CrmBaseController
         // scheduler -- de lo contrario un recordatorio movido a una fecha
         // futura seguiría "ya enviado" para siempre.
         if (array_key_exists('recordatorio_at', $validated)) {
+            // Comparación por instante (Carbon), no por string: el frontend
+            // manda formatos distintos según el origen (p. ej. un
+            // <input type="datetime-local"> produce 'YYYY-MM-DDTHH:mm', sin
+            // segundos y con 'T' en vez de espacio) que casi nunca
+            // coinciden byte a byte con el 'Y-m-d H:i:s' canónico del cast
+            // del modelo, aunque representen el mismo instante -- eso
+            // reseteaba recordatorio_enviado_at en casi cualquier edición
+            // que reenviara recordatorio_at, re-notificando recordatorios
+            // que ya se habían enviado.
             $nuevoValor = $validated['recordatorio_at'];
-            $valorActual = $agenda->recordatorio_at?->toDateTimeString();
-            if ($nuevoValor !== $valorActual) {
+            $valorActual = $agenda->recordatorio_at;
+            $cambio = is_null($nuevoValor) !== is_null($valorActual)
+                || ($nuevoValor !== null && ! \Carbon\Carbon::parse($nuevoValor)->eq($valorActual));
+            if ($cambio) {
                 $validated['recordatorio_enviado_at'] = null;
             }
         }

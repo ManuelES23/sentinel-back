@@ -254,6 +254,59 @@ class AgendaControllerTest extends TestCase
         $this->assertNull($evento->fresh()->recordatorio_enviado_at);
     }
 
+    public function test_rechaza_fecha_fin_anterior_a_fecha_inicio_en_update_parcial(): void
+    {
+        // Regresión: un PUT que SOLO manda fecha_fin (sin fecha_inicio en el
+        // payload) debe seguir validando contra la fecha_inicio ya
+        // persistida -- antes 'after_or_equal:fecha_inicio' resolvía el
+        // comparador ausente a 0 y dejaba pasar cualquier fecha_fin,
+        // incluyendo una anterior a la fecha_inicio real del evento.
+        $this->otorgarPermisosAgenda(['ver', 'editar']);
+        $evento = CrmAgenda::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+            'tipo' => 'llamada', 'titulo' => 'X',
+            'fecha_inicio' => now(), 'fecha_fin' => now()->addHour(),
+        ]);
+
+        $response = $this->withHeaders($this->crmHeaders())
+            ->putJson("/api/crm/agenda/{$evento->id}", [
+                'fecha_fin' => now()->subYears(5)->toDateTimeString(),
+            ]);
+
+        $response->assertStatus(422)->assertJsonValidationErrors('fecha_fin');
+        $this->assertNotEquals(now()->subYears(5)->toDateString(), $evento->fresh()->fecha_fin->toDateString());
+    }
+
+    public function test_reenviar_mismo_recordatorio_en_otro_formato_no_resetea_recordatorio_enviado_at(): void
+    {
+        // Regresión: comparar por string crudo hacía que un mismo instante
+        // enviado en un formato distinto (p. ej. sin segundos, con 'T' en
+        // vez de espacio -- lo que produce un <input type="datetime-local">)
+        // se interpretara como "cambió", reseteando recordatorio_enviado_at
+        // y re-notificando un recordatorio que ya se había enviado.
+        $this->otorgarPermisosAgenda(['ver', 'editar']);
+        $recordatorio = now()->addHours(3)->second(0);
+        $evento = CrmAgenda::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+            'tipo' => 'llamada', 'titulo' => 'X',
+            'fecha_inicio' => now()->addDay(), 'fecha_fin' => now()->addDay()->addHour(),
+            'recordatorio_at' => $recordatorio,
+            'recordatorio_enviado_at' => now()->subMinutes(30),
+        ]);
+
+        // Mismo instante que el ya guardado, pero en formato
+        // 'datetime-local' (sin segundos, separador 'T').
+        $mismoInstanteOtroFormato = $recordatorio->format('Y-m-d\TH:i');
+
+        $response = $this->withHeaders($this->crmHeaders())
+            ->putJson("/api/crm/agenda/{$evento->id}", [
+                'recordatorio_at' => $mismoInstanteOtroFormato,
+            ]);
+
+        $response->assertOk();
+        $this->assertNotNull($evento->fresh()->recordatorio_enviado_at);
+    }
+
     public function test_eliminar_requiere_permiso_eliminar(): void
     {
         $this->otorgarPermisosAgenda(['ver', 'editar']);
