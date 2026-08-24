@@ -44,10 +44,13 @@ class EnviarRecordatoriosAgendaCommand extends Command
                     Log::warning("Recordatorio de agenda #{$evento->id}: vendedor sin usuario ligado, no se notifica.");
                 }
 
+                // Nota: sin transacción — un fallo en update() después de notificar
+                // con éxito causaría doble notificación en el reintento. Aceptable
+                // por el riesgo bajo vs. la complejidad de una transacción por evento.
                 $evento->update(['recordatorio_enviado_at' => now()]);
                 $enviados++;
             } catch (\Throwable $e) {
-                Log::error("Error al enviar recordatorio de agenda #{$evento->id}: {$e->getMessage()}");
+                Log::error("Error al enviar recordatorio de agenda #{$evento->id}: {$e->getMessage()}", ['exception' => $e]);
             }
         }
 

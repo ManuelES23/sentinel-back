@@ -94,21 +94,18 @@ class EnviarRecordatoriosAgendaCommandTest extends TestCase
 
     public function test_un_fallo_en_un_evento_no_detiene_el_procesamiento_de_los_demas(): void
     {
-        // Vendedor con user_id apuntando a un usuario que se elimina después
-        // de crear el evento: vendedor()->user (BelongsTo) devuelve null al
-        // resolver, así que no truena -- este caso ya lo cubre el test de
-        // "sin usuario". Para forzar una excepción real, se usa un segundo
-        // evento sano junto a uno cuyo vendedor fue borrado (vendedor_id
-        // huérfano), lo que hace que $evento->vendedor sea null también sin
-        // lanzar -- por eso se valida el caso realista: dos eventos válidos
-        // se procesan ambos aunque el primero no tenga usuario ligado.
-        $vendedorSinUsuario = CrmVendedor::create([
-            'empresa_id' => $this->enterprise->id,
-            'nombre' => 'Vendedor sin cuenta',
-        ]);
-        $this->crearEvento([
-            'vendedor_id' => $vendedorSinUsuario->id,
-            'titulo' => 'Evento sin usuario',
+        // Fuerza una excepción real en el punto exacto donde
+        // NotificationService::send() inserta el SystemNotification, para
+        // probar el aislamiento por evento sin acoplarse a los internos del
+        // comando.
+        \App\Models\SystemNotification::creating(function ($notification) {
+            if ($notification->title === 'Evento que falla') {
+                throw new \RuntimeException('Fallo forzado para probar aislamiento por evento');
+            }
+        });
+
+        $eventoQueFalla = $this->crearEvento([
+            'titulo' => 'Evento que falla',
             'recordatorio_at' => now()->subMinutes(5),
         ]);
         $eventoSano = $this->crearEvento([
@@ -120,5 +117,6 @@ class EnviarRecordatoriosAgendaCommandTest extends TestCase
 
         $this->assertDatabaseHas('system_notifications', ['title' => 'Evento con usuario']);
         $this->assertNotNull($eventoSano->fresh()->recordatorio_enviado_at);
+        $this->assertNull($eventoQueFalla->fresh()->recordatorio_enviado_at);
     }
 }
