@@ -22,3 +22,8 @@ Schedule::command('biometrics:requeue-stale-checks')->hourly();
 // un recordatorio de agenda comercial (llamada/visita en minutos, no en
 // horas) sin sobrecargar con corridas más frecuentes.
 Schedule::command('agenda:enviar-recordatorios')->everyFiveMinutes();
+
+// Sincronización Agenda -> Outlook (CRM): unidireccional, cada 5 min es
+// suficiente margen para reflejar cambios recientes sin saturar Microsoft
+// Graph con corridas más frecuentes.
+Schedule::command('agenda:sincronizar-outlook')->everyFiveMinutes();
