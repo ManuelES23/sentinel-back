@@ -170,9 +170,23 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
 
     // -------------------------------------------------
     // AGENDA
-    // CRUD
+    // CRUD + completar (genera Actividad automáticamente)
     // -------------------------------------------------
-
+    Route::patch('agenda/{agenda}/completar', [
+        App\Http\Controllers\Api\CRM\AgendaController::class, 'completar'
+    ]);
+    Route::get('agenda', [
+        App\Http\Controllers\Api\CRM\AgendaController::class, 'index'
+    ]);
+    Route::post('agenda', [
+        App\Http\Controllers\Api\CRM\AgendaController::class, 'store'
+    ]);
+    Route::put('agenda/{agenda}', [
+        App\Http\Controllers\Api\CRM\AgendaController::class, 'update'
+    ]);
+    Route::delete('agenda/{agenda}', [
+        App\Http\Controllers\Api\CRM\AgendaController::class, 'destroy'
+    ]);
 
     // -------------------------------------------------
     // DASHBOARD
