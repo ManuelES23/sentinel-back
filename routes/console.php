@@ -17,3 +17,8 @@ Schedule::command('biometrics:purge')->dailyAt('03:00');
 // la cola con redespachos redundantes de checks que todavía están
 // reintentando normalmente.
 Schedule::command('biometrics:requeue-stale-checks')->hourly();
+
+// Recordatorios de Agenda (CRM): granularidad de 5 min es razonable para
+// un recordatorio de agenda comercial (llamada/visita en minutos, no en
+// horas) sin sobrecargar con corridas más frecuentes.
+Schedule::command('agenda:enviar-recordatorios')->everyFiveMinutes();

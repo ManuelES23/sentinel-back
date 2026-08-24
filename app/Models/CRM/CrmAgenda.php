@@ -27,13 +27,15 @@ class CrmAgenda extends Model
         'fecha_fin',
         'completado',
         'recordatorio_at',
+        'recordatorio_enviado_at',
     ];
 
     protected $casts = [
-        'fecha_inicio'    => 'datetime',
-        'fecha_fin'       => 'datetime',
-        'completado'      => 'boolean',
-        'recordatorio_at' => 'datetime',
+        'fecha_inicio'            => 'datetime',
+        'fecha_fin'               => 'datetime',
+        'completado'              => 'boolean',
+        'recordatorio_at'         => 'datetime',
+        'recordatorio_enviado_at' => 'datetime',
     ];
 
     public function empresa(): BelongsTo
@@ -61,10 +63,18 @@ class CrmAgenda extends Model
         return $query->where('completado', false)->where('fecha_fin', '<', now());
     }
 
+    /**
+     * Recordatorios que deben notificarse AHORA: no completados, con
+     * recordatorio_at ya vencido, y que todavía no se marcaron como
+     * enviados (recordatorio_enviado_at nulo). Sin este último filtro, el
+     * comando programado (cada 5 min) re-notificaría el mismo evento en
+     * cada corrida mientras el evento siga sin completarse.
+     */
     public function scopeConRecordatorioPendiente($query)
     {
         return $query->where('completado', false)
             ->whereNotNull('recordatorio_at')
-            ->where('recordatorio_at', '<=', now());
+            ->where('recordatorio_at', '<=', now())
+            ->whereNull('recordatorio_enviado_at');
     }
 }
