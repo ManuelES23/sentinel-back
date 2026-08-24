@@ -277,6 +277,63 @@ class AgendaControllerTest extends TestCase
         $this->assertNotEquals(now()->subYears(5)->toDateString(), $evento->fresh()->fecha_fin->toDateString());
     }
 
+    public function test_rechaza_fecha_inicio_posterior_a_fecha_fin_en_update_parcial(): void
+    {
+        // Regresión (imagen espejo de la anterior): un PUT que SOLO manda
+        // fecha_inicio (sin fecha_fin en el payload) debe seguir validando
+        // contra la fecha_fin ya persistida -- antes no existía ningún
+        // closure simétrico en fecha_inicio, así que un fecha_inicio
+        // posterior a la fecha_fin real del evento pasaba sin error.
+        $this->otorgarPermisosAgenda(['ver', 'editar']);
+        $evento = CrmAgenda::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+            'tipo' => 'llamada', 'titulo' => 'X',
+            'fecha_inicio' => now()->addDay(), 'fecha_fin' => now()->addDay()->addHour(),
+        ]);
+
+        $response = $this->withHeaders($this->crmHeaders())
+            ->putJson("/api/crm/agenda/{$evento->id}", [
+                'fecha_inicio' => now()->addDays(2)->toDateTimeString(),
+            ]);
+
+        $response->assertStatus(422)->assertJsonValidationErrors('fecha_inicio');
+        $this->assertNotEquals(
+            now()->addDays(2)->toDateString(),
+            $evento->fresh()->fecha_inicio->toDateString(),
+        );
+    }
+
+    public function test_rechaza_editar_sin_permiso_editar(): void
+    {
+        $this->otorgarPermisosAgenda(['ver']);
+        $evento = CrmAgenda::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+            'tipo' => 'llamada', 'titulo' => 'X',
+            'fecha_inicio' => now(), 'fecha_fin' => now()->addHour(),
+        ]);
+
+        $response = $this->withHeaders($this->crmHeaders())
+            ->putJson("/api/crm/agenda/{$evento->id}", ['titulo' => 'Nuevo título']);
+
+        $response->assertStatus(403);
+    }
+
+    public function test_rechaza_completar_sin_permiso_editar(): void
+    {
+        $this->otorgarPermisosAgenda(['ver']);
+        $evento = CrmAgenda::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+            'tipo' => 'llamada', 'titulo' => 'X',
+            'fecha_inicio' => now(), 'fecha_fin' => now()->addHour(),
+        ]);
+
+        $response = $this->withHeaders($this->crmHeaders())
+            ->patchJson("/api/crm/agenda/{$evento->id}/completar");
+
+        $response->assertStatus(403);
+        $this->assertFalse($evento->fresh()->completado);
+    }
+
     public function test_reenviar_mismo_recordatorio_en_otro_formato_no_resetea_recordatorio_enviado_at(): void
     {
         // Regresión: comparar por string crudo hacía que un mismo instante

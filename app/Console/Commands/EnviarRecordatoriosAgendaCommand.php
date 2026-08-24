@@ -47,6 +47,13 @@ class EnviarRecordatoriosAgendaCommand extends Command
                 // Nota: sin transacción — un fallo en update() después de notificar
                 // con éxito causaría doble notificación en el reintento. Aceptable
                 // por el riesgo bajo vs. la complejidad de una transacción por evento.
+                // Nota: race condition conocida y aceptada — si un PUT del usuario
+                // resetea recordatorio_enviado_at a null en la ventana entre el
+                // ->get() de arriba y este update() sobre la MISMA instancia en
+                // memoria, ese reset se pisa y el recordatorio recién editado queda
+                // marcado "enviado" sin notificar la nueva fecha. Poco probable dada
+                // la cadencia de 5 min del scheduler; no se corrige por complejidad
+                // vs. riesgo bajo (mismo criterio que la nota de arriba).
                 $evento->update(['recordatorio_enviado_at' => now()]);
                 $enviados++;
             } catch (\Throwable $e) {

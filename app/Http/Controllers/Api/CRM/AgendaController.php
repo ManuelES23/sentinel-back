@@ -159,24 +159,35 @@ class AgendaController extends CrmBaseController
             'tipo' => ['sometimes', 'required', Rule::in(self::TIPOS_AGENDA)],
             'titulo' => 'sometimes|required|string|max:255',
             'descripcion' => 'sometimes|nullable|string',
-            'fecha_inicio' => 'sometimes|required|date',
-            // Nota (deviación puntual respecto al brief, ambos campos
-            // siguientes): antes se usaba 'after_or_equal:fecha_inicio' en
-            // fecha_fin y 'before_or_equal:fecha_inicio' en recordatorio_at,
-            // pero Laravel evalúa esas reglas contra el valor de
-            // fecha_inicio EN EL REQUEST, no contra el registro existente.
-            // Como update() usa 'sometimes' en todos los campos, un PUT que
-            // solo manda fecha_fin (o solo recordatorio_at) no incluye
-            // fecha_inicio en el payload:
+            // Nota (deviación puntual respecto al brief, los tres campos
+            // siguientes): antes se usaba 'before_or_equal:fecha_fin' en
+            // fecha_inicio (no estaba en el brief pero sería el equivalente
+            // simétrico), 'after_or_equal:fecha_inicio' en fecha_fin y
+            // 'before_or_equal:fecha_inicio' en recordatorio_at, pero
+            // Laravel evalúa esas reglas contra el valor del OTRO campo EN
+            // EL REQUEST, no contra el registro existente. Como update()
+            // usa 'sometimes' en todos los campos, un PUT que solo manda
+            // UNO de los tres no incluye el otro en el payload:
             // - before_or_equal (recordatorio_at) con el comparador ausente
             //   resuelve a 0 y FALLA siempre (incluso con fechas válidas).
-            // - after_or_equal (fecha_fin) con el comparador ausente
-            //   también resuelve a 0, y como "$fechaFin >= 0" es casi
-            //   siempre true, la regla PASA silenciosamente para
-            //   cualquier fecha, permitiendo persistir fecha_fin anterior
-            //   a fecha_inicio.
-            // Ambos closures comparan contra fecha_inicio del payload si
-            // vino, y si no contra $agenda->fecha_inicio actual.
+            // - after_or_equal (fecha_fin, y por simetría fecha_inicio) con
+            //   el comparador ausente también resuelve a 0, y como
+            //   "$valor >= 0" es casi siempre true, la regla PASA
+            //   silenciosamente para cualquier fecha -- permitiendo
+            //   persistir fecha_inicio posterior a fecha_fin (o viceversa).
+            // Los tres closures comparan contra el otro campo del payload
+            // si vino, y si no contra el valor ya persistido en el modelo.
+            'fecha_inicio' => [
+                'sometimes',
+                'required',
+                'date',
+                function (string $attribute, $value, $fail) use ($request, $agenda) {
+                    $fechaFin = $request->input('fecha_fin') ?? optional($agenda->fecha_fin)->toDateTimeString();
+                    if ($fechaFin && strtotime($value) > strtotime($fechaFin)) {
+                        $fail('La fecha de fin debe ser posterior o igual a la fecha de inicio.');
+                    }
+                },
+            ],
             'fecha_fin' => [
                 'sometimes',
                 'required',
