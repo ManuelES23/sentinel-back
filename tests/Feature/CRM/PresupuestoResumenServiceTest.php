@@ -69,10 +69,12 @@ class PresupuestoResumenServiceTest extends TestCase
 
     public function test_resumen_mensual_cuenta_clientes_y_actividades_reales_del_mes(): void
     {
-        CrmCliente::create([
+        $cliente = new CrmCliente([
             'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
-            'nombre' => 'Cliente de agosto', 'estatus' => 'activo', 'created_at' => '2026-08-05',
+            'nombre' => 'Cliente de agosto', 'estatus' => 'activo',
         ]);
+        $cliente->forceFill(['created_at' => '2026-08-05'])->save();
+
         CrmActividad::create([
             'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
             'tipo' => 'llamada', 'entidad_type' => 'CrmCliente', 'entidad_id' => 1,
@@ -87,14 +89,35 @@ class PresupuestoResumenServiceTest extends TestCase
 
     public function test_resumen_mensual_no_mezcla_datos_de_otro_mes(): void
     {
-        CrmCliente::create([
+        $cliente = new CrmCliente([
             'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
-            'nombre' => 'Cliente de julio', 'estatus' => 'activo', 'created_at' => '2026-07-31',
+            'nombre' => 'Cliente de julio', 'estatus' => 'activo',
         ]);
+        $cliente->forceFill(['created_at' => '2026-07-31'])->save();
 
         $resumen = $this->servicio->resumenMensual($this->enterprise->id, $this->vendedor->id, 8, 2026);
 
         $this->assertEquals(0, $resumen['clientesReales']);
+    }
+
+    public function test_resumen_mensual_incluye_cotizaciones_del_primer_dia_del_mes(): void
+    {
+        // Regression test for SQLite date-string comparison bug where day-1
+        // cotizations with fecha_emision='2026-08-01' (date-cast column) were
+        // excluded due to lexicographic string comparison with '2026-08-01 00:00:00'.
+        $oportunidad = CrmOportunidad::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+            'nombre' => 'Oportunidad', 'monto_esperado' => 0,
+        ]);
+        CrmCotizacion::create([
+            'empresa_id' => $this->enterprise->id, 'oportunidad_id' => $oportunidad->id,
+            'folio' => 'COT-00001', 'estado' => 'aprobado', 'fecha_emision' => '2026-08-01',
+            'subtotal' => 500, 'total' => 500,
+        ]);
+
+        $resumen = $this->servicio->resumenMensual($this->enterprise->id, $this->vendedor->id, 8, 2026);
+
+        $this->assertEquals(500.0, $resumen['montoCotizado']);
     }
 
     public function test_comparativo_anual_devuelve_12_meses_con_ceros_donde_no_hay_presupuesto(): void

@@ -28,7 +28,6 @@ class CrmCliente extends Model
         'vendedor_id',
         'region_id',
         'notas',
-        'created_at',
     ];
 
     public function empresa(): BelongsTo

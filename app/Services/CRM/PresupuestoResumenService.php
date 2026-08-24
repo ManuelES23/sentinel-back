@@ -35,7 +35,7 @@ class PresupuestoResumenService
         $montoCotizado = (float) CrmCotizacion::where('empresa_id', $empresaId)
             ->where('estado', 'aprobado')
             ->whereHas('oportunidad', fn ($q) => $q->where('vendedor_id', $vendedorId))
-            ->whereBetween('fecha_emision', [$inicio, $fin])
+            ->whereBetween('fecha_emision', [$inicio->toDateString(), $fin->toDateString()])
             ->sum('total');
 
         $clientesReales = CrmCliente::where('empresa_id', $empresaId)
