@@ -1060,4 +1060,13 @@ Route::prefix('checador')->group(function () {
 // =====================================================
 // MÓDULO CRM COMERCIAL
 // =====================================================
+
+// Callback público de OAuth Outlook -- Microsoft redirige aquí sin ningún
+// Bearer token, así que esta ruta vive fuera de auth:sanctum. La identidad
+// se resuelve por el nonce propio del parámetro `state`, no por Auth::user()
+// -- ver OutlookIntegracionController::callback().
+Route::get('crm/integraciones/outlook/callback', [
+    App\Http\Controllers\Api\CRM\OutlookIntegracionController::class, 'callback'
+]);
+
 require __DIR__.'/crm.php';

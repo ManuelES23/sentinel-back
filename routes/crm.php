@@ -199,4 +199,19 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     // Dialpad sync manual
     // -------------------------------------------------
 
+    // -------------------------------------------------
+    // INTEGRACIONES · OUTLOOK
+    // Conectar/desconectar la cuenta de Outlook propia y consultar su
+    // estado. El callback público vive en routes/api.php, FUERA de
+    // auth:sanctum -- ver nota en OutlookIntegracionController::callback().
+    // -------------------------------------------------
+    Route::get('integraciones/outlook/estado', [
+        App\Http\Controllers\Api\CRM\OutlookIntegracionController::class, 'estado'
+    ]);
+    Route::get('integraciones/outlook/conectar', [
+        App\Http\Controllers\Api\CRM\OutlookIntegracionController::class, 'conectar'
+    ]);
+    Route::delete('integraciones/outlook/desconectar', [
+        App\Http\Controllers\Api\CRM\OutlookIntegracionController::class, 'desconectar'
+    ]);
 });

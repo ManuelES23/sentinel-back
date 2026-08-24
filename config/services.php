@@ -46,4 +46,13 @@ return [
         'timeout' => env('FACE_RECOGNITION_TIMEOUT', 15),
     ],
 
+    'microsoft' => [
+        'client_id' => env('MICROSOFT_CLIENT_ID'),
+        'client_secret' => env('MICROSOFT_CLIENT_SECRET'),
+        'redirect' => env('MICROSOFT_REDIRECT_URI'),
+        // URL base del frontend a donde el callback redirige de vuelta tras
+        // el consentimiento de Microsoft (ver OutlookIntegracionController).
+        'frontend_url' => env('FRONTEND_URL', env('APP_URL')),
+    ],
+
 ];
