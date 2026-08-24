@@ -69,4 +69,5 @@ enum CrmPermiso: string
 
     // --- Integraciones ---
     case INTEGRACIONES_DIALPAD = 'crm.integraciones.dialpad';
+    case INTEGRACIONES_OUTLOOK_VER = 'crm.integraciones.outlook.ver';
 }

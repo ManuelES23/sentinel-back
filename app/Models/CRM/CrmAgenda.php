@@ -7,6 +7,7 @@ use App\Traits\Loggable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
 
 class CrmAgenda extends Model
@@ -51,6 +52,11 @@ class CrmAgenda extends Model
     public function entidad(): MorphTo
     {
         return $this->morphTo();
+    }
+
+    public function outlookMapeo(): HasOne
+    {
+        return $this->hasOne(CrmOutlookEventoMapeado::class, 'crm_agenda_id');
     }
 
     public function scopePendientes($query)

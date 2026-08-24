@@ -126,6 +126,9 @@ class CrmPermisosSeeder extends Seeder
                 ['slug' => 'ver',    'name' => 'Ver llamadas',         'order' => 2],
                 ['slug' => 'editar', 'name' => 'Clasificar llamadas',  'order' => 3],
             ]],
+            ['slug' => 'outlook', 'name' => 'Outlook', 'icon' => 'Calendar', 'order' => 2, 'permisos' => [
+                ['slug' => 'ver', 'name' => 'Conectar y ver estado de Outlook', 'order' => 1],
+            ]],
         ]);
     }
 

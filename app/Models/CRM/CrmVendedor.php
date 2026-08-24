@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class CrmVendedor extends Model
 {
@@ -67,6 +68,11 @@ class CrmVendedor extends Model
     public function agenda(): HasMany
     {
         return $this->hasMany(CrmAgenda::class, 'vendedor_id');
+    }
+
+    public function outlookConexion(): HasOne
+    {
+        return $this->hasOne(CrmOutlookConexion::class, 'crm_vendedor_id');
     }
 
     public function scopeActivo($query)
