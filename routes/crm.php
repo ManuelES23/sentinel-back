@@ -152,7 +152,21 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     // PRESUPUESTOS
     // CRUD + resumen meta vs real + comparativo anual
     // -------------------------------------------------
-
+    Route::get('presupuestos/resumen', [
+        App\Http\Controllers\Api\CRM\PresupuestoController::class, 'resumenMensual'
+    ]);
+    Route::get('presupuestos/comparativo-anual', [
+        App\Http\Controllers\Api\CRM\PresupuestoController::class, 'comparativoAnual'
+    ]);
+    Route::get('presupuestos', [
+        App\Http\Controllers\Api\CRM\PresupuestoController::class, 'index'
+    ]);
+    Route::post('presupuestos', [
+        App\Http\Controllers\Api\CRM\PresupuestoController::class, 'store'
+    ]);
+    Route::put('presupuestos/{presupuesto}', [
+        App\Http\Controllers\Api\CRM\PresupuestoController::class, 'update'
+    ]);
 
     // -------------------------------------------------
     // AGENDA
