@@ -13,6 +13,8 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Laravel\Socialite\Facades\Socialite;
 
@@ -50,6 +52,12 @@ class OutlookIntegracionController extends CrmBaseController
 
     private const CACHE_PREFIX = 'outlook_connect_nonce:';
     private const NONCE_TTL_MINUTOS = 10;
+
+    // Duplicada de SincronizarOutlookCommand::GRAPH_BASE a propósito -- ambas
+    // clases son pequeñas y autocontenidas (mismo criterio del resto del
+    // codebase); no vale la pena una dependencia compartida por una sola
+    // constante.
+    private const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
 
     private const SCOPES = [
         'openid', 'profile', 'email', 'offline_access',
@@ -160,9 +168,57 @@ class OutlookIntegracionController extends CrmBaseController
         );
 
         $conexion = $this->conexionDelUsuarioActual($empresaId);
-        $conexion?->delete();
+
+        if ($conexion) {
+            // Best-effort: limpiar los eventos espejo en el calendario real
+            // de Outlook antes de borrar el mapeo (cascade). Si esto falla
+            // por completo, el disconnect debe seguir adelante igual --
+            // por eso el try/catch envolvente además del que ya trae
+            // limpiarEventosMapeados() por cada item.
+            try {
+                $this->limpiarEventosMapeados($conexion);
+            } catch (\Throwable $e) {
+                Log::error("Error inesperado al limpiar eventos de Outlook al desconectar la conexión #{$conexion->id}: {$e->getMessage()}", ['exception' => $e]);
+            }
+
+            $conexion->delete();
+        }
 
         return $this->jsonSuccess(null, 'Cuenta de Outlook desconectada.');
+    }
+
+    /**
+     * Borra en Microsoft Graph, uno por uno, cada evento espejo asociado a
+     * esta conexión, antes de que el cascade de la BD borre los mapeos. Es
+     * limpieza best-effort: un fallo (red, 500, rate limit, token vencido,
+     * etc.) en un evento puntual se registra y se sigue con los demás -- y
+     * un fallo aquí jamás debe impedir que desconectar() complete el borrado
+     * de la conexión (mismo criterio de aislamiento por item que
+     * SincronizarOutlookCommand::borrarEliminados()).
+     */
+    private function limpiarEventosMapeados(CrmOutlookConexion $conexion): void
+    {
+        foreach ($conexion->eventosMapeados as $mapeo) {
+            try {
+                $response = Http::withToken($conexion->access_token)
+                    ->acceptJson()
+                    ->delete(self::GRAPH_BASE."/me/events/{$mapeo->outlook_event_id}");
+
+                if ($response->status() === 429) {
+                    Log::warning('Rate limit de Microsoft Graph alcanzado al desconectar Outlook, se omite la limpieza de este evento.');
+
+                    continue;
+                }
+
+                // 404 = ya no existe del lado de Outlook -- se trata igual
+                // que un borrado exitoso.
+                if (! $response->successful() && $response->status() !== 404) {
+                    Log::warning("No se pudo borrar el evento de Outlook {$mapeo->outlook_event_id} al desconectar (status {$response->status()}).");
+                }
+            } catch (\Throwable $e) {
+                Log::error("Error al borrar el evento de Outlook {$mapeo->outlook_event_id} al desconectar: {$e->getMessage()}", ['exception' => $e]);
+            }
+        }
     }
 
     private function conexionDelUsuarioActual(int $empresaId): ?CrmOutlookConexion

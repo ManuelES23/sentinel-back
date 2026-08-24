@@ -4,7 +4,9 @@
 namespace Tests\Feature\CRM;
 
 use App\Models\Application;
+use App\Models\CRM\CrmAgenda;
 use App\Models\CRM\CrmOutlookConexion;
+use App\Models\CRM\CrmOutlookEventoMapeado;
 use App\Models\Module;
 use App\Models\Submodule;
 use App\Models\SubmodulePermissionType;
@@ -12,6 +14,7 @@ use App\Models\UserSubmodulePermission;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 use Laravel\Sanctum\Sanctum;
 use Laravel\Socialite\Facades\Socialite;
 use Laravel\Socialite\Two\AbstractProvider;
@@ -176,5 +179,94 @@ class OutlookIntegracionControllerTest extends TestCase
 
         $response->assertStatus(200);
         $this->assertDatabaseCount('crm_outlook_conexiones', 0);
+    }
+
+    public function test_desconectar_borra_los_eventos_espejo_en_outlook_antes_de_borrar_la_conexion(): void
+    {
+        $this->otorgarPermisoOutlook();
+        $vendedor = $this->crearVendedorPropio();
+
+        $conexion = CrmOutlookConexion::create([
+            'empresa_id' => $this->enterprise->id,
+            'crm_vendedor_id' => $vendedor->id,
+            'email_outlook' => 'vendedor@outlook.com',
+            'access_token' => 'access-token-vigente',
+            'refresh_token' => 'refresh-token-vigente',
+            'token_expires_at' => now()->addHour(),
+        ]);
+
+        $evento = CrmAgenda::create([
+            'empresa_id' => $this->enterprise->id,
+            'vendedor_id' => $vendedor->id,
+            'tipo' => 'tarea',
+            'titulo' => 'Llamar a cliente',
+            'fecha_inicio' => now()->addDay(),
+            'fecha_fin' => now()->addDay()->addHour(),
+            'completado' => false,
+        ]);
+
+        CrmOutlookEventoMapeado::create([
+            'crm_agenda_id' => $evento->id,
+            'crm_outlook_conexion_id' => $conexion->id,
+            'outlook_event_id' => 'outlook-evt-1',
+            'ultima_actualizacion_enviada_at' => now(),
+        ]);
+
+        Http::fake([
+            'graph.microsoft.com/v1.0/me/events/outlook-evt-1' => Http::response([], 204),
+        ]);
+
+        $response = $this->deleteJson('/api/crm/integraciones/outlook/desconectar', [], $this->crmHeaders());
+
+        $response->assertStatus(200);
+        $this->assertDatabaseCount('crm_outlook_conexiones', 0);
+        $this->assertDatabaseCount('crm_outlook_eventos_mapeados', 0);
+
+        Http::assertSent(fn ($request) => $request->method() === 'DELETE'
+            && str_contains($request->url(), '/me/events/outlook-evt-1'));
+    }
+
+    public function test_desconectar_siempre_borra_la_conexion_aunque_graph_falle(): void
+    {
+        $this->otorgarPermisoOutlook();
+        $vendedor = $this->crearVendedorPropio();
+
+        $conexion = CrmOutlookConexion::create([
+            'empresa_id' => $this->enterprise->id,
+            'crm_vendedor_id' => $vendedor->id,
+            'email_outlook' => 'vendedor@outlook.com',
+            'access_token' => 'access-token-vigente',
+            'refresh_token' => 'refresh-token-vigente',
+            'token_expires_at' => now()->addHour(),
+        ]);
+
+        $evento = CrmAgenda::create([
+            'empresa_id' => $this->enterprise->id,
+            'vendedor_id' => $vendedor->id,
+            'tipo' => 'tarea',
+            'titulo' => 'Llamar a cliente',
+            'fecha_inicio' => now()->addDay(),
+            'fecha_fin' => now()->addDay()->addHour(),
+            'completado' => false,
+        ]);
+
+        CrmOutlookEventoMapeado::create([
+            'crm_agenda_id' => $evento->id,
+            'crm_outlook_conexion_id' => $conexion->id,
+            'outlook_event_id' => 'outlook-evt-1',
+            'ultima_actualizacion_enviada_at' => now(),
+        ]);
+
+        // Graph responde con un error duro (no 404, no 429) -- el disconnect
+        // debe completarse igual, sin propagar ninguna excepción al cliente.
+        Http::fake([
+            'graph.microsoft.com/v1.0/me/events/outlook-evt-1' => Http::response(['error' => 'boom'], 500),
+        ]);
+
+        $response = $this->deleteJson('/api/crm/integraciones/outlook/desconectar', [], $this->crmHeaders());
+
+        $response->assertStatus(200);
+        $this->assertDatabaseCount('crm_outlook_conexiones', 0);
+        $this->assertDatabaseCount('crm_outlook_eventos_mapeados', 0);
     }
 }
