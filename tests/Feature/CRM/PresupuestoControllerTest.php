@@ -7,6 +7,7 @@ use App\Models\Module;
 use App\Models\Submodule;
 use App\Models\SubmodulePermissionType;
 use App\Models\CRM\CrmPresupuesto;
+use App\Models\CRM\CrmVendedor;
 use App\Models\UserSubmodulePermission;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
@@ -61,6 +62,16 @@ class PresupuestoControllerTest extends TestCase
                 ]);
             }
         }
+    }
+
+    /** Crea un CrmVendedor cuyo user_id es el actingUser -- para probar el auto-scoping de un usuario 'ver'-only sobre su propio vendedor. */
+    private function crearVendedorPropio(): CrmVendedor
+    {
+        return CrmVendedor::create([
+            'empresa_id' => $this->enterprise->id,
+            'user_id' => $this->actingUser->id,
+            'nombre' => 'Vendedor propio',
+        ]);
     }
 
     public function test_crea_un_presupuesto_con_permiso_crear(): void
@@ -122,7 +133,7 @@ class PresupuestoControllerTest extends TestCase
         $response = $this->withHeaders($this->crmHeaders())
             ->putJson("/api/crm/presupuestos/{$presupuesto->id}", ['meta_monto' => 7000]);
 
-        $response->assertOk()->assertJsonPath('data.meta_monto', '7000.00');
+        $response->assertOk()->assertJsonPath('data.meta_monto', 7000);
     }
 
     public function test_rechaza_editar_sin_permiso_editar(): void
@@ -172,9 +183,10 @@ class PresupuestoControllerTest extends TestCase
     public function test_get_devuelve_null_si_no_existe_presupuesto_ese_mes(): void
     {
         $this->otorgarPermisosPresupuestos(['ver']);
+        $vendedorPropio = $this->crearVendedorPropio();
 
         $response = $this->withHeaders($this->crmHeaders())
-            ->getJson("/api/crm/presupuestos?vendedor_id={$this->vendedor->id}&mes=8&anio=2026");
+            ->getJson("/api/crm/presupuestos?vendedor_id={$vendedorPropio->id}&mes=8&anio=2026");
 
         $response->assertOk()->assertJsonPath('data', null);
     }
@@ -182,13 +194,14 @@ class PresupuestoControllerTest extends TestCase
     public function test_resumen_devuelve_metas_y_valores_reales_combinados(): void
     {
         $this->otorgarPermisosPresupuestos(['ver']);
+        $vendedorPropio = $this->crearVendedorPropio();
         CrmPresupuesto::create([
-            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $vendedorPropio->id,
             'mes' => 8, 'anio' => 2026, 'meta_monto' => 10000, 'meta_clientes' => 5, 'meta_actividades' => 20,
         ]);
 
         $response = $this->withHeaders($this->crmHeaders())
-            ->getJson("/api/crm/presupuestos/resumen?vendedor_id={$this->vendedor->id}&mes=8&anio=2026");
+            ->getJson("/api/crm/presupuestos/resumen?vendedor_id={$vendedorPropio->id}&mes=8&anio=2026");
 
         $response->assertOk()
             ->assertJsonPath('data.metaMonto', 10000)
@@ -197,14 +210,140 @@ class PresupuestoControllerTest extends TestCase
             ->assertJsonPath('data.clientesReales', 0);
     }
 
+    public function test_resumen_devuelve_metas_null_si_no_existe_presupuesto_ese_mes(): void
+    {
+        $this->otorgarPermisosPresupuestos(['ver']);
+        $vendedorPropio = $this->crearVendedorPropio();
+
+        $response = $this->withHeaders($this->crmHeaders())
+            ->getJson("/api/crm/presupuestos/resumen?vendedor_id={$vendedorPropio->id}&mes=8&anio=2026");
+
+        $response->assertOk()
+            ->assertJsonPath('data.presupuestoId', null)
+            ->assertJsonPath('data.metaMonto', null)
+            ->assertJsonPath('data.metaClientes', null)
+            ->assertJsonPath('data.metaActividades', null)
+            ->assertJsonPath('data.montoEsperado', 0);
+    }
+
     public function test_comparativo_anual_devuelve_12_meses(): void
     {
         $this->otorgarPermisosPresupuestos(['ver']);
+        $vendedorPropio = $this->crearVendedorPropio();
 
         $response = $this->withHeaders($this->crmHeaders())
-            ->getJson("/api/crm/presupuestos/comparativo-anual?vendedor_id={$this->vendedor->id}&anio=2026");
+            ->getJson("/api/crm/presupuestos/comparativo-anual?vendedor_id={$vendedorPropio->id}&anio=2026");
 
         $response->assertOk()->assertJsonCount(12, 'data');
+    }
+
+    public function test_ver_propio_permite_consultar_su_propio_vendedor_id(): void
+    {
+        $this->otorgarPermisosPresupuestos(['ver']);
+        $vendedorPropio = $this->crearVendedorPropio();
+        CrmPresupuesto::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $vendedorPropio->id,
+            'mes' => 8, 'anio' => 2026, 'meta_monto' => 3000,
+        ]);
+
+        $response = $this->withHeaders($this->crmHeaders())
+            ->getJson("/api/crm/presupuestos?vendedor_id={$vendedorPropio->id}&mes=8&anio=2026");
+
+        $response->assertOk()->assertJsonPath('data.meta_monto', 3000);
+    }
+
+    public function test_ver_propio_rechaza_consultar_vendedor_id_ajeno(): void
+    {
+        $this->otorgarPermisosPresupuestos(['ver']);
+        $this->crearVendedorPropio();
+        // $this->vendedor (de la fixture) pertenece a OTRO usuario.
+
+        $response = $this->withHeaders($this->crmHeaders())
+            ->getJson("/api/crm/presupuestos?vendedor_id={$this->vendedor->id}&mes=8&anio=2026");
+
+        $response->assertStatus(403);
+    }
+
+    public function test_ver_sin_ningun_vendedor_propio_rechaza_cualquier_consulta(): void
+    {
+        $this->otorgarPermisosPresupuestos(['ver']);
+        // El actingUser no tiene NINGÚN CrmVendedor propio.
+
+        $response = $this->withHeaders($this->crmHeaders())
+            ->getJson("/api/crm/presupuestos?vendedor_id={$this->vendedor->id}&mes=8&anio=2026");
+
+        $response->assertStatus(403);
+    }
+
+    public function test_con_permiso_crear_puede_consultar_cualquier_vendedor_id(): void
+    {
+        $this->otorgarPermisosPresupuestos(['ver', 'crear']);
+        // El actingUser no tiene un CrmVendedor propio -- igual debe poder
+        // ver, porque 'crear' lo marca como gerencia.
+
+        $response = $this->withHeaders($this->crmHeaders())
+            ->getJson("/api/crm/presupuestos?vendedor_id={$this->vendedor->id}&mes=8&anio=2026");
+
+        $response->assertOk();
+    }
+
+    public function test_con_permiso_editar_puede_consultar_cualquier_vendedor_id(): void
+    {
+        $this->otorgarPermisosPresupuestos(['ver', 'editar']);
+
+        $response = $this->withHeaders($this->crmHeaders())
+            ->getJson("/api/crm/presupuestos/resumen?vendedor_id={$this->vendedor->id}&mes=8&anio=2026");
+
+        $response->assertOk();
+    }
+
+    public function test_crear_con_meta_monto_explicitamente_null_no_causa_error_500(): void
+    {
+        $this->otorgarPermisosPresupuestos(['ver', 'crear']);
+
+        $response = $this->withHeaders($this->crmHeaders())->postJson('/api/crm/presupuestos', [
+            'vendedor_id' => $this->vendedor->id, 'mes' => 9, 'anio' => 2026,
+            'meta_monto' => null, 'meta_clientes' => null, 'meta_actividades' => null,
+        ]);
+
+        $response->assertCreated();
+        $this->assertDatabaseHas('crm_presupuestos', [
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+            'mes' => 9, 'anio' => 2026, 'meta_monto' => 0, 'meta_clientes' => 0, 'meta_actividades' => 0,
+        ]);
+    }
+
+    public function test_editar_con_meta_monto_explicitamente_null_no_causa_error_500(): void
+    {
+        $this->otorgarPermisosPresupuestos(['ver', 'editar']);
+        $presupuesto = CrmPresupuesto::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+            'mes' => 8, 'anio' => 2026, 'meta_monto' => 5000,
+        ]);
+
+        $response = $this->withHeaders($this->crmHeaders())
+            ->putJson("/api/crm/presupuestos/{$presupuesto->id}", ['meta_monto' => null]);
+
+        $response->assertOk()->assertJsonPath('data.meta_monto', 0);
+    }
+
+    public function test_el_constraint_unico_de_bd_rechaza_un_duplicado_a_nivel_modelo(): void
+    {
+        // Sanity check de que el UNIQUE(empresa_id, vendedor_id, mes, anio)
+        // de la migración realmente existe -- es la red de seguridad que el
+        // catch(QueryException) de store() depende de que dispare en la
+        // ventana de carrera entre el exists() y el create().
+        CrmPresupuesto::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+            'mes' => 8, 'anio' => 2026, 'meta_monto' => 1000,
+        ]);
+
+        $this->expectException(\Illuminate\Database\QueryException::class);
+
+        CrmPresupuesto::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+            'mes' => 8, 'anio' => 2026, 'meta_monto' => 2000,
+        ]);
     }
 
     public function test_no_ve_presupuestos_de_otra_empresa(): void
