@@ -139,6 +139,36 @@ class PresupuestoControllerTest extends TestCase
         $response->assertStatus(403);
     }
 
+    public function test_rechaza_index_sin_permiso_ver(): void
+    {
+        $this->otorgarPermisosPresupuestos([]);
+
+        $response = $this->withHeaders($this->crmHeaders())
+            ->getJson("/api/crm/presupuestos?vendedor_id={$this->vendedor->id}&mes=8&anio=2026");
+
+        $response->assertStatus(403);
+    }
+
+    public function test_rechaza_resumen_sin_permiso_ver(): void
+    {
+        $this->otorgarPermisosPresupuestos([]);
+
+        $response = $this->withHeaders($this->crmHeaders())
+            ->getJson("/api/crm/presupuestos/resumen?vendedor_id={$this->vendedor->id}&mes=8&anio=2026");
+
+        $response->assertStatus(403);
+    }
+
+    public function test_rechaza_comparativo_anual_sin_permiso_ver(): void
+    {
+        $this->otorgarPermisosPresupuestos([]);
+
+        $response = $this->withHeaders($this->crmHeaders())
+            ->getJson("/api/crm/presupuestos/comparativo-anual?vendedor_id={$this->vendedor->id}&anio=2026");
+
+        $response->assertStatus(403);
+    }
+
     public function test_get_devuelve_null_si_no_existe_presupuesto_ese_mes(): void
     {
         $this->otorgarPermisosPresupuestos(['ver']);
