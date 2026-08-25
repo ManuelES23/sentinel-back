@@ -195,9 +195,22 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
 
 
     // -------------------------------------------------
-    // INTEGRACIONES
-    // Dialpad sync manual
+    // INTEGRACIONES · DIALPAD
+    // Listado/clasificación de llamadas importadas + sync manual bajo
+    // demanda. Sin conexión por usuario -- una sola API key global.
     // -------------------------------------------------
+    Route::get('integraciones/dialpad/llamadas', [
+        App\Http\Controllers\Api\CRM\DialpadIntegracionController::class, 'index'
+    ]);
+    Route::patch('integraciones/dialpad/llamadas/{actividad}/clasificar', [
+        App\Http\Controllers\Api\CRM\DialpadIntegracionController::class, 'clasificar'
+    ]);
+    Route::post('integraciones/dialpad/sincronizar', [
+        App\Http\Controllers\Api\CRM\DialpadIntegracionController::class, 'sincronizar'
+    ]);
+    Route::get('integraciones/dialpad/estado', [
+        App\Http\Controllers\Api\CRM\DialpadIntegracionController::class, 'estado'
+    ]);
 
     // -------------------------------------------------
     // INTEGRACIONES · OUTLOOK
