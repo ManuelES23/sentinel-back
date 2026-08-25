@@ -27,3 +27,8 @@ Schedule::command('agenda:enviar-recordatorios')->everyFiveMinutes();
 // suficiente margen para reflejar cambios recientes sin saturar Microsoft
 // Graph con corridas más frecuentes.
 Schedule::command('agenda:sincronizar-outlook')->everyFiveMinutes();
+
+// Sincronización de llamadas Dialpad (CRM): unidireccional, cada 15 min es
+// suficiente para que las llamadas recientes aparezcan sin sobrecargar la
+// API de Dialpad con corridas más frecuentes.
+Schedule::command('crm:sincronizar-dialpad')->everyFifteenMinutes();
