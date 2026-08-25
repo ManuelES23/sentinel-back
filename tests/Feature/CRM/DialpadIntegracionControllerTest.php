@@ -184,6 +184,42 @@ class DialpadIntegracionControllerTest extends TestCase
         $response->assertStatus(403);
     }
 
+    public function test_llamadas_de_otra_empresa_no_se_filtran_ni_se_pueden_clasificar(): void
+    {
+        $this->otorgarPermisoDialpad(['sync', 'ver', 'editar']);
+
+        $propia = $this->crearLlamada(['vendedor_id' => $this->vendedor->id]);
+
+        $otraEmpresa = $this->crearOtraEmpresa();
+        $otroVendedor = CrmVendedor::create([
+            'empresa_id' => $otraEmpresa->id,
+            'nombre' => 'Vendedor de otra empresa',
+            'email' => 'vendedor.otra@example.com',
+        ]);
+        $llamadaAjena = CrmActividad::create([
+            'empresa_id' => $otraEmpresa->id,
+            'tipo' => 'llamada',
+            'vendedor_id' => $otroVendedor->id,
+            'descripcion' => 'Llamada entrante de Dialpad (5551234567) — 3 min',
+            'fecha_actividad' => now(),
+            'duracion_minutos' => 3,
+            'fuente' => 'dialpad',
+            'dialpad_call_id' => 'call-ajena-'.uniqid(),
+        ]);
+
+        $response = $this->getJson('/api/crm/integraciones/dialpad/llamadas', $this->crmHeaders());
+        $response->assertStatus(200);
+        $response->assertJsonCount(1, 'data');
+        $response->assertJsonPath('data.0.id', $propia->id);
+
+        $patchResponse = $this->patchJson(
+            "/api/crm/integraciones/dialpad/llamadas/{$llamadaAjena->id}/clasificar",
+            ['resultado' => 'Interesado'],
+            $this->crmHeaders(),
+        );
+        $patchResponse->assertStatus(404);
+    }
+
     public function test_estado_devuelve_la_forma_correcta(): void
     {
         $this->otorgarPermisoDialpad(['ver']);

@@ -7,6 +7,7 @@ use App\Console\Commands\SincronizarDialpadCommand;
 use App\Models\CRM\CrmActividad;
 use App\Models\CRM\CrmCliente;
 use App\Models\CRM\CrmDialpadSyncEstado;
+use App\Models\CRM\CrmVendedor;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -170,6 +171,65 @@ class SincronizarDialpadCommandTest extends TestCase
         $actividad->refresh();
         $this->assertEquals(10, $actividad->duracion_minutos);
         $this->assertStringContainsString('10 min', $actividad->descripcion);
+    }
+
+    public function test_llamadas_de_distintas_empresas_no_cruzan_el_match_de_telefono_aunque_el_numero_colisione(): void
+    {
+        $otraEmpresa = $this->crearOtraEmpresa();
+        $otroVendedor = CrmVendedor::create([
+            'empresa_id' => $otraEmpresa->id,
+            'nombre' => 'Vendedor Otra Empresa',
+            'email' => 'otro.vendedor@example.com',
+        ]);
+
+        $telefonoColision = '6621234567';
+
+        $clientePropio = CrmCliente::create([
+            'empresa_id' => $this->enterprise->id,
+            'nombre' => 'Cliente Empresa A',
+            'telefono' => $telefonoColision,
+            'estatus' => 'activo',
+        ]);
+        $clienteAjeno = CrmCliente::create([
+            'empresa_id' => $otraEmpresa->id,
+            'nombre' => 'Cliente Empresa B',
+            'telefono' => $telefonoColision,
+            'estatus' => 'activo',
+        ]);
+
+        Http::fake([
+            'dialpad.test/api/v2/call*' => Http::response([
+                'items' => [
+                    $this->llamadaFake([
+                        'call_id' => 'call-empresa-a',
+                        'target' => ['email' => 'juan.perez@example.com'],
+                        'contact' => ['phone' => $telefonoColision],
+                    ]),
+                    $this->llamadaFake([
+                        'call_id' => 'call-empresa-b',
+                        'target' => ['email' => 'otro.vendedor@example.com'],
+                        'contact' => ['phone' => $telefonoColision],
+                    ]),
+                ],
+                'cursor' => null,
+            ], 200),
+        ]);
+
+        $this->artisan('crm:sincronizar-dialpad')->assertExitCode(0);
+
+        $this->assertDatabaseHas('crm_actividades', [
+            'dialpad_call_id' => 'call-empresa-a',
+            'empresa_id' => $this->enterprise->id,
+            'entidad_type' => CrmCliente::class,
+            'entidad_id' => $clientePropio->id,
+        ]);
+
+        $this->assertDatabaseHas('crm_actividades', [
+            'dialpad_call_id' => 'call-empresa-b',
+            'empresa_id' => $otraEmpresa->id,
+            'entidad_type' => CrmCliente::class,
+            'entidad_id' => $clienteAjeno->id,
+        ]);
     }
 
     public function test_rate_limit_corta_la_corrida_sin_avanzar_el_cursor(): void

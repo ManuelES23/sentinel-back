@@ -50,6 +50,21 @@ class SincronizarDialpadCommand extends Command
     /** Límite de páginas por corrida -- acota cuánto puede tardar tanto la corrida programada como el disparo manual síncrono (ver DialpadIntegracionController::sincronizar()). */
     private const MAX_PAGINAS_POR_CORRIDA = 20;
 
+    /**
+     * Mensaje genérico persistido en crm_dialpad_sync_estado.ultimo_error.
+     * `crm_dialpad_sync_estado` es UNA sola fila global compartida por todas
+     * las empresas, así que nunca debe contener el mensaje crudo de la
+     * excepción: un QueryException interpola los bindings del SQL (incluida
+     * la `descripcion` autogenerada, que embebe el teléfono del contacto,
+     * más empresa_id/vendedor_id/dialpad_call_id) y un RequestException de
+     * Dialpad embebe el cuerpo crudo de la respuesta HTTP -- cualquiera de
+     * los dos filtraría datos de una empresa a cualquier usuario con permiso
+     * 'ver' en OTRA empresa. El detalle completo sigue yendo a Log::error().
+     */
+    private const MENSAJE_ERROR_GENERICO = 'Error al sincronizar con Dialpad. Ver logs del servidor para más detalle.';
+
+    private const MENSAJE_RATE_LIMIT = 'Se alcanzó el límite de solicitudes de Dialpad; se reintentará en la siguiente corrida.';
+
     public function handle(): int
     {
         $estado = CrmDialpadSyncEstado::obtenerSingleton();
@@ -58,8 +73,12 @@ class SincronizarDialpadCommand extends Command
         if (! $apiKey) {
             $mensaje = 'CRM_DIALPAD_API_KEY no está configurada.';
             Log::error($mensaje);
-            $estado->update(['ultimo_error' => $mensaje]);
-            Cache::put(self::CACHE_ULTIMA_CORRIDA, ['sincronizadas' => 0, 'omitidas' => 0], now()->addMinutes(5));
+            // $mensaje no contiene datos sensibles en este caso puntual, pero
+            // se persiste el mismo mensaje genérico que el catch-all para no
+            // tener dos formatos distintos de error en un mismo campo
+            // compartido entre empresas -- ver nota de seguridad arriba.
+            $estado->update(['ultimo_error' => self::MENSAJE_ERROR_GENERICO]);
+            $this->guardarContadores(0, 0);
 
             return self::FAILURE;
         }
@@ -102,7 +121,15 @@ class SincronizarDialpadCommand extends Command
                 $pagina++;
             } while ($cursor && $pagina < self::MAX_PAGINAS_POR_CORRIDA);
 
-            if (! $rateLimited) {
+            if ($rateLimited) {
+                // No se toca ultimo_call_id_sincronizado ni ultimo_sync_at
+                // (esa regla se mantiene intacta -- no avanzar el cursor de
+                // diagnóstico en un rate limit), pero sí se refleja en
+                // ultimo_error para que un admin viendo estado() no vea una
+                // corrida "exitosa" obsoleta sin ninguna señal de problema.
+                // Se autolimpia en la siguiente corrida exitosa (ver arriba).
+                $estado->update(['ultimo_error' => self::MENSAJE_RATE_LIMIT]);
+            } else {
                 $estado->update([
                     'ultimo_call_id_sincronizado' => $masRecienteCallId ?? $estado->ultimo_call_id_sincronizado,
                     'ultimo_sync_at' => now(),
@@ -111,17 +138,28 @@ class SincronizarDialpadCommand extends Command
             }
         } catch (\Throwable $e) {
             Log::error("Error al sincronizar llamadas de Dialpad: {$e->getMessage()}", ['exception' => $e]);
-            $estado->update(['ultimo_error' => $e->getMessage()]);
-            Cache::put(self::CACHE_ULTIMA_CORRIDA, ['sincronizadas' => $sincronizadas, 'omitidas' => $omitidas], now()->addMinutes(5));
+            $estado->update(['ultimo_error' => self::MENSAJE_ERROR_GENERICO]);
+            $this->guardarContadores($sincronizadas, $omitidas);
 
             return self::FAILURE;
         }
 
-        Cache::put(self::CACHE_ULTIMA_CORRIDA, ['sincronizadas' => $sincronizadas, 'omitidas' => $omitidas], now()->addMinutes(5));
+        $this->guardarContadores($sincronizadas, $omitidas);
 
         $this->info("Llamadas de Dialpad sincronizadas: {$sincronizadas}, omitidas: {$omitidas}");
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Guarda en Cache los contadores de la corrida más reciente, para que el
+     * disparo manual (Task 3) los pueda leer justo después de invocar
+     * Artisan::call(). Único punto de escritura para las 3 salidas de
+     * handle() (falla de API key, excepción, y corrida normal/rate-limited).
+     */
+    private function guardarContadores(int $sincronizadas, int $omitidas): void
+    {
+        Cache::put(self::CACHE_ULTIMA_CORRIDA, ['sincronizadas' => $sincronizadas, 'omitidas' => $omitidas], now()->addMinutes(5));
     }
 
     private function solicitarPagina(string $apiKey, ?string $cursor)
@@ -129,7 +167,7 @@ class SincronizarDialpadCommand extends Command
         $baseUrl = rtrim((string) config('services.dialpad.base_url'), '/');
         $query = $cursor ? ['cursor' => $cursor] : [];
 
-        return Http::withToken($apiKey)->acceptJson()->get("{$baseUrl}/call", $query);
+        return Http::withToken($apiKey)->acceptJson()->timeout(15)->get("{$baseUrl}/call", $query);
     }
 
     /**

@@ -69,7 +69,7 @@ class DialpadIntegracionController extends CrmBaseController
             ->where('empresa_id', $empresaId)
             ->where('fuente', 'dialpad')
             ->when($vendedorId !== null, fn ($q) => $q->where('vendedor_id', $vendedorId))
-            ->when($validated['sin_clasificar'] ?? null, fn ($q) => $q->whereNull('entidad_id'))
+            ->when($request->boolean('sin_clasificar'), fn ($q) => $q->whereNull('entidad_id'))
             ->when($validated['desde'] ?? null, fn ($q, $desde) => $q->where('fecha_actividad', '>=', $desde))
             ->when($validated['hasta'] ?? null, fn ($q, $hasta) => $q->where('fecha_actividad', '<=', $hasta))
             ->orderByDesc('fecha_actividad');
@@ -112,30 +112,39 @@ class DialpadIntegracionController extends CrmBaseController
         }
 
         $validated = $request->validate([
-            'entidad_tipo' => ['nullable', Rule::in(array_keys(self::TIPOS))],
-            'entidad_id' => 'nullable|integer',
+            'entidad_tipo' => ['sometimes', 'nullable', Rule::in(array_keys(self::TIPOS))],
+            'entidad_id' => 'sometimes|nullable|integer',
             'resultado' => 'nullable|string',
         ]);
 
-        $entidadType = null;
-        $entidadId = null;
+        $datosActualizar = [
+            'resultado' => array_key_exists('resultado', $validated) ? $validated['resultado'] : $actividad->resultado,
+        ];
 
-        if (! empty($validated['entidad_tipo'])) {
-            abort_unless(! empty($validated['entidad_id']), 422, 'Falta entidad_id.');
+        // Solo se recalcula/pisa entidad_type/entidad_id cuando el payload
+        // trae explícitamente la llave 'entidad_tipo' -- un PATCH parcial que
+        // solo manda 'resultado' (p.ej. registrar el desenlace de la llamada)
+        // no debe borrar el match automático que hizo el comando de sync.
+        if (array_key_exists('entidad_tipo', $validated)) {
+            $entidadType = null;
+            $entidadId = null;
 
-            $modelClass = self::TIPOS[$validated['entidad_tipo']];
-            $entidad = $modelClass::where('empresa_id', $empresaId)->find($validated['entidad_id']);
-            abort_unless($entidad, 404, 'La entidad relacionada no existe o no pertenece a la empresa.');
+            if (! empty($validated['entidad_tipo'])) {
+                abort_unless(! empty($validated['entidad_id']), 422, 'Falta entidad_id.');
 
-            $entidadType = $modelClass;
-            $entidadId = $validated['entidad_id'];
+                $modelClass = self::TIPOS[$validated['entidad_tipo']];
+                $entidad = $modelClass::where('empresa_id', $empresaId)->find($validated['entidad_id']);
+                abort_unless($entidad, 404, 'La entidad relacionada no existe o no pertenece a la empresa.');
+
+                $entidadType = $modelClass;
+                $entidadId = $validated['entidad_id'];
+            }
+
+            $datosActualizar['entidad_type'] = $entidadType;
+            $datosActualizar['entidad_id'] = $entidadId;
         }
 
-        $actividad->update([
-            'entidad_type' => $entidadType,
-            'entidad_id' => $entidadId,
-            'resultado' => array_key_exists('resultado', $validated) ? $validated['resultado'] : $actividad->resultado,
-        ]);
+        $actividad->update($datosActualizar);
 
         $actividad->load(['vendedor:id,nombre', 'entidad']);
         $actividad->entidad_tipo = array_search($actividad->entidad_type, self::TIPOS, true) ?: null;
