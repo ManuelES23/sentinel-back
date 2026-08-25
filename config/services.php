@@ -55,4 +55,9 @@ return [
         'frontend_url' => env('FRONTEND_URL', env('APP_URL')),
     ],
 
+    'dialpad' => [
+        'api_key' => env('CRM_DIALPAD_API_KEY'),
+        'base_url' => env('CRM_DIALPAD_BASE_URL', 'https://dialpad.com/api/v2'),
+    ],
+
 ];
