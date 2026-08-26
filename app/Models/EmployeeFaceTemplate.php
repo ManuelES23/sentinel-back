@@ -14,6 +14,14 @@ class EmployeeFaceTemplate extends Model
     public const STATUS_ACTIVE = 'active';
     public const STATUS_REVOKED = 'revoked';
 
+    /**
+     * Atributos que Loggable nunca debe copiar a ActivityLog.old_values /
+     * new_values. El embedding facial es dato biométrico sensible: si se
+     * loguea, revocar/purgar la plantilla ya no lo elimina realmente (queda
+     * una copia sin control de retención en activity_logs).
+     */
+    protected array $loggableExcept = ['embedding'];
+
     protected $fillable = [
         'employee_id',
         'embedding',

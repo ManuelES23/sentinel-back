@@ -10,6 +10,7 @@ use App\Models\UserEnterpriseAccess;
 use App\Services\FaceRecognitionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 
 class EmployeeFaceTemplateController extends Controller
@@ -66,31 +67,74 @@ class EmployeeFaceTemplateController extends Controller
 
         $photoPath = $request->file('photo')->store('private/employee-face-templates', 'local');
 
-        $consentDocumentPath = null;
+        $newConsentDocumentPath = null;
         if ($request->hasFile('consent_document')) {
-            $consentDocumentPath = $request->file('consent_document')
+            $newConsentDocumentPath = $request->file('consent_document')
                 ->store('private/employee-face-consents', 'local');
         }
 
         $previous = EmployeeFaceTemplate::where('employee_id', $employee->id)->first();
-        if ($previous && $previous->photo_path && Storage::disk('local')->exists($previous->photo_path)) {
-            Storage::disk('local')->delete($previous->photo_path);
+
+        // Si no se subió un consentimiento nuevo, conservar el apuntador al
+        // documento firmado previamente enrolado en vez de anularlo — de lo
+        // contrario un re-enrolamiento sin re-adjuntar el PDF deja el
+        // consentimiento firmado "huérfano" (archivo sigue en disco, pero
+        // nada apunta a él) mientras consent_signed_at se refresca como si
+        // el consentimiento se hubiera capturado de nuevo.
+        $consentDocumentPath = $newConsentDocumentPath ?? $previous?->consent_document_path;
+
+        // Rutas de archivos previos a borrar SOLO si la transacción de abajo
+        // confirma exitosamente — nunca antes, para no dejar una foto o
+        // documento borrados sin que la fila en BD apunte a los nuevos.
+        $photoPathToDelete = ($previous && $previous->photo_path && $previous->photo_path !== $photoPath)
+            ? $previous->photo_path
+            : null;
+        $consentDocumentPathToDelete = ($newConsentDocumentPath !== null
+            && $previous
+            && $previous->consent_document_path
+            && $previous->consent_document_path !== $newConsentDocumentPath)
+            ? $previous->consent_document_path
+            : null;
+
+        try {
+            $template = DB::transaction(function () use ($employee, $result, $photoPath, $consentDocumentPath, $request) {
+                return EmployeeFaceTemplate::updateOrCreate(
+                    ['employee_id' => $employee->id],
+                    [
+                        'embedding' => $result['embedding'],
+                        'photo_path' => $photoPath,
+                        'model_version' => $result['model_version'],
+                        'enrolled_by_user_id' => $request->user()?->id,
+                        'enrolled_at' => now(),
+                        'consent_signed_at' => now(),
+                        'consent_document_path' => $consentDocumentPath,
+                        'status' => EmployeeFaceTemplate::STATUS_ACTIVE,
+                        'revoked_at' => null,
+                    ]
+                );
+            });
+        } catch (\Throwable $e) {
+            // La transacción no se confirmó: no borrar ningún archivo previo,
+            // y limpiar los archivos recién subidos que quedaron huérfanos.
+            if (Storage::disk('local')->exists($photoPath)) {
+                Storage::disk('local')->delete($photoPath);
+            }
+            if ($newConsentDocumentPath && Storage::disk('local')->exists($newConsentDocumentPath)) {
+                Storage::disk('local')->delete($newConsentDocumentPath);
+            }
+
+            throw $e;
         }
 
-        $template = EmployeeFaceTemplate::updateOrCreate(
-            ['employee_id' => $employee->id],
-            [
-                'embedding' => $result['embedding'],
-                'photo_path' => $photoPath,
-                'model_version' => $result['model_version'],
-                'enrolled_by_user_id' => $request->user()->id,
-                'enrolled_at' => now(),
-                'consent_signed_at' => now(),
-                'consent_document_path' => $consentDocumentPath,
-                'status' => EmployeeFaceTemplate::STATUS_ACTIVE,
-                'revoked_at' => null,
-            ]
-        );
+        // La transacción confirmó: ahora sí es seguro borrar los archivos
+        // previos que fueron reemplazados, para no acumular datos
+        // biométricos huérfanos en disco.
+        if ($photoPathToDelete && Storage::disk('local')->exists($photoPathToDelete)) {
+            Storage::disk('local')->delete($photoPathToDelete);
+        }
+        if ($consentDocumentPathToDelete && Storage::disk('local')->exists($consentDocumentPathToDelete)) {
+            Storage::disk('local')->delete($consentDocumentPathToDelete);
+        }
 
         return response()->json([
             'success' => true,

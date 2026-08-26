@@ -2,6 +2,7 @@
 // sentinel-back/tests/Feature/GrupoEsplendido/RH/EmployeeFaceTemplateControllerTest.php
 namespace Tests\Feature\GrupoEsplendido\RH;
 
+use App\Models\ActivityLog;
 use App\Models\EmployeeFaceTemplate;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
@@ -90,6 +91,82 @@ class EmployeeFaceTemplateControllerTest extends TestCase
         ])->assertStatus(201);
 
         $this->assertSame(1, EmployeeFaceTemplate::where('employee_id', $employee->id)->count());
+    }
+
+    public function test_enroll_does_not_leak_embedding_into_activity_log(): void
+    {
+        Storage::fake('local');
+        $this->fakeNodeService();
+        [$user, $enterprise] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterprise->id);
+
+        $this->postJson($this->enrollUrl($employee->id), [
+            'photo' => UploadedFile::fake()->image('face.jpg', 640, 480),
+            'consent_signed' => '1',
+        ])->assertStatus(201);
+
+        $log = ActivityLog::where('model', 'EmployeeFaceTemplate')->where('action', 'create')->firstOrFail();
+
+        $this->assertArrayNotHasKey('embedding', $log->new_values ?? []);
+        $this->assertNull($log->old_values);
+        // El resto de los atributos sí se deben seguir logueando con normalidad.
+        $this->assertArrayHasKey('photo_path', $log->new_values);
+        $this->assertArrayHasKey('status', $log->new_values);
+    }
+
+    public function test_reenroll_does_not_leak_old_or_new_embedding_into_activity_log(): void
+    {
+        Storage::fake('local');
+        $this->fakeNodeService();
+        [$user, $enterprise] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterprise->id);
+
+        $this->postJson($this->enrollUrl($employee->id), [
+            'photo' => UploadedFile::fake()->image('face1.jpg', 640, 480),
+            'consent_signed' => '1',
+        ])->assertStatus(201);
+
+        $this->postJson($this->enrollUrl($employee->id), [
+            'photo' => UploadedFile::fake()->image('face2.jpg', 640, 480),
+            'consent_signed' => '1',
+        ])->assertStatus(201);
+
+        $updateLog = ActivityLog::where('model', 'EmployeeFaceTemplate')->where('action', 'update')->firstOrFail();
+
+        $this->assertArrayNotHasKey('embedding', $updateLog->new_values ?? []);
+        $this->assertArrayNotHasKey('embedding', $updateLog->old_values ?? []);
+        // El resto de los campos que sí cambiaron (p. ej. photo_path) se deben
+        // seguir logueando con normalidad.
+        $this->assertArrayHasKey('photo_path', $updateLog->new_values);
+    }
+
+    public function test_reenroll_preserves_consent_document_path_when_not_reattached(): void
+    {
+        Storage::fake('local');
+        $this->fakeNodeService();
+        [$user, $enterprise] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterprise->id);
+
+        $this->postJson($this->enrollUrl($employee->id), [
+            'photo' => UploadedFile::fake()->image('face1.jpg', 640, 480),
+            'consent_signed' => '1',
+            'consent_document' => UploadedFile::fake()->create('consent.pdf', 100, 'application/pdf'),
+        ])->assertStatus(201);
+
+        $firstTemplate = EmployeeFaceTemplate::where('employee_id', $employee->id)->firstOrFail();
+        $originalConsentPath = $firstTemplate->consent_document_path;
+        $this->assertNotNull($originalConsentPath);
+        Storage::disk('local')->assertExists($originalConsentPath);
+
+        // Re-enroll sin volver a adjuntar el documento de consentimiento.
+        $this->postJson($this->enrollUrl($employee->id), [
+            'photo' => UploadedFile::fake()->image('face2.jpg', 640, 480),
+            'consent_signed' => '1',
+        ])->assertStatus(201);
+
+        $template = EmployeeFaceTemplate::where('employee_id', $employee->id)->firstOrFail();
+        $this->assertSame($originalConsentPath, $template->consent_document_path);
+        Storage::disk('local')->assertExists($originalConsentPath);
     }
 
     public function test_enroll_returns_422_when_no_face_detected(): void
@@ -198,5 +275,61 @@ class EmployeeFaceTemplateControllerTest extends TestCase
 
         $this->get("/api/grupoesplendido/rh/empleados/{$employee->id}/face-template/photo")
             ->assertStatus(404);
+    }
+
+    public function test_store_rejects_employee_from_a_different_enterprise(): void
+    {
+        Storage::fake('local');
+        $this->fakeNodeService();
+        [$userA, $enterpriseA] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterpriseA->id);
+
+        // createAuthenticatedRhUser() re-autentica (Sanctum::actingAs) al
+        // usuario recién creado: el usuario que actúa a partir de aquí es
+        // $userB, miembro únicamente de $enterpriseB.
+        [$userB, $enterpriseB] = $this->createAuthenticatedRhUser();
+
+        $this->postJson($this->enrollUrl($employee->id), [
+            'photo' => UploadedFile::fake()->image('face.jpg', 640, 480),
+            'consent_signed' => '1',
+        ])->assertStatus(403);
+
+        $this->assertDatabaseCount('employee_face_templates', 0);
+    }
+
+    public function test_destroy_rejects_employee_from_a_different_enterprise(): void
+    {
+        Storage::fake('local');
+        $this->fakeNodeService();
+        [$userA, $enterpriseA] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterpriseA->id);
+        $this->postJson($this->enrollUrl($employee->id), [
+            'photo' => UploadedFile::fake()->image('face.jpg', 640, 480),
+            'consent_signed' => '1',
+        ])->assertStatus(201);
+
+        [$userB, $enterpriseB] = $this->createAuthenticatedRhUser();
+
+        $this->deleteJson($this->enrollUrl($employee->id))->assertStatus(403);
+
+        $template = EmployeeFaceTemplate::where('employee_id', $employee->id)->firstOrFail();
+        $this->assertSame('active', $template->status);
+    }
+
+    public function test_photo_rejects_employee_from_a_different_enterprise(): void
+    {
+        Storage::fake('local');
+        $this->fakeNodeService();
+        [$userA, $enterpriseA] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterpriseA->id);
+        $this->postJson($this->enrollUrl($employee->id), [
+            'photo' => UploadedFile::fake()->image('face.jpg', 640, 480),
+            'consent_signed' => '1',
+        ])->assertStatus(201);
+
+        [$userB, $enterpriseB] = $this->createAuthenticatedRhUser();
+
+        $this->get("/api/grupoesplendido/rh/empleados/{$employee->id}/face-template/photo")
+            ->assertStatus(403);
     }
 }
