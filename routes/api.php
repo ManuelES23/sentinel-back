@@ -961,6 +961,8 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::post('{employee}/regenerate-pin', [App\Http\Controllers\Api\GrupoEsplendido\RH\EmployeeController::class, 'regeneratePIN']);
                 Route::get('{employee}/credential', [App\Http\Controllers\Api\GrupoEsplendido\RH\EmployeeController::class, 'getCredential']);
                 Route::post('{employee}/terminate', [App\Http\Controllers\Api\GrupoEsplendido\RH\EmployeeController::class, 'terminate']);
+                Route::post('{employee}/face-template', [App\Http\Controllers\Api\GrupoEsplendido\RH\EmployeeFaceTemplateController::class, 'store']);
+                Route::delete('{employee}/face-template', [App\Http\Controllers\Api\GrupoEsplendido\RH\EmployeeFaceTemplateController::class, 'destroy']);
             });
             Route::apiResource('empleados', App\Http\Controllers\Api\GrupoEsplendido\RH\EmployeeController::class)
                 ->parameters(['empleados' => 'employee']);
