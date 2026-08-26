@@ -64,4 +64,31 @@ class AttendanceRecordCheckInOutTest extends TestCase
         $this->expectExceptionMessage('Ya registraste tu entrada hoy');
         AttendanceRecord::checkIn($employee, 'biometric', null, now());
     }
+
+    public function test_check_in_with_past_checked_at_creates_record_on_that_date_not_today(): void
+    {
+        [$user, $enterprise] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterprise->id);
+        $pastCheckedAt = now()->subDays(2)->setTime(8, 0);
+
+        $record = AttendanceRecord::checkIn($employee, 'biometric', null, $pastCheckedAt);
+
+        $this->assertSame($pastCheckedAt->toDateString(), $record->date->toDateString());
+        $this->assertNotSame(today()->toDateString(), $record->date->toDateString());
+    }
+
+    public function test_check_out_with_past_checked_at_completes_the_matching_past_day_record(): void
+    {
+        [$user, $enterprise] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterprise->id);
+        $pastCheckIn = now()->subDays(2)->setTime(8, 0);
+        $pastCheckOut = now()->subDays(2)->setTime(17, 0);
+
+        AttendanceRecord::checkIn($employee, 'biometric', null, $pastCheckIn);
+        $record = AttendanceRecord::checkOut($employee, 'biometric', null, $pastCheckOut);
+
+        $this->assertSame($pastCheckIn->toDateString(), $record->date->toDateString());
+        $this->assertTrue($record->check_out->equalTo($pastCheckOut));
+        $this->assertEqualsWithDelta(9.0, (float) $record->hours_worked, 0.01);
+    }
 }

@@ -165,4 +165,23 @@ class TimeClockCheckControllerTest extends TestCase
         $check->refresh();
         $this->assertSame('low_confidence', $check->verification_status); // sin cambio, sigue pendiente de resolver
     }
+
+    public function test_review_approve_with_past_checked_at_registers_on_that_date_not_review_day(): void
+    {
+        [$user, $enterprise] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterprise->id);
+        $pastCheckedAt = now()->subDays(3)->setTime(8, 0);
+        $check = $this->makeCheckDirectly($employee->id, ['checked_at' => $pastCheckedAt]);
+
+        $response = $this->postJson("/api/grupoesplendido/rh/asistencia/checador/{$check->id}/review", [
+            'decision' => 'approve',
+        ]);
+
+        $response->assertStatus(200);
+        $record = AttendanceRecord::where('employee_id', $employee->id)
+            ->whereDate('date', $pastCheckedAt->toDateString())
+            ->first();
+        $this->assertNotNull($record);
+        $this->assertTrue($record->check_in->equalTo($pastCheckedAt));
+    }
 }

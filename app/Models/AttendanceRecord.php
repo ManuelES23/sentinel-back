@@ -159,7 +159,7 @@ class AttendanceRecord extends Model
      */
     public static function checkIn(Employee $employee, string $method = 'qr', ?string $device = null, ?Carbon $checkedAt = null): self
     {
-        $today = today();
+        $today = $checkedAt ? $checkedAt->copy()->startOfDay() : today();
 
         // Buscar o crear registro del día
         $record = self::firstOrCreate(
@@ -195,7 +195,7 @@ class AttendanceRecord extends Model
      */
     public static function checkOut(Employee $employee, string $method = 'qr', ?string $device = null, ?Carbon $checkedAt = null): self
     {
-        $today = today();
+        $today = $checkedAt ? $checkedAt->copy()->startOfDay() : today();
 
         $record = self::where('employee_id', $employee->id)
             ->where('date', $today)
