@@ -142,6 +142,12 @@ class Employee extends Model
         return $this->hasMany(Department::class, 'manager_id');
     }
 
+    public function faceTemplate()
+    {
+        return $this->hasOne(EmployeeFaceTemplate::class)
+            ->where('status', EmployeeFaceTemplate::STATUS_ACTIVE);
+    }
+
     // ==================== ACCESSORS ====================
 
     public function getFullNameAttribute(): string
