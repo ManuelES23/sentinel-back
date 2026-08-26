@@ -1053,8 +1053,7 @@ Route::middleware('auth:sanctum')->group(function () {
 // Son para el kiosco/terminal de checado
 // =====================================================
 Route::prefix('checador')->group(function () {
-    Route::post('qr', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockController::class, 'checkByQR']);
-    Route::post('pin', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockController::class, 'checkByPIN']);
+    Route::post('sync', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockController::class, 'sync']);
     Route::get('status', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockController::class, 'getStatus']);
     Route::get('server-time', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockController::class, 'serverTime']);
     Route::get('today-checks', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockController::class, 'todayChecks']);

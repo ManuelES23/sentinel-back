@@ -3,10 +3,14 @@
 namespace App\Http\Controllers\Api\GrupoEsplendido\RH;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\VerifyTimeClockCheckJob;
 use App\Models\AttendanceRecord;
 use App\Models\Employee;
+use App\Models\TimeClockCheck;
+use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 
 /**
  * Controlador del Checador de Asistencia
@@ -14,137 +18,6 @@ use Illuminate\Http\Request;
  */
 class TimeClockController extends Controller
 {
-    /**
-     * Registrar entrada/salida mediante código QR
-     */
-    public function checkByQR(Request $request): JsonResponse
-    {
-        $validated = $request->validate([
-            'qr_code' => 'required|string',
-            'device_id' => 'nullable|string|max:100',
-        ]);
-
-        $employee = Employee::findByQRCode($validated['qr_code']);
-
-        if (!$employee) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Código QR no válido o empleado inactivo',
-                'type' => 'error',
-            ], 404);
-        }
-
-        return $this->processCheck($employee, 'qr', $validated['device_id'] ?? null);
-    }
-
-    /**
-     * Registrar entrada/salida mediante PIN
-     */
-    public function checkByPIN(Request $request): JsonResponse
-    {
-        $validated = $request->validate([
-            'employee_number' => 'required|string',
-            'pin' => 'required|string|size:6',
-            'device_id' => 'nullable|string|max:100',
-        ]);
-
-        $employee = Employee::where('employee_number', $validated['employee_number'])
-            ->where('pin', $validated['pin'])
-            ->where('status', Employee::STATUS_ACTIVE)
-            ->first();
-
-        if (!$employee) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Número de empleado o PIN incorrecto',
-                'type' => 'error',
-            ], 401);
-        }
-
-        return $this->processCheck($employee, 'pin', $validated['device_id'] ?? null);
-    }
-
-    /**
-     * Procesar checada (entrada o salida automática)
-     */
-    private function processCheck(Employee $employee, string $method, ?string $deviceId): JsonResponse
-    {
-        try {
-            $todayRecord = $employee->todayAttendance();
-            $now = now();
-
-            if (!$todayRecord || !$todayRecord->check_in) {
-                // ENTRADA
-                $record = AttendanceRecord::checkIn($employee, $method, $deviceId);
-
-                return response()->json([
-                    'success' => true,
-                    'type' => 'check_in',
-                    'message' => '¡Buenos días, ' . $employee->first_name . '!',
-                    'data' => [
-                        'employee' => [
-                            'id' => $employee->id,
-                            'employee_number' => $employee->employee_number,
-                            'full_name' => $employee->full_name,
-                            'photo_url' => $employee->photo_url,
-                            'department' => $employee->department?->name,
-                            'position' => $employee->position?->name,
-                        ],
-                        'check_time' => $now->format('H:i:s'),
-                        'date' => $now->format('Y-m-d'),
-                        'status' => $record->status,
-                        'status_label' => $record->status_label,
-                        'late_minutes' => $record->late_minutes,
-                    ],
-                ]);
-            } elseif (!$todayRecord->check_out) {
-                // SALIDA
-                $record = AttendanceRecord::checkOut($employee, $method, $deviceId);
-
-                return response()->json([
-                    'success' => true,
-                    'type' => 'check_out',
-                    'message' => '¡Hasta mañana, ' . $employee->first_name . '!',
-                    'data' => [
-                        'employee' => [
-                            'id' => $employee->id,
-                            'employee_number' => $employee->employee_number,
-                            'full_name' => $employee->full_name,
-                            'photo_url' => $employee->photo_url,
-                            'department' => $employee->department?->name,
-                            'position' => $employee->position?->name,
-                        ],
-                        'check_in_time' => $record->check_in->format('H:i:s'),
-                        'check_out_time' => $now->format('H:i:s'),
-                        'hours_worked' => round($record->hours_worked, 2),
-                        'status' => $record->status,
-                        'status_label' => $record->status_label,
-                    ],
-                ]);
-            } else {
-                // Ya tiene entrada y salida
-                return response()->json([
-                    'success' => false,
-                    'type' => 'already_complete',
-                    'message' => 'Ya completaste tu registro del día',
-                    'data' => [
-                        'employee' => [
-                            'full_name' => $employee->full_name,
-                        ],
-                        'check_in' => $todayRecord->check_in->format('H:i:s'),
-                        'check_out' => $todayRecord->check_out->format('H:i:s'),
-                    ],
-                ], 400);
-            }
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'type' => 'error',
-                'message' => $e->getMessage(),
-            ], 400);
-        }
-    }
-
     /**
      * Consultar estado del empleado (sin checar)
      */
@@ -253,5 +126,96 @@ class TimeClockController extends Controller
             'success' => true,
             'data' => $records,
         ]);
+    }
+
+    /**
+     * Sincroniza un lote de chequeos biométricos. Idempotente por client_uuid.
+     * Público (sin Sanctum) — el empleado no tiene cuenta individual, se
+     * identifica por número + PIN, confirmados por biometría server-side.
+     */
+    public function sync(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'checks' => 'required|array|min:1|max:20',
+            'checks.*.client_uuid' => 'required|uuid',
+            'checks.*.employee_number' => 'required|string',
+            'checks.*.pin' => 'required|string|size:6',
+            'checks.*.type' => 'required|in:' . TimeClockCheck::TYPE_CHECK_IN . ',' . TimeClockCheck::TYPE_CHECK_OUT,
+            'checks.*.checked_at' => 'required|date',
+            'checks.*.device_synced_at' => 'required|date',
+            'checks.*.evidence_photo' => 'required|string',
+            'checks.*.latitude' => 'nullable|numeric|between:-90,90',
+            'checks.*.longitude' => 'nullable|numeric|between:-180,180',
+            'checks.*.device_info' => 'nullable|array',
+        ]);
+
+        $results = [];
+
+        foreach ($validated['checks'] as $item) {
+            $existing = TimeClockCheck::where('client_uuid', $item['client_uuid'])->first();
+            if ($existing) {
+                $results[] = ['client_uuid' => $item['client_uuid'], 'status' => 'duplicate'];
+                continue;
+            }
+
+            $employee = Employee::where('employee_number', $item['employee_number'])
+                ->where('pin', $item['pin'])
+                ->where('status', Employee::STATUS_ACTIVE)
+                ->first();
+
+            if (! $employee) {
+                $results[] = ['client_uuid' => $item['client_uuid'], 'status' => 'rejected', 'reason' => 'numero de empleado o PIN incorrecto, o empleado inactivo'];
+                continue;
+            }
+
+            $decodedPhoto = $this->decodeBase64Photo($item['evidence_photo']);
+            if ($decodedPhoto === null || strlen($decodedPhoto) > 2 * 1024 * 1024) {
+                $results[] = ['client_uuid' => $item['client_uuid'], 'status' => 'rejected', 'reason' => 'foto de evidencia invalida o demasiado grande'];
+                continue;
+            }
+
+            $photoPath = 'private/time-clock-evidence/' . $item['client_uuid'] . '.jpg';
+            Storage::disk('local')->put($photoPath, $decodedPhoto);
+
+            // checked_at: el celular manda new Date().toISOString() (UTC, sufijo
+            // "Z") — se normaliza a la zona horaria de la app antes de guardar,
+            // igual que se corrigio en SfFieldCheckController::sync() (ver
+            // sentinel-back/CLAUDE.md / commit ccc405d) para que no quede
+            // desalineado contra created_at (que si usa now(), ya en hora de la app).
+            $checkedAt = Carbon::parse($item['checked_at'])->setTimezone(config('app.timezone'));
+            $deviceSyncedAt = Carbon::parse($item['device_synced_at']);
+            $clockSkewSeconds = abs(now()->diffInSeconds($deviceSyncedAt));
+
+            $check = TimeClockCheck::create([
+                'client_uuid' => $item['client_uuid'],
+                'employee_id' => $employee->id,
+                'type' => $item['type'],
+                'checked_at' => $checkedAt,
+                'synced_at' => now(),
+                'evidence_photo_path' => $photoPath,
+                'verification_status' => TimeClockCheck::STATUS_PENDING,
+                'latitude' => $item['latitude'] ?? null,
+                'longitude' => $item['longitude'] ?? null,
+                'device_info' => $item['device_info'] ?? null,
+                'clock_skew_seconds' => $clockSkewSeconds,
+            ]);
+
+            VerifyTimeClockCheckJob::dispatch($check->id);
+
+            $results[] = ['client_uuid' => $item['client_uuid'], 'status' => 'accepted'];
+        }
+
+        return response()->json(['success' => true, 'data' => ['results' => $results]]);
+    }
+
+    private function decodeBase64Photo(string $data): ?string
+    {
+        if (str_contains($data, 'base64,')) {
+            $data = substr($data, strpos($data, 'base64,') + 7);
+        }
+
+        $decoded = base64_decode($data, true);
+
+        return $decoded === false ? null : $decoded;
     }
 }
