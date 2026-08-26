@@ -171,7 +171,24 @@ class EmployeeFaceTemplateControllerTest extends TestCase
         ])->assertStatus(201);
 
         $this->get("/api/grupoesplendido/rh/empleados/{$employee->id}/face-template/photo")
-            ->assertStatus(200);
+            ->assertStatus(200)
+            ->assertHeader('Content-Type', 'image/jpeg');
+    }
+
+    public function test_photo_returns_real_content_type_for_png_upload(): void
+    {
+        Storage::fake('local');
+        $this->fakeNodeService();
+        [$user, $enterprise] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterprise->id);
+        $this->postJson($this->enrollUrl($employee->id), [
+            'photo' => UploadedFile::fake()->image('face.png', 640, 480),
+            'consent_signed' => '1',
+        ])->assertStatus(201);
+
+        $this->get("/api/grupoesplendido/rh/empleados/{$employee->id}/face-template/photo")
+            ->assertStatus(200)
+            ->assertHeader('Content-Type', 'image/png');
     }
 
     public function test_photo_returns_404_without_active_template(): void

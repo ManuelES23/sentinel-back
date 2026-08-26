@@ -151,7 +151,7 @@ class EmployeeFaceTemplateController extends Controller
         }
 
         return Storage::disk('local')->response($template->photo_path, null, [
-            'Content-Type' => 'image/jpeg',
+            'Content-Type' => Storage::disk('local')->mimeType($template->photo_path),
         ]);
     }
 }
