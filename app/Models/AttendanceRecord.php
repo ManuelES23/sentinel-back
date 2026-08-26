@@ -157,10 +157,10 @@ class AttendanceRecord extends Model
     /**
      * Registrar entrada
      */
-    public static function checkIn(Employee $employee, string $method = 'qr', ?string $device = null): self
+    public static function checkIn(Employee $employee, string $method = 'qr', ?string $device = null, ?Carbon $checkedAt = null): self
     {
         $today = today();
-        
+
         // Buscar o crear registro del día
         $record = self::firstOrCreate(
             ['employee_id' => $employee->id, 'date' => $today],
@@ -171,7 +171,7 @@ class AttendanceRecord extends Model
             throw new \Exception('Ya registraste tu entrada hoy');
         }
 
-        $now = now();
+        $now = $checkedAt ?? now();
         $record->check_in = $now;
         $record->check_in_method = $method;
         $record->check_in_device = $device;
@@ -193,10 +193,10 @@ class AttendanceRecord extends Model
     /**
      * Registrar salida
      */
-    public static function checkOut(Employee $employee, string $method = 'qr', ?string $device = null): self
+    public static function checkOut(Employee $employee, string $method = 'qr', ?string $device = null, ?Carbon $checkedAt = null): self
     {
         $today = today();
-        
+
         $record = self::where('employee_id', $employee->id)
             ->where('date', $today)
             ->first();
@@ -209,7 +209,7 @@ class AttendanceRecord extends Model
             throw new \Exception('Ya registraste tu salida hoy');
         }
 
-        $now = now();
+        $now = $checkedAt ?? now();
         $record->check_out = $now;
         $record->check_out_method = $method;
         $record->check_out_device = $device;
