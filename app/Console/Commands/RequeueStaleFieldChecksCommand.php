@@ -12,7 +12,7 @@ class RequeueStaleFieldChecksCommand extends Command
 {
     protected $signature = 'biometrics:requeue-stale-checks';
 
-    protected $description = 'Re-despacha VerifyFieldCheckJob para checks atascados en pending más allá de la ventana normal de reintento';
+    protected $description = 'Re-despacha VerifyFieldCheckJob y VerifyTimeClockCheckJob para checks atascados en pending más allá de la ventana normal de reintento';
 
     /**
      * STATUS_PENDING solo se escribe en SfFieldCheckController::sync() y solo
