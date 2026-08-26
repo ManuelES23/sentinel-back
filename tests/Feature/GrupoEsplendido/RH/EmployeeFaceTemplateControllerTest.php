@@ -137,4 +137,49 @@ class EmployeeFaceTemplateControllerTest extends TestCase
 
         $this->deleteJson($this->enrollUrl($employee->id))->assertStatus(404);
     }
+
+    public function test_employee_index_includes_has_face_template(): void
+    {
+        Storage::fake('local');
+        $this->fakeNodeService();
+        [$user, $enterprise] = $this->createAuthenticatedRhUser();
+        $enrolled = $this->createEmployee($enterprise->id);
+        $notEnrolled = $this->createEmployee($enterprise->id);
+
+        $this->postJson($this->enrollUrl($enrolled->id), [
+            'photo' => UploadedFile::fake()->image('face.jpg', 640, 480),
+            'consent_signed' => '1',
+        ])->assertStatus(201);
+
+        $response = $this->getJson('/api/grupoesplendido/rh/empleados?enterprise_id=' . $enterprise->id);
+        $response->assertStatus(200);
+
+        $rows = collect($response->json('data.data') ?? $response->json('data'));
+        $this->assertTrue((bool) $rows->firstWhere('id', $enrolled->id)['has_face_template']);
+        $this->assertFalse((bool) $rows->firstWhere('id', $notEnrolled->id)['has_face_template']);
+    }
+
+    public function test_photo_returns_binary_for_active_template(): void
+    {
+        Storage::fake('local');
+        $this->fakeNodeService();
+        [$user, $enterprise] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterprise->id);
+        $this->postJson($this->enrollUrl($employee->id), [
+            'photo' => UploadedFile::fake()->image('face.jpg', 640, 480),
+            'consent_signed' => '1',
+        ])->assertStatus(201);
+
+        $this->get("/api/grupoesplendido/rh/empleados/{$employee->id}/face-template/photo")
+            ->assertStatus(200);
+    }
+
+    public function test_photo_returns_404_without_active_template(): void
+    {
+        [$user, $enterprise] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterprise->id);
+
+        $this->get("/api/grupoesplendido/rh/empleados/{$employee->id}/face-template/photo")
+            ->assertStatus(404);
+    }
 }

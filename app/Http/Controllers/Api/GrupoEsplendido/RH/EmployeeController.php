@@ -15,7 +15,8 @@ class EmployeeController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $query = Employee::with(['enterprise', 'department', 'position', 'supervisor', 'workSchedule']);
+        $query = Employee::with(['enterprise', 'department', 'position', 'supervisor', 'workSchedule'])
+            ->withExists(['faceTemplate as has_face_template']);
 
         // Filtrar por empresa
         if ($request->has('enterprise_id')) {

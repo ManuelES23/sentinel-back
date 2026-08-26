@@ -963,6 +963,7 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::post('{employee}/terminate', [App\Http\Controllers\Api\GrupoEsplendido\RH\EmployeeController::class, 'terminate']);
                 Route::post('{employee}/face-template', [App\Http\Controllers\Api\GrupoEsplendido\RH\EmployeeFaceTemplateController::class, 'store']);
                 Route::delete('{employee}/face-template', [App\Http\Controllers\Api\GrupoEsplendido\RH\EmployeeFaceTemplateController::class, 'destroy']);
+                Route::get('{employee}/face-template/photo', [App\Http\Controllers\Api\GrupoEsplendido\RH\EmployeeFaceTemplateController::class, 'photo']);
             });
             Route::apiResource('empleados', App\Http\Controllers\Api\GrupoEsplendido\RH\EmployeeController::class)
                 ->parameters(['empleados' => 'employee']);

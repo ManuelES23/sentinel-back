@@ -134,4 +134,24 @@ class EmployeeFaceTemplateController extends Controller
             'data' => null,
         ]);
     }
+
+    /**
+     * Sirve la foto de referencia de la plantilla facial ACTIVA del empleado.
+     */
+    public function photo(Request $request, Employee $employee)
+    {
+        $this->authorizeEnterpriseAccess($request, (int) $employee->enterprise_id);
+
+        $template = EmployeeFaceTemplate::where('employee_id', $employee->id)
+            ->where('status', EmployeeFaceTemplate::STATUS_ACTIVE)
+            ->first();
+
+        if (! $template || ! $template->photo_path || ! Storage::disk('local')->exists($template->photo_path)) {
+            abort(404, 'El empleado no tiene una foto de referencia disponible.');
+        }
+
+        return Storage::disk('local')->response($template->photo_path, null, [
+            'Content-Type' => 'image/jpeg',
+        ]);
+    }
 }
