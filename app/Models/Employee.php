@@ -148,6 +148,11 @@ class Employee extends Model
             ->where('status', EmployeeFaceTemplate::STATUS_ACTIVE);
     }
 
+    public function timeClockChecks()
+    {
+        return $this->hasMany(TimeClockCheck::class);
+    }
+
     // ==================== ACCESSORS ====================
 
     public function getFullNameAttribute(): string
