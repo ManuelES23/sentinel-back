@@ -12,6 +12,7 @@ use App\Models\Enterprise;
 use App\Models\InventoryMovement;
 use App\Models\PurchaseOrder;
 use App\Models\SfFieldCheck;
+use App\Models\TimeClockCheck;
 use App\Models\VacationBalance;
 use App\Models\VacationRequest;
 use App\Services\NotificationService;
@@ -31,12 +32,18 @@ class PendingApprovalController extends Controller
         $employee = $user->employee;
         $hasTransferPermission = $this->hasTransferApprovalPermission($request, $user);
         $fieldCheckEntry = $this->getFieldCheckReviewProcessEntry($request, $user);
+        $timeClockReviewEntry = $this->getTimeClockReviewProcessEntry($request, $user);
 
         // Sin empleado solo se habilita validación de transferencias o de
         // revisión de asistencia biométrica, ambas por permiso explícito de submódulo.
         if (! $employee && ! $hasTransferPermission) {
             $processes = $fieldCheckEntry ? [$fieldCheckEntry] : [];
             $totalPending = $fieldCheckEntry['pending_count'] ?? 0;
+
+            if ($timeClockReviewEntry) {
+                $processes[] = $timeClockReviewEntry;
+                $totalPending += $timeClockReviewEntry['pending_count'];
+            }
 
             return response()->json([
                 'success' => true,
@@ -66,6 +73,11 @@ class PendingApprovalController extends Controller
             if ($fieldCheckEntry) {
                 $processes[] = $fieldCheckEntry;
                 $totalPending += $fieldCheckEntry['pending_count'];
+            }
+
+            if ($timeClockReviewEntry) {
+                $processes[] = $timeClockReviewEntry;
+                $totalPending += $timeClockReviewEntry['pending_count'];
             }
 
             return response()->json([
@@ -143,6 +155,11 @@ class PendingApprovalController extends Controller
         if ($fieldCheckEntry) {
             $result[] = $fieldCheckEntry;
             $totalPending += $fieldCheckEntry['pending_count'];
+        }
+
+        if ($timeClockReviewEntry) {
+            $result[] = $timeClockReviewEntry;
+            $totalPending += $timeClockReviewEntry['pending_count'];
         }
 
         return response()->json([
@@ -1546,6 +1563,110 @@ class PendingApprovalController extends Controller
             'pending_count' => $count,
             'scope' => 'enterprise',
             'route' => '/administration/personal/revision-asistencia',
+        ];
+    }
+
+    /**
+     * IDs de empresa donde el usuario tiene permiso de escritura en el
+     * submódulo 'revision-checador' de RH > Asistencia. Mismo patrón que
+     * getFieldCheckReviewableEnterpriseIds (campo, Splendid Farms) —
+     * acceso por permiso de submódulo, no por jerarquía ApprovalProcess.
+     */
+    private function getTimeClockReviewableEnterpriseIds($user): array
+    {
+        if (! Schema::hasTable('user_submodule_access')) {
+            return [];
+        }
+
+        $submoduleRows = DB::table('submodules')
+            ->join('modules', 'submodules.module_id', '=', 'modules.id')
+            ->join('applications', 'modules.application_id', '=', 'applications.id')
+            ->where('applications.slug', 'rh')
+            ->where('modules.slug', 'asistencia')
+            ->where('submodules.slug', 'revision-checador')
+            ->pluck('applications.enterprise_id', 'submodules.id');
+
+        if ($submoduleRows->isEmpty()) {
+            return [];
+        }
+
+        $submoduleIds = $submoduleRows->keys();
+
+        $accessibleSubmoduleIds = DB::table('user_submodule_access')
+            ->where('user_id', $user->id)
+            ->whereIn('submodule_id', $submoduleIds)
+            ->where('is_active', true)
+            ->pluck('submodule_id');
+
+        if ($accessibleSubmoduleIds->isEmpty()) {
+            return [];
+        }
+
+        if (! Schema::hasTable('user_submodule_permissions') || ! Schema::hasTable('submodule_permission_types')) {
+            return $accessibleSubmoduleIds->map(fn ($id) => (int) $submoduleRows[$id])->unique()->values()->all();
+        }
+
+        $grantedColumn = Schema::hasColumn('user_submodule_permissions', 'is_granted') ? 'is_granted' : 'granted';
+        $slugColumn = Schema::hasColumn('submodule_permission_types', 'slug') ? 'slug' : 'key';
+
+        $permissionRows = DB::table('user_submodule_permissions as usp')
+            ->leftJoin('submodule_permission_types as spt', 'usp.permission_type_id', '=', 'spt.id')
+            ->where('usp.user_id', $user->id)
+            ->whereIn('usp.submodule_id', $accessibleSubmoduleIds)
+            ->get(['usp.submodule_id', "usp.{$grantedColumn} as is_granted", "spt.{$slugColumn} as slug"]);
+
+        $acceptedSlugs = ['ver', 'view', 'editar', 'edit', 'aprobar', 'approve'];
+        $enterpriseIds = [];
+
+        foreach ($accessibleSubmoduleIds as $submoduleId) {
+            $rowsForSubmodule = $permissionRows->where('submodule_id', $submoduleId);
+
+            if ($rowsForSubmodule->isEmpty()) {
+                $enterpriseIds[] = (int) $submoduleRows[$submoduleId];
+                continue;
+            }
+
+            foreach ($rowsForSubmodule as $row) {
+                $isGranted = (bool) $row->is_granted;
+                $slug = strtolower((string) ($row->slug ?? ''));
+
+                if ($isGranted && $slug !== '' && in_array($slug, $acceptedSlugs, true)) {
+                    $enterpriseIds[] = (int) $submoduleRows[$submoduleId];
+                    break;
+                }
+            }
+        }
+
+        return array_values(array_unique($enterpriseIds));
+    }
+
+    /**
+     * Entrada sintética para el dropdown global "Por Aprobar", o null si el
+     * usuario no tiene permiso en ninguna empresa.
+     */
+    private function getTimeClockReviewProcessEntry(Request $request, $user): ?array
+    {
+        $enterpriseIds = $this->getTimeClockReviewableEnterpriseIds($user);
+        if (empty($enterpriseIds)) {
+            return null;
+        }
+
+        $count = TimeClockCheck::whereHas('employee', fn ($q) => $q->whereIn('enterprise_id', $enterpriseIds))
+            ->whereIn('verification_status', [
+                TimeClockCheck::STATUS_LOW_CONFIDENCE,
+                TimeClockCheck::STATUS_NO_TEMPLATE,
+            ])
+            ->count();
+
+        return [
+            'process_id' => null,
+            'code' => 'time_clock_check_review',
+            'name' => 'Revisión de checador biométrico',
+            'module' => 'rh',
+            'description' => 'Chequeos de asistencia que no se verificaron automáticamente',
+            'pending_count' => $count,
+            'scope' => 'enterprise',
+            'route' => '/rh/asistencia/revision-checador',
         ];
     }
 }
