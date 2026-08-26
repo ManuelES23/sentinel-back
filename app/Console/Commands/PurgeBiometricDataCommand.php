@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Models\SfEmployeeFaceTemplate;
 use App\Models\SfFieldCheck;
+use App\Models\TimeClockCheck;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Storage;
 
@@ -16,11 +17,13 @@ class PurgeBiometricDataCommand extends Command
     public function handle(): int
     {
         $evidencePurged = $this->purgeEvidencePhotos();
+        $timeClockEvidencePurged = $this->purgeTimeClockCheckEvidence();
         $templatesPurged = $this->purgeRevokedTemplates();
 
         // Solo se loguean conteos, nunca contenido ni rutas de archivo —
         // dato biométrico sensible incluso en logs de operación.
         $this->info("Fotos de evidencia purgadas: {$evidencePurged}");
+        $this->info("Fotos de evidencia de checador purgadas: {$timeClockEvidencePurged}");
         $this->info("Plantillas revocadas purgadas: {$templatesPurged}");
 
         return self::SUCCESS;
@@ -44,6 +47,39 @@ class PurgeBiometricDataCommand extends Command
         $checks = SfFieldCheck::whereIn('verification_status', $resolvedStatuses)
             ->whereNotNull('evidence_photo_path')
             ->where('created_at', '<', $cutoff)
+            ->get();
+
+        $count = 0;
+        foreach ($checks as $check) {
+            if (Storage::disk('local')->exists($check->evidence_photo_path)) {
+                Storage::disk('local')->delete($check->evidence_photo_path);
+            }
+            $check->update(['evidence_photo_path' => null]);
+            $count++;
+        }
+
+        return $count;
+    }
+
+    /**
+     * Checks de checador (time_clock_checks) en estado terminal-resuelto
+     * (verified/manually_approved/rejected), con checked_at más viejo que el
+     * plazo configurado, y que aún tienen una foto (no purgados ya). Mismo
+     * criterio que purgeEvidencePhotos() para sf_field_checks — nunca toca
+     * pending/low_confidence/no_template.
+     */
+    private function purgeTimeClockCheckEvidence(): int
+    {
+        $cutoff = now()->subDays((int) config('biometrics.evidence_retention_days'));
+        $resolvedStatuses = [
+            TimeClockCheck::STATUS_VERIFIED,
+            TimeClockCheck::STATUS_MANUALLY_APPROVED,
+            TimeClockCheck::STATUS_REJECTED,
+        ];
+
+        $checks = TimeClockCheck::whereIn('verification_status', $resolvedStatuses)
+            ->whereNotNull('evidence_photo_path')
+            ->where('checked_at', '<', $cutoff)
             ->get();
 
         $count = 0;

@@ -6,12 +6,13 @@ use App\Models\SfEmployeeFaceTemplate;
 use App\Models\SfFieldCheck;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Storage;
+use Tests\Concerns\CreatesRhFixtures;
 use Tests\Concerns\CreatesSfPersonalFixtures;
 use Tests\TestCase;
 
 class PurgeBiometricDataCommandTest extends TestCase
 {
-    use RefreshDatabase, CreatesSfPersonalFixtures;
+    use RefreshDatabase, CreatesSfPersonalFixtures, CreatesRhFixtures;
 
     public function test_purges_evidence_photo_of_old_resolved_check(): void
     {
@@ -171,5 +172,56 @@ class PurgeBiometricDataCommandTest extends TestCase
 
         $check->refresh();
         $this->assertNull($check->evidence_photo_path);
+    }
+
+    public function test_purges_evidence_photo_of_old_resolved_time_clock_check(): void
+    {
+        Storage::fake('local');
+        [, $enterprise] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterprise->id);
+        $path = 'private/time-clock-evidence/old.jpg';
+        Storage::disk('local')->put($path, 'fake-jpeg-bytes');
+
+        $check = \App\Models\TimeClockCheck::create([
+            'client_uuid' => (string) \Illuminate\Support\Str::uuid(),
+            'employee_id' => $employee->id,
+            'type' => 'check_in',
+            'checked_at' => now()->subDays(100),
+            'evidence_photo_path' => $path,
+            'verification_status' => 'verified',
+            'clock_skew_seconds' => 0,
+        ]);
+        $check->forceFill(['created_at' => now()->subDays(100)])->save();
+
+        $this->artisan('biometrics:purge')->assertSuccessful();
+
+        $check->refresh();
+        $this->assertNull($check->evidence_photo_path);
+        $this->assertFalse(Storage::disk('local')->exists($path));
+    }
+
+    public function test_does_not_purge_recent_time_clock_check(): void
+    {
+        Storage::fake('local');
+        [, $enterprise] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterprise->id);
+        $path = 'private/time-clock-evidence/recent.jpg';
+        Storage::disk('local')->put($path, 'fake-jpeg-bytes');
+
+        $check = \App\Models\TimeClockCheck::create([
+            'client_uuid' => (string) \Illuminate\Support\Str::uuid(),
+            'employee_id' => $employee->id,
+            'type' => 'check_in',
+            'checked_at' => now(),
+            'evidence_photo_path' => $path,
+            'verification_status' => 'verified',
+            'clock_skew_seconds' => 0,
+        ]);
+
+        $this->artisan('biometrics:purge')->assertSuccessful();
+
+        $check->refresh();
+        $this->assertSame($path, $check->evidence_photo_path);
+        $this->assertTrue(Storage::disk('local')->exists($path));
     }
 }
