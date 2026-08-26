@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\GrupoEsplendido\RH;
 
 use App\Http\Controllers\Controller;
 use App\Models\Employee;
+use App\Models\EmployeeFaceTemplate;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -223,6 +224,8 @@ class EmployeeController extends Controller
      */
     public function destroy(Employee $employee): JsonResponse
     {
+        $this->revokeActiveFaceTemplate($employee->id);
+
         // Soft delete
         $employee->delete();
 
@@ -295,6 +298,8 @@ class EmployeeController extends Controller
             'notes' => 'nullable|string',
         ]);
 
+        $this->revokeActiveFaceTemplate($employee->id);
+
         $employee->update([
             'status' => Employee::STATUS_TERMINATED,
             'termination_date' => $validated['termination_date'],
@@ -305,6 +310,25 @@ class EmployeeController extends Controller
             'success' => true,
             'message' => 'Empleado dado de baja exitosamente',
             'data' => $employee,
+        ]);
+    }
+
+    /**
+     * Revoca la plantilla facial activa del empleado, si tiene una — parte
+     * del ciclo de vida del dato biométrico al darlo de baja (por
+     * terminate() o por destroy()). Se carga el modelo primero (no un
+     * ->update() masivo sobre la query) para que el trait Loggable dispare
+     * su evento updated() y quede auditado en activity_logs.
+     */
+    private function revokeActiveFaceTemplate(int $employeeId): void
+    {
+        $activeTemplate = EmployeeFaceTemplate::where('employee_id', $employeeId)
+            ->where('status', EmployeeFaceTemplate::STATUS_ACTIVE)
+            ->first();
+
+        $activeTemplate?->update([
+            'status' => EmployeeFaceTemplate::STATUS_REVOKED,
+            'revoked_at' => now(),
         ]);
     }
 }
