@@ -979,15 +979,16 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::post('importar-excel', [App\Http\Controllers\Api\GrupoEsplendido\RH\AttendanceController::class, 'importExcel']);
                 Route::get('nomina-resumen', [App\Http\Controllers\Api\GrupoEsplendido\RH\AttendanceController::class, 'payrollSummary']);
             });
-            Route::apiResource('asistencia', App\Http\Controllers\Api\GrupoEsplendido\RH\AttendanceController::class)
-                ->parameters(['asistencia' => 'attendance']);
 
-            // Submódulo Revisión de checador biométrico
+            // Submódulo Revisión de checador biométrico (ANTES del apiResource para evitar shadowing)
             Route::prefix('asistencia/checador')->group(function () {
                 Route::get('/', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockCheckController::class, 'index']);
                 Route::post('{timeClockCheck}/review', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockCheckController::class, 'review']);
                 Route::get('{timeClockCheck}/evidence-photo', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockCheckController::class, 'evidencePhoto']);
             });
+
+            Route::apiResource('asistencia', App\Http\Controllers\Api\GrupoEsplendido\RH\AttendanceController::class)
+                ->parameters(['asistencia' => 'attendance']);
 
             // Submódulo Vacaciones
             Route::prefix('vacaciones')->group(function () {

@@ -59,6 +59,7 @@ class TimeClockCheckControllerTest extends TestCase
         \Laravel\Sanctum\Sanctum::actingAs($user);
         $response = $this->getJson("/api/grupoesplendido/rh/asistencia/checador?enterprise_id={$enterprise->id}");
 
+        $response->assertStatus(200);
         $this->assertEmpty($response->json('data.data'));
     }
 
@@ -116,7 +117,7 @@ class TimeClockCheckControllerTest extends TestCase
         $this->assertSame($user->id, $check->reviewed_by_user_id);
 
         $record = AttendanceRecord::where('employee_id', $employee->id)
-            ->where('date', $checkedAt->toDateString())
+            ->whereDate('date', $checkedAt->toDateString())
             ->first();
         $this->assertNotNull($record);
         $this->assertTrue($record->check_in->equalTo($checkedAt));
