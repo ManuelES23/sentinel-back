@@ -143,7 +143,13 @@ class TimeClockController extends Controller
             'checks.*.type' => 'required|in:' . TimeClockCheck::TYPE_CHECK_IN . ',' . TimeClockCheck::TYPE_CHECK_OUT,
             'checks.*.checked_at' => 'required|date',
             'checks.*.device_synced_at' => 'required|date',
-            'checks.*.evidence_photo' => 'required|string',
+            // max en caracteres (regla 'string'): ~2MB de JPEG real en
+            // base64 son ~2,800,000 caracteres; 3,000,000 da margen sin
+            // dejar el payload sin techo — antes de esto la validacion
+            // aceptaba un string de cualquier tamaño y el limite de ~2MB
+            // solo se checaba DESPUES de decodificar el base64 completo
+            // ya recibido (decodeBase64Photo() mas abajo).
+            'checks.*.evidence_photo' => 'required|string|max:3000000',
             'checks.*.latitude' => 'nullable|numeric|between:-90,90',
             'checks.*.longitude' => 'nullable|numeric|between:-180,180',
             'checks.*.device_info' => 'nullable|array',

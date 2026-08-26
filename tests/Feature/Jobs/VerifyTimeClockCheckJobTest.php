@@ -178,6 +178,32 @@ class VerifyTimeClockCheckJobTest extends TestCase
         $this->assertDatabaseCount('attendance_records', 0);
     }
 
+    /**
+     * Guarda de medianoche (hallazgo #2 de la revision final del branch):
+     * un checado offline con checked_at de AYER (encolado sin conexion y
+     * solo sincronizado/procesado hoy) NO debe consolidarse contra el dia
+     * de HOY via AttendanceRecord::checkIn() — ese metodo ancla a
+     * today() del servidor en el momento en que corre el job, no al dia
+     * real del checado, lo que produciria un registro cruzado/corrupto.
+     * Debe ir a revision humana (STATUS_LOW_CONFIDENCE) sin crear ni
+     * tocar ningun AttendanceRecord.
+     */
+    public function test_offline_check_synced_after_midnight_goes_to_low_confidence_without_consolidating(): void
+    {
+        [, $enterprise] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterprise->id);
+        $embedding = array_fill(0, 128, 0.2);
+        $this->enrollTemplate($employee->id, $embedding);
+        $this->fakeEmbedResponse($embedding); // match perfecto — sin la guarda, consolidaria
+
+        $check = $this->makeCheck($employee->id, ['checked_at' => now()->subDay()->setTime(23, 50)]);
+        $this->runJob(new VerifyTimeClockCheckJob($check->id));
+
+        $check->refresh();
+        $this->assertSame(TimeClockCheck::STATUS_LOW_CONFIDENCE, $check->verification_status);
+        $this->assertDatabaseCount('attendance_records', 0);
+    }
+
     public function test_stale_model_version_template_is_treated_as_no_template(): void
     {
         [, $enterprise] = $this->createAuthenticatedRhUser();

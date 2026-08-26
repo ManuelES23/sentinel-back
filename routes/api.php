@@ -1048,15 +1048,25 @@ Route::middleware('auth:sanctum')->group(function () {
 });
 
 // =====================================================
-// RUTAS PÚBLICAS - CHECADOR DE ASISTENCIA
-// Estas rutas NO requieren autenticación Sanctum
-// Son para el kiosco/terminal de checado
+// RUTAS DEL CHECADOR DE ASISTENCIA
+// 'sync' y 'server-time' son PÚBLICAS a propósito (checador self-service,
+// el empleado no tiene cuenta individual — se identifica con número+PIN,
+// confirmado por biometría server-side). 'status' y 'today-checks' NO
+// tienen consumidor actual (ChecadorView.jsx / useTimeClock.js ya no las
+// llama) y exponen PII de empleados (nombre, foto, depto) a cualquiera
+// con un employee_number adivinable, así que van detrás de Sanctum.
+// Throttle en las 4: 'sync' es el único endpoint público de escritura del
+// feature (mitiga fuerza bruta de PIN vía employee_number), y 'status' /
+// 'today-checks' son endpoints de lectura con PII que no deben poder
+// scrapearse ni ya autenticado.
 // =====================================================
-Route::prefix('checador')->group(function () {
+Route::prefix('checador')->middleware('throttle:30,1')->group(function () {
     Route::post('sync', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockController::class, 'sync']);
-    Route::get('status', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockController::class, 'getStatus']);
     Route::get('server-time', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockController::class, 'serverTime']);
-    Route::get('today-checks', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockController::class, 'todayChecks']);
+    Route::get('status', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockController::class, 'getStatus'])
+        ->middleware('auth:sanctum');
+    Route::get('today-checks', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockController::class, 'todayChecks'])
+        ->middleware('auth:sanctum');
 });
 
 // =====================================================
