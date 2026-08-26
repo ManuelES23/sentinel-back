@@ -3,7 +3,9 @@
 namespace App\Console\Commands;
 
 use App\Jobs\VerifyFieldCheckJob;
+use App\Jobs\VerifyTimeClockCheckJob;
 use App\Models\SfFieldCheck;
+use App\Models\TimeClockCheck;
 use Illuminate\Console\Command;
 
 class RequeueStaleFieldChecksCommand extends Command
@@ -57,7 +59,21 @@ class RequeueStaleFieldChecksCommand extends Command
             VerifyFieldCheckJob::dispatch($check->id);
         }
 
-        $this->info("Chequeos pending re-despachados: {$staleChecks->count()}");
+        $staleTimeClockChecks = TimeClockCheck::where('verification_status', TimeClockCheck::STATUS_PENDING)
+            ->where(function ($query) use ($cutoff) {
+                $query->where(function ($q) use ($cutoff) {
+                    $q->whereNotNull('synced_at')->where('synced_at', '<', $cutoff);
+                })->orWhere(function ($q) use ($cutoff) {
+                    $q->whereNull('synced_at')->where('created_at', '<', $cutoff);
+                });
+            })
+            ->get();
+
+        foreach ($staleTimeClockChecks as $check) {
+            VerifyTimeClockCheckJob::dispatch($check->id);
+        }
+
+        $this->info("SfFieldCheck pending re-despachados: {$staleChecks->count()}, TimeClockCheck pending re-despachados: {$staleTimeClockChecks->count()}");
 
         return self::SUCCESS;
     }
