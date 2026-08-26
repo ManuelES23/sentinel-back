@@ -982,6 +982,13 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::apiResource('asistencia', App\Http\Controllers\Api\GrupoEsplendido\RH\AttendanceController::class)
                 ->parameters(['asistencia' => 'attendance']);
 
+            // Submódulo Revisión de checador biométrico
+            Route::prefix('asistencia/checador')->group(function () {
+                Route::get('/', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockCheckController::class, 'index']);
+                Route::post('{timeClockCheck}/review', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockCheckController::class, 'review']);
+                Route::get('{timeClockCheck}/evidence-photo', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockCheckController::class, 'evidencePhoto']);
+            });
+
             // Submódulo Vacaciones
             Route::prefix('vacaciones')->group(function () {
                 // Rutas de cálculo según Ley Federal del Trabajo México
