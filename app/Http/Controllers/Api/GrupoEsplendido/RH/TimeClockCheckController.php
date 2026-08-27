@@ -32,19 +32,34 @@ class TimeClockCheckController extends Controller
     public function index(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'enterprise_id' => 'required|exists:enterprises,id',
+            'enterprise_id' => 'nullable|exists:enterprises,id',
             'employee_id' => 'nullable|exists:employees,id',
             'verification_status' => 'nullable|string',
             'start_date' => 'nullable|date',
             'end_date' => 'nullable|date',
+            'per_page' => 'nullable|integer|min:1|max:100',
         ]);
 
-        $this->authorizeEnterpriseAccess($request, (int) $validated['enterprise_id']);
-
         $query = TimeClockCheck::query()
-            ->with('employee:id,enterprise_id,employee_number,first_name,last_name,second_last_name')
-            ->whereHas('employee', fn ($q) => $q->where('enterprise_id', $validated['enterprise_id']))
-            ->when($validated['employee_id'] ?? null, fn ($q, $v) => $q->where('employee_id', $v))
+            ->with('employee:id,enterprise_id,employee_number,first_name,last_name,second_last_name');
+
+        if ($validated['enterprise_id'] ?? null) {
+            $this->authorizeEnterpriseAccess($request, (int) $validated['enterprise_id']);
+
+            $query->whereHas('employee', fn ($q) => $q->where('enterprise_id', $validated['enterprise_id']));
+        } else {
+            // RH es una app corporativa multi-empresa: sin enterprise_id
+            // explícito, se escala a todas las empresas donde el usuario
+            // tiene acceso activo (UserEnterpriseAccess), no solo a la
+            // empresa dueña de la app RH.
+            $enterpriseIds = UserEnterpriseAccess::where('user_id', $request->user()->id)
+                ->where('is_active', true)
+                ->pluck('enterprise_id');
+
+            $query->whereHas('employee', fn ($q) => $q->whereIn('enterprise_id', $enterpriseIds));
+        }
+
+        $query->when($validated['employee_id'] ?? null, fn ($q, $v) => $q->where('employee_id', $v))
             ->when($validated['verification_status'] ?? null, fn ($q, $v) => $q->where('verification_status', $v))
             ->when(
                 ($validated['start_date'] ?? null) && ($validated['end_date'] ?? null),
@@ -52,9 +67,11 @@ class TimeClockCheckController extends Controller
             )
             ->orderByDesc('checked_at');
 
+        $perPage = $validated['per_page'] ?? 20;
+
         return response()->json([
             'success' => true,
-            'data' => $query->paginate(20),
+            'data' => $query->paginate($perPage),
         ]);
     }
 

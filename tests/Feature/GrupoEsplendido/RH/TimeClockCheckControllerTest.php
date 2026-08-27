@@ -6,6 +6,7 @@ use App\Models\AttendanceRecord;
 use App\Models\Employee;
 use App\Models\Enterprise;
 use App\Models\TimeClockCheck;
+use App\Models\UserEnterpriseAccess;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Tests\Concerns\CreatesRhFixtures;
@@ -61,6 +62,95 @@ class TimeClockCheckControllerTest extends TestCase
 
         $response->assertStatus(200);
         $this->assertEmpty($response->json('data.data'));
+    }
+
+    /**
+     * Hallazgo #1 de la revision final del branch (Fix 1b): RH es una app
+     * corporativa multi-empresa — un usuario puede tener UserEnterpriseAccess
+     * a varias empresas reales (grupoesplendido, splendidbyporvenir, etc.)
+     * aunque la app 'rh' este registrada bajo una sola. Sin enterprise_id
+     * explicito, index() debe escalar a TODAS las empresas del usuario, no
+     * solo a la primera/unica.
+     */
+    public function test_index_without_enterprise_id_spans_all_user_enterprises(): void
+    {
+        [$user, $enterpriseA] = $this->createAuthenticatedRhUser();
+        $enterpriseB = Enterprise::create([
+            'name' => 'Grupo Espléndido Test B',
+            'slug' => 'grupoesplendido-test-b',
+            'description' => 'Segunda empresa de prueba para RH',
+            'is_active' => true,
+        ]);
+        UserEnterpriseAccess::create([
+            'user_id' => $user->id,
+            'enterprise_id' => $enterpriseB->id,
+            'is_active' => true,
+            'granted_at' => now(),
+        ]);
+
+        $employeeA = $this->createEmployee($enterpriseA->id);
+        $employeeB = $this->createEmployee($enterpriseB->id);
+        $checkA = $this->makeCheckDirectly($employeeA->id);
+        $checkB = $this->makeCheckDirectly($employeeB->id);
+
+        $response = $this->getJson('/api/grupoesplendido/rh/asistencia/checador');
+
+        $response->assertStatus(200);
+        $ids = collect($response->json('data.data'))->pluck('id');
+        $this->assertTrue($ids->contains($checkA->id));
+        $this->assertTrue($ids->contains($checkB->id));
+    }
+
+    /**
+     * Regresion: cuando SI se manda enterprise_id explicito, el comportamiento
+     * de una sola empresa (mas authorizeEnterpriseAccess) debe seguir intacto.
+     */
+    public function test_index_with_explicit_enterprise_id_still_narrows_to_one_enterprise(): void
+    {
+        [$user, $enterpriseA] = $this->createAuthenticatedRhUser();
+        $enterpriseB = Enterprise::create([
+            'name' => 'Grupo Espléndido Test C',
+            'slug' => 'grupoesplendido-test-c',
+            'description' => 'Tercera empresa de prueba para RH',
+            'is_active' => true,
+        ]);
+        UserEnterpriseAccess::create([
+            'user_id' => $user->id,
+            'enterprise_id' => $enterpriseB->id,
+            'is_active' => true,
+            'granted_at' => now(),
+        ]);
+
+        $employeeA = $this->createEmployee($enterpriseA->id);
+        $employeeB = $this->createEmployee($enterpriseB->id);
+        $checkA = $this->makeCheckDirectly($employeeA->id);
+        $checkB = $this->makeCheckDirectly($employeeB->id);
+
+        $response = $this->getJson("/api/grupoesplendido/rh/asistencia/checador?enterprise_id={$enterpriseA->id}");
+
+        $response->assertStatus(200);
+        $ids = collect($response->json('data.data'))->pluck('id');
+        $this->assertTrue($ids->contains($checkA->id));
+        $this->assertFalse($ids->contains($checkB->id));
+    }
+
+    /**
+     * Hallazgo #2 de la revision final del branch (Fix 2): sin per_page, el
+     * hardcode de paginate(20) le esconde a la bandeja cualquier check mas
+     * alla de los 20 mas recientes. per_page=100 debe devolver mas de 20.
+     */
+    public function test_index_per_page_returns_more_than_default_twenty(): void
+    {
+        [, $enterprise] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterprise->id);
+        for ($i = 0; $i < 25; $i++) {
+            $this->makeCheckDirectly($employee->id, ['checked_at' => now()->subMinutes($i)]);
+        }
+
+        $response = $this->getJson("/api/grupoesplendido/rh/asistencia/checador?enterprise_id={$enterprise->id}&per_page=100");
+
+        $response->assertStatus(200);
+        $this->assertGreaterThan(20, count($response->json('data.data')));
     }
 
     public function test_review_requires_authentication(): void

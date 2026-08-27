@@ -1603,7 +1603,19 @@ class PendingApprovalController extends Controller
         }
 
         if (! Schema::hasTable('user_submodule_permissions') || ! Schema::hasTable('submodule_permission_types')) {
-            return $accessibleSubmoduleIds->map(fn ($id) => (int) $submoduleRows[$id])->unique()->values()->all();
+            // Gate de permiso superado: RH es una app corporativa
+            // multi-empresa (applications.slug='rh' vive bajo un solo
+            // enterprise_id, pero los empleados de RH abarcan varias
+            // empresas reales) — a diferencia del gate mismo (arriba, sin
+            // tocar), lo que se devuelve aquí ya NO es "la empresa dueña
+            // del submódulo" sino todas las empresas donde el usuario
+            // tiene acceso activo real.
+            return \App\Models\UserEnterpriseAccess::where('user_id', $user->id)
+                ->where('is_active', true)
+                ->pluck('enterprise_id')
+                ->unique()
+                ->values()
+                ->all();
         }
 
         $grantedColumn = Schema::hasColumn('user_submodule_permissions', 'is_granted') ? 'is_granted' : 'granted';
@@ -1637,7 +1649,19 @@ class PendingApprovalController extends Controller
             }
         }
 
-        return array_values(array_unique($enterpriseIds));
+        if (empty($enterpriseIds)) {
+            return [];
+        }
+
+        // Gate de permiso superado (ver comentario en la rama de arriba):
+        // se devuelven todas las empresas del usuario, no solo la empresa
+        // dueña del submódulo RH.
+        return \App\Models\UserEnterpriseAccess::where('user_id', $user->id)
+            ->where('is_active', true)
+            ->pluck('enterprise_id')
+            ->unique()
+            ->values()
+            ->all();
     }
 
     /**

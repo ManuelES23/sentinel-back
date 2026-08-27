@@ -224,4 +224,43 @@ class PurgeBiometricDataCommandTest extends TestCase
         $this->assertSame($path, $check->evidence_photo_path);
         $this->assertTrue(Storage::disk('local')->exists($path));
     }
+
+    /**
+     * Hallazgo #4 de la revision final del branch (ver Global Constraints/
+     * Fix 4 del prompt de revision): el corte de retencion de
+     * purgeTimeClockCheckEvidence() debe usar created_at (server-side,
+     * inmutable), NUNCA checked_at (dato del dispositivo del empleado,
+     * potencialmente incorrecto). Este check simula un dispositivo con
+     * checked_at viejo (cruzaria el corte de retencion si se usara esa
+     * columna) pero created_at reciente (default de Eloquent al crear el
+     * registro en este mismo test) — con el fix, NO debe purgarse. Los
+     * demas tests de esta clase mueven checked_at y created_at juntos, asi
+     * que no detectan una regresion a checked_at por si solos; este si.
+     */
+    public function test_time_clock_check_purge_cutoff_uses_created_at_not_checked_at(): void
+    {
+        Storage::fake('local');
+        [, $enterprise] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterprise->id);
+        $path = 'private/time-clock-evidence/device-clock-wrong.jpg';
+        Storage::disk('local')->put($path, 'fake-jpeg-bytes');
+
+        $check = \App\Models\TimeClockCheck::create([
+            'client_uuid' => (string) \Illuminate\Support\Str::uuid(),
+            'employee_id' => $employee->id,
+            'type' => 'check_in',
+            'checked_at' => now()->subDays(100), // dato de dispositivo, viejo
+            'evidence_photo_path' => $path,
+            'verification_status' => 'verified',
+            'clock_skew_seconds' => 0,
+        ]);
+        // created_at queda en su valor por defecto (now()) — NO se hace
+        // forceFill aqui, a proposito, para separarlo de checked_at.
+
+        $this->artisan('biometrics:purge')->assertSuccessful();
+
+        $check->refresh();
+        $this->assertSame($path, $check->evidence_photo_path);
+        $this->assertTrue(Storage::disk('local')->exists($path));
+    }
 }

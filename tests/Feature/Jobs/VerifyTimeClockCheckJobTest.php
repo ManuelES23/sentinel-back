@@ -179,29 +179,41 @@ class VerifyTimeClockCheckJobTest extends TestCase
     }
 
     /**
-     * Guarda de medianoche (hallazgo #2 de la revision final del branch):
-     * un checado offline con checked_at de AYER (encolado sin conexion y
-     * solo sincronizado/procesado hoy) NO debe consolidarse contra el dia
-     * de HOY via AttendanceRecord::checkIn() — ese metodo ancla a
-     * today() del servidor en el momento en que corre el job, no al dia
-     * real del checado, lo que produciria un registro cruzado/corrupto.
-     * Debe ir a revision humana (STATUS_LOW_CONFIDENCE) sin crear ni
-     * tocar ningun AttendanceRecord.
+     * Ex-guarda de medianoche (hallazgo #3 de la revision final del branch,
+     * ver Global Constraints/Fix 3 del prompt de revision): la guarda que
+     * mandaba a low_confidence cualquier checado offline con checked_at de
+     * un dia distinto de "hoy" server-side quedo OBSOLETA cuando
+     * AttendanceRecord::checkIn()/checkOut() se corrigio para anclar al
+     * dia de $checkedAt (no a today() del servidor) — ver
+     * test_review_approve_with_past_checked_at_registers_on_that_date_not_review_day
+     * en TimeClockCheckControllerTest, que ya prueba esto a nivel
+     * AttendanceRecord. Este test prueba el flujo completo del job: un
+     * checado offline con checked_at de AYER que matchea correctamente
+     * contra la plantilla facial debe consolidarse normalmente a
+     * STATUS_VERIFIED, con un AttendanceRecord fechado al dia de
+     * checked_at (no al dia de hoy).
      */
-    public function test_offline_check_synced_after_midnight_goes_to_low_confidence_without_consolidating(): void
+    public function test_offline_check_synced_after_midnight_consolidates_normally_on_checked_at_day(): void
     {
         [, $enterprise] = $this->createAuthenticatedRhUser();
         $employee = $this->createEmployee($enterprise->id);
         $embedding = array_fill(0, 128, 0.2);
         $this->enrollTemplate($employee->id, $embedding);
-        $this->fakeEmbedResponse($embedding); // match perfecto — sin la guarda, consolidaria
+        $this->fakeEmbedResponse($embedding); // match perfecto
 
-        $check = $this->makeCheck($employee->id, ['checked_at' => now()->subDay()->setTime(23, 50)]);
+        $checkedAt = now()->subDay()->setTime(23, 50);
+        $check = $this->makeCheck($employee->id, ['checked_at' => $checkedAt]);
         $this->runJob(new VerifyTimeClockCheckJob($check->id));
 
         $check->refresh();
-        $this->assertSame(TimeClockCheck::STATUS_LOW_CONFIDENCE, $check->verification_status);
-        $this->assertDatabaseCount('attendance_records', 0);
+        $this->assertSame(TimeClockCheck::STATUS_VERIFIED, $check->verification_status);
+
+        $record = AttendanceRecord::where('employee_id', $employee->id)
+            ->whereDate('date', $checkedAt->toDateString())
+            ->first();
+        $this->assertNotNull($record);
+        $this->assertNotNull($record->check_in);
+        $this->assertTrue($record->check_in->equalTo($checkedAt));
     }
 
     public function test_stale_model_version_template_is_treated_as_no_template(): void

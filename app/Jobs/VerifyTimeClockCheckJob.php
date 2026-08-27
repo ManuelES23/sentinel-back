@@ -92,21 +92,6 @@ class VerifyTimeClockCheckJob implements ShouldQueue
             return;
         }
 
-        // Guarda de medianoche: AttendanceRecord::checkIn()/checkOut()
-        // anclan al $today = today() DEL SERVIDOR en el momento en que
-        // corre el job, no al dia real del checado (check->checked_at).
-        // Un checado offline encolado antes de medianoche y sincronizado/
-        // procesado despues consolidaria contra el dia equivocado y
-        // podria producir un hours_worked corrupto. Es una limitacion
-        // documentada y fuera de alcance de AttendanceRecord (Task 2 del
-        // plan) — aqui solo se contiene: si el dia real del checado no es
-        // "hoy" server-side en este instante, se manda a revision humana
-        // en vez de arriesgar un registro cruzado/corrupto.
-        if (! $check->checked_at->isSameDay(today())) {
-            $check->update(['verification_status' => TimeClockCheck::STATUS_LOW_CONFIDENCE]);
-            return;
-        }
-
         $employee = Employee::find($check->employee_id);
 
         try {

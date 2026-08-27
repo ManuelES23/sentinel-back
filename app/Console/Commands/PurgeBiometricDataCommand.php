@@ -63,10 +63,15 @@ class PurgeBiometricDataCommand extends Command
 
     /**
      * Checks de checador (time_clock_checks) en estado terminal-resuelto
-     * (verified/manually_approved/rejected), con checked_at más viejo que el
+     * (verified/manually_approved/rejected), con created_at más viejo que el
      * plazo configurado, y que aún tienen una foto (no purgados ya). Mismo
      * criterio que purgeEvidencePhotos() para sf_field_checks — nunca toca
      * pending/low_confidence/no_template.
+     *
+     * El corte usa created_at (server-side, inmutable), NO checked_at
+     * (dato del dispositivo del empleado, potencialmente incorrecto según
+     * el propio spec de este feature) — mismo criterio que
+     * purgeEvidencePhotos() arriba.
      */
     private function purgeTimeClockCheckEvidence(): int
     {
@@ -79,7 +84,7 @@ class PurgeBiometricDataCommand extends Command
 
         $checks = TimeClockCheck::whereIn('verification_status', $resolvedStatuses)
             ->whereNotNull('evidence_photo_path')
-            ->where('checked_at', '<', $cutoff)
+            ->where('created_at', '<', $cutoff)
             ->get();
 
         $count = 0;
