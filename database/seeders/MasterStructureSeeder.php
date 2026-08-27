@@ -209,6 +209,12 @@ class MasterStructureSeeder extends Seeder
         );
         $this->command->info("    → Asistencia: Checador");
 
+        Submodule::firstOrCreate(
+            ['slug' => 'revision-checador', 'module_id' => $rhAsistencia->id],
+            ['name' => 'Revisión de Checador', 'icon' => 'ShieldCheck', 'order' => 3, 'is_active' => true]
+        );
+        $this->command->info("    → Asistencia: Revisión de Checador");
+
         // Módulo: Gestión (Vacaciones e Incidencias)
         $rhGestion = Module::firstOrCreate(
             ['slug' => 'gestion', 'application_id' => $rh->id],
