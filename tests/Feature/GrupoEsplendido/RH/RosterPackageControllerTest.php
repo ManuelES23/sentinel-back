@@ -81,7 +81,7 @@ class RosterPackageControllerTest extends TestCase
             ->getJson('/api/checador/roster-package');
 
         $response->assertStatus(200);
-        $ids = collect($response->json('data.employees'))->pluck('id');
+        $ids = collect($response->json('data.employees'))->pluck('employee_id');
         $this->assertTrue($ids->contains($employeeA->id));
         $this->assertTrue($ids->contains($employeeB->id)); // cruza empresas, sin filtrar
         $this->assertSame('faceapi-v1', $response->json('data.model_version'));
@@ -98,7 +98,7 @@ class RosterPackageControllerTest extends TestCase
         $response = $this->withHeaders(['X-Device-Token' => $token])
             ->getJson('/api/checador/roster-package');
 
-        $ids = collect($response->json('data.employees'))->pluck('id');
+        $ids = collect($response->json('data.employees'))->pluck('employee_id');
         $this->assertFalse($ids->contains($noTemplateEmployee->id));
         $this->assertFalse($ids->contains($revokedEmployee->id));
     }

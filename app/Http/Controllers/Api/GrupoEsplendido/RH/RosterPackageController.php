@@ -41,7 +41,7 @@ class RosterPackageController extends Controller
             $template = $employee->faceTemplate;
 
             return [
-                'id' => $employee->id,
+                'employee_id' => $employee->id,
                 'employee_number' => $employee->employee_number,
                 'full_name' => trim("{$employee->first_name} {$employee->last_name} {$employee->second_last_name}"),
                 'embedding' => $template->embedding,
