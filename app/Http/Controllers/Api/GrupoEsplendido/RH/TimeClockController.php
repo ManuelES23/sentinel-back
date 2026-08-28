@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\GrupoEsplendido\RH;
 use App\Http\Controllers\Controller;
 use App\Jobs\VerifyTimeClockCheckJob;
 use App\Models\AttendanceRecord;
+use App\Models\DevicePairing;
 use App\Models\Employee;
 use App\Models\TimeClockCheck;
 use Carbon\Carbon;
@@ -157,6 +158,19 @@ class TimeClockController extends Controller
             'checks.*.device_info' => 'nullable|array',
         ]);
 
+        // El middleware device.token ya resolvió y validó el DevicePairing
+        // del dispositivo que llama (ver AuthenticateDeviceToken) y lo dejó
+        // en los attributes del request. mode/device_pairing_id se derivan
+        // de ahí, nunca del device_info que manda el cliente — el cliente
+        // puede mandar otros campos propios (os, app_version, etc.) que sí
+        // se conservan tal cual.
+        /** @var DevicePairing $devicePairing */
+        $devicePairing = $request->attributes->get('devicePairing');
+        $serverDeviceInfo = [
+            'mode' => $devicePairing->mode,
+            'device_pairing_id' => $devicePairing->id,
+        ];
+
         $results = [];
 
         foreach ($validated['checks'] as $item) {
@@ -203,7 +217,11 @@ class TimeClockController extends Controller
                 'verification_status' => TimeClockCheck::STATUS_PENDING,
                 'latitude' => $item['latitude'] ?? null,
                 'longitude' => $item['longitude'] ?? null,
-                'device_info' => $item['device_info'] ?? null,
+                // Server-derived mode/device_pairing_id siempre ganan sobre
+                // cualquier valor que el cliente haya mandado con esas
+                // mismas dos llaves — el resto del device_info del cliente
+                // (os, app_version, etc.) se conserva.
+                'device_info' => array_merge($item['device_info'] ?? [], $serverDeviceInfo),
                 'clock_skew_seconds' => $clockSkewSeconds,
             ]);
 

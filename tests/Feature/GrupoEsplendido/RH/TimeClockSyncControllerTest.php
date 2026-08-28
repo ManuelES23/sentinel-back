@@ -83,6 +83,45 @@ class TimeClockSyncControllerTest extends TestCase
         $this->assertDatabaseCount('time_clock_checks', 0);
     }
 
+    public function test_sync_rejects_invalid_device_token(): void
+    {
+        Queue::fake();
+        Storage::fake('local');
+        [, $enterprise] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterprise->id);
+
+        $response = $this->withHeaders(['X-Device-Token' => 'token-invalido'])
+            ->postJson('/api/checador/sync', [
+                'checks' => [$this->baseCheckPayload(['employee_id' => $employee->id])],
+            ]);
+
+        $response->assertStatus(401);
+        $this->assertDatabaseCount('time_clock_checks', 0);
+    }
+
+    public function test_sync_rejects_revoked_device_token(): void
+    {
+        Queue::fake();
+        Storage::fake('local');
+        [, $enterprise] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterprise->id);
+        $raw = DevicePairing::generateToken();
+        DevicePairing::create([
+            'device_token_hash' => DevicePairing::hashToken($raw),
+            'mode' => DevicePairing::MODE_SELF,
+            'paired_by_employee_id' => $employee->id,
+            'revoked_at' => now(),
+        ]);
+
+        $response = $this->withHeaders(['X-Device-Token' => $raw])
+            ->postJson('/api/checador/sync', [
+                'checks' => [$this->baseCheckPayload(['employee_id' => $employee->id])],
+            ]);
+
+        $response->assertStatus(401);
+        $this->assertDatabaseCount('time_clock_checks', 0);
+    }
+
     public function test_sync_rejects_nonexistent_employee_id_without_creating_row(): void
     {
         Queue::fake();
@@ -182,5 +221,72 @@ class TimeClockSyncControllerTest extends TestCase
 
         $check = TimeClockCheck::first();
         $this->assertGreaterThanOrEqual(2600, $check->clock_skew_seconds);
+    }
+
+    public function test_sync_stamps_mode_and_device_pairing_id_from_the_attached_pairing(): void
+    {
+        Queue::fake();
+        Storage::fake('local');
+        [, $enterprise] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterprise->id);
+        $token = $this->pairedDeviceToken($employee->id);
+        $pairing = DevicePairing::first();
+
+        $this->withHeaders(['X-Device-Token' => $token])
+            ->postJson('/api/checador/sync', [
+                'checks' => [$this->baseCheckPayload(['employee_id' => $employee->id])],
+            ])->assertStatus(200);
+
+        $check = TimeClockCheck::first();
+        $this->assertSame(DevicePairing::MODE_SELF, $check->device_info['mode']);
+        $this->assertSame($pairing->id, $check->device_info['device_pairing_id']);
+    }
+
+    public function test_sync_merges_server_stamped_fields_with_client_sent_device_info(): void
+    {
+        Queue::fake();
+        Storage::fake('local');
+        [, $enterprise] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterprise->id);
+        $token = $this->pairedDeviceToken($employee->id);
+        $pairing = DevicePairing::first();
+
+        $this->withHeaders(['X-Device-Token' => $token])
+            ->postJson('/api/checador/sync', [
+                'checks' => [$this->baseCheckPayload([
+                    'employee_id' => $employee->id,
+                    'device_info' => ['os' => 'Android 14', 'app_version' => '1.2.3'],
+                ])],
+            ])->assertStatus(200);
+
+        $check = TimeClockCheck::first();
+        $this->assertSame('Android 14', $check->device_info['os']);
+        $this->assertSame('1.2.3', $check->device_info['app_version']);
+        $this->assertSame(DevicePairing::MODE_SELF, $check->device_info['mode']);
+        $this->assertSame($pairing->id, $check->device_info['device_pairing_id']);
+    }
+
+    public function test_sync_server_stamped_device_info_overrides_client_sent_values(): void
+    {
+        Queue::fake();
+        Storage::fake('local');
+        [, $enterprise] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterprise->id);
+        $token = $this->pairedDeviceToken($employee->id);
+        $pairing = DevicePairing::first();
+
+        $this->withHeaders(['X-Device-Token' => $token])
+            ->postJson('/api/checador/sync', [
+                'checks' => [$this->baseCheckPayload([
+                    'employee_id' => $employee->id,
+                    // El cliente intenta suplantar mode/device_pairing_id —
+                    // el servidor nunca debe confiar en estos dos campos.
+                    'device_info' => ['mode' => 'kiosk', 'device_pairing_id' => 999999],
+                ])],
+            ])->assertStatus(200);
+
+        $check = TimeClockCheck::first();
+        $this->assertSame(DevicePairing::MODE_SELF, $check->device_info['mode']);
+        $this->assertSame($pairing->id, $check->device_info['device_pairing_id']);
     }
 }
