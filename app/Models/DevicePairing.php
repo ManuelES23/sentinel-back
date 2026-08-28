@@ -33,6 +33,8 @@ class DevicePairing extends Model
         'revoked_at',
     ];
 
+    protected $hidden = ['device_token_hash'];
+
     protected $casts = [
         'last_used_at' => 'datetime',
         'revoked_at' => 'datetime',

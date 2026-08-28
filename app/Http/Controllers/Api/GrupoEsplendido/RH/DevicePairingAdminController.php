@@ -42,6 +42,17 @@ class DevicePairingAdminController extends Controller
 
     public function revoke(Request $request, DevicePairing $devicePairing): JsonResponse
     {
+        // Si es un kiosco, cualquier admin de RH autenticado puede revocarlo.
+        // Si es un emparejamiento personal (self), solo el admin de RH que tiene
+        // acceso a la empresa del empleado puede revocarlo.
+        if ($devicePairing->mode === DevicePairing::MODE_SELF) {
+            // Cargar la relación si no está cargada
+            $devicePairing->load('pairedByEmployee');
+
+            // Verificar que el usuario tiene acceso a la empresa del empleado
+            $this->authorizeEnterpriseAccess($request, (int) $devicePairing->pairedByEmployee->enterprise_id);
+        }
+
         $devicePairing->update(['revoked_at' => now()]);
 
         return response()->json([
@@ -49,5 +60,17 @@ class DevicePairingAdminController extends Controller
             'message' => 'Dispositivo revocado. Ya no puede sincronizar ni descargar el paquete de plantillas.',
             'data' => $devicePairing->fresh(),
         ]);
+    }
+
+    private function authorizeEnterpriseAccess(Request $request, int $enterpriseId): void
+    {
+        abort_unless(
+            UserEnterpriseAccess::where('user_id', $request->user()->id)
+                ->where('enterprise_id', $enterpriseId)
+                ->where('is_active', true)
+                ->exists(),
+            403,
+            'No tienes acceso a esta empresa'
+        );
     }
 }

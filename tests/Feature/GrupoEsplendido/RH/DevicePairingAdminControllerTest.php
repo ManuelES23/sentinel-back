@@ -105,4 +105,25 @@ class DevicePairingAdminControllerTest extends TestCase
             ->getJson('/api/checador/roster-package')
             ->assertStatus(401);
     }
+
+    public function test_revoke_prevents_cross_enterprise_idor(): void
+    {
+        // Usuario de RH con acceso solo a empresa 1
+        [$user1, $enterprise1] = $this->createAuthenticatedRhUser();
+        // Usuario de RH con acceso solo a empresa 2
+        [$user2, $enterprise2] = $this->createAuthenticatedRhUser();
+
+        // Crear un emparejamiento personal en empresa 2
+        $employee2 = $this->createEmployee($enterprise2->id);
+        $pairing = $this->makeSelfPairing($employee2->id);
+
+        // Usuario 1 intenta revocar el dispositivo de empresa 2 (IDOR attack)
+        \Laravel\Sanctum\Sanctum::actingAs($user1);
+        $response = $this->postJson("/api/grupoesplendido/rh/asistencia/dispositivos/{$pairing->id}/revocar");
+
+        // Debe ser 403 Forbidden
+        $response->assertStatus(403);
+        // El dispositivo no debe estar revocado
+        $this->assertNull($pairing->fresh()->revoked_at);
+    }
 }
