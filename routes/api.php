@@ -1071,6 +1071,8 @@ Route::middleware('auth:sanctum')->group(function () {
 Route::prefix('checador')->middleware('throttle:30,1')->group(function () {
     Route::post('sync', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockController::class, 'sync']);
     Route::get('server-time', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockController::class, 'serverTime']);
+    Route::post('pair', [App\Http\Controllers\Api\GrupoEsplendido\RH\DevicePairingController::class, 'pairSelf'])
+        ->middleware('throttle:5,1');
     Route::get('status', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockController::class, 'getStatus'])
         ->middleware('auth:sanctum');
     Route::get('today-checks', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockController::class, 'todayChecks'])
