@@ -96,4 +96,42 @@ class DevicePairingControllerTest extends TestCase
         $this->postJson('/api/grupoesplendido/rh/checador-fijo/pair')
             ->assertStatus(201);
     }
+
+    /**
+     * Prueba de aislamiento real del throttle de /checador/pair (5/min por
+     * IP). Antes de la corrección, este límite y el throttle:30,1 del grupo
+     * compartían la misma clave del RateLimiter (sin un tercer segmento de
+     * prefijo), así que el cupo real efectivo era mucho menor y se
+     * compartía con cualquier otra ruta de /checador/* — ver hallazgo
+     * Bloqueante de la revisión final del branch.
+     */
+    public function test_pair_throttle_is_isolated_from_other_checador_routes(): void
+    {
+        // Agota el cupo aislado de 5/min de /checador/pair.
+        for ($i = 0; $i < 5; $i++) {
+            $this->postJson('/api/checador/pair', [])->assertStatus(422);
+        }
+        $this->postJson('/api/checador/pair', [])->assertStatus(429);
+
+        // Otra ruta de /checador/* (server-time, pública, sin token) NO
+        // debe verse afectada por el cupo agotado de pair — prueba que
+        // son limitadores independientes, no el mismo contador compartido.
+        $this->getJson('/api/checador/server-time')->assertStatus(200);
+    }
+
+    public function test_hitting_other_checador_routes_does_not_drain_pairs_isolated_budget(): void
+    {
+        // Golpea otra ruta de /checador/* varias veces (bien por debajo del
+        // techo de 30/min del grupo) antes de tocar /checador/pair.
+        for ($i = 0; $i < 10; $i++) {
+            $this->getJson('/api/checador/server-time')->assertStatus(200);
+        }
+
+        // El cupo propio de pair sigue intacto: las primeras 5 pasan, la
+        // sexta es la que dispara su propio límite aislado.
+        for ($i = 0; $i < 5; $i++) {
+            $this->postJson('/api/checador/pair', [])->assertStatus(422);
+        }
+        $this->postJson('/api/checador/pair', [])->assertStatus(429);
+    }
 }

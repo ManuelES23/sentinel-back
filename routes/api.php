@@ -1077,8 +1077,13 @@ Route::prefix('checador')->middleware('throttle:30,1')->group(function () {
     Route::post('sync', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockController::class, 'sync'])
         ->middleware('device.token');
     Route::get('server-time', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockController::class, 'serverTime']);
+    // El tercer segmento ('pair') le da a este límite su propia clave en el
+    // RateLimiter, aislada del throttle:30,1 del grupo (sin ese segmento,
+    // ambos limiters comparten la misma clave sha1(dominio|ip) y el cupo
+    // real termina siendo mucho menor y compartido con /checador/sync y
+    // demás rutas del grupo — ver hallazgo Bloqueante de la revisión final).
     Route::post('pair', [App\Http\Controllers\Api\GrupoEsplendido\RH\DevicePairingController::class, 'pairSelf'])
-        ->middleware('throttle:5,1');
+        ->middleware('throttle:5,1,pair');
     Route::get('status', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockController::class, 'getStatus'])
         ->middleware('auth:sanctum');
     Route::get('today-checks', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockController::class, 'todayChecks'])
