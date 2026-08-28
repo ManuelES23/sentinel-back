@@ -1080,6 +1080,8 @@ Route::prefix('checador')->middleware('throttle:30,1')->group(function () {
         ->middleware('auth:sanctum');
     Route::get('today-checks', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockController::class, 'todayChecks'])
         ->middleware('auth:sanctum');
+    Route::get('roster-package', App\Http\Controllers\Api\GrupoEsplendido\RH\RosterPackageController::class)
+        ->middleware('device.token');
 });
 
 // =====================================================

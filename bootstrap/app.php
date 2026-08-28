@@ -17,6 +17,10 @@ return Application::configure(basePath: dirname(__DIR__))
         // CORS global: se ejecuta antes del routing y cubre respuestas de error
         // de Apache (OOM, timeout) donde el pipeline de Laravel no alcanza a correr.
         $middleware->prepend(\Illuminate\Http\Middleware\HandleCors::class);
+
+        $middleware->alias([
+            'device.token' => \App\Http\Middleware\AuthenticateDeviceToken::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
         //
