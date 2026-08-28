@@ -29,7 +29,12 @@ class AuthenticateDeviceToken
             ], 401);
         }
 
-        $pairing->update(['last_used_at' => now()]);
+        // updateQuietly(): last_used_at se toca en CADA sync()/refresh de
+        // paquete exitoso — un update() normal dispararía el evento
+        // `updated` de Loggable en cada uno de esos requests, generando una
+        // fila de activity_log por checada/refresh (ruido de auditoría sin
+        // valor real, ver hallazgo Importante de la revisión final).
+        $pairing->updateQuietly(['last_used_at' => now()]);
         $request->attributes->set('devicePairing', $pairing);
 
         return $next($request);
