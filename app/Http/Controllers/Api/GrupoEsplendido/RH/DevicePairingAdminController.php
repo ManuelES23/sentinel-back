@@ -58,7 +58,7 @@ class DevicePairingAdminController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Dispositivo revocado. Ya no puede sincronizar ni descargar el paquete de plantillas.',
-            'data' => $devicePairing->fresh(),
+            'data' => $devicePairing->fresh(['pairedByEmployee', 'pairedByUser']),
         ]);
     }
 
