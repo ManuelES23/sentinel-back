@@ -987,6 +987,9 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::get('{timeClockCheck}/evidence-photo', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockCheckController::class, 'evidencePhoto']);
             });
 
+            // Emparejamiento del kiosco fijo
+            Route::post('checador-fijo/pair', [App\Http\Controllers\Api\GrupoEsplendido\RH\DevicePairingController::class, 'pairKiosk']);
+
             Route::apiResource('asistencia', App\Http\Controllers\Api\GrupoEsplendido\RH\AttendanceController::class)
                 ->parameters(['asistencia' => 'attendance']);
 

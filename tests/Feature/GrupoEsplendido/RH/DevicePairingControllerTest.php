@@ -63,4 +63,37 @@ class DevicePairingControllerTest extends TestCase
     {
         $this->postJson('/api/checador/pair', [])->assertStatus(422);
     }
+
+    public function test_pair_kiosk_requires_authentication(): void
+    {
+        $this->postJson('/api/grupoesplendido/rh/checador-fijo/pair')
+            ->assertStatus(401);
+    }
+
+    public function test_pair_kiosk_creates_kiosk_pairing_linked_to_authenticated_user(): void
+    {
+        [$user] = $this->createAuthenticatedRhUser();
+
+        $response = $this->postJson('/api/grupoesplendido/rh/checador-fijo/pair', [
+            'label' => 'Entrada oficina principal',
+        ]);
+
+        $response->assertStatus(201);
+        $token = $response->json('data.device_token');
+        $this->assertNotEmpty($token);
+
+        $this->assertDatabaseHas('device_pairings', [
+            'mode' => DevicePairing::MODE_KIOSK,
+            'paired_by_user_id' => $user->id,
+            'label' => 'Entrada oficina principal',
+        ]);
+    }
+
+    public function test_pair_kiosk_label_is_optional(): void
+    {
+        $this->createAuthenticatedRhUser();
+
+        $this->postJson('/api/grupoesplendido/rh/checador-fijo/pair')
+            ->assertStatus(201);
+    }
 }

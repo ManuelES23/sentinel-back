@@ -48,4 +48,32 @@ class DevicePairingController extends Controller
             'data' => ['device_token' => $rawToken],
         ], 201);
     }
+
+    /**
+     * Emparejamiento del kiosco fijo: requiere que un usuario de RH ya
+     * autenticado lo autorice explícitamente — no cualquier empleado con
+     * número+PIN, porque este dispositivo se queda instalado en un lugar
+     * físico y escanea a cualquiera que pase, no solo a su dueño.
+     */
+    public function pairKiosk(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'label' => 'nullable|string|max:255',
+        ]);
+
+        $rawToken = DevicePairing::generateToken();
+
+        DevicePairing::create([
+            'device_token_hash' => DevicePairing::hashToken($rawToken),
+            'mode' => DevicePairing::MODE_KIOSK,
+            'paired_by_user_id' => $request->user()->id,
+            'label' => $validated['label'] ?? null,
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Dispositivo fijo emparejado correctamente.',
+            'data' => ['device_token' => $rawToken],
+        ], 201);
+    }
 }
