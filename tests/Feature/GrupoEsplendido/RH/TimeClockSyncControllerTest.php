@@ -3,6 +3,8 @@
 namespace Tests\Feature\GrupoEsplendido\RH;
 
 use App\Jobs\VerifyTimeClockCheckJob;
+use App\Models\DevicePairing;
+use App\Models\Employee;
 use App\Models\TimeClockCheck;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -22,12 +24,27 @@ class TimeClockSyncControllerTest extends TestCase
         ));
     }
 
+    /**
+     * Empareja un dispositivo (mode self) para un empleado dado y regresa el
+     * token crudo, listo para mandarse en el header X-Device-Token. Mismo
+     * patrón que RosterPackageControllerTest::pairedDeviceToken() (Task 4).
+     */
+    private function pairedDeviceToken(int $employeeId): string
+    {
+        $raw = DevicePairing::generateToken();
+        DevicePairing::create([
+            'device_token_hash' => DevicePairing::hashToken($raw),
+            'mode' => DevicePairing::MODE_SELF,
+            'paired_by_employee_id' => $employeeId,
+        ]);
+
+        return $raw;
+    }
+
     private function baseCheckPayload(array $overrides = []): array
     {
         return array_merge([
             'client_uuid' => (string) Str::uuid(),
-            'employee_number' => 'EMP-0001',
-            'pin' => '000001',
             'type' => 'check_in',
             'checked_at' => now()->toIso8601String(),
             'device_synced_at' => now()->toIso8601String(),
@@ -35,33 +52,51 @@ class TimeClockSyncControllerTest extends TestCase
         ], $overrides);
     }
 
-    public function test_sync_does_not_require_authentication(): void
+    public function test_sync_does_not_require_sanctum_authentication(): void
     {
         Queue::fake();
         Storage::fake('local');
         [, $enterprise] = $this->createAuthenticatedRhUser();
-        $this->createEmployee($enterprise->id, ['employee_number' => 'EMP-0001', 'pin' => '000001']);
-        // Simula petición pública real: sin token de Sanctum.
+        $employee = $this->createEmployee($enterprise->id);
+        $token = $this->pairedDeviceToken($employee->id);
+        // Simula petición pública real: sin token de Sanctum (solo device.token).
         $this->app['auth']->forgetGuards();
 
-        $response = $this->postJson('/api/checador/sync', ['checks' => [$this->baseCheckPayload()]]);
+        $response = $this->withHeaders(['X-Device-Token' => $token])
+            ->postJson('/api/checador/sync', ['checks' => [$this->baseCheckPayload(['employee_id' => $employee->id])]]);
 
         $response->assertStatus(200);
     }
 
-    public function test_sync_rejects_wrong_pin_without_creating_row(): void
+    public function test_sync_requires_device_token_header(): void
     {
         Queue::fake();
         Storage::fake('local');
         [, $enterprise] = $this->createAuthenticatedRhUser();
-        $this->createEmployee($enterprise->id, ['employee_number' => 'EMP-0001', 'pin' => '000001']);
+        $employee = $this->createEmployee($enterprise->id);
 
         $response = $this->postJson('/api/checador/sync', [
-            'checks' => [$this->baseCheckPayload(['pin' => '999999'])],
+            'checks' => [$this->baseCheckPayload(['employee_id' => $employee->id])],
         ]);
 
-        $response->assertStatus(200);
-        $this->assertSame('rejected', collect($response->json('data.results'))->first()['status']);
+        $response->assertStatus(401);
+        $this->assertDatabaseCount('time_clock_checks', 0);
+    }
+
+    public function test_sync_rejects_nonexistent_employee_id_without_creating_row(): void
+    {
+        Queue::fake();
+        Storage::fake('local');
+        [, $enterprise] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterprise->id);
+        $token = $this->pairedDeviceToken($employee->id);
+
+        $response = $this->withHeaders(['X-Device-Token' => $token])
+            ->postJson('/api/checador/sync', [
+                'checks' => [$this->baseCheckPayload(['employee_id' => $employee->id + 999])],
+            ]);
+
+        $response->assertStatus(422);
         $this->assertDatabaseCount('time_clock_checks', 0);
     }
 
@@ -70,12 +105,14 @@ class TimeClockSyncControllerTest extends TestCase
         Queue::fake();
         Storage::fake('local');
         [, $enterprise] = $this->createAuthenticatedRhUser();
-        $this->createEmployee($enterprise->id, ['employee_number' => 'EMP-0001', 'pin' => '000001']);
+        $employee = $this->createEmployee($enterprise->id);
+        $token = $this->pairedDeviceToken($employee->id);
 
         $uuid = (string) Str::uuid();
-        $response = $this->postJson('/api/checador/sync', [
-            'checks' => [$this->baseCheckPayload(['client_uuid' => $uuid])],
-        ]);
+        $response = $this->withHeaders(['X-Device-Token' => $token])
+            ->postJson('/api/checador/sync', [
+                'checks' => [$this->baseCheckPayload(['client_uuid' => $uuid, 'employee_id' => $employee->id])],
+            ]);
 
         $response->assertStatus(200);
         $this->assertSame('accepted', collect($response->json('data.results'))->firstWhere('client_uuid', $uuid)['status']);
@@ -88,11 +125,15 @@ class TimeClockSyncControllerTest extends TestCase
         Queue::fake();
         Storage::fake('local');
         [, $enterprise] = $this->createAuthenticatedRhUser();
-        $this->createEmployee($enterprise->id, ['employee_number' => 'EMP-0001', 'pin' => '000001']);
-        $payload = $this->baseCheckPayload();
+        $employee = $this->createEmployee($enterprise->id);
+        $token = $this->pairedDeviceToken($employee->id);
+        $payload = $this->baseCheckPayload(['employee_id' => $employee->id]);
 
-        $this->postJson('/api/checador/sync', ['checks' => [$payload]])->assertStatus(200);
-        $second = $this->postJson('/api/checador/sync', ['checks' => [$payload]]);
+        $this->withHeaders(['X-Device-Token' => $token])
+            ->postJson('/api/checador/sync', ['checks' => [$payload]])
+            ->assertStatus(200);
+        $second = $this->withHeaders(['X-Device-Token' => $token])
+            ->postJson('/api/checador/sync', ['checks' => [$payload]]);
 
         $this->assertSame('duplicate', collect($second->json('data.results'))->first()['status']);
         $this->assertSame(1, TimeClockCheck::where('client_uuid', $payload['client_uuid'])->count());
@@ -103,14 +144,21 @@ class TimeClockSyncControllerTest extends TestCase
         Queue::fake();
         Storage::fake('local');
         [, $enterprise] = $this->createAuthenticatedRhUser();
-        $this->createEmployee($enterprise->id, [
-            'employee_number' => 'EMP-0001',
-            'pin' => '000001',
-            'status' => \App\Models\Employee::STATUS_INACTIVE,
+        // El dispositivo se empareja con un empleado activo distinto — el
+        // middleware device.token no ata el checado al empleado que emparejó,
+        // solo valida que el token siga vigente (ver AuthenticateDeviceToken).
+        $pairingOwner = $this->createEmployee($enterprise->id);
+        $token = $this->pairedDeviceToken($pairingOwner->id);
+        $inactiveEmployee = $this->createEmployee($enterprise->id, [
+            'status' => Employee::STATUS_INACTIVE,
         ]);
 
-        $response = $this->postJson('/api/checador/sync', ['checks' => [$this->baseCheckPayload()]]);
+        $response = $this->withHeaders(['X-Device-Token' => $token])
+            ->postJson('/api/checador/sync', [
+                'checks' => [$this->baseCheckPayload(['employee_id' => $inactiveEmployee->id])],
+            ]);
 
+        $response->assertStatus(200);
         $this->assertSame('rejected', collect($response->json('data.results'))->first()['status']);
         $this->assertDatabaseCount('time_clock_checks', 0);
     }
@@ -120,11 +168,16 @@ class TimeClockSyncControllerTest extends TestCase
         Queue::fake();
         Storage::fake('local');
         [, $enterprise] = $this->createAuthenticatedRhUser();
-        $this->createEmployee($enterprise->id, ['employee_number' => 'EMP-0001', 'pin' => '000001']);
+        $employee = $this->createEmployee($enterprise->id);
+        $token = $this->pairedDeviceToken($employee->id);
 
-        $response = $this->postJson('/api/checador/sync', [
-            'checks' => [$this->baseCheckPayload(['device_synced_at' => now()->subMinutes(45)->toIso8601String()])],
-        ]);
+        $response = $this->withHeaders(['X-Device-Token' => $token])
+            ->postJson('/api/checador/sync', [
+                'checks' => [$this->baseCheckPayload([
+                    'employee_id' => $employee->id,
+                    'device_synced_at' => now()->subMinutes(45)->toIso8601String(),
+                ])],
+            ]);
         $response->assertStatus(200);
 
         $check = TimeClockCheck::first();

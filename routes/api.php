@@ -1060,19 +1060,22 @@ Route::middleware('auth:sanctum')->group(function () {
 
 // =====================================================
 // RUTAS DEL CHECADOR DE ASISTENCIA
-// 'sync' y 'server-time' son PÚBLICAS a propósito (checador self-service,
-// el empleado no tiene cuenta individual — se identifica con número+PIN,
-// confirmado por biometría server-side). 'status' y 'today-checks' NO
-// tienen consumidor actual (ChecadorView.jsx / useTimeClock.js ya no las
+// 'sync' y 'server-time' son PÚBLICAS a propósito (sin Sanctum) — el
+// empleado no tiene cuenta individual. Desde este plan, 'sync' ya no recibe
+// número+PIN: el cliente identifica al empleado localmente por matching
+// facial contra el roster-package (ver RosterPackageController) y manda el
+// employee_id ya resuelto, protegido por el middleware 'device.token'
+// (X-Device-Token, ver AuthenticateDeviceToken). 'status' y 'today-checks'
+// NO tienen consumidor actual (ChecadorView.jsx / useTimeClock.js ya no las
 // llama) y exponen PII de empleados (nombre, foto, depto) a cualquiera
 // con un employee_number adivinable, así que van detrás de Sanctum.
 // Throttle en las 4: 'sync' es el único endpoint público de escritura del
-// feature (mitiga fuerza bruta de PIN vía employee_number), y 'status' /
-// 'today-checks' son endpoints de lectura con PII que no deben poder
-// scrapearse ni ya autenticado.
+// feature, y 'status' / 'today-checks' son endpoints de lectura con PII
+// que no deben poder scrapearse ni ya autenticado.
 // =====================================================
 Route::prefix('checador')->middleware('throttle:30,1')->group(function () {
-    Route::post('sync', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockController::class, 'sync']);
+    Route::post('sync', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockController::class, 'sync'])
+        ->middleware('device.token');
     Route::get('server-time', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockController::class, 'serverTime']);
     Route::post('pair', [App\Http\Controllers\Api\GrupoEsplendido\RH\DevicePairingController::class, 'pairSelf'])
         ->middleware('throttle:5,1');

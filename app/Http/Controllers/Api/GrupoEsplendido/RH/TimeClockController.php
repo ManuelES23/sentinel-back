@@ -130,16 +130,18 @@ class TimeClockController extends Controller
 
     /**
      * Sincroniza un lote de chequeos biométricos. Idempotente por client_uuid.
-     * Público (sin Sanctum) — el empleado no tiene cuenta individual, se
-     * identifica por número + PIN, confirmados por biometría server-side.
+     * Público (sin Sanctum) pero requiere `X-Device-Token` (middleware
+     * `device.token`) — el empleado ya fue identificado en el cliente por
+     * matching facial local contra el roster-package antes de sincronizar;
+     * este endpoint recibe el `employee_id` ya resuelto, y la verificación
+     * 1:1 real ocurre server-side vía VerifyTimeClockCheckJob.
      */
     public function sync(Request $request): JsonResponse
     {
         $validated = $request->validate([
             'checks' => 'required|array|min:1|max:20',
             'checks.*.client_uuid' => 'required|uuid',
-            'checks.*.employee_number' => 'required|string',
-            'checks.*.pin' => 'required|string|size:6',
+            'checks.*.employee_id' => 'required|integer|exists:employees,id',
             'checks.*.type' => 'required|in:' . TimeClockCheck::TYPE_CHECK_IN . ',' . TimeClockCheck::TYPE_CHECK_OUT,
             'checks.*.checked_at' => 'required|date',
             'checks.*.device_synced_at' => 'required|date',
@@ -164,13 +166,12 @@ class TimeClockController extends Controller
                 continue;
             }
 
-            $employee = Employee::where('employee_number', $item['employee_number'])
-                ->where('pin', $item['pin'])
+            $employee = Employee::where('id', $item['employee_id'])
                 ->where('status', Employee::STATUS_ACTIVE)
                 ->first();
 
             if (! $employee) {
-                $results[] = ['client_uuid' => $item['client_uuid'], 'status' => 'rejected', 'reason' => 'numero de empleado o PIN incorrecto, o empleado inactivo'];
+                $results[] = ['client_uuid' => $item['client_uuid'], 'status' => 'rejected', 'reason' => 'empleado no encontrado o inactivo'];
                 continue;
             }
 
