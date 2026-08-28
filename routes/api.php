@@ -987,6 +987,12 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::get('{timeClockCheck}/evidence-photo', [App\Http\Controllers\Api\GrupoEsplendido\RH\TimeClockCheckController::class, 'evidencePhoto']);
             });
 
+            // Submódulo Administración de dispositivos emparejados
+            Route::prefix('asistencia/dispositivos')->group(function () {
+                Route::get('/', [App\Http\Controllers\Api\GrupoEsplendido\RH\DevicePairingAdminController::class, 'index']);
+                Route::post('{devicePairing}/revocar', [App\Http\Controllers\Api\GrupoEsplendido\RH\DevicePairingAdminController::class, 'revoke']);
+            });
+
             // Emparejamiento del kiosco fijo
             Route::post('checador-fijo/pair', [App\Http\Controllers\Api\GrupoEsplendido\RH\DevicePairingController::class, 'pairKiosk']);
 

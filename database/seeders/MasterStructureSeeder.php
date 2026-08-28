@@ -221,6 +221,12 @@ class MasterStructureSeeder extends Seeder
         );
         $this->command->info("    → Asistencia: Checador Fijo");
 
+        Submodule::firstOrCreate(
+            ['slug' => 'dispositivos', 'module_id' => $rhAsistencia->id],
+            ['name' => 'Dispositivos', 'icon' => 'Smartphone', 'order' => 5, 'is_active' => true]
+        );
+        $this->command->info("    → Asistencia: Dispositivos");
+
         // Módulo: Gestión (Vacaciones e Incidencias)
         $rhGestion = Module::firstOrCreate(
             ['slug' => 'gestion', 'application_id' => $rh->id],
