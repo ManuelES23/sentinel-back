@@ -62,6 +62,40 @@ class DevicePairingAdminControllerTest extends TestCase
         $this->assertFalse($ids->contains($otherPairing->id));
     }
 
+    public function test_index_includes_self_pairings_from_all_enterprises_user_has_access_to(): void
+    {
+        // Usuario de RH con acceso activo a DOS empresas (respeta las varias
+        // empresas de cada usuario de RH — spec §9). Debe ver en una sola
+        // llamada los emparejamientos self de ambas.
+        [$user, $enterprise1] = $this->createAuthenticatedRhUser();
+
+        $enterprise2 = \App\Models\Enterprise::create([
+            'name' => 'Grupo Espléndido Test Segunda Empresa',
+            'slug' => 'grupoesplendido-test-segunda-empresa',
+            'description' => 'Empresa de prueba para RH',
+            'is_active' => true,
+        ]);
+        \App\Models\UserEnterpriseAccess::create([
+            'user_id' => $user->id,
+            'enterprise_id' => $enterprise2->id,
+            'is_active' => true,
+            'granted_at' => now(),
+        ]);
+
+        $employee1 = $this->createEmployee($enterprise1->id);
+        $pairing1 = $this->makeSelfPairing($employee1->id);
+        $employee2 = $this->createEmployee($enterprise2->id);
+        $pairing2 = $this->makeSelfPairing($employee2->id);
+
+        \Laravel\Sanctum\Sanctum::actingAs($user);
+        $response = $this->getJson('/api/grupoesplendido/rh/asistencia/dispositivos');
+
+        $response->assertStatus(200);
+        $ids = collect($response->json('data.data'))->pluck('id');
+        $this->assertTrue($ids->contains($pairing1->id));
+        $this->assertTrue($ids->contains($pairing2->id));
+    }
+
     public function test_index_includes_all_kiosk_pairings_regardless_of_who_paired_them(): void
     {
         [$user] = $this->createAuthenticatedRhUser();
@@ -125,5 +159,106 @@ class DevicePairingAdminControllerTest extends TestCase
         $response->assertStatus(403);
         // El dispositivo no debe estar revocado
         $this->assertNull($pairing->fresh()->revoked_at);
+    }
+
+    // --- Regresión: empleado dado de baja (soft-delete) con emparejamiento self activo ---
+    // Employee::destroy() aplica SoftDeletes (a diferencia de terminate(), que no borra el
+    // registro). El global scope de SoftDeletes excluye por defecto al empleado de
+    // cualquier relación, así que pairedByEmployee debe resolverse con withTrashed().
+
+    public function test_index_includes_self_pairing_when_employee_is_soft_deleted(): void
+    {
+        [, $enterprise] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterprise->id);
+        $pairing = $this->makeSelfPairing($employee->id);
+        $employee->delete();
+
+        $response = $this->getJson('/api/grupoesplendido/rh/asistencia/dispositivos');
+
+        $response->assertStatus(200);
+        $ids = collect($response->json('data.data'))->pluck('id');
+        $this->assertTrue($ids->contains($pairing->id));
+    }
+
+    public function test_index_excludes_soft_deleted_employee_self_pairing_from_other_enterprise(): void
+    {
+        [, $enterprise1] = $this->createAuthenticatedRhUser();
+        [$user2] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterprise1->id);
+        $pairing = $this->makeSelfPairing($employee->id);
+        $employee->delete();
+
+        \Laravel\Sanctum\Sanctum::actingAs($user2);
+        $response = $this->getJson('/api/grupoesplendido/rh/asistencia/dispositivos');
+
+        $response->assertStatus(200);
+        $ids = collect($response->json('data.data'))->pluck('id');
+        $this->assertFalse($ids->contains($pairing->id));
+    }
+
+    public function test_revoke_allows_admin_with_enterprise_access_when_employee_is_soft_deleted(): void
+    {
+        [, $enterprise] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterprise->id);
+        $pairing = $this->makeSelfPairing($employee->id);
+        $employee->delete();
+
+        $response = $this->postJson("/api/grupoesplendido/rh/asistencia/dispositivos/{$pairing->id}/revocar");
+
+        $response->assertStatus(200);
+        $this->assertNotNull($pairing->fresh()->revoked_at);
+    }
+
+    public function test_revoke_denies_admin_without_enterprise_access_when_employee_is_soft_deleted(): void
+    {
+        [, $enterprise1] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterprise1->id);
+        $pairing = $this->makeSelfPairing($employee->id);
+        $employee->delete();
+
+        [$user2] = $this->createAuthenticatedRhUser();
+        \Laravel\Sanctum\Sanctum::actingAs($user2);
+        $response = $this->postJson("/api/grupoesplendido/rh/asistencia/dispositivos/{$pairing->id}/revocar");
+
+        $response->assertStatus(403);
+        $this->assertNull($pairing->fresh()->revoked_at);
+    }
+
+    // --- Regresión: empleado eliminado permanentemente (hard-delete) ---
+    // paired_by_employee_id tiene ->nullOnDelete(), así que tras un forceDelete()
+    // la columna queda NULL: el emparejamiento queda huérfano, sin empresa a la
+    // cual asociarlo. Decisión de diseño: se trata como un kiosco (visible y
+    // revocable por cualquier admin de RH autenticado con acceso activo a al
+    // menos una empresa) en vez de quedar inaccesible para siempre.
+
+    public function test_index_includes_orphaned_self_pairing_when_employee_is_hard_deleted(): void
+    {
+        [, $enterprise] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterprise->id);
+        $pairing = $this->makeSelfPairing($employee->id);
+        $employee->forceDelete();
+
+        $response = $this->getJson('/api/grupoesplendido/rh/asistencia/dispositivos');
+
+        $response->assertStatus(200);
+        $ids = collect($response->json('data.data'))->pluck('id');
+        $this->assertTrue($ids->contains($pairing->id));
+    }
+
+    public function test_revoke_allows_any_rh_admin_when_employee_is_hard_deleted(): void
+    {
+        [, $enterprise1] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterprise1->id);
+        $pairing = $this->makeSelfPairing($employee->id);
+        $employee->forceDelete();
+
+        // Admin sin ninguna relación con la empresa original del empleado,
+        // pero con acceso activo a SU PROPIA empresa.
+        [$user2] = $this->createAuthenticatedRhUser();
+        \Laravel\Sanctum\Sanctum::actingAs($user2);
+        $response = $this->postJson("/api/grupoesplendido/rh/asistencia/dispositivos/{$pairing->id}/revocar");
+
+        $response->assertStatus(200);
+        $this->assertNotNull($pairing->fresh()->revoked_at);
     }
 }
