@@ -14,6 +14,15 @@ class DevicePairing extends Model
     public const MODE_SELF = 'self';
     public const MODE_KIOSK = 'kiosk';
 
+    /**
+     * Atributos que Loggable nunca debe copiar a ActivityLog.old_values /
+     * new_values. El hash del token de dispositivo no es explotable por sí
+     * solo (no autentica nada sin el token crudo), pero se excluye igual
+     * siguiendo el mismo precedente del proyecto que
+     * EmployeeFaceTemplate::$loggableExcept para su `embedding`.
+     */
+    protected array $loggableExcept = ['device_token_hash'];
+
     protected $fillable = [
         'device_token_hash',
         'mode',
