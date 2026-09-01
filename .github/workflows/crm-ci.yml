@@ -25,19 +25,13 @@ jobs:
     name: PHP Tests (CRM)
     runs-on: ubuntu-latest
 
-    services:
-      mysql:
-        image: mysql:8.0
-        env:
-          MYSQL_ROOT_PASSWORD: root
-          MYSQL_DATABASE: sentinel_test
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd="mysqladmin ping"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=3
+    # NOTA: no hay servicio MySQL aquí a propósito. phpunit.xml fuerza
+    # (force="true") DB_CONNECTION=sqlite / DB_DATABASE=:memory: sin importar
+    # qué haya en el entorno, y tests/TestCase.php aborta el proceso si la
+    # conexión resuelta no es esa — ver el incidente de agosto 2026 descrito
+    # ahí. Los tests corren contra SQLite en memoria y Laravel migra solo vía
+    # RefreshDatabase, así que no hace falta MySQL, .env.testing, ni un paso
+    # de `migrate` separado.
 
     steps:
       - uses: actions/checkout@v4
@@ -46,72 +40,31 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: "8.3"
-          extensions: pdo, pdo_mysql, mbstring, bcmath
+          extensions: pdo, pdo_sqlite, mbstring, bcmath
           coverage: none
 
       - name: Install Composer dependencies
-        working-directory: sentinel-back
         run: composer install --no-interaction --prefer-dist --optimize-autoloader
 
       - name: Copy .env for testing
-        working-directory: sentinel-back
-        run: cp .env.example .env.testing
-
-      - name: Configure test env
-        working-directory: sentinel-back
-        run: |
-          echo "DB_CONNECTION=mysql" >> .env.testing
-          echo "DB_HOST=127.0.0.1" >> .env.testing
-          echo "DB_PORT=3306" >> .env.testing
-          echo "DB_DATABASE=sentinel_test" >> .env.testing
-          echo "DB_USERNAME=root" >> .env.testing
-          echo "DB_PASSWORD=root" >> .env.testing
+        run: cp .env.example .env
 
       - name: Generate application key
-        working-directory: sentinel-back
-        run: php artisan key:generate --env=testing
+        run: php artisan key:generate
 
-      - name: Run migrations
-        working-directory: sentinel-back
-        run: php artisan migrate --env=testing --force
-
+      # 🛑 Nunca --env=testing aquí: filtra variables de .env al proceso hijo
+      # y puede sobreescribir el force="true" de phpunit.xml. Ver CLAUDE.md.
       - name: Run backend test suite
-        working-directory: sentinel-back
-        run: php artisan test --env=testing
+        run: php artisan test
 
-  # ──────────────────────────────────────────────────────────────
-  # Frontend: build check — solo si hay cambios en src/views/crm
-  # o src/hooks/crm
-  # ──────────────────────────────────────────────────────────────
-  frontend-build:
-    name: Frontend Build (CRM)
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
-
-      - name: Detect CRM frontend changes
-        id: changes
-        run: |
-          CHANGED=$(git diff --name-only HEAD~1 HEAD -- 'sentinel-front/src/views/crm/' 'sentinel-front/src/hooks/crm/' | wc -l)
-          echo "count=$CHANGED" >> $GITHUB_OUTPUT
-
-      - name: Set up Node.js
-        if: steps.changes.outputs.count > 0
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: sentinel-front/package-lock.json
-
-      - name: Install dependencies
-        if: steps.changes.outputs.count > 0
-        working-directory: sentinel-front
-        run: npm ci
-
-      - name: Build
-        if: steps.changes.outputs.count > 0
-        working-directory: sentinel-front
-        run: npm run build
+  # NOTA: hubo un job `frontend-build` aquí que buscaba cambios en
+  # 'sentinel-front/src/views/crm/' y 'sentinel-front/src/hooks/crm/'. Este
+  # workflow vive en el repo standalone sentinel-back (no en el monorepo), y
+  # ese checkout nunca tiene una carpeta sentinel-front/ (no es submódulo ni
+  # existe aquí) — el diff siempre daba 0 archivos y el job era un no-op
+  # permanente. Se quitó por no aportar nada; main no tiene branch protection
+  # que dependiera de su nombre como required check (verificado vía
+  # `gh api repos/ManuelES23/sentinel-back/branches/main/protection` → 404
+  # "Branch not protected"). Si el frontend vuelve a vivir en este repo (o se
+  # agrega como submódulo), un job equivalente puede recrearse apuntando a la
+  # ruta real.
