@@ -3,7 +3,9 @@
 namespace App\Http\Controllers\Api\SplendidFarms\Inventory;
 
 use App\Http\Controllers\Controller;
+use App\Models\Enterprise;
 use App\Models\Product;
+use App\Models\ProductCategory;
 use App\Models\Recipe;
 use App\Models\RecipeItem;
 use App\Models\UnitOfMeasure;
@@ -144,7 +146,7 @@ class RecipeController extends Controller
         $calibres = $validated['calibres'] ?? [];
         unset($validated['items'], $validated['calibres']);
 
-        $recipe = DB::transaction(function () use ($validated, $items, $calibres) {
+        $recipe = DB::transaction(function () use ($validated, $items, $calibres, $request) {
             $recipe = Recipe::create($validated);
 
             foreach ($items as $index => $item) {
@@ -169,6 +171,8 @@ class RecipeController extends Controller
             if (! empty($items)) {
                 $recipe->recalculateCost();
             }
+
+            $this->syncOutputProduct($recipe, $request);
 
             return $recipe;
         });
@@ -285,8 +289,12 @@ class RecipeController extends Controller
         // Todo el sync corre en una sola transacción: si algo truena a medio
         // camino (ej. una violación de constraint), no debe quedar la receta
         // con menos items/calibres de los que tenía antes de editar.
-        DB::transaction(function () use ($recipe, $validated, $items, $calibres) {
+        DB::transaction(function () use ($recipe, $validated, $items, $calibres, $request) {
             $recipe->update($validated);
+
+            // Recetas que se crearon antes de este fix nunca tienen
+            // output_product_id (nunca se implementó) — se autocura aquí.
+            $this->syncOutputProduct($recipe, $request);
 
             // Sincronizar items si se enviaron
             if ($items !== null) {
@@ -654,6 +662,55 @@ class RecipeController extends Controller
         $name = Str::lower((string) ($payload['name'] ?? $recipe?->name ?? ''));
 
         return Str::contains($name, 'pallet');
+    }
+
+    /**
+     * Crea (si hace falta) el artículo "producto terminado" que representa
+     * el resultado de la receta, y lo enlaza vía output_product_id. Es
+     * idempotente: si la receta ya tiene un producto enlazado, no hace nada.
+     *
+     * El código de artículo y el enlace a la empresa siguen el mismo patrón
+     * que ProductController::store() para que el artículo se vea igual de
+     * "real" en el catálogo de Inventario que uno creado a mano.
+     */
+    private function syncOutputProduct(Recipe $recipe, Request $request): void
+    {
+        if ($recipe->output_product_id) {
+            return;
+        }
+
+        $category = ProductCategory::firstOrCreate(
+            ['name' => 'Producto Terminado'],
+            ['code' => 'CAT-PT', 'is_active' => true],
+        );
+
+        $prefix = 'PROD';
+        $lastProduct = Product::withTrashed()
+            ->where('code', 'like', $prefix.'-%')
+            ->orderByRaw('CAST(SUBSTRING(code, '.(strlen($prefix) + 2).') AS UNSIGNED) DESC')
+            ->first();
+        $nextNumber = $lastProduct ? ((int) substr($lastProduct->code, strlen($prefix) + 1)) + 1 : 1;
+
+        $product = Product::create([
+            'code' => $prefix.'-'.str_pad($nextNumber, 5, '0', STR_PAD_LEFT),
+            'name' => $recipe->name,
+            'description' => $recipe->description,
+            'category_id' => $category->id,
+            'unit_id' => $recipe->output_unit_id,
+            'product_type' => 'finished_good',
+            'cost_price' => $recipe->estimated_cost ?? 0,
+            'is_active' => $recipe->is_active ?? true,
+        ]);
+
+        $enterpriseSlug = $request->header('X-Enterprise-Slug');
+        if ($enterpriseSlug) {
+            $enterprise = Enterprise::where('slug', $enterpriseSlug)->first();
+            if ($enterprise) {
+                $product->enterprises()->syncWithoutDetaching([$enterprise->id]);
+            }
+        }
+
+        $recipe->update(['output_product_id' => $product->id]);
     }
 
     /**

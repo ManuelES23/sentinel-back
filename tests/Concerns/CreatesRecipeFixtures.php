@@ -4,6 +4,7 @@ namespace Tests\Concerns;
 
 use App\Models\Calibre;
 use App\Models\Cultivo;
+use App\Models\Enterprise;
 use App\Models\Product;
 use App\Models\ProductCategory;
 use App\Models\UnitOfMeasure;
@@ -17,6 +18,7 @@ use App\Models\User;
 trait CreatesRecipeFixtures
 {
     protected User $actingUser;
+    protected Enterprise $enterprise;
     protected ProductCategory $category;
     protected UnitOfMeasure $unit;
     protected Product $productA;
@@ -27,6 +29,13 @@ trait CreatesRecipeFixtures
     protected function setUpRecipeFixtures(): void
     {
         $this->actingUser = User::factory()->create();
+
+        $this->enterprise = Enterprise::create([
+            'name' => 'Splendid Farms',
+            'slug' => 'splendidfarms',
+            'description' => 'Empresa agrícola de prueba',
+            'is_active' => true,
+        ]);
 
         $this->category = ProductCategory::create([
             'code' => 'CAT-001',

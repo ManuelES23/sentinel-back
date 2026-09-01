@@ -162,4 +162,100 @@ class RecipeControllerTest extends TestCase
             'quantity' => 3,
         ]);
     }
+
+    /**
+     * Bonus (relacionado, no reportado explícitamente): output_product_id
+     * nunca se asignaba en ningún lugar del backend, así que la promesa del
+     * frontend "el artículo terminado se crea automáticamente" no pasaba
+     * nada en realidad.
+     */
+    public function test_crear_una_receta_crea_y_vincula_el_producto_terminado(): void
+    {
+        $response = $this->postJson(
+            self::BASE_URL,
+            $this->validRecipePayload([
+                'output_unit_id' => $this->unit->id,
+                'items' => [
+                    ['product_id' => $this->productA->id, 'quantity' => 2],
+                ],
+            ]),
+            ['X-Enterprise-Slug' => 'splendidfarms'],
+        );
+
+        $response->assertOk();
+        $recipeId = $response->json('data.id');
+        $productId = $response->json('data.output_product.id');
+
+        $this->assertNotNull($productId, 'La receta debería quedar enlazada a un producto terminado');
+        $this->assertDatabaseHas('recipes', [
+            'id' => $recipeId,
+            'output_product_id' => $productId,
+        ]);
+        $this->assertDatabaseHas('products', [
+            'id' => $productId,
+            'name' => 'Caja Elote Premium 20lb',
+            'product_type' => 'finished_good',
+            'unit_id' => $this->unit->id,
+        ]);
+        $this->assertDatabaseHas('product_categories', [
+            'name' => 'Producto Terminado',
+        ]);
+        $this->assertDatabaseHas('enterprise_product', [
+            'enterprise_id' => $this->enterprise->id,
+            'product_id' => $productId,
+        ]);
+    }
+
+    public function test_actualizar_una_receta_antigua_sin_producto_vinculado_se_autocura(): void
+    {
+        // Simula una receta creada antes de este fix: nunca tuvo output_product_id.
+        $recipe = Recipe::create($this->validRecipePayload(['code' => 'RCP-TEST-04']));
+        $this->assertNull($recipe->output_product_id);
+
+        $response = $this->putJson(self::BASE_URL."/{$recipe->id}", [
+            'name' => 'Caja Elote Premium 20lb (rev)',
+        ]);
+
+        $response->assertOk();
+        $recipe->refresh();
+        $this->assertNotNull($recipe->output_product_id);
+        $this->assertDatabaseHas('products', [
+            'id' => $recipe->output_product_id,
+            'name' => 'Caja Elote Premium 20lb (rev)',
+        ]);
+    }
+
+    public function test_actualizar_receta_sincroniza_costo_al_producto_ya_vinculado(): void
+    {
+        $recipe = Recipe::create($this->validRecipePayload(['code' => 'RCP-TEST-05']));
+        $this->syncOutputProductForTest($recipe);
+
+        $response = $this->putJson(self::BASE_URL."/{$recipe->id}", [
+            'items' => [
+                ['product_id' => $this->productA->id, 'quantity' => 2, 'cost_per_unit' => 10],
+            ],
+        ]);
+
+        $response->assertOk();
+        $this->assertDatabaseHas('products', [
+            'id' => $recipe->output_product_id,
+            'cost_price' => 20,
+        ]);
+    }
+
+    /**
+     * Atajo de prueba: crea directamente el producto enlazado, sin pasar por
+     * el endpoint, para probar el camino de "ya tiene producto" de forma
+     * aislada del de autocuración.
+     */
+    private function syncOutputProductForTest(Recipe $recipe): void
+    {
+        $product = \App\Models\Product::create([
+            'code' => 'PROD-999',
+            'name' => $recipe->name,
+            'unit_id' => $this->unit->id,
+            'product_type' => 'finished_good',
+        ]);
+        $recipe->update(['output_product_id' => $product->id]);
+    }
 }
