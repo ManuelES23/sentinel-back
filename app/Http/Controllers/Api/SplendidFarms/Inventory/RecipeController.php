@@ -3,13 +3,17 @@
 namespace App\Http\Controllers\Api\SplendidFarms\Inventory;
 
 use App\Http\Controllers\Controller;
+use App\Models\Enterprise;
 use App\Models\Product;
+use App\Models\ProductCategory;
 use App\Models\Recipe;
 use App\Models\RecipeItem;
 use App\Models\UnitOfMeasure;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 
 class RecipeController extends Controller
 {
@@ -135,8 +139,58 @@ class RecipeController extends Controller
             $validated['code'] = $prefix . '-' . str_pad($nextNumber, 5, '0', STR_PAD_LEFT);
         }
 
-        $recipe = Recipe::create($validated);
-        $this->ensureCajaGroup($recipe);
+        // 'items' y 'calibres' no son columnas de recipes (son relaciones) — hay
+        // que extraerlas antes de Recipe::create() o se descartan en silencio.
+        $items = $this->ensureCajaGroupForEmpaquePallet($validated['items'] ?? [], $validated);
+        $this->assertNoDuplicateItems($items);
+        $calibres = $validated['calibres'] ?? [];
+        unset($validated['items'], $validated['calibres']);
+
+        $recipe = DB::transaction(function () use ($validated, $items, $calibres, $request) {
+            $recipe = Recipe::create($validated);
+
+            foreach ($items as $index => $item) {
+                $recipe->items()->create(array_merge($item, [
+                    'sort_order' => $item['sort_order'] ?? $index,
+                ]));
+            }
+
+            foreach ($calibres as $calibreData) {
+                $rc = $recipe->recipeCalibres()->create([
+                    'calibre_id' => $calibreData['calibre_id'],
+                ]);
+                foreach ($calibreData['plus'] ?? [] as $pluData) {
+                    $rc->plus()->create([
+                        'product_id' => $pluData['product_id'],
+                        'is_organic' => $pluData['is_organic'] ?? false,
+                        'notes' => $pluData['notes'] ?? null,
+                    ]);
+                }
+            }
+
+            if (! empty($items)) {
+                $recipe->recalculateCost();
+            }
+
+            $this->syncOutputProduct($recipe, $request);
+
+            return $recipe;
+        });
+
+        $recipe = $recipe->fresh([
+            'category:id,name,code',
+            'cultivo:id,nombre',
+            'variedad:id,nombre',
+            'outputProduct:id,name,code',
+            'outputUnit:id,name,abbreviation',
+            'items.product:id,name,code,brand_id',
+            'items.product.brand:id,name',
+            'items.unit:id,name,abbreviation',
+            'items.calibre:id,nombre,valor',
+            'recipeCalibres.calibre:id,nombre,valor',
+            'recipeCalibres.plus.product:id,code,name',
+        ]);
+        $recipe->loadCount('items');
 
         return response()->json([
             'success' => true,
@@ -222,6 +276,7 @@ class RecipeController extends Controller
         if (array_key_exists('items', $validated)) {
             $items = $validated['items'] ?? [];
             $items = $this->ensureCajaGroupForEmpaquePallet($items, $validated, $recipe);
+            $this->assertNoDuplicateItems($items);
             unset($validated['items']);
         }
 
@@ -231,68 +286,77 @@ class RecipeController extends Controller
             unset($validated['calibres']);
         }
 
-        $recipe->update($validated);
+        // Todo el sync corre en una sola transacción: si algo truena a medio
+        // camino (ej. una violación de constraint), no debe quedar la receta
+        // con menos items/calibres de los que tenía antes de editar.
+        DB::transaction(function () use ($recipe, $validated, $items, $calibres, $request) {
+            $recipe->update($validated);
 
-        // Sincronizar items si se enviaron
-        if ($items !== null) {
-            // Eliminar items existentes y recrear
-            $recipe->items()->delete();
+            // Recetas que se crearon antes de este fix nunca tienen
+            // output_product_id (nunca se implementó) — se autocura aquí.
+            $this->syncOutputProduct($recipe, $request);
 
-            foreach ($items as $index => $item) {
-                $recipe->items()->create(array_merge($item, [
-                    'sort_order' => $item['sort_order'] ?? $index,
-                ]));
+            // Sincronizar items si se enviaron
+            if ($items !== null) {
+                // Eliminar items existentes y recrear
+                $recipe->items()->delete();
+
+                foreach ($items as $index => $item) {
+                    $recipe->items()->create(array_merge($item, [
+                        'sort_order' => $item['sort_order'] ?? $index,
+                    ]));
+                }
+
+                $recipe->recalculateCost();
+
+                // Actualizar cost_price del producto enlazado
+                if ($recipe->output_product_id) {
+                    Product::where('id', $recipe->output_product_id)
+                        ->update(['cost_price' => $recipe->fresh()->estimated_cost ?? 0]);
+                }
             }
 
-            $recipe->recalculateCost();
+            // Sincronizar calibres y PLUs si se enviaron
+            if ($calibres !== null) {
+                // Eliminar calibres existentes (cascade borra plus)
+                $recipe->recipeCalibres()->delete();
 
-            // Actualizar cost_price del producto enlazado
-            if ($recipe->output_product_id) {
-                Product::where('id', $recipe->output_product_id)
-                    ->update(['cost_price' => $recipe->fresh()->estimated_cost ?? 0]);
-            }
-        }
-
-        // Sincronizar calibres y PLUs si se enviaron
-        if ($calibres !== null) {
-            // Eliminar calibres existentes (cascade borra plus)
-            $recipe->recipeCalibres()->delete();
-
-            foreach ($calibres as $calibreData) {
-                $rc = $recipe->recipeCalibres()->create([
-                    'calibre_id' => $calibreData['calibre_id'],
-                ]);
-                if (! empty($calibreData['plus'])) {
-                    foreach ($calibreData['plus'] as $pluData) {
-                        $rc->plus()->create([
-                            'product_id' => $pluData['product_id'],
-                            'is_organic' => $pluData['is_organic'] ?? false,
-                            'notes' => $pluData['notes'] ?? null,
-                        ]);
+                foreach ($calibres as $calibreData) {
+                    $rc = $recipe->recipeCalibres()->create([
+                        'calibre_id' => $calibreData['calibre_id'],
+                    ]);
+                    if (! empty($calibreData['plus'])) {
+                        foreach ($calibreData['plus'] as $pluData) {
+                            $rc->plus()->create([
+                                'product_id' => $pluData['product_id'],
+                                'is_organic' => $pluData['is_organic'] ?? false,
+                                'notes' => $pluData['notes'] ?? null,
+                            ]);
+                        }
                     }
                 }
             }
-        }
 
-        // Sincronizar datos al producto enlazado
-        if ($recipe->output_product_id) {
-            $productUpdates = [];
-            if (isset($validated['name'])) {
-                $productUpdates['name'] = $validated['name'];
+            // Sincronizar datos al producto enlazado
+            if ($recipe->output_product_id) {
+                $productUpdates = [];
+                if (isset($validated['name'])) {
+                    $productUpdates['name'] = $validated['name'];
+                }
+                if (isset($validated['description'])) {
+                    $productUpdates['description'] = $validated['description'];
+                }
+                if (isset($validated['output_unit_id'])) {
+                    $productUpdates['unit_id'] = $validated['output_unit_id'];
+                }
+                if (isset($validated['is_active'])) {
+                    $productUpdates['is_active'] = $validated['is_active'];
+                }
+                if (! empty($productUpdates)) {
+                    Product::where('id', $recipe->output_product_id)->update($productUpdates);
+                }
             }
-            if (isset($validated['description'])) {
-                $productUpdates['description'] = $validated['description'];
-            }
-            if (isset($validated['output_unit_id'])) {
-                $productUpdates['unit_id'] = $validated['output_unit_id'];
-            }
-            if (isset($validated['is_active'])) {
-                $productUpdates['is_active'] = $validated['is_active'];
-            }
-            if (! empty($productUpdates)) {
-                Product::where('id', $recipe->output_product_id)->update($productUpdates);
-            }
-        }
+        });
 
         $recipe = $recipe->fresh([
             'category:id,name,code',
@@ -601,18 +665,79 @@ class RecipeController extends Controller
     }
 
     /**
-     * Ensure Caja group for Empaque + Pallet recipes.
+     * Crea (si hace falta) el artículo "producto terminado" que representa
+     * el resultado de la receta, y lo enlaza vía output_product_id. Es
+     * idempotente: si la receta ya tiene un producto enlazado, no hace nada.
+     *
+     * El código de artículo y el enlace a la empresa siguen el mismo patrón
+     * que ProductController::store() para que el artículo se vea igual de
+     * "real" en el catálogo de Inventario que uno creado a mano.
      */
-    private function ensureCajaGroup(Recipe $recipe): void
+    private function syncOutputProduct(Recipe $recipe, Request $request): void
     {
-        if (! $this->isEmpaquePalletRecipe([], $recipe)) {
+        if ($recipe->output_product_id) {
             return;
         }
 
-        // Normaliza variaciones de casing del grupo caja.
-        $recipe->items()
-            ->whereRaw('LOWER(group_key) = ?', ['caja'])
-            ->where('group_key', '!=', 'Caja')
-            ->update(['group_key' => 'Caja']);
+        $category = ProductCategory::firstOrCreate(
+            ['name' => 'Producto Terminado'],
+            ['code' => 'CAT-PT', 'is_active' => true],
+        );
+
+        $prefix = 'PROD';
+        $lastProduct = Product::withTrashed()
+            ->where('code', 'like', $prefix.'-%')
+            ->orderByRaw('CAST(SUBSTRING(code, '.(strlen($prefix) + 2).') AS UNSIGNED) DESC')
+            ->first();
+        $nextNumber = $lastProduct ? ((int) substr($lastProduct->code, strlen($prefix) + 1)) + 1 : 1;
+
+        $product = Product::create([
+            'code' => $prefix.'-'.str_pad($nextNumber, 5, '0', STR_PAD_LEFT),
+            'name' => $recipe->name,
+            'description' => $recipe->description,
+            'category_id' => $category->id,
+            'unit_id' => $recipe->output_unit_id,
+            'product_type' => 'finished_good',
+            'cost_price' => $recipe->estimated_cost ?? 0,
+            'is_active' => $recipe->is_active ?? true,
+        ]);
+
+        $enterpriseSlug = $request->header('X-Enterprise-Slug');
+        if ($enterpriseSlug) {
+            $enterprise = Enterprise::where('slug', $enterpriseSlug)->first();
+            if ($enterprise) {
+                $product->enterprises()->syncWithoutDetaching([$enterprise->id]);
+            }
+        }
+
+        $recipe->update(['output_product_id' => $product->id]);
+    }
+
+    /**
+     * Valida que no haya dos items para el mismo producto dentro del mismo
+     * contexto (mismo group_key, o ambos sin grupo). La unicidad real a
+     * nivel de BD es (recipe_id, product_id, group_key) — el mismo producto
+     * SÍ puede repetirse en grupos intercambiables distintos (ej. una
+     * etiqueta genérica usada como alternativa en "Caja" y en "PLU").
+     */
+    private function assertNoDuplicateItems(array $items): void
+    {
+        $seen = [];
+
+        foreach ($items as $item) {
+            $groupKey = trim((string) ($item['group_key'] ?? ''));
+            $key = $groupKey.'|'.($item['product_id'] ?? '');
+
+            if (isset($seen[$key])) {
+                throw ValidationException::withMessages([
+                    'items' => [$groupKey === ''
+                        ? 'Este producto ya está agregado como ingrediente fijo.'
+                        : "Este producto ya está agregado en el grupo \"{$groupKey}\".",
+                    ],
+                ]);
+            }
+
+            $seen[$key] = true;
+        }
     }
 }
