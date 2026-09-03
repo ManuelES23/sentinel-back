@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Models\SfEmployee;
 use App\Models\SfEmployeeFaceTemplate;
 use App\Services\FaceRecognitionService;
+use App\Traits\AuthorizesEnterpriseAccess;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -14,6 +15,8 @@ use Illuminate\Support\Facades\Storage;
 
 class SfFaceTemplateController extends Controller
 {
+    use AuthorizesEnterpriseAccess;
+
     public function __construct(private readonly FaceRecognitionService $faceService)
     {
     }
@@ -168,11 +171,7 @@ class SfFaceTemplateController extends Controller
      */
     public function photo(Request $request, SfEmployee $sfEmployee)
     {
-        abort_unless(
-            $request->user()->activeEnterprises()->where('enterprises.id', $sfEmployee->enterprise_id)->exists(),
-            403,
-            'No tienes acceso a esta empresa'
-        );
+        $this->authorizeEnterpriseAccess($request, (int) $sfEmployee->enterprise_id);
 
         $template = SfEmployeeFaceTemplate::where('sf_employee_id', $sfEmployee->id)
             ->where('status', SfEmployeeFaceTemplate::STATUS_ACTIVE)

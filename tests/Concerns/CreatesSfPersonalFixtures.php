@@ -35,19 +35,14 @@ trait CreatesSfPersonalFixtures
             'is_active' => true,
         ], $enterpriseOverrides));
 
-        // Este fixture alimenta controllers que, hoy por hoy, validan acceso a
-        // empresa contra DOS fuentes distintas (inconsistencia real del
-        // proyecto, no un descuido de este fixture):
-        //   - SfFieldCheckController::authorizeEnterpriseAccess() usa
-        //     user_enterprise_access (UserEnterpriseAccess) — el fix de 57f8e87
-        //     movió la fuente de verdad ahí a propósito (ver el comentario de
-        //     ese método).
-        //   - SfFaceTemplateController::photo() todavía usa
-        //     User::activeEnterprises() (pivot legacy user_enterprises) y no
-        //     fue migrado en ese mismo fix.
-        // Hay que poblar ambas o los tests "felices" de uno de los dos
-        // controllers reciben 403 en vez del código de estado que en realidad
-        // prueban.
+        // Se puebla tanto el pivot legacy user_enterprises (por si algún
+        // consumidor viejo todavía lo lee) como user_enterprise_access — la
+        // fuente real de acceso que usan authorizeEnterpriseAccess() en los
+        // controllers de este módulo (SfFieldCheckController,
+        // SfFaceTemplateController) y el resto del sistema de permisos
+        // (HierarchicalPermissionController, AuthController::getUserPermissions()).
+        // Sin la fila en user_enterprise_access, todos los tests "felices"
+        // recibirían 403 en vez del código de estado que en realidad prueban.
         $user->enterprises()->attach($enterprise->id, [
             'role' => 'admin',
             'is_active' => true,
