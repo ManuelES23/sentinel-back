@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\GrupoEsplendido\RH;
 
 use App\Http\Controllers\Controller;
+use App\Models\DevicePairing;
 use App\Models\Employee;
 use App\Models\EmployeeFaceTemplate;
 use Illuminate\Http\JsonResponse;
@@ -225,6 +226,7 @@ class EmployeeController extends Controller
     public function destroy(Employee $employee): JsonResponse
     {
         $this->revokeActiveFaceTemplate($employee->id);
+        $this->revokeActiveDevicePairings($employee->id);
 
         // Soft delete
         $employee->delete();
@@ -299,6 +301,7 @@ class EmployeeController extends Controller
         ]);
 
         $this->revokeActiveFaceTemplate($employee->id);
+        $this->revokeActiveDevicePairings($employee->id);
 
         $employee->update([
             'status' => Employee::STATUS_TERMINATED,
@@ -330,5 +333,28 @@ class EmployeeController extends Controller
             'status' => EmployeeFaceTemplate::STATUS_REVOKED,
             'revoked_at' => now(),
         ]);
+    }
+
+    /**
+     * Revoca cualquier emparejamiento de dispositivo personal (mode 'self')
+     * que este empleado haya hecho, al darlo de baja (terminate() o
+     * destroy()). Sin esto, el teléfono del empleado conservaba un token de
+     * dispositivo funcional indefinidamente — podía seguir descargando el
+     * roster-package completo (embeddings faciales de todos los empleados
+     * enrolados) y mandando checadas hasta que un admin de RH lo encontrara
+     * y revocara manualmente desde "Dispositivos". Se cargan los modelos
+     * primero (no un ->update() masivo sobre la query) por el mismo motivo
+     * que revokeActiveFaceTemplate(): que el trait Loggable dispare su
+     * evento updated() y quede auditado en activity_logs. Un empleado puede
+     * tener más de un emparejamiento self activo (p. ej. si se reemparejó
+     * tras perder el teléfono), así que se revocan todos.
+     */
+    private function revokeActiveDevicePairings(int $employeeId): void
+    {
+        DevicePairing::where('paired_by_employee_id', $employeeId)
+            ->where('mode', DevicePairing::MODE_SELF)
+            ->whereNull('revoked_at')
+            ->get()
+            ->each(fn (DevicePairing $pairing) => $pairing->update(['revoked_at' => now()]));
     }
 }
