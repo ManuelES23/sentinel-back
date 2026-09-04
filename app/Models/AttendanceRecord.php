@@ -27,6 +27,10 @@ class AttendanceRecord extends Model
         'check_out_method',
         'check_in_device',
         'check_out_device',
+        'check_in_latitude',
+        'check_in_longitude',
+        'check_out_latitude',
+        'check_out_longitude',
         'notes',
         'justification',
         'approved_by',
@@ -157,7 +161,7 @@ class AttendanceRecord extends Model
     /**
      * Registrar entrada
      */
-    public static function checkIn(Employee $employee, string $method = 'qr', ?string $device = null, ?Carbon $checkedAt = null): self
+    public static function checkIn(Employee $employee, string $method = 'qr', ?string $device = null, ?Carbon $checkedAt = null, ?float $latitude = null, ?float $longitude = null): self
     {
         $today = $checkedAt ? $checkedAt->copy()->startOfDay() : today();
 
@@ -175,6 +179,8 @@ class AttendanceRecord extends Model
         $record->check_in = $now;
         $record->check_in_method = $method;
         $record->check_in_device = $device;
+        $record->check_in_latitude = $latitude;
+        $record->check_in_longitude = $longitude;
 
         // Calcular retardo si tiene horario asignado
         if ($employee->workSchedule) {
@@ -193,7 +199,7 @@ class AttendanceRecord extends Model
     /**
      * Registrar salida
      */
-    public static function checkOut(Employee $employee, string $method = 'qr', ?string $device = null, ?Carbon $checkedAt = null): self
+    public static function checkOut(Employee $employee, string $method = 'qr', ?string $device = null, ?Carbon $checkedAt = null, ?float $latitude = null, ?float $longitude = null): self
     {
         $today = $checkedAt ? $checkedAt->copy()->startOfDay() : today();
 
@@ -213,6 +219,8 @@ class AttendanceRecord extends Model
         $record->check_out = $now;
         $record->check_out_method = $method;
         $record->check_out_device = $device;
+        $record->check_out_latitude = $latitude;
+        $record->check_out_longitude = $longitude;
 
         // Calcular horas trabajadas
         $record->hours_worked = $record->check_in->diffInMinutes($now) / 60;

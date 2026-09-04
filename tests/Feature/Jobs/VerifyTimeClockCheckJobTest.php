@@ -96,6 +96,29 @@ class VerifyTimeClockCheckJobTest extends TestCase
         $this->assertSame('biometric', $record->check_in_method);
     }
 
+    public function test_check_location_propagates_to_attendance_record(): void
+    {
+        [, $enterprise] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterprise->id);
+        $embedding = array_fill(0, 128, 0.2);
+        $this->enrollTemplate($employee->id, $embedding);
+        $this->fakeEmbedResponse($embedding);
+
+        $check = $this->makeCheck($employee->id, [
+            'checked_at' => now()->setTime(8, 0),
+            'latitude' => 23.2494200,
+            'longitude' => -106.4111800,
+        ]);
+        $this->runJob(new VerifyTimeClockCheckJob($check->id));
+
+        $record = AttendanceRecord::where('employee_id', $employee->id)
+            ->whereDate('date', $check->checked_at->toDateString())
+            ->first();
+        $this->assertNotNull($record);
+        $this->assertEqualsWithDelta(23.2494200, (float) $record->check_in_latitude, 0.0001);
+        $this->assertEqualsWithDelta(-106.4111800, (float) $record->check_in_longitude, 0.0001);
+    }
+
     public function test_non_matching_face_marks_low_confidence_without_consolidating(): void
     {
         [, $enterprise] = $this->createAuthenticatedRhUser();
