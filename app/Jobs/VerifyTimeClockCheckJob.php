@@ -95,10 +95,13 @@ class VerifyTimeClockCheckJob implements ShouldQueue
         $employee = Employee::find($check->employee_id);
 
         try {
+            $latitude = $check->latitude !== null ? (float) $check->latitude : null;
+            $longitude = $check->longitude !== null ? (float) $check->longitude : null;
+
             if ($check->type === TimeClockCheck::TYPE_CHECK_IN) {
-                \App\Models\AttendanceRecord::checkIn($employee, 'biometric', null, $check->checked_at);
+                \App\Models\AttendanceRecord::checkIn($employee, 'biometric', null, $check->checked_at, $latitude, $longitude);
             } else {
-                \App\Models\AttendanceRecord::checkOut($employee, 'biometric', null, $check->checked_at);
+                \App\Models\AttendanceRecord::checkOut($employee, 'biometric', null, $check->checked_at, $latitude, $longitude);
             }
         } catch (\Exception $e) {
             // "Ya registraste tu entrada/salida hoy" o "Primero debes

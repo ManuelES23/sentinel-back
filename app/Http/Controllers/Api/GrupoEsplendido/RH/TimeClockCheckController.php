@@ -115,10 +115,13 @@ class TimeClockCheckController extends Controller
         }
 
         try {
+            $latitude = $timeClockCheck->latitude !== null ? (float) $timeClockCheck->latitude : null;
+            $longitude = $timeClockCheck->longitude !== null ? (float) $timeClockCheck->longitude : null;
+
             if ($timeClockCheck->type === TimeClockCheck::TYPE_CHECK_IN) {
-                AttendanceRecord::checkIn($employee, 'biometric', null, $timeClockCheck->checked_at);
+                AttendanceRecord::checkIn($employee, 'biometric', null, $timeClockCheck->checked_at, $latitude, $longitude);
             } else {
-                AttendanceRecord::checkOut($employee, 'biometric', null, $timeClockCheck->checked_at);
+                AttendanceRecord::checkOut($employee, 'biometric', null, $timeClockCheck->checked_at, $latitude, $longitude);
             }
         } catch (\Exception $e) {
             abort(422, $e->getMessage());
