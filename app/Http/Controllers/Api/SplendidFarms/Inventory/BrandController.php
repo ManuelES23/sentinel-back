@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\SplendidFarms\Inventory;
 
 use App\Http\Controllers\Controller;
+use App\Models\Enterprise;
 use App\Models\Brand;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -12,6 +13,14 @@ class BrandController extends Controller
     public function index(Request $request): JsonResponse
     {
         $query = Brand::withCount('products');
+
+        $enterpriseSlug = $request->header('X-Enterprise-Slug');
+        if ($enterpriseSlug) {
+            $enterprise = Enterprise::where('slug', $enterpriseSlug)->first();
+            if ($enterprise) {
+                $query->forEnterprise($enterprise->id);
+            }
+        }
 
         if ($request->boolean('active_only')) {
             $query->active();
@@ -66,6 +75,14 @@ class BrandController extends Controller
         }
 
         $brand = Brand::create($validated);
+
+        $enterpriseSlug = $request->header('X-Enterprise-Slug');
+        if ($enterpriseSlug) {
+            $enterprise = Enterprise::where('slug', $enterpriseSlug)->first();
+            if ($enterprise) {
+                $brand->enterprises()->syncWithoutDetaching([$enterprise->id]);
+            }
+        }
 
         return response()->json([
             'success' => true,
