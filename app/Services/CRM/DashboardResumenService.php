@@ -60,6 +60,13 @@ class DashboardResumenService
 
     /**
      * @return array<int, array{etapa: string, total: int, monto: float}>
+     *
+     * NOTA: solo cuenta oportunidades con `fecha_cierre_esperada` definida
+     * (la columna es nullable). Una oportunidad sin fecha de cierre esperada
+     * no aparece aquí, aunque sí se cuenta en kpis().oportunidadesAbiertas
+     * (que es un snapshot sin filtro de fecha) -- por eso el total agregado
+     * de las 6 etapas puede ser menor que oportunidadesAbiertas. Decisión de
+     * producto, no un bug.
      */
     public function pipeline(int $empresaId, ?int $vendedorId, string $periodo): array
     {
