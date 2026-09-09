@@ -6,6 +6,7 @@ use App\Models\CRM\CrmActividad;
 use App\Models\CRM\CrmCliente;
 use App\Models\CRM\CrmCotizacion;
 use App\Models\CRM\CrmOportunidad;
+use App\Models\CRM\CrmPresupuesto;
 use App\Models\CRM\CrmProspecto;
 use App\Models\Enterprise;
 use App\Services\CRM\DashboardResumenService;
@@ -424,6 +425,122 @@ class DashboardResumenServiceTest extends TestCase
         // No debe incluir data de la otra empresa
         $this->assertSame([], $resultado['porTipo']);
         $this->assertSame([], $resultado['porDia']);
+
+        Carbon::setTestNow();
+    }
+
+    public function test_cumplimiento_metas_de_un_solo_mes(): void
+    {
+        Carbon::setTestNow(Carbon::create(2026, 9, 15));
+
+        CrmPresupuesto::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+            'mes' => 9, 'anio' => 2026, 'meta_monto' => 10000, 'meta_clientes' => 5, 'meta_actividades' => 20,
+        ]);
+        CrmOportunidad::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+            'nombre' => 'Ganada', 'monto_esperado' => 4000, 'etapa' => 'cerrado_ganado',
+            'fecha_cierre_real' => '2026-09-05',
+        ]);
+        CrmCliente::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id, 'nombre' => 'Cliente nuevo',
+        ]);
+        CrmActividad::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+            'tipo' => 'llamada', 'descripcion' => 'x', 'fecha_actividad' => '2026-09-06 10:00:00',
+        ]);
+
+        $service = new DashboardResumenService();
+        $resultado = $service->cumplimientoMetas($this->enterprise->id, $this->vendedor->id, 'mes_actual');
+
+        $this->assertSame(10000.0, $resultado['metaMonto']);
+        $this->assertSame(5, $resultado['metaClientes']);
+        $this->assertSame(20, $resultado['metaActividades']);
+        $this->assertSame(4000.0, $resultado['montoReal']);
+        $this->assertSame(1, $resultado['clientesReales']);
+        $this->assertSame(1, $resultado['actividadesReales']);
+
+        Carbon::setTestNow();
+    }
+
+    public function test_cumplimiento_metas_de_trimestre_suma_los_3_meses(): void
+    {
+        Carbon::setTestNow(Carbon::create(2026, 9, 15));
+
+        foreach ([7, 8, 9] as $mes) {
+            CrmPresupuesto::create([
+                'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+                'mes' => $mes, 'anio' => 2026, 'meta_monto' => 1000, 'meta_clientes' => 1, 'meta_actividades' => 2,
+            ]);
+        }
+        // Meta de un mes fuera del trimestre (junio) -- no debe sumar.
+        CrmPresupuesto::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+            'mes' => 6, 'anio' => 2026, 'meta_monto' => 99999, 'meta_clientes' => 99, 'meta_actividades' => 99,
+        ]);
+
+        $service = new DashboardResumenService();
+        $resultado = $service->cumplimientoMetas($this->enterprise->id, $this->vendedor->id, 'trimestre');
+
+        $this->assertSame(3000.0, $resultado['metaMonto']);
+        $this->assertSame(3, $resultado['metaClientes']);
+        $this->assertSame(6, $resultado['metaActividades']);
+
+        Carbon::setTestNow();
+    }
+
+    public function test_cumplimiento_metas_sin_presupuesto_definido_devuelve_metas_en_cero(): void
+    {
+        $service = new DashboardResumenService();
+        $resultado = $service->cumplimientoMetas($this->enterprise->id, $this->vendedor->id, 'mes_actual');
+
+        $this->assertSame(0.0, $resultado['metaMonto']);
+        $this->assertSame(0, $resultado['metaClientes']);
+        $this->assertSame(0.0, $resultado['montoReal']);
+    }
+
+    public function test_cumplimiento_metas_ignora_datos_de_otra_empresa(): void
+    {
+        Carbon::setTestNow(Carbon::create(2026, 9, 15));
+        $otraEmpresa = $this->crearOtraEmpresa();
+        $vendedorAjeno = \App\Models\CRM\CrmVendedor::create([
+            'empresa_id' => $otraEmpresa->id, 'nombre' => 'Vendedor ajeno',
+        ]);
+
+        // Crear presupuesto en la otra empresa que estaría dentro del rango
+        CrmPresupuesto::create([
+            'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id,
+            'mes' => 9, 'anio' => 2026, 'meta_monto' => 99999, 'meta_clientes' => 99, 'meta_actividades' => 99,
+        ]);
+
+        // Crear oportunidad cerrada ganada en la otra empresa
+        CrmOportunidad::create([
+            'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id,
+            'nombre' => 'Ganada ajena', 'monto_esperado' => 88888, 'etapa' => 'cerrado_ganado',
+            'fecha_cierre_real' => '2026-09-05',
+        ]);
+
+        // Crear cliente en la otra empresa
+        CrmCliente::create([
+            'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id, 'nombre' => 'Cliente ajeno',
+        ]);
+
+        // Crear actividad en la otra empresa
+        CrmActividad::create([
+            'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id,
+            'tipo' => 'llamada', 'descripcion' => 'Llamada ajena', 'fecha_actividad' => '2026-09-06 10:00:00',
+        ]);
+
+        $service = new DashboardResumenService();
+        $resultado = $service->cumplimientoMetas($this->enterprise->id, $this->vendedor->id, 'mes_actual');
+
+        // Debe retornar 0 para metas y reales porque no hay data en nuestra empresa
+        $this->assertSame(0.0, $resultado['metaMonto']);
+        $this->assertSame(0, $resultado['metaClientes']);
+        $this->assertSame(0, $resultado['metaActividades']);
+        $this->assertSame(0.0, $resultado['montoReal']);
+        $this->assertSame(0, $resultado['clientesReales']);
+        $this->assertSame(0, $resultado['actividadesReales']);
 
         Carbon::setTestNow();
     }

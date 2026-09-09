@@ -6,6 +6,7 @@ use App\Models\CRM\CrmActividad;
 use App\Models\CRM\CrmCliente;
 use App\Models\CRM\CrmCotizacion;
 use App\Models\CRM\CrmOportunidad;
+use App\Models\CRM\CrmPresupuesto;
 use App\Models\CRM\CrmProspecto;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -173,6 +174,51 @@ class DashboardResumenService
         return [
             'porTipo' => $porTipo,
             'porDia' => $porDia,
+        ];
+    }
+
+    /**
+     * @return array{metaMonto: float, metaClientes: int, metaActividades: int, montoReal: float, clientesReales: int, actividadesReales: int}
+     */
+    public function cumplimientoMetas(int $empresaId, ?int $vendedorId, string $periodo): array
+    {
+        ['inicio' => $inicio, 'fin' => $fin] = $this->resolverRangoFechas($periodo);
+
+        $metas = CrmPresupuesto::where('empresa_id', $empresaId)
+            ->where(function ($query) use ($inicio, $fin) {
+                $cursor = $inicio->copy()->startOfMonth();
+                while ($cursor->lte($fin)) {
+                    $query->orWhere(fn ($q) => $q->where('mes', $cursor->month)->where('anio', $cursor->year));
+                    $cursor->addMonth();
+                }
+            })
+            ->when($vendedorId !== null, fn ($q) => $q->where('vendedor_id', $vendedorId))
+            ->selectRaw('SUM(meta_monto) as meta_monto, SUM(meta_clientes) as meta_clientes, SUM(meta_actividades) as meta_actividades')
+            ->first();
+
+        $montoReal = (float) CrmOportunidad::where('empresa_id', $empresaId)
+            ->where('etapa', 'cerrado_ganado')
+            ->whereBetween('fecha_cierre_real', [$inicio, $fin])
+            ->when($vendedorId !== null, fn ($q) => $q->where('vendedor_id', $vendedorId))
+            ->sum('monto_esperado');
+
+        $clientesReales = CrmCliente::where('empresa_id', $empresaId)
+            ->whereBetween('created_at', [$inicio, $fin])
+            ->when($vendedorId !== null, fn ($q) => $q->where('vendedor_id', $vendedorId))
+            ->count();
+
+        $actividadesReales = CrmActividad::where('empresa_id', $empresaId)
+            ->whereBetween('fecha_actividad', [$inicio, $fin])
+            ->when($vendedorId !== null, fn ($q) => $q->where('vendedor_id', $vendedorId))
+            ->count();
+
+        return [
+            'metaMonto' => (float) ($metas->meta_monto ?? 0),
+            'metaClientes' => (int) ($metas->meta_clientes ?? 0),
+            'metaActividades' => (int) ($metas->meta_actividades ?? 0),
+            'montoReal' => $montoReal,
+            'clientesReales' => $clientesReales,
+            'actividadesReales' => $actividadesReales,
         ];
     }
 }
