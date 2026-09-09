@@ -1937,9 +1937,17 @@ class RecipeApprovalTest extends TestCase
     public function test_aprobar_una_receta_pendiente_la_marca_activa(): void
     {
         $position = Position::create(['name' => 'Gerente de Inventario', 'hierarchy_level' => 2, 'can_approve' => true]);
-        $approverEmployee = Employee::factory()->create(['position_id' => $position->id]);
-        $approver = $approverEmployee->user ?? \App\Models\User::factory()->create();
-        $approverEmployee->update(['user_id' => $approver->id]);
+        $approver = \App\Models\User::factory()->create();
+        Employee::create([
+            'enterprise_id' => $this->enterprise->id,
+            'employee_number' => 'EMP-001',
+            'first_name' => 'Ana',
+            'last_name' => 'Gómez',
+            'position_id' => $position->id,
+            'hire_date' => now()->toDateString(),
+            'qr_code' => 'QR-EMP-001',
+            'user_id' => $approver->id,
+        ]);
 
         $process = \App\Models\ApprovalProcess::create([
             'code' => 'recipe_approval', 'name' => 'Aprobación de recetas', 'module' => 'inventario',
@@ -1967,7 +1975,7 @@ class RecipeApprovalTest extends TestCase
 }
 ```
 
-Nota para quien implemente esta tarea: revisar `database/factories/EmployeeFactory.php` y el modelo `Employee` antes de escribir el fixture del segundo test — el plan asume `Employee` tiene `position_id` y `user_id` fillable/factory-able porque `ApprovalFlowStep::matchesEmployee()` (`app/Models/ApprovalFlowStep.php:62`) los requiere, pero no se leyó ese factory en esta sesión; ajustar el test si los nombres reales difieren.
+Nota (verificado en el pre-flight scan de esta ejecución): `database/factories/EmployeeFactory.php` **no existe** — por eso el fixture usa `Employee::create()` directo, no `Employee::factory()`. Los campos usados arriba (`enterprise_id`, `employee_number`, `first_name`, `last_name`, `hire_date`, `qr_code`) son exactamente las columnas NOT NULL sin default de la tabla `employees` (`database/migrations/2026_01_31_003000_create_employees_table.php:13-66`); `position_id`/`user_id` son nullable pero se necesitan para que `ApprovalFlowStep::matchesEmployee()` (`app/Models/ApprovalFlowStep.php:62`) y `User::employee()` (`app/Models/User.php:126`, relación `hasOne`) funcionen.
 
 - [ ] **Step 2: Correr el test y confirmar que falla**
 
@@ -3149,7 +3157,7 @@ git commit -m "feat: pestañas Historial/Uso en detalle de receta + comparación
 
 **Cobertura del spec:** Sección 1 (aislamiento) → Tasks 1-4. Sección 2 (núcleo + `recipe_agro_details`) → Tasks 5-6. Sección 3 (alta Canes Agro) → Tasks 7-9. Sección 4 (versionado/aprobación/trazabilidad/comparar) → Tasks 10-13, 21. Sección 5 (reestructura + Propuesta C) → Tasks 14-21. Los 2 riesgos conocidos del spec quedan explícitos: el supuesto de backfill en las migraciones de las Tasks 1, 2, 3 y 4 (comentado en cada migración), y la dependencia de que Canes Agro tenga puestos con `can_approve` configurados antes de que el flujo de aprobación tenga aprobadores reales (Task 11, nota del Step 1).
 
-**Puntos abiertos que el ejecutor debe resolver al llegar a la tarea** (marcados explícitamente en el texto de cada tarea, no son placeholders del plan sino dependencias de código no leído en esta sesión): estructura exacta de `Employee`/`EmployeeFactory` (Task 11), cuerpo completo de `PendingApprovalController::getInventoryApprovalProcess()` (Task 11), columnas exactas de `produccion_empaque` más allá de `recipe_id` (Task 12).
+**Puntos abiertos que el ejecutor debe resolver al llegar a la tarea** (marcados explícitamente en el texto de cada tarea, no son placeholders del plan sino dependencias de código no leído en esta sesión): cuerpo completo de `PendingApprovalController::getInventoryApprovalProcess()` (Task 11 — la estructura de `Employee` ya se verificó en el pre-flight de esta ejecución y quedó resuelta en el fixture del Task 11), columnas exactas de `produccion_empaque` más allá de `recipe_id` (Task 12).
 
 **Consistencia de tipos:** `scopeForEnterprise(int $enterpriseId)` mismo nombre/firma en `ProductCategory`, `Brand`, `UnitOfMeasure` (Tasks 1-3) y `Recipe` (Task 4) — coherente con `Product::scopeForEnterprise()` ya existente. `buildPayload()` de `useRecipeEditorState` (Task 15) es lo único que `RecipeEditorView` (Task 20) llama para guardar — su forma de salida (`agroDetails: {cultivoId, variedadId, pesoPieza} | null`) coincide con lo que `RecipeController::extractAgroDetails()` (Task 6) acepta como payload anidado.
 
