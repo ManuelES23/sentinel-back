@@ -2,6 +2,7 @@
 
 namespace App\Services\CRM;
 
+use App\Models\CRM\CrmOportunidad;
 use Carbon\Carbon;
 
 /**
@@ -48,5 +49,31 @@ class DashboardResumenService
             ],
             default => throw new \InvalidArgumentException("Periodo inválido: {$periodo}"),
         };
+    }
+
+    /**
+     * @return array<int, array{etapa: string, total: int, monto: float}>
+     */
+    public function pipeline(int $empresaId, ?int $vendedorId, string $periodo): array
+    {
+        ['inicio' => $inicio, 'fin' => $fin] = $this->resolverRangoFechas($periodo);
+
+        $query = CrmOportunidad::where('empresa_id', $empresaId)
+            ->whereBetween('fecha_cierre_esperada', [$inicio->toDateString(), $fin->toDateString()])
+            ->when($vendedorId !== null, fn ($q) => $q->where('vendedor_id', $vendedorId));
+
+        $filas = $query->selectRaw('etapa, COUNT(*) as total, SUM(monto_esperado) as monto')
+            ->groupBy('etapa')
+            ->get()
+            ->keyBy('etapa');
+
+        return collect(array_keys(CrmOportunidad::ORDEN_ETAPAS))
+            ->map(fn ($etapa) => [
+                'etapa' => $etapa,
+                'total' => (int) ($filas[$etapa]->total ?? 0),
+                'monto' => (float) ($filas[$etapa]->monto ?? 0),
+            ])
+            ->values()
+            ->all();
     }
 }
