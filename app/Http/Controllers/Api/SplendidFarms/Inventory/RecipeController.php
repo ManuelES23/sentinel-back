@@ -151,9 +151,16 @@ class RecipeController extends Controller
         $calibres = $validated['calibres'] ?? [];
         unset($validated['items'], $validated['calibres']);
 
-        $recipe = DB::transaction(function () use ($validated, $items, $calibres, $request) {
-            $enterprise = $this->resolveEnterprise($request);
-            $recipe = Recipe::create([...$validated, 'enterprise_id' => $enterprise?->id]);
+        $enterprise = $this->resolveEnterprise($request);
+        if (! $enterprise) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No se pudo determinar la empresa activa (X-Enterprise-Slug faltante o inválido).',
+            ], 422);
+        }
+
+        $recipe = DB::transaction(function () use ($validated, $items, $calibres, $request, $enterprise) {
+            $recipe = Recipe::create([...$validated, 'enterprise_id' => $enterprise->id]);
 
             foreach ($items as $index => $item) {
                 $recipe->items()->create(array_merge($item, [
@@ -208,8 +215,10 @@ class RecipeController extends Controller
     /**
      * Display the specified resource.
      */
-    public function show(Recipe $recipe): JsonResponse
+    public function show(Request $request, Recipe $recipe): JsonResponse
     {
+        $this->assertRecipeBelongsToResolvedEnterprise($recipe, $request);
+
         $recipe->load([
             'category:id,name,code',
             'cultivo:id,nombre',
@@ -236,6 +245,8 @@ class RecipeController extends Controller
      */
     public function update(Request $request, Recipe $recipe): JsonResponse
     {
+        $this->assertRecipeBelongsToResolvedEnterprise($recipe, $request);
+
         $validated = $request->validate([
             'code' => 'sometimes|string|max:50|unique:recipes,code,'.$recipe->id,
             'name' => 'sometimes|string|max:255',
@@ -391,8 +402,10 @@ class RecipeController extends Controller
     /**
      * Remove the specified resource from storage.
      */
-    public function destroy(Recipe $recipe): JsonResponse
+    public function destroy(Request $request, Recipe $recipe): JsonResponse
     {
+        $this->assertRecipeBelongsToResolvedEnterprise($recipe, $request);
+
         // No eliminar si está activa y en uso
         if ($recipe->status === 'active') {
             return response()->json([
@@ -416,6 +429,8 @@ class RecipeController extends Controller
      */
     public function addItem(Request $request, Recipe $recipe): JsonResponse
     {
+        $this->assertRecipeBelongsToResolvedEnterprise($recipe, $request);
+
         $validated = $request->validate([
             'product_id' => 'required|exists:products,id',
             'quantity' => 'required|numeric|min:0.01',
@@ -476,6 +491,8 @@ class RecipeController extends Controller
      */
     public function updateItem(Request $request, Recipe $recipe, RecipeItem $item): JsonResponse
     {
+        $this->assertRecipeBelongsToResolvedEnterprise($recipe, $request);
+
         // Verificar que el item pertenezca a la receta
         if ($item->recipe_id !== $recipe->id) {
             return response()->json([
@@ -515,8 +532,10 @@ class RecipeController extends Controller
     /**
      * Eliminar un item de la receta
      */
-    public function deleteItem(Recipe $recipe, RecipeItem $item): JsonResponse
+    public function deleteItem(Request $request, Recipe $recipe, RecipeItem $item): JsonResponse
     {
+        $this->assertRecipeBelongsToResolvedEnterprise($recipe, $request);
+
         if ($item->recipe_id !== $recipe->id) {
             return response()->json([
                 'status' => 'error',
@@ -539,8 +558,10 @@ class RecipeController extends Controller
     /**
      * Recalcular el costo de la receta
      */
-    public function recalculateCost(Recipe $recipe): JsonResponse
+    public function recalculateCost(Request $request, Recipe $recipe): JsonResponse
     {
+        $this->assertRecipeBelongsToResolvedEnterprise($recipe, $request);
+
         $recipe->load('items');
         $recipe->recalculateCost();
 
@@ -732,6 +753,21 @@ class RecipeController extends Controller
         $slug = $request->header('X-Enterprise-Slug');
 
         return $slug ? Enterprise::where('slug', $slug)->first() : null;
+    }
+
+    /**
+     * Aborta con 404 si la receta pertenece a una empresa distinta de la
+     * resuelta desde el header X-Enterprise-Slug. Si el header está ausente
+     * o no resuelve a ninguna Enterprise conocida, no bloquea — mismo patrón
+     * "lenient-if-absent" que ProductController y sus hermanos.
+     */
+    private function assertRecipeBelongsToResolvedEnterprise(Recipe $recipe, Request $request): void
+    {
+        $enterprise = $this->resolveEnterprise($request);
+
+        if ($enterprise && $recipe->enterprise_id !== $enterprise->id) {
+            abort(404);
+        }
     }
 
     /**

@@ -54,4 +54,57 @@ class RecipeEnterpriseScopeTest extends TestCase
         $this->assertSame($this->enterprise->id, $recipe->enterprise_id);
         $this->assertSame($this->enterprise->id, $recipe->items->first()->enterprise_id);
     }
+
+    public function test_store_sin_enterprise_slug_devuelve_422_no_500(): void
+    {
+        $response = $this->postJson('/api/splendidfarms/inventario/catalogos/recetas',
+            $this->validRecipePayload());
+
+        $response->assertStatus(422);
+        $response->assertJson(['status' => 'error']);
+    }
+
+    public function test_store_con_enterprise_slug_invalido_devuelve_422_no_500(): void
+    {
+        $response = $this->postJson('/api/splendidfarms/inventario/catalogos/recetas',
+            $this->validRecipePayload(),
+            ['X-Enterprise-Slug' => 'empresa-que-no-existe']);
+
+        $response->assertStatus(422);
+        $response->assertJson(['status' => 'error']);
+    }
+
+    public function test_show_devuelve_404_para_receta_de_otra_empresa(): void
+    {
+        Enterprise::create(['name' => 'Canes Agro', 'slug' => 'canes-agro', 'is_active' => true, 'description' => 'Test enterprise']);
+
+        $createResponse = $this->postJson('/api/splendidfarms/inventario/catalogos/recetas',
+            $this->validRecipePayload(['name' => 'Caja Elote Premium 20lb']),
+            ['X-Enterprise-Slug' => 'splendidfarms']);
+
+        $recipeId = $createResponse->json('data.id');
+
+        $response = $this->getJson("/api/splendidfarms/inventario/catalogos/recetas/{$recipeId}", [
+            'X-Enterprise-Slug' => 'canes-agro',
+        ]);
+
+        $response->assertStatus(404);
+    }
+
+    public function test_update_devuelve_404_para_receta_de_otra_empresa(): void
+    {
+        Enterprise::create(['name' => 'Canes Agro', 'slug' => 'canes-agro', 'is_active' => true, 'description' => 'Test enterprise']);
+
+        $createResponse = $this->postJson('/api/splendidfarms/inventario/catalogos/recetas',
+            $this->validRecipePayload(['name' => 'Caja Elote Premium 20lb']),
+            ['X-Enterprise-Slug' => 'splendidfarms']);
+
+        $recipeId = $createResponse->json('data.id');
+
+        $response = $this->putJson("/api/splendidfarms/inventario/catalogos/recetas/{$recipeId}",
+            ['name' => 'Nombre Hackeado'],
+            ['X-Enterprise-Slug' => 'canes-agro']);
+
+        $response->assertStatus(404);
+    }
 }
