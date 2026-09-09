@@ -47,7 +47,7 @@ class RecipeApprovalService
         $process = ApprovalProcess::findByCode('recipe_approval');
         $employee = $approver->employee;
 
-        if (! $process || ! $employee || ! $process->canBeApprovedBy($employee, $recipe->enterprise_id)) {
+        if (! $process || ! $employee || ! $process->canBeApprovedBy($employee, $employee->enterprise_id)) {
             throw ValidationException::withMessages(['approval' => ['No tienes permiso para aprobar esta receta.']]);
         }
     }
