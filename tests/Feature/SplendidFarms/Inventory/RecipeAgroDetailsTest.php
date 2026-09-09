@@ -69,4 +69,95 @@ class RecipeAgroDetailsTest extends TestCase
             'cultivo_id' => $this->cultivo->id,
         ]);
     }
+
+    public function test_update_con_agro_details_null_explicito_borra_la_extension(): void
+    {
+        // Crear receta CON agro_details
+        $createResponse = $this->postJson('/api/splendidfarms/inventario/catalogos/recetas',
+            $this->validRecipePayload(['cultivo_id' => $this->cultivo->id, 'peso_pieza' => 4.01]),
+            ['X-Enterprise-Slug' => 'splendidfarms']);
+
+        $recipeId = $createResponse->json('data.id');
+
+        // Verificar que la fila existe
+        $this->assertDatabaseHas('recipe_agro_details', ['recipe_id' => $recipeId]);
+
+        // Actualizar la receta mandando agro_details explícitamente como null
+        $updateResponse = $this->putJson(
+            "/api/splendidfarms/inventario/catalogos/recetas/{$recipeId}",
+            ['agro_details' => null],
+            ['X-Enterprise-Slug' => 'splendidfarms']
+        );
+
+        $updateResponse->assertOk();
+
+        // Verificar que la fila fue eliminada
+        $this->assertDatabaseMissing('recipe_agro_details', ['recipe_id' => $recipeId]);
+    }
+
+    public function test_update_acepta_payload_plano_legado_de_agro_details(): void
+    {
+        // Crear receta SIN agro_details
+        $createResponse = $this->postJson('/api/splendidfarms/inventario/catalogos/recetas',
+            $this->validRecipePayload(),
+            ['X-Enterprise-Slug' => 'splendidfarms']);
+
+        $recipeId = $createResponse->json('data.id');
+
+        // Verificar que no existe fila de agro_details
+        $this->assertDatabaseMissing('recipe_agro_details', ['recipe_id' => $recipeId]);
+
+        // Actualizar mandando el payload plano legado (cultivo_id a nivel raíz)
+        $updateResponse = $this->putJson(
+            "/api/splendidfarms/inventario/catalogos/recetas/{$recipeId}",
+            [
+                'cultivo_id' => $this->cultivo->id,
+                'peso_pieza' => 3.5,
+            ],
+            ['X-Enterprise-Slug' => 'splendidfarms']
+        );
+
+        $updateResponse->assertOk();
+
+        // Verificar que la fila fue creada con los valores correctos
+        $this->assertDatabaseHas('recipe_agro_details', [
+            'recipe_id' => $recipeId,
+            'cultivo_id' => $this->cultivo->id,
+            'peso_pieza' => 3.5,
+        ]);
+    }
+
+    public function test_update_acepta_agro_details_anidado(): void
+    {
+        // Crear receta SIN agro_details
+        $createResponse = $this->postJson('/api/splendidfarms/inventario/catalogos/recetas',
+            $this->validRecipePayload(),
+            ['X-Enterprise-Slug' => 'splendidfarms']);
+
+        $recipeId = $createResponse->json('data.id');
+
+        // Verificar que no existe fila de agro_details
+        $this->assertDatabaseMissing('recipe_agro_details', ['recipe_id' => $recipeId]);
+
+        // Actualizar mandando agro_details anidado
+        $updateResponse = $this->putJson(
+            "/api/splendidfarms/inventario/catalogos/recetas/{$recipeId}",
+            [
+                'agro_details' => [
+                    'cultivo_id' => $this->cultivo->id,
+                    'peso_pieza' => 2.75,
+                ],
+            ],
+            ['X-Enterprise-Slug' => 'splendidfarms']
+        );
+
+        $updateResponse->assertOk();
+
+        // Verificar que la fila fue creada con los valores correctos
+        $this->assertDatabaseHas('recipe_agro_details', [
+            'recipe_id' => $recipeId,
+            'cultivo_id' => $this->cultivo->id,
+            'peso_pieza' => 2.75,
+        ]);
+    }
 }
