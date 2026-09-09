@@ -192,7 +192,27 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     // DASHBOARD
     // 7 endpoints de métricas ejecutivas
     // -------------------------------------------------
-
+    Route::get('dashboard/kpis', [
+        App\Http\Controllers\Api\CRM\DashboardController::class, 'kpis'
+    ]);
+    Route::get('dashboard/pipeline', [
+        App\Http\Controllers\Api\CRM\DashboardController::class, 'pipeline'
+    ]);
+    Route::get('dashboard/cotizaciones', [
+        App\Http\Controllers\Api\CRM\DashboardController::class, 'cotizaciones'
+    ]);
+    Route::get('dashboard/funnel-conversion', [
+        App\Http\Controllers\Api\CRM\DashboardController::class, 'funnelConversion'
+    ]);
+    Route::get('dashboard/actividad', [
+        App\Http\Controllers\Api\CRM\DashboardController::class, 'actividad'
+    ]);
+    Route::get('dashboard/cumplimiento-metas', [
+        App\Http\Controllers\Api\CRM\DashboardController::class, 'cumplimientoMetas'
+    ]);
+    Route::get('dashboard/ranking-vendedores', [
+        App\Http\Controllers\Api\CRM\DashboardController::class, 'rankingVendedores'
+    ]);
 
     // -------------------------------------------------
     // INTEGRACIONES · DIALPAD
