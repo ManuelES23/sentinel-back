@@ -262,4 +262,29 @@ class DashboardResumenServiceTest extends TestCase
 
         Carbon::setTestNow();
     }
+
+    public function test_cotizaciones_ignora_datos_de_otra_empresa(): void
+    {
+        Carbon::setTestNow(Carbon::create(2026, 9, 15));
+        $otraEmpresa = $this->crearOtraEmpresa();
+        $vendedorAjeno = \App\Models\CRM\CrmVendedor::create([
+            'empresa_id' => $otraEmpresa->id, 'nombre' => 'Vendedor ajeno',
+        ]);
+        $oportunidadAjena = CrmOportunidad::create([
+            'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id,
+            'nombre' => 'Ajena', 'monto_esperado' => 5000, 'etapa' => 'propuesta',
+        ]);
+        CrmCotizacion::create([
+            'empresa_id' => $otraEmpresa->id, 'oportunidad_id' => $oportunidadAjena->id,
+            'folio' => 'COT-AJENA', 'estado' => 'aprobado', 'fecha_emision' => '2026-09-20', 'total' => 9999,
+        ]);
+
+        $service = new DashboardResumenService();
+        $porEstado = collect($service->cotizaciones($this->enterprise->id, null, 'mes_actual'))->keyBy('estado');
+
+        $this->assertSame(0, $porEstado['aprobado']['total']);
+        $this->assertSame(0.0, $porEstado['aprobado']['monto']);
+
+        Carbon::setTestNow();
+    }
 }
