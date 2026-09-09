@@ -886,6 +886,21 @@ class RecipeController extends Controller
         ]);
     }
 
+    /**
+     * Producciones/empaques que han usado esta receta.
+     */
+    public function uso(Request $request, Recipe $recipe): JsonResponse
+    {
+        $this->assertRecipeBelongsToResolvedEnterprise($recipe, $request);
+
+        $producciones = DB::table('produccion_empaque')
+            ->where('recipe_id', $recipe->id)
+            ->orderByDesc('created_at')
+            ->get(['id', 'fecha_produccion', 'created_at']);
+
+        return response()->json(['success' => true, 'data' => ['producciones' => $producciones]]);
+    }
+
     // ── Flujo de aprobación ─────────────────────────────────────
 
     /**

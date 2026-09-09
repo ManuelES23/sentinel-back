@@ -280,6 +280,17 @@ class ProductController extends Controller
     }
 
     /**
+     * Recetas que usan este artículo como ingrediente.
+     */
+    public function usadoEnRecetas(Product $product): JsonResponse
+    {
+        $recetas = \App\Models\Recipe::whereHas('items', fn ($q) => $q->where('product_id', $product->id))
+            ->get(['id', 'code', 'name', 'status']);
+
+        return response()->json(['success' => true, 'data' => ['recetas' => $recetas]]);
+    }
+
+    /**
      * Productos disponibles para importar desde otras empresas.
      */
     public function availableForImport(Request $request): JsonResponse
