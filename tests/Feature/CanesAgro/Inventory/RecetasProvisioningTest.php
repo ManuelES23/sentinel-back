@@ -36,4 +36,32 @@ class RecetasProvisioningTest extends TestCase
 
         $this->assertDatabaseCount('applications', 1);
     }
+
+    public function test_flujo_completo_receta_de_canes_agro_no_es_visible_para_splendid_farms(): void
+    {
+        \App\Models\Enterprise::create(['name' => 'Splendid Farms', 'slug' => 'splendidfarms', 'description' => 'Splendid Farms', 'is_active' => true]);
+        \App\Models\Enterprise::create(['name' => 'Canes Agro', 'slug' => 'canes-agro', 'description' => 'Alimentos para canes', 'is_active' => true]);
+
+        \Laravel\Sanctum\Sanctum::actingAs(\App\Models\User::factory()->create());
+
+        $unit = \App\Models\UnitOfMeasure::create(['code' => 'LT', 'name' => 'Litro', 'abbreviation' => 'lt', 'type' => 'volume']);
+        $category = \App\Models\ProductCategory::create(['code' => 'CAT-FERT', 'name' => 'Fertilizantes', 'is_active' => true]);
+        $ingredient = \App\Models\Product::create([
+            'code' => 'PROD-N', 'name' => 'Nitrógeno líquido', 'category_id' => $category->id,
+            'unit_id' => $unit->id, 'cost_price' => 12,
+        ]);
+
+        $response = $this->postJson('/api/canes-agro/inventario/catalogos/recetas', [
+            'name' => 'Mezcla Foliar NPK 20-20-20',
+            'output_quantity' => 200,
+            'output_unit_id' => $unit->id,
+            'items' => [['product_id' => $ingredient->id, 'quantity' => 50]],
+        ], ['X-Enterprise-Slug' => 'canes-agro']);
+
+        $response->assertOk();
+        $this->assertNull($response->json('data.agro_details'));
+
+        $sfList = $this->getJson('/api/splendidfarms/inventario/catalogos/recetas', ['X-Enterprise-Slug' => 'splendidfarms']);
+        $this->assertFalse(collect($sfList->json('data'))->pluck('name')->contains('Mezcla Foliar NPK 20-20-20'));
+    }
 }
