@@ -2,8 +2,10 @@
 
 namespace Tests\Feature\CRM;
 
+use App\Models\CRM\CrmCliente;
 use App\Models\CRM\CrmCotizacion;
 use App\Models\CRM\CrmOportunidad;
+use App\Models\CRM\CrmProspecto;
 use App\Models\Enterprise;
 use App\Services\CRM\DashboardResumenService;
 use Carbon\Carbon;
@@ -284,6 +286,69 @@ class DashboardResumenServiceTest extends TestCase
 
         $this->assertSame(0, $porEstado['aprobado']['total']);
         $this->assertSame(0.0, $porEstado['aprobado']['monto']);
+
+        Carbon::setTestNow();
+    }
+
+    public function test_funnel_conversion_calcula_prospectos_clientes_y_tasa(): void
+    {
+        Carbon::setTestNow(Carbon::create(2026, 9, 15));
+
+        CrmProspecto::create(['empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id, 'nombre' => 'P1']);
+        CrmProspecto::create(['empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id, 'nombre' => 'P2']);
+        CrmProspecto::create(['empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id, 'nombre' => 'P3']);
+        CrmCliente::create(['empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id, 'nombre' => 'C1', 'prospecto_id' => null]);
+        // Solo este cuenta como "convertido" -- tiene prospecto_id.
+        $prospectoConvertido = CrmProspecto::create(['empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id, 'nombre' => 'P4']);
+        CrmCliente::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+            'nombre' => 'C2', 'prospecto_id' => $prospectoConvertido->id,
+        ]);
+
+        $service = new DashboardResumenService();
+        $resultado = $service->funnelConversion($this->enterprise->id, $this->vendedor->id, 'mes_actual');
+
+        $this->assertSame(4, $resultado['prospectosCreados']);
+        $this->assertSame(1, $resultado['clientesConvertidos']);
+        $this->assertSame(25.0, $resultado['tasaConversion']);
+
+        Carbon::setTestNow();
+    }
+
+    public function test_funnel_conversion_sin_prospectos_devuelve_tasa_cero(): void
+    {
+        $service = new DashboardResumenService();
+        $resultado = $service->funnelConversion($this->enterprise->id, $this->vendedor->id, 'mes_actual');
+
+        $this->assertSame(0, $resultado['prospectosCreados']);
+        $this->assertSame(0, $resultado['clientesConvertidos']);
+        $this->assertSame(0.0, $resultado['tasaConversion']);
+    }
+
+    public function test_funnel_conversion_ignora_datos_de_otra_empresa(): void
+    {
+        Carbon::setTestNow(Carbon::create(2026, 9, 15));
+        $otraEmpresa = $this->crearOtraEmpresa();
+        $vendedorAjeno = \App\Models\CRM\CrmVendedor::create([
+            'empresa_id' => $otraEmpresa->id, 'nombre' => 'Vendedor ajeno',
+        ]);
+
+        // Crear prospectos y clientes en la otra empresa que estarían dentro del rango
+        CrmProspecto::create(['empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id, 'nombre' => 'P-ajena-1']);
+        CrmProspecto::create(['empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id, 'nombre' => 'P-ajena-2']);
+        $prospectoAjeno = CrmProspecto::create(['empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id, 'nombre' => 'P-ajena-3']);
+        CrmCliente::create([
+            'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id,
+            'nombre' => 'C-ajena', 'prospecto_id' => $prospectoAjeno->id,
+        ]);
+
+        $service = new DashboardResumenService();
+        $resultado = $service->funnelConversion($this->enterprise->id, $this->vendedor->id, 'mes_actual');
+
+        // Debe retornar 0, 0, 0.0 porque no hay data en nuestra empresa
+        $this->assertSame(0, $resultado['prospectosCreados']);
+        $this->assertSame(0, $resultado['clientesConvertidos']);
+        $this->assertSame(0.0, $resultado['tasaConversion']);
 
         Carbon::setTestNow();
     }

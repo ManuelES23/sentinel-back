@@ -2,8 +2,10 @@
 
 namespace App\Services\CRM;
 
+use App\Models\CRM\CrmCliente;
 use App\Models\CRM\CrmCotizacion;
 use App\Models\CRM\CrmOportunidad;
+use App\Models\CRM\CrmProspecto;
 use Carbon\Carbon;
 
 /**
@@ -107,5 +109,34 @@ class DashboardResumenService
             ])
             ->values()
             ->all();
+    }
+
+    /**
+     * @return array{prospectosCreados: int, clientesConvertidos: int, tasaConversion: float}
+     */
+    public function funnelConversion(int $empresaId, ?int $vendedorId, string $periodo): array
+    {
+        ['inicio' => $inicio, 'fin' => $fin] = $this->resolverRangoFechas($periodo);
+
+        $prospectosCreados = CrmProspecto::where('empresa_id', $empresaId)
+            ->whereBetween('created_at', [$inicio, $fin])
+            ->when($vendedorId !== null, fn ($q) => $q->where('vendedor_id', $vendedorId))
+            ->count();
+
+        $clientesConvertidos = CrmCliente::where('empresa_id', $empresaId)
+            ->whereNotNull('prospecto_id')
+            ->whereBetween('created_at', [$inicio, $fin])
+            ->when($vendedorId !== null, fn ($q) => $q->where('vendedor_id', $vendedorId))
+            ->count();
+
+        $tasaConversion = $prospectosCreados > 0
+            ? round(($clientesConvertidos / $prospectosCreados) * 100, 1)
+            : 0.0;
+
+        return [
+            'prospectosCreados' => $prospectosCreados,
+            'clientesConvertidos' => $clientesConvertidos,
+            'tasaConversion' => $tasaConversion,
+        ];
     }
 }
