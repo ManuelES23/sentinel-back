@@ -391,6 +391,8 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::put('recetas/{recipe}/items/{item}', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'updateItem']);
                 Route::delete('recetas/{recipe}/items/{item}', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'deleteItem']);
                 Route::post('recetas/{recipe}/recalculate-cost', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'recalculateCost']);
+                Route::get('recetas/{recipe}/versions', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'versions']);
+                Route::post('recetas/{recipe}/versions/{versionNumber}/restore', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'restoreVersion']);
                 Route::apiResource('recetas', App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class)
                     ->parameters(['recetas' => 'recipe']);
             });
@@ -954,6 +956,8 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::put('recetas/{recipe}/items/{item}', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'updateItem']);
                 Route::delete('recetas/{recipe}/items/{item}', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'deleteItem']);
                 Route::post('recetas/{recipe}/recalculate-cost', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'recalculateCost']);
+                Route::get('recetas/{recipe}/versions', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'versions']);
+                Route::post('recetas/{recipe}/versions/{versionNumber}/restore', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'restoreVersion']);
                 Route::apiResource('recetas', App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class)
                     ->parameters(['recetas' => 'recipe']);
             });

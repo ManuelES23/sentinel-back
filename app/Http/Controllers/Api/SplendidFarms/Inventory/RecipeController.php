@@ -9,6 +9,7 @@ use App\Models\ProductCategory;
 use App\Models\Recipe;
 use App\Models\RecipeItem;
 use App\Models\UnitOfMeasure;
+use App\Services\RecipeVersioningService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -17,6 +18,8 @@ use Illuminate\Validation\ValidationException;
 
 class RecipeController extends Controller
 {
+    public function __construct(private RecipeVersioningService $versioning) {}
+
     /**
      * Display a listing of the resource.
      */
@@ -256,6 +259,8 @@ class RecipeController extends Controller
     public function update(Request $request, Recipe $recipe): JsonResponse
     {
         $this->assertRecipeBelongsToResolvedEnterprise($recipe, $request);
+
+        $this->versioning->snapshotBeforeUpdate($recipe, $request->user()?->id);
 
         $validated = $request->validate([
             'code' => 'sometimes|string|max:50|unique:recipes,code,'.$recipe->id,
@@ -847,5 +852,33 @@ class RecipeController extends Controller
 
             $seen[$key] = true;
         }
+    }
+
+    /**
+     * Historial de versiones de la receta.
+     */
+    public function versions(Request $request, Recipe $recipe): JsonResponse
+    {
+        $this->assertRecipeBelongsToResolvedEnterprise($recipe, $request);
+
+        $versions = $recipe->versions()->with('createdBy:id,name')->orderByDesc('version_number')->get();
+
+        return response()->json(['success' => true, 'data' => $versions]);
+    }
+
+    /**
+     * Restaura una versión anterior como una edición nueva.
+     */
+    public function restoreVersion(Request $request, Recipe $recipe, int $versionNumber): JsonResponse
+    {
+        $this->assertRecipeBelongsToResolvedEnterprise($recipe, $request);
+
+        $restored = $this->versioning->restore($recipe, $versionNumber, $request->user()?->id);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Receta restaurada exitosamente',
+            'data' => $restored,
+        ]);
     }
 }

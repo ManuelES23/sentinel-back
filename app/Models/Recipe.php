@@ -91,6 +91,14 @@ class Recipe extends Model
         return $this->hasMany(RecipeItem::class)->orderBy('sort_order');
     }
 
+    /**
+     * Historial de versiones de la receta (snapshots previos a cada edición).
+     */
+    public function versions(): HasMany
+    {
+        return $this->hasMany(RecipeVersion::class)->orderByDesc('version_number');
+    }
+
     // ── Scopes ──────────────────────────────────────────────────
 
     /**
