@@ -641,4 +641,79 @@ class DashboardResumenServiceTest extends TestCase
 
         Carbon::setTestNow();
     }
+
+    public function test_ranking_vendedores_ordena_por_monto_cerrado_descendente(): void
+    {
+        Carbon::setTestNow(Carbon::create(2026, 9, 15));
+
+        $vendedorB = \App\Models\CRM\CrmVendedor::create([
+            'empresa_id' => $this->enterprise->id, 'nombre' => 'Vendedor B', 'activo' => true,
+        ]);
+
+        CrmOportunidad::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+            'nombre' => 'Op 1', 'monto_esperado' => 1000, 'etapa' => 'cerrado_ganado',
+            'fecha_cierre_real' => '2026-09-05',
+        ]);
+        CrmOportunidad::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $vendedorB->id,
+            'nombre' => 'Op 2', 'monto_esperado' => 5000, 'etapa' => 'cerrado_ganado',
+            'fecha_cierre_real' => '2026-09-06',
+        ]);
+        CrmOportunidad::create([
+            // Fuera del periodo -- no debe sumar.
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $vendedorB->id,
+            'nombre' => 'Op 3 (agosto)', 'monto_esperado' => 9999, 'etapa' => 'cerrado_ganado',
+            'fecha_cierre_real' => '2026-08-01',
+        ]);
+
+        $service = new DashboardResumenService();
+        $ranking = $service->rankingVendedores($this->enterprise->id, 'mes_actual');
+
+        $this->assertSame($vendedorB->id, $ranking[0]['vendedorId']);
+        $this->assertSame(5000.0, $ranking[0]['montoCerrado']);
+        $this->assertSame($this->vendedor->id, $ranking[1]['vendedorId']);
+        $this->assertSame(1000.0, $ranking[1]['montoCerrado']);
+
+        Carbon::setTestNow();
+    }
+
+    public function test_ranking_vendedores_incluye_vendedores_sin_cierres_en_cero(): void
+    {
+        $service = new DashboardResumenService();
+        $ranking = $service->rankingVendedores($this->enterprise->id, 'mes_actual');
+
+        $this->assertCount(1, $ranking); // solo $this->vendedor, de la fixture
+        $this->assertSame(0.0, $ranking[0]['montoCerrado']);
+    }
+
+    public function test_ranking_vendedores_ignora_datos_de_otra_empresa(): void
+    {
+        Carbon::setTestNow(Carbon::create(2026, 9, 15));
+
+        $otraEmpresa = $this->crearOtraEmpresa();
+        $vendedorAjeno = \App\Models\CRM\CrmVendedor::create([
+            'empresa_id' => $otraEmpresa->id, 'nombre' => 'Vendedor ajeno', 'activo' => true,
+        ]);
+
+        // Crear oportunidad cerrada ganada en la otra empresa con monto distintivo (66666)
+        CrmOportunidad::create([
+            'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id,
+            'nombre' => 'Op ajena', 'monto_esperado' => 66666, 'etapa' => 'cerrado_ganado',
+            'fecha_cierre_real' => '2026-09-10',
+        ]);
+
+        $service = new DashboardResumenService();
+        $ranking = $service->rankingVendedores($this->enterprise->id, 'mes_actual');
+
+        // Debe retornar solo vendedores de $this->enterprise (solo $this->vendedor de la fixture)
+        $this->assertCount(1, $ranking);
+        $this->assertSame($this->vendedor->id, $ranking[0]['vendedorId']);
+        // Verificar que ninguno de los returned vendedorId coincida con el vendedor ajeno
+        foreach ($ranking as $item) {
+            $this->assertNotSame($vendedorAjeno->id, $item['vendedorId']);
+        }
+
+        Carbon::setTestNow();
+    }
 }

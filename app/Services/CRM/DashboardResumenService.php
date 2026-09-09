@@ -8,6 +8,7 @@ use App\Models\CRM\CrmCotizacion;
 use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmPresupuesto;
 use App\Models\CRM\CrmProspecto;
+use App\Models\CRM\CrmVendedor;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 
@@ -262,5 +263,29 @@ class DashboardResumenService
             'clientesNuevos' => $clientesNuevos,
             'porcentajeCumplimientoMeta' => $porcentajeCumplimientoMeta,
         ];
+    }
+
+    /**
+     * @return array<int, array{vendedorId: int, nombre: string, montoCerrado: float}>
+     */
+    public function rankingVendedores(int $empresaId, string $periodo): array
+    {
+        ['inicio' => $inicio, 'fin' => $fin] = $this->resolverRangoFechas($periodo);
+
+        return CrmVendedor::where('empresa_id', $empresaId)
+            ->activo()
+            ->withSum(['oportunidades as monto_cerrado' => function ($query) use ($inicio, $fin) {
+                $query->where('etapa', 'cerrado_ganado')
+                    ->whereBetween('fecha_cierre_real', [$inicio, $fin]);
+            }], 'monto_esperado')
+            ->orderByDesc('monto_cerrado')
+            ->get()
+            ->map(fn ($vendedor) => [
+                'vendedorId' => $vendedor->id,
+                'nombre' => $vendedor->nombre,
+                'montoCerrado' => (float) ($vendedor->monto_cerrado ?? 0),
+            ])
+            ->values()
+            ->all();
     }
 }
