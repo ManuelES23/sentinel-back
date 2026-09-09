@@ -11,6 +11,7 @@ use App\Models\EmployeeIncident;
 use App\Models\Enterprise;
 use App\Models\InventoryMovement;
 use App\Models\PurchaseOrder;
+use App\Models\Recipe;
 use App\Models\SfFieldCheck;
 use App\Models\TimeClockCheck;
 use App\Models\VacationBalance;
@@ -360,6 +361,7 @@ class PendingApprovalController extends Controller
             ApprovalProcess::INCIDENTS => $this->countPendingIncidents($employee, $scope),
             ApprovalProcess::PURCHASE_ORDERS => $this->countPendingPurchaseOrders($employee, $scope),
             ApprovalProcess::INVENTORY_MOVEMENTS => $this->countPendingInventoryMovements($employee, $scope),
+            'recipe_approval' => $this->countPendingRecipes($employee, $scope),
             default => 0,
         };
     }
@@ -374,6 +376,7 @@ class PendingApprovalController extends Controller
             ApprovalProcess::INCIDENTS => $this->getPendingIncidents($employee, $scope),
             ApprovalProcess::PURCHASE_ORDERS => $this->getPendingPurchaseOrders($employee, $scope),
             ApprovalProcess::INVENTORY_MOVEMENTS => $this->getPendingInventoryMovements($employee, $scope),
+            'recipe_approval' => $this->getPendingRecipes($employee, $scope),
             default => [],
         };
     }
@@ -560,6 +563,47 @@ class PendingApprovalController extends Controller
                 'description' => ($item->notes ?? 'Sin observaciones').
                     ' - '.($item->creator->name ?? 'Usuario'),
                 'creator_name' => $item->creator->name ?? null,
+                'department' => null,
+                'photo' => null,
+                'date' => $item->created_at?->toISOString(),
+            ])
+            ->toArray();
+    }
+
+    // ===== Recetas (BOM) =====
+
+    /**
+     * A diferencia de vacaciones/incidencias/OC/movimientos, las recetas no
+     * tienen employee_id ni "creador" — es un catálogo compartido de la
+     * empresa. El único alcance que aplica es 'enterprise' (mismo criterio
+     * que el caso 'enterprise' de applyScopeFilterByCreator(): no se filtra
+     * más porque ya está acotado por enterprise_id); $scope se recibe para
+     * respetar la firma común de countPendingItems()/getPendingItems() pero
+     * no cambia el resultado.
+     */
+    private function getRecipeQuery(Employee $employee, string $scope)
+    {
+        return Recipe::where('status', 'pending_approval')
+            ->where('enterprise_id', $employee->enterprise_id);
+    }
+
+    private function countPendingRecipes(Employee $employee, string $scope): int
+    {
+        return $this->getRecipeQuery($employee, $scope)->count();
+    }
+
+    private function getPendingRecipes(Employee $employee, string $scope): array
+    {
+        return $this->getRecipeQuery($employee, $scope)
+            ->orderBy('created_at', 'desc')
+            ->limit(50)
+            ->get()
+            ->map(fn ($item) => [
+                'id' => $item->id,
+                'type' => 'recipe',
+                'title' => $item->name,
+                'subtitle' => $item->code,
+                'description' => $item->description ?: 'Sin descripción',
                 'department' => null,
                 'photo' => null,
                 'date' => $item->created_at?->toISOString(),

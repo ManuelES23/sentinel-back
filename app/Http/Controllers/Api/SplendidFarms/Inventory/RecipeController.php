@@ -9,6 +9,7 @@ use App\Models\ProductCategory;
 use App\Models\Recipe;
 use App\Models\RecipeItem;
 use App\Models\UnitOfMeasure;
+use App\Services\RecipeApprovalService;
 use App\Services\RecipeVersioningService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -18,7 +19,10 @@ use Illuminate\Validation\ValidationException;
 
 class RecipeController extends Controller
 {
-    public function __construct(private RecipeVersioningService $versioning) {}
+    public function __construct(
+        private RecipeVersioningService $versioning,
+        private RecipeApprovalService $approval,
+    ) {}
 
     /**
      * Display a listing of the resource.
@@ -100,7 +104,7 @@ class RecipeController extends Controller
             'category_id' => 'nullable|exists:product_categories,id',
             'output_quantity' => 'nullable|numeric|min:0.01',
             'output_unit_id' => 'nullable|exists:units_of_measure,id',
-            'status' => 'nullable|in:draft,active,inactive,archived',
+            'status' => 'nullable|in:draft,pending_approval,active,inactive,archived',
             'version' => 'nullable|string|max:20',
             'notes' => 'nullable|string',
             'is_active' => 'boolean',
@@ -272,7 +276,7 @@ class RecipeController extends Controller
             'output_quantity' => 'nullable|numeric|min:0.01',
             'output_unit_id' => 'nullable|exists:units_of_measure,id',
             'estimated_cost' => 'nullable|numeric|min:0',
-            'status' => 'nullable|in:draft,active,inactive,archived',
+            'status' => 'nullable|in:draft,pending_approval,active,inactive,archived',
             'version' => 'nullable|string|max:20',
             'notes' => 'nullable|string',
             'is_active' => 'boolean',
@@ -880,5 +884,44 @@ class RecipeController extends Controller
             'message' => 'Receta restaurada exitosamente',
             'data' => $restored,
         ]);
+    }
+
+    // ── Flujo de aprobación ─────────────────────────────────────
+
+    /**
+     * Envía la receta a revisión (draft -> pending_approval).
+     */
+    public function submitForApproval(Request $request, Recipe $recipe): JsonResponse
+    {
+        $this->assertRecipeBelongsToResolvedEnterprise($recipe, $request);
+
+        $recipe = $this->approval->submit($recipe);
+
+        return response()->json(['success' => true, 'message' => 'Receta enviada a revisión', 'data' => $recipe]);
+    }
+
+    /**
+     * Aprueba una receta pendiente (pending_approval -> active).
+     */
+    public function approve(Request $request, Recipe $recipe): JsonResponse
+    {
+        $this->assertRecipeBelongsToResolvedEnterprise($recipe, $request);
+
+        $recipe = $this->approval->approve($recipe, $request->user());
+
+        return response()->json(['success' => true, 'message' => 'Receta aprobada', 'data' => $recipe]);
+    }
+
+    /**
+     * Rechaza una receta pendiente (pending_approval -> draft).
+     */
+    public function reject(Request $request, Recipe $recipe): JsonResponse
+    {
+        $this->assertRecipeBelongsToResolvedEnterprise($recipe, $request);
+
+        $validated = $request->validate(['reason' => 'required|string|max:500']);
+        $recipe = $this->approval->reject($recipe, $request->user(), $validated['reason']);
+
+        return response()->json(['success' => true, 'message' => 'Receta rechazada', 'data' => $recipe]);
     }
 }
