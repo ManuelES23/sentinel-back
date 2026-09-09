@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\SplendidFarms\Inventory;
 
 use App\Http\Controllers\Controller;
+use App\Models\Enterprise;
 use App\Models\ProductCategory;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -16,6 +17,15 @@ class ProductCategoryController extends Controller
     {
         $query = ProductCategory::with(['parent:id,name,code', 'children:id,parent_id,name,code,icon,is_active'])
             ->withCount('products');
+
+        // Filtrar por empresa si se envía el header
+        $enterpriseSlug = $request->header('X-Enterprise-Slug');
+        if ($enterpriseSlug) {
+            $enterprise = Enterprise::where('slug', $enterpriseSlug)->first();
+            if ($enterprise) {
+                $query->forEnterprise($enterprise->id);
+            }
+        }
 
         // Filtrar solo activas
         if ($request->boolean('active_only')) {
@@ -100,6 +110,16 @@ class ProductCategoryController extends Controller
         }
 
         $category = ProductCategory::create($validated);
+
+        // Vincular la categoría a la empresa actual
+        $enterpriseSlug = $request->header('X-Enterprise-Slug');
+        if ($enterpriseSlug) {
+            $enterprise = Enterprise::where('slug', $enterpriseSlug)->first();
+            if ($enterprise) {
+                $category->enterprises()->syncWithoutDetaching([$enterprise->id]);
+            }
+        }
+
         $category->load('parent:id,name,code');
         $category->loadCount('products');
 
