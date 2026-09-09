@@ -24,8 +24,8 @@ class RecipeController extends Controller
     {
         $query = Recipe::with([
             'category:id,name,code',
-            'cultivo:id,nombre',
-            'variedad:id,nombre',
+            'agroDetails.cultivo:id,nombre',
+            'agroDetails.variedad:id,nombre',
             'outputProduct:id,name,code',
             'outputUnit:id,name,abbreviation',
         ])->withCount('items');
@@ -52,7 +52,7 @@ class RecipeController extends Controller
 
         // Filtrar por cultivo
         if ($request->filled('cultivo_id')) {
-            $query->where('cultivo_id', $request->cultivo_id);
+            $query->whereHas('agroDetails', fn ($q) => $q->where('cultivo_id', $request->cultivo_id));
         }
 
         // Filtrar por tipo de receta
@@ -95,10 +95,8 @@ class RecipeController extends Controller
             'slug' => 'nullable|string|max:255|unique:recipes,slug',
             'description' => 'nullable|string',
             'category_id' => 'nullable|exists:product_categories,id',
-            'cultivo_id' => 'nullable|exists:cultivos,id',
             'output_quantity' => 'nullable|numeric|min:0.01',
             'output_unit_id' => 'nullable|exists:units_of_measure,id',
-            'peso_pieza' => 'nullable|numeric|min:0',
             'status' => 'nullable|in:draft,active,inactive,archived',
             'version' => 'nullable|string|max:20',
             'notes' => 'nullable|string',
@@ -118,8 +116,6 @@ class RecipeController extends Controller
             'items.*.is_default' => 'nullable|boolean',
             'items.*.solo_interno' => 'nullable|boolean',
             'items.*.calibre_id' => 'nullable|exists:calibres,id',
-            // Variedad
-            'variedad_id' => 'nullable|exists:variedades,id',
             // Calibres y PLUs
             'calibres' => 'nullable|array',
             'calibres.*.calibre_id' => 'required|exists:calibres,id',
@@ -127,6 +123,15 @@ class RecipeController extends Controller
             'calibres.*.plus.*.product_id' => 'required|exists:products,id',
             'calibres.*.plus.*.is_organic' => 'nullable|boolean',
             'calibres.*.plus.*.notes' => 'nullable|string|max:500',
+            // Detalle agrícola: payload anidado (nuevo) o campos planos (legado)
+            'agro_details' => 'nullable|array',
+            'agro_details.cultivo_id' => 'nullable|exists:cultivos,id',
+            'agro_details.variedad_id' => 'nullable|exists:variedades,id',
+            'agro_details.peso_pieza' => 'nullable|numeric|min:0',
+            // Compatibilidad con el frontend actual (payload plano) hasta la Fase 5
+            'cultivo_id' => 'nullable|exists:cultivos,id',
+            'variedad_id' => 'nullable|exists:variedades,id',
+            'peso_pieza' => 'nullable|numeric|min:0',
         ]);
 
         if (empty($validated['code'])) {
@@ -150,6 +155,7 @@ class RecipeController extends Controller
         $this->assertNoDuplicateItems($items);
         $calibres = $validated['calibres'] ?? [];
         unset($validated['items'], $validated['calibres']);
+        $agroDetails = $this->extractAgroDetails($validated);
 
         $enterprise = $this->resolveEnterprise($request);
         if (! $enterprise) {
@@ -159,8 +165,12 @@ class RecipeController extends Controller
             ], 422);
         }
 
-        $recipe = DB::transaction(function () use ($validated, $items, $calibres, $request, $enterprise) {
+        $recipe = DB::transaction(function () use ($validated, $items, $calibres, $agroDetails, $request, $enterprise) {
             $recipe = Recipe::create([...$validated, 'enterprise_id' => $enterprise->id]);
+
+            if ($agroDetails) {
+                $recipe->agroDetails()->create($agroDetails);
+            }
 
             foreach ($items as $index => $item) {
                 $recipe->items()->create(array_merge($item, [
@@ -193,8 +203,8 @@ class RecipeController extends Controller
 
         $recipe = $recipe->fresh([
             'category:id,name,code',
-            'cultivo:id,nombre',
-            'variedad:id,nombre',
+            'agroDetails.cultivo:id,nombre',
+            'agroDetails.variedad:id,nombre',
             'outputProduct:id,name,code',
             'outputUnit:id,name,abbreviation',
             'items.product:id,name,code,brand_id',
@@ -221,8 +231,8 @@ class RecipeController extends Controller
 
         $recipe->load([
             'category:id,name,code',
-            'cultivo:id,nombre',
-            'variedad:id,nombre',
+            'agroDetails.cultivo:id,nombre',
+            'agroDetails.variedad:id,nombre',
             'outputProduct:id,name,code,cost_price',
             'outputUnit:id,name,abbreviation',
             'items.product:id,name,code,cost_price,brand_id',
@@ -253,11 +263,9 @@ class RecipeController extends Controller
             'slug' => 'nullable|string|max:255|unique:recipes,slug,'.$recipe->id,
             'description' => 'nullable|string',
             'category_id' => 'nullable|exists:product_categories,id',
-            'cultivo_id' => 'nullable|exists:cultivos,id',
             'recipe_type' => 'nullable|string|max:50',
             'output_quantity' => 'nullable|numeric|min:0.01',
             'output_unit_id' => 'nullable|exists:units_of_measure,id',
-            'peso_pieza' => 'nullable|numeric|min:0',
             'estimated_cost' => 'nullable|numeric|min:0',
             'status' => 'nullable|in:draft,active,inactive,archived',
             'version' => 'nullable|string|max:20',
@@ -278,8 +286,6 @@ class RecipeController extends Controller
             'items.*.is_default' => 'nullable|boolean',
             'items.*.solo_interno' => 'nullable|boolean',
             'items.*.calibre_id' => 'nullable|exists:calibres,id',
-            // Variedad
-            'variedad_id' => 'nullable|exists:variedades,id',
             // Calibres y PLUs
             'calibres' => 'nullable|array',
             'calibres.*.calibre_id' => 'required|exists:calibres,id',
@@ -287,6 +293,15 @@ class RecipeController extends Controller
             'calibres.*.plus.*.product_id' => 'required|exists:products,id',
             'calibres.*.plus.*.is_organic' => 'nullable|boolean',
             'calibres.*.plus.*.notes' => 'nullable|string|max:500',
+            // Detalle agrícola: payload anidado (nuevo) o campos planos (legado)
+            'agro_details' => 'nullable|array',
+            'agro_details.cultivo_id' => 'nullable|exists:cultivos,id',
+            'agro_details.variedad_id' => 'nullable|exists:variedades,id',
+            'agro_details.peso_pieza' => 'nullable|numeric|min:0',
+            // Compatibilidad con el frontend actual (payload plano) hasta la Fase 5
+            'cultivo_id' => 'nullable|exists:cultivos,id',
+            'variedad_id' => 'nullable|exists:variedades,id',
+            'peso_pieza' => 'nullable|numeric|min:0',
         ]);
 
         // Extraer items y calibres antes de actualizar la receta
@@ -304,11 +319,20 @@ class RecipeController extends Controller
             unset($validated['calibres']);
         }
 
+        $agroDetails = $this->extractAgroDetails($validated);
+
         // Todo el sync corre en una sola transacción: si algo truena a medio
         // camino (ej. una violación de constraint), no debe quedar la receta
         // con menos items/calibres de los que tenía antes de editar.
-        DB::transaction(function () use ($recipe, $validated, $items, $calibres, $request) {
+        DB::transaction(function () use ($recipe, $validated, $items, $calibres, $agroDetails, $request) {
             $recipe->update($validated);
+
+            if ($agroDetails) {
+                $recipe->agroDetails()->updateOrCreate(['recipe_id' => $recipe->id], $agroDetails);
+            } elseif ($agroDetails === null && array_key_exists('agro_details', $request->all())) {
+                // Se mandó agro_details explícitamente vacío -> quitar la extensión
+                $recipe->agroDetails()->delete();
+            }
 
             // Recetas que se crearon antes de este fix nunca tienen
             // output_product_id (nunca se implementó) — se autocura aquí.
@@ -379,8 +403,8 @@ class RecipeController extends Controller
 
         $recipe = $recipe->fresh([
             'category:id,name,code',
-            'cultivo:id,nombre',
-            'variedad:id,nombre',
+            'agroDetails.cultivo:id,nombre',
+            'agroDetails.variedad:id,nombre',
             'outputProduct:id,name,code',
             'outputUnit:id,name,abbreviation',
             'items.product:id,name,code,brand_id',
@@ -753,6 +777,33 @@ class RecipeController extends Controller
         $slug = $request->header('X-Enterprise-Slug');
 
         return $slug ? Enterprise::where('slug', $slug)->first() : null;
+    }
+
+    /**
+     * Normaliza agro_details: acepta tanto el payload anidado nuevo como los
+     * campos planos legado (cultivo_id/variedad_id/peso_pieza a nivel raíz),
+     * y los saca de $validated para que Recipe::create()/update() no truene
+     * por columnas que ya no existen en `recipes`.
+     */
+    private function extractAgroDetails(array &$validated): ?array
+    {
+        $nested = $validated['agro_details'] ?? null;
+        unset($validated['agro_details']);
+
+        $legacyCultivo = $validated['cultivo_id'] ?? null;
+        $legacyVariedad = $validated['variedad_id'] ?? null;
+        $legacyPeso = $validated['peso_pieza'] ?? null;
+        unset($validated['cultivo_id'], $validated['variedad_id'], $validated['peso_pieza']);
+
+        $details = $nested ?? [
+            'cultivo_id' => $legacyCultivo,
+            'variedad_id' => $legacyVariedad,
+            'peso_pieza' => $legacyPeso,
+        ];
+
+        $hasAnyValue = collect($details)->filter(fn ($v) => $v !== null)->isNotEmpty();
+
+        return $hasAnyValue ? $details : null;
     }
 
     /**
