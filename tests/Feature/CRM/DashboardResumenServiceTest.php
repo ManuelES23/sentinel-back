@@ -532,7 +532,8 @@ class DashboardResumenServiceTest extends TestCase
         ]);
 
         $service = new DashboardResumenService();
-        $resultado = $service->cumplimientoMetas($this->enterprise->id, $this->vendedor->id, 'mes_actual');
+        // Call with vendedorId = null (team aggregate) so empresa_id is the ONLY filter that excludes the other empresa's data
+        $resultado = $service->cumplimientoMetas($this->enterprise->id, null, 'mes_actual');
 
         // Debe retornar 0 para metas y reales porque no hay data en nuestra empresa
         $this->assertSame(0.0, $resultado['metaMonto']);
