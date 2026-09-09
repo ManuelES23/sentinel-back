@@ -2,11 +2,13 @@
 
 namespace App\Services\CRM;
 
+use App\Models\CRM\CrmActividad;
 use App\Models\CRM\CrmCliente;
 use App\Models\CRM\CrmCotizacion;
 use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmProspecto;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Agrega métricas ejecutivas del CRM (pipeline, cotizaciones, funnel de
@@ -137,6 +139,40 @@ class DashboardResumenService
             'prospectosCreados' => $prospectosCreados,
             'clientesConvertidos' => $clientesConvertidos,
             'tasaConversion' => $tasaConversion,
+        ];
+    }
+
+    /**
+     * @return array{porTipo: array<int, array{tipo: string, total: int}>, porDia: array<int, array{fecha: string, total: int}>}
+     */
+    public function actividad(int $empresaId, ?int $vendedorId, string $periodo): array
+    {
+        ['inicio' => $inicio, 'fin' => $fin] = $this->resolverRangoFechas($periodo);
+
+        $base = CrmActividad::where('empresa_id', $empresaId)
+            ->whereBetween('fecha_actividad', [$inicio, $fin])
+            ->when($vendedorId !== null, fn ($q) => $q->where('vendedor_id', $vendedorId));
+
+        $porTipo = (clone $base)
+            ->selectRaw('tipo, COUNT(*) as total')
+            ->groupBy('tipo')
+            ->get()
+            ->map(fn ($fila) => ['tipo' => $fila->tipo, 'total' => (int) $fila->total])
+            ->values()
+            ->all();
+
+        $porDia = (clone $base)
+            ->selectRaw('DATE(fecha_actividad) as fecha, COUNT(*) as total')
+            ->groupBy(DB::raw('DATE(fecha_actividad)'))
+            ->orderBy('fecha')
+            ->get()
+            ->map(fn ($fila) => ['fecha' => $fila->fecha, 'total' => (int) $fila->total])
+            ->values()
+            ->all();
+
+        return [
+            'porTipo' => $porTipo,
+            'porDia' => $porDia,
         ];
     }
 }

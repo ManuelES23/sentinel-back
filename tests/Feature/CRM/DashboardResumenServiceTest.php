@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\CRM;
 
+use App\Models\CRM\CrmActividad;
 use App\Models\CRM\CrmCliente;
 use App\Models\CRM\CrmCotizacion;
 use App\Models\CRM\CrmOportunidad;
@@ -349,6 +350,80 @@ class DashboardResumenServiceTest extends TestCase
         $this->assertSame(0, $resultado['prospectosCreados']);
         $this->assertSame(0, $resultado['clientesConvertidos']);
         $this->assertSame(0.0, $resultado['tasaConversion']);
+
+        Carbon::setTestNow();
+    }
+
+    public function test_actividad_agrupa_por_tipo_y_por_dia(): void
+    {
+        Carbon::setTestNow(Carbon::create(2026, 9, 15));
+
+        CrmActividad::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+            'tipo' => 'llamada', 'descripcion' => 'Llamada 1', 'fecha_actividad' => '2026-09-10 09:00:00',
+        ]);
+        CrmActividad::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+            'tipo' => 'llamada', 'descripcion' => 'Llamada 2', 'fecha_actividad' => '2026-09-10 15:00:00',
+        ]);
+        CrmActividad::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+            'tipo' => 'correo', 'descripcion' => 'Correo 1', 'fecha_actividad' => '2026-09-12 09:00:00',
+        ]);
+
+        $service = new DashboardResumenService();
+        $resultado = $service->actividad($this->enterprise->id, $this->vendedor->id, 'mes_actual');
+
+        $porTipo = collect($resultado['porTipo'])->keyBy('tipo');
+        $this->assertSame(2, $porTipo['llamada']['total']);
+        $this->assertSame(1, $porTipo['correo']['total']);
+
+        $porDia = collect($resultado['porDia']);
+        $this->assertCount(2, $porDia);
+        $this->assertSame('2026-09-10', $porDia->first()['fecha']);
+        $this->assertSame(2, $porDia->first()['total']);
+        $this->assertSame('2026-09-12', $porDia->last()['fecha']);
+
+        Carbon::setTestNow();
+    }
+
+    public function test_actividad_sin_datos_devuelve_arrays_vacios(): void
+    {
+        $service = new DashboardResumenService();
+        $resultado = $service->actividad($this->enterprise->id, $this->vendedor->id, 'mes_actual');
+
+        $this->assertSame([], $resultado['porTipo']);
+        $this->assertSame([], $resultado['porDia']);
+    }
+
+    public function test_actividad_ignora_datos_de_otra_empresa(): void
+    {
+        Carbon::setTestNow(Carbon::create(2026, 9, 15));
+        $otraEmpresa = $this->crearOtraEmpresa();
+        $vendedorAjeno = \App\Models\CRM\CrmVendedor::create([
+            'empresa_id' => $otraEmpresa->id, 'nombre' => 'Vendedor ajeno',
+        ]);
+
+        // Crear actividades en la otra empresa que estarían dentro del rango
+        CrmActividad::create([
+            'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id,
+            'tipo' => 'llamada', 'descripcion' => 'Llamada ajena 1', 'fecha_actividad' => '2026-09-10 09:00:00',
+        ]);
+        CrmActividad::create([
+            'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id,
+            'tipo' => 'llamada', 'descripcion' => 'Llamada ajena 2', 'fecha_actividad' => '2026-09-10 15:00:00',
+        ]);
+        CrmActividad::create([
+            'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id,
+            'tipo' => 'correo', 'descripcion' => 'Correo ajeno', 'fecha_actividad' => '2026-09-12 09:00:00',
+        ]);
+
+        $service = new DashboardResumenService();
+        $resultado = $service->actividad($this->enterprise->id, null, 'mes_actual');
+
+        // No debe incluir data de la otra empresa
+        $this->assertSame([], $resultado['porTipo']);
+        $this->assertSame([], $resultado['porDia']);
 
         Carbon::setTestNow();
     }
