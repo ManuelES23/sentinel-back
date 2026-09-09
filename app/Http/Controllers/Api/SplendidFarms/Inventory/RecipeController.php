@@ -30,6 +30,11 @@ class RecipeController extends Controller
             'outputUnit:id,name,abbreviation',
         ])->withCount('items');
 
+        $enterprise = $this->resolveEnterprise($request);
+        if ($enterprise) {
+            $query->forEnterprise($enterprise->id);
+        }
+
         // Filtrar solo activas
         if ($request->boolean('active_only')) {
             $query->active();
@@ -147,11 +152,13 @@ class RecipeController extends Controller
         unset($validated['items'], $validated['calibres']);
 
         $recipe = DB::transaction(function () use ($validated, $items, $calibres, $request) {
-            $recipe = Recipe::create($validated);
+            $enterprise = $this->resolveEnterprise($request);
+            $recipe = Recipe::create([...$validated, 'enterprise_id' => $enterprise?->id]);
 
             foreach ($items as $index => $item) {
                 $recipe->items()->create(array_merge($item, [
                     'sort_order' => $item['sort_order'] ?? $index,
+                    'enterprise_id' => $recipe->enterprise_id,
                 ]));
             }
 
@@ -304,6 +311,7 @@ class RecipeController extends Controller
                 foreach ($items as $index => $item) {
                     $recipe->items()->create(array_merge($item, [
                         'sort_order' => $item['sort_order'] ?? $index,
+                        'enterprise_id' => $recipe->enterprise_id,
                     ]));
                 }
 
@@ -446,6 +454,8 @@ class RecipeController extends Controller
         if (! isset($validated['sort_order'])) {
             $validated['sort_order'] = $recipe->items()->max('sort_order') + 1;
         }
+
+        $validated['enterprise_id'] = $recipe->enterprise_id;
 
         $item = $recipe->items()->create($validated);
         $item->load(['product:id,name,code', 'unit:id,name,abbreviation', 'calibre:id,nombre,valor']);
@@ -711,6 +721,17 @@ class RecipeController extends Controller
         }
 
         $recipe->update(['output_product_id' => $product->id]);
+    }
+
+    /**
+     * Resuelve la empresa activa desde el header X-Enterprise-Slug — mismo
+     * mecanismo que ProductController/ProductCategoryController/etc.
+     */
+    private function resolveEnterprise(Request $request): ?Enterprise
+    {
+        $slug = $request->header('X-Enterprise-Slug');
+
+        return $slug ? Enterprise::where('slug', $slug)->first() : null;
     }
 
     /**

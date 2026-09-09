@@ -24,7 +24,7 @@ class RecipeControllerTest extends TestCase
 
     public function test_crear_una_receta_sin_items_no_falla(): void
     {
-        $response = $this->postJson(self::BASE_URL, $this->validRecipePayload());
+        $response = $this->postJson(self::BASE_URL, $this->validRecipePayload(), ['X-Enterprise-Slug' => 'splendidfarms']);
 
         $response->assertOk()->assertJson(['success' => true]);
         $this->assertDatabaseHas('recipes', ['name' => 'Caja Elote Premium 20lb']);
@@ -44,7 +44,7 @@ class RecipeControllerTest extends TestCase
                 ['product_id' => $this->productA->id, 'quantity' => 2],
                 ['product_id' => $this->productB->id, 'quantity' => 10],
             ],
-        ]));
+        ]), ['X-Enterprise-Slug' => 'splendidfarms']);
 
         $response->assertOk();
         $recipeId = $response->json('data.id');
@@ -72,7 +72,7 @@ class RecipeControllerTest extends TestCase
                     ],
                 ],
             ],
-        ]));
+        ]), ['X-Enterprise-Slug' => 'splendidfarms']);
 
         $response->assertOk();
         $recipeId = $response->json('data.id');
@@ -117,6 +117,7 @@ class RecipeControllerTest extends TestCase
         $recipe->items()->create([
             'product_id' => $this->productA->id,
             'quantity' => 1,
+            'enterprise_id' => $recipe->enterprise_id,
         ]);
 
         // Set inválido: dos items con el mismo producto y mismo group_key
@@ -145,6 +146,7 @@ class RecipeControllerTest extends TestCase
         $recipe->items()->create([
             'product_id' => $this->productA->id,
             'quantity' => 1,
+            'enterprise_id' => $recipe->enterprise_id,
         ]);
 
         $response = $this->putJson(self::BASE_URL."/{$recipe->id}", [

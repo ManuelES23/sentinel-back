@@ -14,6 +14,7 @@ class Recipe extends Model
     use HasFactory, SoftDeletes, Loggable;
 
     protected $fillable = [
+        'enterprise_id',
         'code',
         'name',
         'recipe_type',
@@ -116,6 +117,14 @@ class Recipe extends Model
     public function scopeByStatus($query, string $status)
     {
         return $query->where('status', $status);
+    }
+
+    /**
+     * Scope para filtrar por empresa
+     */
+    public function scopeForEnterprise($query, int $enterpriseId)
+    {
+        return $query->where('enterprise_id', $enterpriseId);
     }
 
     // ── Accessors / Helpers ─────────────────────────────────────
