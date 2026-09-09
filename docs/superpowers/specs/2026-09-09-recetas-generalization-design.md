@@ -18,15 +18,21 @@ Inventario, cero Recetas. Es una comercializadora de agroinsumos: necesita
 combinar artículos (insumos) para crear productos propios, sin ningún
 concepto agrícola de Splendid Farms.
 
-**Bug de aislamiento encontrado en esta sesión (bloqueante, no opcional).**
-`products`, `product_categories`, `brands`, `units_of_measure`, `recipes` y
-`recipe_items` no tienen `enterprise_id` — confirmado con `Schema::
-getColumnListing()` vía tinker. `RecipeController@index` no filtra por
-empresa en ningún punto. Splendid Farms y Splendid by Porvenir ya comparten
-hoy, sin saberlo, el mismo catálogo de artículos y las mismas recetas en la
-base de datos — solo no se nota porque nadie más entra a esas rutas. Dar de
-alta Recetas para Canes Agro tal cual mezclaría su catálogo con el de
-Splendid Farms.
+**Bug de aislamiento encontrado en esta sesión (bloqueante, no opcional) —
+corregido tras revisar los controllers completos.** `products` **sí** tiene
+un mecanismo de aislamiento parcialmente construido: tabla pivote
+muchos-a-muchos `enterprise_product` (ya poblada, todo lo existente enlazado
+a Splendid Farms), resuelta vía header `X-Enterprise-Slug` +
+`Product::scopeForEnterprise()`, y `ProductController@index`/`store` ya la
+usan. `product_categories`, `brands` y `units_of_measure` **no tienen nada**
+— confirmado revisando sus controllers, ningún filtro por empresa en
+ninguno de los tres. `recipes`/`recipe_items` tampoco tienen nada —
+`RecipeController@index` no filtra por empresa en ningún punto, y no existe
+ninguna tabla pivote para ellas. Splendid Farms y Splendid by Porvenir ya
+comparten hoy, sin saberlo, las mismas recetas y (para todo lo que no sea
+`Product`) el mismo catálogo — solo no se nota porque nadie más entra a esas
+rutas. Dar de alta Recetas para Canes Agro tal cual mezclaría su catálogo y
+sus recetas con las de Splendid Farms.
 
 Las rutas de negocio (`splendidfarms`, `splendidbyporvenir`,
 `grupoesplendido`) están hardcodeadas en `routes/api.php` — no existe (en
@@ -89,25 +95,56 @@ desde ahí cuesta poco extra sobre A y evita la deuda duplicada de B.
 
 ### 1. Aislamiento por empresa
 
-Migración (mismo patrón de 3 pasos ya usado en otros retrofits del
-proyecto: columna nullable → backfill a Splendid Farms → NOT NULL) sobre:
-`products`, `product_categories`, `brands`, `units_of_measure`, `recipes`,
-`recipe_items`.
+Dos mecanismos distintos, cada uno siguiendo el patrón que **ya existe en
+el proyecto** para el caso análogo — no se introduce un trait nuevo tipo
+`BelongsToEnterprise`, se replica lo que `Product`/`enterprise_product` ya
+hacen:
+
+**a) Categorías, marcas y unidades — pivote muchos-a-muchos, igual que
+`Product`.** Un artículo o categoría legítimamente puede compartirse entre
+negocios (ya es el diseño actual de `Product`); una tabla de referencia como
+"Kilogramos" no tiene por qué duplicarse por empresa. Se crean 3 tablas
+pivote nuevas siguiendo exactamente la forma de `enterprise_product`:
+
+```php
+Schema::create('enterprise_product_category', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('enterprise_id')->constrained()->cascadeOnDelete();
+    $table->foreignId('product_category_id')->constrained()->cascadeOnDelete();
+    $table->timestamps();
+    $table->unique(['enterprise_id', 'product_category_id']);
+});
+// mismo patrón para enterprise_brand (brand_id) y enterprise_unit_of_measure (unit_of_measure_id)
+```
+
+Cada migración backfillea lo existente a Splendid Farms (mismo bloque
+`DB::table('enterprises')->where('slug','splendidfarms')...` que ya usa
+`2026_04_09_002324_create_enterprise_product_table.php`). `ProductCategory`,
+`Brand`, `UnitOfMeasure` ganan una relación `enterprises(): BelongsToMany` y
+un `scopeForEnterprise()` idénticos a los de `Product`. Sus controllers
+(`ProductCategoryController`, `BrandController`, `UnitOfMeasureController`)
+ganan el mismo bloque que ya está repetido 4 veces en `ProductController`:
+leer `X-Enterprise-Slug`, resolver la empresa, aplicar `->forEnterprise($id)`
+en `index()` y `syncWithoutDetaching()` en `store()`.
+
+**b) Recetas — columna `enterprise_id` directa, no pivote.** A diferencia de
+un artículo, una receta no tiene sentido compartida entre negocios (es una
+fórmula propia). Migración de 3 pasos (nullable → backfill a Splendid Farms
+→ NOT NULL) sobre `recipes` y `recipe_items`:
 
 ```php
 $table->foreignId('enterprise_id')->nullable()->after('id')
     ->constrained('enterprises')->cascadeOnDelete();
 ```
 
-Trait `BelongsToEnterprise` (nuevo) + global scope que filtra automáticamente
-por la empresa resuelta del usuario autenticado (mismo mecanismo de
-resolución que ya usa el resto del sistema de permisos jerárquicos). Se
-aplica a los 6 modelos de la lista. `RecipeController`, `ProductController`,
-`ProductCategoryController`, `BrandController`, `UnitOfMeasureController` no
-cambian su lógica interna — el scope filtra antes de que la query llegue al
-controller. `RecipeCalibre`/`RecipeCalibrePlu` heredan aislamiento a través
-de `Recipe` (no necesitan columna propia, mismo criterio que las tablas pivote
-documentadas en retrofits anteriores del proyecto).
+`Recipe`/`RecipeItem` ganan un `scopeForEnterprise()` propio (mismo nombre
+que en `Product`, misma firma, para que el patrón sea reconocible). Se
+resuelve con el mismo header `X-Enterprise-Slug` que ya usa
+`ProductController` y que `RecipeController::syncOutputProduct()` **ya lee**
+para enlazar el producto de salida — hoy es la única función del archivo que
+conoce la empresa activa; con este cambio la conoce todo el controller.
+`RecipeCalibre`/`RecipeCalibrePlu` no necesitan columna propia — heredan
+aislamiento a través de `Recipe`.
 
 ### 2. Generalización del modelo de Receta
 
@@ -221,9 +258,12 @@ agrícola — así es como Canes Agro nunca ve cultivo/variedad/calibre.
 
 ## Rollout
 
-1. Migraciones de aislamiento (`enterprise_id` en las 6 tablas) — se puede
-   desplegar solo, es retrocompatible (backfill automático a Splendid
-   Farms), sin afectar el frontend.
+1. Migraciones de aislamiento — pivotes para categorías/marcas/unidades y
+   columna `enterprise_id` en recipes/recipe_items — se pueden desplegar
+   solas, son retrocompatibles (backfill automático a Splendid Farms), sin
+   afectar el frontend. `products` no requiere migración, ya tiene
+   `enterprise_product`; solo sus controllers hermanos (categorías, marcas,
+   unidades) se ponen al día con el filtro que `ProductController` ya usa.
 2. Split de `recipe_agro_details` + generalización del modelo — junto con la
    reestructura del backend de `RecipeController`.
 3. Alta de Canes Agro (Applications/Modules/Submodules + rutas).
@@ -232,11 +272,14 @@ agrícola — así es como Canes Agro nunca ve cultivo/variedad/calibre.
 
 ## Riesgos conocidos
 
-- El backfill de `enterprise_id` asume que **todo** lo existente en
-  `products`/`recipes` hoy pertenece a Splendid Farms. Si Splendid by
-  Porvenir ya generó artículos o recetas propias sin saberlo (comparte las
-  mismas tablas hoy), esos registros quedarían mal asignados en el backfill
-  — se audita antes de correr la migración en producción.
+- El backfill de las tablas nuevas (categorías/marcas/unidades/recetas)
+  asume que **todo** lo existente hoy pertenece a Splendid Farms — mismo
+  supuesto que ya usó `enterprise_product` en su momento. Si Splendid by
+  Porvenir ya generó categorías, marcas o recetas propias sin saberlo
+  (comparte las mismas tablas hoy), esos registros quedarían mal asignados
+  en el backfill — se audita antes de correr las migraciones en producción.
+  `products` no corre este riesgo de nuevo: su backfill ya se hizo y no se
+  toca.
 - Reusar `ApprovalProcess` asume que sus pasos de aprobación (por puesto/
   nivel jerárquico, vía `Employee`/`Position`) tienen sentido para Recetas;
   si Canes Agro no tiene esa estructura de puestos aún configurada, el flujo
