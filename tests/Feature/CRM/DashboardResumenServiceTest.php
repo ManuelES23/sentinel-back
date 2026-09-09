@@ -20,6 +20,7 @@ class DashboardResumenServiceTest extends TestCase
         parent::setUp();
         $this->setUpCrmFixtures();
     }
+
     public function test_resuelve_rango_de_mes_actual(): void
     {
         Carbon::setTestNow(Carbon::create(2026, 9, 15, 10, 0, 0));
@@ -132,10 +133,7 @@ class DashboardResumenServiceTest extends TestCase
     public function test_pipeline_ignora_datos_de_otra_empresa(): void
     {
         Carbon::setTestNow(Carbon::create(2026, 9, 15));
-        $otraEmpresa = Enterprise::create([
-            'name' => 'Otra Empresa', 'slug' => 'otra-empresa-dashboard-'.uniqid(),
-            'description' => 'Aislamiento', 'is_active' => true,
-        ]);
+        $otraEmpresa = $this->crearOtraEmpresa();
         $vendedorAjeno = \App\Models\CRM\CrmVendedor::create([
             'empresa_id' => $otraEmpresa->id, 'nombre' => 'Vendedor ajeno',
         ]);
@@ -149,6 +147,51 @@ class DashboardResumenServiceTest extends TestCase
         $porEtapa = collect($service->pipeline($this->enterprise->id, null, 'mes_actual'))->keyBy('etapa');
 
         $this->assertSame(0, $porEtapa['calificado']['total']);
+
+        Carbon::setTestNow();
+    }
+
+    public function test_pipeline_filtra_por_vendedor_dentro_de_empresa(): void
+    {
+        Carbon::setTestNow(Carbon::create(2026, 9, 15));
+
+        // Crear segundo vendedor en la misma empresa
+        $segundoVendedor = \App\Models\CRM\CrmVendedor::create([
+            'empresa_id' => $this->enterprise->id,
+            'nombre' => 'Segundo Vendedor',
+        ]);
+
+        // Crear oportunidad del PRIMER vendedor en etapa "prospecto" con monto 1000
+        CrmOportunidad::create([
+            'empresa_id' => $this->enterprise->id,
+            'vendedor_id' => $this->vendedor->id,
+            'nombre' => 'Oportunidad Vendedor 1',
+            'monto_esperado' => 1000,
+            'etapa' => 'prospecto',
+            'fecha_cierre_esperada' => '2026-09-20',
+        ]);
+
+        // Crear oportunidad del SEGUNDO vendedor en etapa "prospecto" con monto 5000
+        // Esta data NO debe contar cuando filtramos por $this->vendedor->id
+        CrmOportunidad::create([
+            'empresa_id' => $this->enterprise->id,
+            'vendedor_id' => $segundoVendedor->id,
+            'nombre' => 'Oportunidad Vendedor 2',
+            'monto_esperado' => 5000,
+            'etapa' => 'prospecto',
+            'fecha_cierre_esperada' => '2026-09-20',
+        ]);
+
+        $service = new DashboardResumenService();
+        $porEtapa = collect($service->pipeline($this->enterprise->id, $this->vendedor->id, 'mes_actual'))
+            ->keyBy('etapa');
+
+        // Debe contar SOLO la oportunidad del primer vendedor (1000), NOT del segundo (5000)
+        $this->assertSame(1, $porEtapa['prospecto']['total']);
+        $this->assertSame(1000.0, $porEtapa['prospecto']['monto']);
+        // Las demás etapas deben estar en cero
+        $this->assertSame(0, $porEtapa['calificado']['total']);
+        $this->assertSame(0.0, $porEtapa['calificado']['monto']);
 
         Carbon::setTestNow();
     }
