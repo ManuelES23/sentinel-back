@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\CRM;
 
+use App\Models\CRM\CrmCotizacion;
 use App\Models\CRM\CrmOportunidad;
 use App\Models\Enterprise;
 use App\Services\CRM\DashboardResumenService;
@@ -192,6 +193,72 @@ class DashboardResumenServiceTest extends TestCase
         // Las demás etapas deben estar en cero
         $this->assertSame(0, $porEtapa['calificado']['total']);
         $this->assertSame(0.0, $porEtapa['calificado']['monto']);
+
+        Carbon::setTestNow();
+    }
+
+    public function test_cotizaciones_agrupa_por_estado_y_filtra_por_vendedor_via_oportunidad(): void
+    {
+        Carbon::setTestNow(Carbon::create(2026, 9, 15));
+
+        $oportunidadPropia = CrmOportunidad::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+            'nombre' => 'Op propia', 'monto_esperado' => 2000, 'etapa' => 'propuesta',
+        ]);
+        CrmCotizacion::create([
+            'empresa_id' => $this->enterprise->id, 'oportunidad_id' => $oportunidadPropia->id,
+            'folio' => 'COT-1', 'estado' => 'aprobado', 'fecha_emision' => '2026-09-10', 'total' => 1200,
+        ]);
+        CrmCotizacion::create([
+            'empresa_id' => $this->enterprise->id, 'oportunidad_id' => $oportunidadPropia->id,
+            'folio' => 'COT-2', 'estado' => 'aprobado', 'fecha_emision' => '2026-09-12', 'total' => 800,
+        ]);
+
+        $otroVendedor = \App\Models\CRM\CrmVendedor::create([
+            'empresa_id' => $this->enterprise->id, 'nombre' => 'Otro vendedor',
+        ]);
+        $oportunidadAjena = CrmOportunidad::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $otroVendedor->id,
+            'nombre' => 'Op ajena', 'monto_esperado' => 5000, 'etapa' => 'propuesta',
+        ]);
+        CrmCotizacion::create([
+            // De otro vendedor -- no debe contar cuando se filtra por $this->vendedor.
+            'empresa_id' => $this->enterprise->id, 'oportunidad_id' => $oportunidadAjena->id,
+            'folio' => 'COT-3', 'estado' => 'aprobado', 'fecha_emision' => '2026-09-14', 'total' => 9999,
+        ]);
+
+        $service = new DashboardResumenService();
+        $porEstado = collect($service->cotizaciones($this->enterprise->id, $this->vendedor->id, 'mes_actual'))
+            ->keyBy('estado');
+
+        $this->assertCount(5, $porEstado);
+        $this->assertSame(2, $porEstado['aprobado']['total']);
+        $this->assertSame(2000.0, $porEstado['aprobado']['monto']);
+        $this->assertSame(0, $porEstado['rechazado']['total']);
+
+        Carbon::setTestNow();
+    }
+
+    public function test_cotizaciones_sin_vendedor_agrega_todo_el_equipo(): void
+    {
+        Carbon::setTestNow(Carbon::create(2026, 9, 15));
+
+        $otroVendedor = \App\Models\CRM\CrmVendedor::create([
+            'empresa_id' => $this->enterprise->id, 'nombre' => 'Otro vendedor',
+        ]);
+        $oportunidadAjena = CrmOportunidad::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $otroVendedor->id,
+            'nombre' => 'Op ajena', 'monto_esperado' => 5000, 'etapa' => 'propuesta',
+        ]);
+        CrmCotizacion::create([
+            'empresa_id' => $this->enterprise->id, 'oportunidad_id' => $oportunidadAjena->id,
+            'folio' => 'COT-4', 'estado' => 'enviado', 'fecha_emision' => '2026-09-14', 'total' => 300,
+        ]);
+
+        $service = new DashboardResumenService();
+        $porEstado = collect($service->cotizaciones($this->enterprise->id, null, 'mes_actual'))->keyBy('estado');
+
+        $this->assertSame(1, $porEstado['enviado']['total']);
 
         Carbon::setTestNow();
     }

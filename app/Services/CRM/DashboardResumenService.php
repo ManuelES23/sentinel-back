@@ -2,6 +2,7 @@
 
 namespace App\Services\CRM;
 
+use App\Models\CRM\CrmCotizacion;
 use App\Models\CRM\CrmOportunidad;
 use Carbon\Carbon;
 
@@ -72,6 +73,37 @@ class DashboardResumenService
                 'etapa' => $etapa,
                 'total' => (int) ($filas[$etapa]->total ?? 0),
                 'monto' => (float) ($filas[$etapa]->monto ?? 0),
+            ])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @return array<int, array{estado: string, total: int, monto: float}>
+     */
+    public function cotizaciones(int $empresaId, ?int $vendedorId, string $periodo): array
+    {
+        ['inicio' => $inicio, 'fin' => $fin] = $this->resolverRangoFechas($periodo);
+
+        $query = CrmCotizacion::where('empresa_id', $empresaId)
+            ->whereBetween('fecha_emision', [$inicio->toDateString(), $fin->toDateString()])
+            ->when(
+                $vendedorId !== null,
+                fn ($q) => $q->whereHas('oportunidad', fn ($qq) => $qq->where('vendedor_id', $vendedorId)),
+            );
+
+        $filas = $query->selectRaw('estado, COUNT(*) as total, SUM(total) as monto')
+            ->groupBy('estado')
+            ->get()
+            ->keyBy('estado');
+
+        $estados = ['borrador', 'enviado', 'aprobado', 'rechazado', 'superado'];
+
+        return collect($estados)
+            ->map(fn ($estado) => [
+                'estado' => $estado,
+                'total' => (int) ($filas[$estado]->total ?? 0),
+                'monto' => (float) ($filas[$estado]->monto ?? 0),
             ])
             ->values()
             ->all();
