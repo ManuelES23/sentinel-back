@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class UnitOfMeasure extends Model
 {
@@ -54,6 +55,19 @@ class UnitOfMeasure extends Model
     public function products(): HasMany
     {
         return $this->hasMany(Product::class, 'unit_id');
+    }
+
+    public function enterprises(): BelongsToMany
+    {
+        return $this->belongsToMany(Enterprise::class, 'enterprise_unit_of_measure', 'unit_of_measure_id', 'enterprise_id')
+            ->withTimestamps();
+    }
+
+    public function scopeForEnterprise($query, int $enterpriseId)
+    {
+        return $query->whereHas('enterprises', function ($q) use ($enterpriseId) {
+            $q->where('enterprises.id', $enterpriseId);
+        });
     }
 
     /**

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\SplendidFarms\Inventory;
 
 use App\Http\Controllers\Controller;
+use App\Models\Enterprise;
 use App\Models\UnitOfMeasure;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -15,6 +16,14 @@ class UnitOfMeasureController extends Controller
     public function index(Request $request): JsonResponse
     {
         $query = UnitOfMeasure::with(['baseUnit:id,name,abbreviation']);
+
+        $enterpriseSlug = $request->header('X-Enterprise-Slug');
+        if ($enterpriseSlug) {
+            $enterprise = Enterprise::where('slug', $enterpriseSlug)->first();
+            if ($enterprise) {
+                $query->forEnterprise($enterprise->id);
+            }
+        }
 
         // Filtrar solo activas
         if ($request->boolean('active_only')) {
@@ -96,6 +105,15 @@ class UnitOfMeasureController extends Controller
         }
 
         $unit = UnitOfMeasure::create($validated);
+
+        $enterpriseSlug = $request->header('X-Enterprise-Slug');
+        if ($enterpriseSlug) {
+            $enterprise = Enterprise::where('slug', $enterpriseSlug)->first();
+            if ($enterprise) {
+                $unit->enterprises()->syncWithoutDetaching([$enterprise->id]);
+            }
+        }
+
         $unit->load('baseUnit:id,name,abbreviation');
 
         return response()->json([
