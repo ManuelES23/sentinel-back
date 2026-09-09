@@ -545,4 +545,100 @@ class DashboardResumenServiceTest extends TestCase
 
         Carbon::setTestNow();
     }
+
+    public function test_kpis_combina_snapshot_actual_y_metricas_del_periodo(): void
+    {
+        Carbon::setTestNow(Carbon::create(2026, 9, 15));
+
+        // Oportunidades abiertas (snapshot -- no filtra por fecha).
+        CrmOportunidad::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+            'nombre' => 'Abierta', 'monto_esperado' => 3000, 'etapa' => 'propuesta',
+        ]);
+        CrmOportunidad::create([
+            // Cerrada -- no cuenta como "abierta".
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+            'nombre' => 'Cerrada', 'monto_esperado' => 999, 'etapa' => 'cerrado_ganado',
+            'fecha_cierre_real' => '2026-08-01',
+        ]);
+
+        // Cotizaciones pendientes (snapshot).
+        $op = CrmOportunidad::first();
+        CrmCotizacion::create([
+            'empresa_id' => $this->enterprise->id, 'oportunidad_id' => $op->id,
+            'folio' => 'C1', 'estado' => 'enviado', 'fecha_emision' => '2026-01-01', 'total' => 700,
+        ]);
+        CrmCotizacion::create([
+            'empresa_id' => $this->enterprise->id, 'oportunidad_id' => $op->id,
+            'folio' => 'C2', 'estado' => 'aprobado', 'fecha_emision' => '2026-01-01', 'total' => 1500,
+        ]);
+
+        // Clientes nuevos (respeta el periodo).
+        CrmCliente::create(['empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id, 'nombre' => 'Nuevo']);
+
+        // Meta + real para el % de cumplimiento.
+        CrmPresupuesto::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+            'mes' => 9, 'anio' => 2026, 'meta_monto' => 2000, 'meta_clientes' => 1, 'meta_actividades' => 1,
+        ]);
+        CrmOportunidad::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+            'nombre' => 'Ganada del mes', 'monto_esperado' => 1000, 'etapa' => 'cerrado_ganado',
+            'fecha_cierre_real' => '2026-09-10',
+        ]);
+
+        $service = new DashboardResumenService();
+        $resultado = $service->kpis($this->enterprise->id, $this->vendedor->id, 'mes_actual');
+
+        $this->assertSame(1, $resultado['oportunidadesAbiertas']);
+        $this->assertSame(3000.0, $resultado['montoOportunidadesAbiertas']);
+        $this->assertSame(1, $resultado['cotizacionesPendientes']); // solo 'enviado' es pendiente
+        $this->assertSame(700.0, $resultado['montoCotizacionesPendientes']);
+        $this->assertSame(1, $resultado['clientesNuevos']);
+        $this->assertSame(50.0, $resultado['porcentajeCumplimientoMeta']); // 1000/2000
+
+        Carbon::setTestNow();
+    }
+
+    public function test_kpis_sin_meta_definida_no_divide_entre_cero(): void
+    {
+        $service = new DashboardResumenService();
+        $resultado = $service->kpis($this->enterprise->id, $this->vendedor->id, 'mes_actual');
+
+        $this->assertSame(0.0, $resultado['porcentajeCumplimientoMeta']);
+    }
+
+    public function test_kpis_ignora_datos_de_otra_empresa(): void
+    {
+        Carbon::setTestNow(Carbon::create(2026, 9, 15));
+        $otraEmpresa = $this->crearOtraEmpresa();
+        $vendedorAjeno = \App\Models\CRM\CrmVendedor::create([
+            'empresa_id' => $otraEmpresa->id, 'nombre' => 'Vendedor ajeno',
+        ]);
+
+        // Crear una oportunidad abierta en la otra empresa que alimentaría oportunidadesAbiertas
+        CrmOportunidad::create([
+            'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id,
+            'nombre' => 'Ajena abierta', 'monto_esperado' => 77777, 'etapa' => 'propuesta',
+        ]);
+
+        // Crear un cliente en la otra empresa que alimentaría clientesNuevos
+        CrmCliente::create([
+            'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id, 'nombre' => 'Cliente ajeno',
+        ]);
+
+        $service = new DashboardResumenService();
+        // Call with vendedorId = null (team aggregate) so empresa_id is the ONLY filter excluding the other empresa's data
+        $resultado = $service->kpis($this->enterprise->id, null, 'mes_actual');
+
+        // Debe retornar 0 para todos los campos porque no hay data en nuestra empresa
+        $this->assertSame(0, $resultado['oportunidadesAbiertas']);
+        $this->assertSame(0.0, $resultado['montoOportunidadesAbiertas']);
+        $this->assertSame(0, $resultado['cotizacionesPendientes']);
+        $this->assertSame(0.0, $resultado['montoCotizacionesPendientes']);
+        $this->assertSame(0, $resultado['clientesNuevos']);
+        $this->assertSame(0.0, $resultado['porcentajeCumplimientoMeta']);
+
+        Carbon::setTestNow();
+    }
 }

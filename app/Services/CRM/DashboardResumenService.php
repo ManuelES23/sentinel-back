@@ -221,4 +221,46 @@ class DashboardResumenService
             'actividadesReales' => $actividadesReales,
         ];
     }
+
+    /**
+     * @return array{oportunidadesAbiertas: int, montoOportunidadesAbiertas: float, cotizacionesPendientes: int, montoCotizacionesPendientes: float, clientesNuevos: int, porcentajeCumplimientoMeta: float}
+     */
+    public function kpis(int $empresaId, ?int $vendedorId, string $periodo): array
+    {
+        $oportunidadesAbiertas = CrmOportunidad::where('empresa_id', $empresaId)
+            ->activas()
+            ->when($vendedorId !== null, fn ($q) => $q->where('vendedor_id', $vendedorId))
+            ->selectRaw('COUNT(*) as total, SUM(monto_esperado) as monto')
+            ->first();
+
+        $cotizacionesPendientes = CrmCotizacion::where('empresa_id', $empresaId)
+            ->whereIn('estado', ['borrador', 'enviado'])
+            ->when(
+                $vendedorId !== null,
+                fn ($q) => $q->whereHas('oportunidad', fn ($qq) => $qq->where('vendedor_id', $vendedorId)),
+            )
+            ->selectRaw('COUNT(*) as cantidad, SUM(total) as monto')
+            ->first();
+
+        ['inicio' => $inicio, 'fin' => $fin] = $this->resolverRangoFechas($periodo);
+
+        $clientesNuevos = CrmCliente::where('empresa_id', $empresaId)
+            ->whereBetween('created_at', [$inicio, $fin])
+            ->when($vendedorId !== null, fn ($q) => $q->where('vendedor_id', $vendedorId))
+            ->count();
+
+        $metas = $this->cumplimientoMetas($empresaId, $vendedorId, $periodo);
+        $porcentajeCumplimientoMeta = $metas['metaMonto'] > 0
+            ? round(($metas['montoReal'] / $metas['metaMonto']) * 100, 1)
+            : 0.0;
+
+        return [
+            'oportunidadesAbiertas' => (int) ($oportunidadesAbiertas->total ?? 0),
+            'montoOportunidadesAbiertas' => (float) ($oportunidadesAbiertas->monto ?? 0),
+            'cotizacionesPendientes' => (int) ($cotizacionesPendientes->cantidad ?? 0),
+            'montoCotizacionesPendientes' => (float) ($cotizacionesPendientes->monto ?? 0),
+            'clientesNuevos' => $clientesNuevos,
+            'porcentajeCumplimientoMeta' => $porcentajeCumplimientoMeta,
+        ];
+    }
 }
