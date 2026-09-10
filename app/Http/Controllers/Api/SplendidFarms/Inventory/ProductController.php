@@ -281,11 +281,28 @@ class ProductController extends Controller
 
     /**
      * Recetas que usan este artículo como ingrediente.
+     *
+     * Product es many-to-many con Enterprise (un artículo SÍ puede
+     * compartirse legítimamente entre empresas, ver importProducts()), pero
+     * Recipe es estrictamente mono-empresa (enterprise_id obligatorio). Si
+     * el mismo artículo lo usan recetas de dos empresas distintas, hay que
+     * filtrar por la empresa resuelta del header para no filtrar recetas
+     * ajenas — mismo patrón "lenient-if-absent" que
+     * RecipeController::resolveEnterprise()/assertRecipeBelongsToResolvedEnterprise().
      */
-    public function usadoEnRecetas(Product $product): JsonResponse
+    public function usadoEnRecetas(Product $product, Request $request): JsonResponse
     {
-        $recetas = \App\Models\Recipe::whereHas('items', fn ($q) => $q->where('product_id', $product->id))
-            ->get(['id', 'code', 'name', 'status']);
+        $query = \App\Models\Recipe::whereHas('items', fn ($q) => $q->where('product_id', $product->id));
+
+        $enterpriseSlug = $request->header('X-Enterprise-Slug');
+        if ($enterpriseSlug) {
+            $enterprise = Enterprise::where('slug', $enterpriseSlug)->first();
+            if ($enterprise) {
+                $query->forEnterprise($enterprise->id);
+            }
+        }
+
+        $recetas = $query->get(['id', 'code', 'name', 'status']);
 
         return response()->json(['success' => true, 'data' => ['recetas' => $recetas]]);
     }

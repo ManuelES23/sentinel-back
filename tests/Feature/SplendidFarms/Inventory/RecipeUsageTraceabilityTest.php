@@ -126,4 +126,77 @@ class RecipeUsageTraceabilityTest extends TestCase
         $response->assertOk();
         $this->assertCount(1, $response->json('data.recetas'));
     }
+
+    public function test_articulo_usado_en_recetas_no_filtra_por_defecto_cuando_falta_el_header_de_empresa(): void
+    {
+        // Un artículo compartido (Product es many-to-many con Enterprise, ver
+        // importProducts()) usado por recetas de dos empresas distintas:
+        // sin header, se mantiene el comportamiento previo sin filtrar.
+        $otraEmpresa = Enterprise::create([
+            'name' => 'Otra Empresa',
+            'slug' => 'otra-empresa',
+            'description' => 'Empresa ajena de prueba',
+            'is_active' => true,
+        ]);
+
+        $this->postJson('/api/splendidfarms/inventario/catalogos/recetas',
+            $this->validRecipePayload([
+                'items' => [['product_id' => $this->productA->id, 'quantity' => 2]],
+            ]), ['X-Enterprise-Slug' => 'splendidfarms']);
+
+        $recetaAjena = \App\Models\Recipe::create([
+            'name' => 'Receta Ajena Con Mismo Artículo',
+            'code' => 'RCP-AJENA-002',
+            'output_quantity' => 1,
+            'enterprise_id' => $otraEmpresa->id,
+        ]);
+        $recetaAjena->items()->create([
+            'product_id' => $this->productA->id,
+            'quantity' => 1,
+            'enterprise_id' => $otraEmpresa->id,
+        ]);
+
+        $response = $this->getJson("/api/splendidfarms/inventario/catalogos/articulos/{$this->productA->id}/usado-en-recetas");
+
+        $response->assertOk();
+        $this->assertCount(2, $response->json('data.recetas'));
+    }
+
+    public function test_articulo_usado_en_recetas_no_filtra_la_receta_de_la_otra_empresa(): void
+    {
+        // Regresión: mismo artículo compartido entre dos empresas, pero cada
+        // llamada con X-Enterprise-Slug solo debe ver la receta de SU
+        // empresa — Recipe es estrictamente mono-empresa, a diferencia de
+        // Product.
+        $otraEmpresa = Enterprise::create([
+            'name' => 'Otra Empresa',
+            'slug' => 'otra-empresa',
+            'description' => 'Empresa ajena de prueba',
+            'is_active' => true,
+        ]);
+
+        $this->postJson('/api/splendidfarms/inventario/catalogos/recetas',
+            $this->validRecipePayload([
+                'items' => [['product_id' => $this->productA->id, 'quantity' => 2]],
+            ]), ['X-Enterprise-Slug' => 'splendidfarms']);
+
+        $recetaAjena = \App\Models\Recipe::create([
+            'name' => 'Receta Ajena Con Mismo Artículo',
+            'code' => 'RCP-AJENA-003',
+            'output_quantity' => 1,
+            'enterprise_id' => $otraEmpresa->id,
+        ]);
+        $recetaAjena->items()->create([
+            'product_id' => $this->productA->id,
+            'quantity' => 1,
+            'enterprise_id' => $otraEmpresa->id,
+        ]);
+
+        $response = $this->getJson("/api/splendidfarms/inventario/catalogos/articulos/{$this->productA->id}/usado-en-recetas",
+            ['X-Enterprise-Slug' => 'splendidfarms']);
+
+        $response->assertOk();
+        $this->assertCount(1, $response->json('data.recetas'));
+        $this->assertNotEquals($recetaAjena->id, $response->json('data.recetas.0.id'));
+    }
 }
