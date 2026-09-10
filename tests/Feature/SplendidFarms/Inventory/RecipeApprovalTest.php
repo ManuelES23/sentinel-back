@@ -210,6 +210,61 @@ class RecipeApprovalTest extends TestCase
         $this->assertDatabaseHas('recipes', ['id' => $recipeId, 'status' => 'pending_approval']);
     }
 
+    public function test_empleado_de_otra_empresa_no_puede_aprobar_via_un_step_global_aunque_cumpla_jerarquia(): void
+    {
+        // Regresión (Final Review C3): ApprovalFlowStep::matchesEmployee()
+        // nunca revisa a qué empresa pertenece el empleado, solo
+        // can_approve/jerarquía. Un step GLOBAL (enterprise_id = NULL)
+        // siempre matchea en canBeApprovedBy() para CUALQUIER empresa
+        // (whereNull('enterprise_id') se evalúa siempre, sin importar qué
+        // $enterpriseId se le pase) — así que antes del fix, un empleado de
+        // Canes Agro que cumpliera la jerarquía exigida por un step global
+        // podía aprobar una receta de Splendid Farms. El fix agrega un
+        // chequeo directo employee->enterprise_id === recipe->enterprise_id
+        // independiente de cuál step haya matcheado.
+        $otherEnterprise = Enterprise::create([
+            'name' => 'Canes Agro', 'slug' => 'canes-agro', 'description' => 'Alimentos para canes', 'is_active' => true,
+        ]);
+
+        // Step GLOBAL: sin enterprise_id, jerarquía <= 3.
+        $process = ApprovalProcess::findByCode('recipe_approval');
+        ApprovalFlowStep::create([
+            'approval_process_id' => $process->id,
+            'step_order' => 1,
+            'approver_type' => 'hierarchy_level', 'min_hierarchy_level' => 3,
+            'approval_scope' => 'enterprise', 'can_approve' => true, 'can_reject' => true, 'is_active' => true,
+        ]);
+
+        // Empleado de Canes Agro (OTRA empresa distinta a la de la receta)
+        // que sí cumple la jerarquía exigida por el step (hierarchy_level=2 <= 3).
+        $foreignPosition = Position::create([
+            'enterprise_id' => $otherEnterprise->id,
+            'name' => 'Gerente de Inventario Canes Agro',
+            'hierarchy_level' => 2,
+            'can_approve' => true,
+        ]);
+        $foreignUser = User::factory()->create();
+        Employee::create([
+            'enterprise_id' => $otherEnterprise->id,
+            'employee_number' => 'EMP-CA-GLOBAL-001',
+            'first_name' => 'Marta',
+            'last_name' => 'Salinas',
+            'position_id' => $foreignPosition->id,
+            'hire_date' => now()->toDateString(),
+            'qr_code' => 'QR-EMP-CA-GLOBAL-001',
+            'user_id' => $foreignUser->id,
+        ]);
+
+        $recipeId = $this->createAndSubmitRecipe();
+
+        Sanctum::actingAs($foreignUser);
+        $response = $this->postJson("/api/splendidfarms/inventario/catalogos/recetas/{$recipeId}/approve",
+            [], ['X-Enterprise-Slug' => 'splendidfarms']);
+
+        $response->assertStatus(422);
+        $this->assertDatabaseHas('recipes', ['id' => $recipeId, 'status' => 'pending_approval']);
+    }
+
     public function test_inbox_de_pendientes_por_aprobar_incluye_recetas_pendientes(): void
     {
         [$approver] = $this->createApproverWithFlowStep();

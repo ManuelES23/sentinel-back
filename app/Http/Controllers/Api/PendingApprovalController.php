@@ -361,7 +361,7 @@ class PendingApprovalController extends Controller
             ApprovalProcess::INCIDENTS => $this->countPendingIncidents($employee, $scope),
             ApprovalProcess::PURCHASE_ORDERS => $this->countPendingPurchaseOrders($employee, $scope),
             ApprovalProcess::INVENTORY_MOVEMENTS => $this->countPendingInventoryMovements($employee, $scope),
-            'recipe_approval' => $this->countPendingRecipes($employee, $scope),
+            ApprovalProcess::RECIPE_APPROVAL => $this->countPendingRecipes($employee, $scope),
             default => 0,
         };
     }
@@ -376,7 +376,7 @@ class PendingApprovalController extends Controller
             ApprovalProcess::INCIDENTS => $this->getPendingIncidents($employee, $scope),
             ApprovalProcess::PURCHASE_ORDERS => $this->getPendingPurchaseOrders($employee, $scope),
             ApprovalProcess::INVENTORY_MOVEMENTS => $this->getPendingInventoryMovements($employee, $scope),
-            'recipe_approval' => $this->getPendingRecipes($employee, $scope),
+            ApprovalProcess::RECIPE_APPROVAL => $this->getPendingRecipes($employee, $scope),
             default => [],
         };
     }
