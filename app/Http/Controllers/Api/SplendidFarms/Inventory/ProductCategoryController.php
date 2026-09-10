@@ -5,11 +5,14 @@ namespace App\Http\Controllers\Api\SplendidFarms\Inventory;
 use App\Http\Controllers\Controller;
 use App\Models\Enterprise;
 use App\Models\ProductCategory;
+use App\Traits\GuardsEnterpriseOwnership;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 
 class ProductCategoryController extends Controller
 {
+    use GuardsEnterpriseOwnership;
+
     /**
      * Display a listing of the resource.
      */
@@ -58,11 +61,21 @@ class ProductCategoryController extends Controller
     /**
      * Get categories in tree structure.
      */
-    public function tree(): JsonResponse
+    public function tree(Request $request): JsonResponse
     {
-        $categories = ProductCategory::with('allChildren')
-            ->withCount('products')
-            ->whereNull('parent_id')
+        $query = ProductCategory::with('allChildren')
+            ->withCount('products');
+
+        // Filtrar por empresa si se envía el header
+        $enterpriseSlug = $request->header('X-Enterprise-Slug');
+        if ($enterpriseSlug) {
+            $enterprise = Enterprise::where('slug', $enterpriseSlug)->first();
+            if ($enterprise) {
+                $query->forEnterprise($enterprise->id);
+            }
+        }
+
+        $categories = $query->whereNull('parent_id')
             ->active()
             ->orderBy('order')
             ->orderBy('name')
@@ -133,8 +146,10 @@ class ProductCategoryController extends Controller
     /**
      * Display the specified resource.
      */
-    public function show(ProductCategory $category): JsonResponse
+    public function show(Request $request, ProductCategory $category): JsonResponse
     {
+        $this->assertBelongsToResolvedEnterprise($category, $request);
+
         $category->load(['parent', 'children', 'products']);
         $category->loadCount('products');
 
@@ -149,6 +164,8 @@ class ProductCategoryController extends Controller
      */
     public function update(Request $request, ProductCategory $category): JsonResponse
     {
+        $this->assertBelongsToResolvedEnterprise($category, $request);
+
         $validated = $request->validate([
             'name' => 'sometimes|string|max:255',
             'slug' => 'nullable|string|max:255|unique:product_categories,slug,' . $category->id,
@@ -183,8 +200,10 @@ class ProductCategoryController extends Controller
     /**
      * Remove the specified resource from storage.
      */
-    public function destroy(ProductCategory $category): JsonResponse
+    public function destroy(Request $request, ProductCategory $category): JsonResponse
     {
+        $this->assertBelongsToResolvedEnterprise($category, $request);
+
         // Verificar si tiene subcategorías
         if ($category->children()->count() > 0) {
             return response()->json([

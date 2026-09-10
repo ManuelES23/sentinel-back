@@ -5,11 +5,14 @@ namespace App\Http\Controllers\Api\SplendidFarms\Inventory;
 use App\Http\Controllers\Controller;
 use App\Models\Enterprise;
 use App\Models\Brand;
+use App\Traits\GuardsEnterpriseOwnership;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 
 class BrandController extends Controller
 {
+    use GuardsEnterpriseOwnership;
+
     public function index(Request $request): JsonResponse
     {
         $query = Brand::withCount('products');
@@ -42,9 +45,19 @@ class BrandController extends Controller
         ]);
     }
 
-    public function list(): JsonResponse
+    public function list(Request $request): JsonResponse
     {
-        $brands = Brand::active()->orderBy('name')->get(['id', 'code', 'name']);
+        $query = Brand::active();
+
+        $enterpriseSlug = $request->header('X-Enterprise-Slug');
+        if ($enterpriseSlug) {
+            $enterprise = Enterprise::where('slug', $enterpriseSlug)->first();
+            if ($enterprise) {
+                $query->forEnterprise($enterprise->id);
+            }
+        }
+
+        $brands = $query->orderBy('name')->get(['id', 'code', 'name']);
 
         return response()->json([
             'success' => true,
@@ -91,8 +104,10 @@ class BrandController extends Controller
         ], 201);
     }
 
-    public function show(Brand $brand): JsonResponse
+    public function show(Request $request, Brand $brand): JsonResponse
     {
+        $this->assertBelongsToResolvedEnterprise($brand, $request);
+
         $brand->loadCount('products');
 
         return response()->json([
@@ -103,6 +118,8 @@ class BrandController extends Controller
 
     public function update(Request $request, Brand $brand): JsonResponse
     {
+        $this->assertBelongsToResolvedEnterprise($brand, $request);
+
         $validated = $request->validate([
             'name' => 'sometimes|string|max:255',
             'is_active' => 'boolean',
@@ -117,8 +134,10 @@ class BrandController extends Controller
         ]);
     }
 
-    public function destroy(Brand $brand): JsonResponse
+    public function destroy(Request $request, Brand $brand): JsonResponse
     {
+        $this->assertBelongsToResolvedEnterprise($brand, $request);
+
         if ($brand->products()->exists()) {
             return response()->json([
                 'status' => 'error',
