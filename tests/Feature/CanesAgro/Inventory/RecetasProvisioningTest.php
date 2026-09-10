@@ -40,12 +40,14 @@ class RecetasProvisioningTest extends TestCase
     public function test_flujo_completo_receta_de_canes_agro_no_es_visible_para_splendid_farms(): void
     {
         \App\Models\Enterprise::create(['name' => 'Splendid Farms', 'slug' => 'splendidfarms', 'description' => 'Splendid Farms', 'is_active' => true]);
-        \App\Models\Enterprise::create(['name' => 'Canes Agro', 'slug' => 'canes-agro', 'description' => 'Alimentos para canes', 'is_active' => true]);
+        $canesAgro = \App\Models\Enterprise::create(['name' => 'Canes Agro', 'slug' => 'canes-agro', 'description' => 'Alimentos para canes', 'is_active' => true]);
 
         \Laravel\Sanctum\Sanctum::actingAs(\App\Models\User::factory()->create());
 
         $unit = \App\Models\UnitOfMeasure::create(['code' => 'LT', 'name' => 'Litro', 'abbreviation' => 'lt', 'type' => 'volume']);
+        $unit->enterprises()->attach($canesAgro->id);
         $category = \App\Models\ProductCategory::create(['code' => 'CAT-FERT', 'name' => 'Fertilizantes', 'is_active' => true]);
+        $category->enterprises()->attach($canesAgro->id);
         $ingredient = \App\Models\Product::create([
             'code' => 'PROD-N', 'name' => 'Nitrógeno líquido', 'category_id' => $category->id,
             'unit_id' => $unit->id, 'cost_price' => 12,

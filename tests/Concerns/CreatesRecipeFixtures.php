@@ -42,12 +42,14 @@ trait CreatesRecipeFixtures
             'name' => 'Consumibles producto terminado',
             'is_active' => true,
         ]);
+        $this->category->enterprises()->attach($this->enterprise->id);
 
         $this->unit = UnitOfMeasure::create([
             'code' => 'PZA',
             'name' => 'Pieza',
             'abbreviation' => 'pza',
         ]);
+        $this->unit->enterprises()->attach($this->enterprise->id);
 
         $this->productA = Product::create([
             'code' => 'PROD-001',

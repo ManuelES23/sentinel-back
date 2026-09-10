@@ -69,6 +69,10 @@ class RecipeVersioningService
 
             $snapshot = $version->snapshot;
 
+            // 'status' se omite deliberadamente: restaurar una versión que se
+            // snapshoteó mientras la receta estaba 'active' NO debe saltarse
+            // el flujo de aprobación devolviendo la receta actual a activa de
+            // golpe. El status ACTUAL de la receta se preserva tal cual.
             $recipe->update([
                 'name' => $snapshot['name'],
                 'description' => $snapshot['description'] ?? null,
@@ -76,7 +80,6 @@ class RecipeVersioningService
                 'category_id' => $snapshot['category_id'] ?? null,
                 'output_quantity' => $snapshot['output_quantity'] ?? 1,
                 'output_unit_id' => $snapshot['output_unit_id'] ?? null,
-                'status' => $snapshot['status'] ?? 'draft',
                 'notes' => $snapshot['notes'] ?? null,
             ]);
 
@@ -98,9 +101,43 @@ class RecipeVersioningService
                 ]);
             }
 
+            // El snapshot también captura agroDetails y recipeCalibres.plus
+            // (ver loadMissing en snapshotBeforeUpdate) — restaurar debe
+            // reflejarlos también, no solo los campos núcleo + items.
+            $agroDetails = $snapshot['agro_details'] ?? null;
+            if (! empty(array_filter($agroDetails ?? [], fn ($v) => $v !== null))) {
+                $recipe->agroDetails()->updateOrCreate(
+                    ['recipe_id' => $recipe->id],
+                    [
+                        'cultivo_id' => $agroDetails['cultivo_id'] ?? null,
+                        'variedad_id' => $agroDetails['variedad_id'] ?? null,
+                        'peso_pieza' => $agroDetails['peso_pieza'] ?? null,
+                    ]
+                );
+            } else {
+                $recipe->agroDetails()->delete();
+            }
+
+            // Mismo patrón que RecipeController::update() para sincronizar
+            // calibres/plus: borrar los existentes (cascade borra plus) y
+            // recrear desde el snapshot.
+            $recipe->recipeCalibres()->delete();
+            foreach ($snapshot['recipe_calibres'] ?? [] as $calibreData) {
+                $rc = $recipe->recipeCalibres()->create([
+                    'calibre_id' => $calibreData['calibre_id'],
+                ]);
+                foreach ($calibreData['plus'] ?? [] as $pluData) {
+                    $rc->plus()->create([
+                        'product_id' => $pluData['product_id'],
+                        'is_organic' => $pluData['is_organic'] ?? false,
+                        'notes' => $pluData['notes'] ?? null,
+                    ]);
+                }
+            }
+
             $recipe->recalculateCost();
 
-            return $recipe->fresh(['items', 'agroDetails', 'category', 'outputProduct', 'outputUnit']);
+            return $recipe->fresh(['items', 'agroDetails', 'recipeCalibres.plus', 'category', 'outputProduct', 'outputUnit']);
         });
     }
 }

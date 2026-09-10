@@ -15,6 +15,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
 class RecipeController extends Controller
@@ -95,15 +96,20 @@ class RecipeController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
+        // Se resuelve ANTES de validate() porque category_id/output_unit_id
+        // necesitan un Rule::exists() con where() para scoping por empresa
+        // (ver enterpriseScopedCategoryRule()/enterpriseScopedUnitRule()).
+        $enterpriseForValidation = $this->resolveEnterprise($request);
+
         $validated = $request->validate([
             'code' => 'nullable|string|max:50|unique:recipes,code',
             'name' => 'required|string|max:255',
             'recipe_type' => 'nullable|string|max:50',
             'slug' => 'nullable|string|max:255|unique:recipes,slug',
             'description' => 'nullable|string',
-            'category_id' => 'nullable|exists:product_categories,id',
+            'category_id' => ['nullable', $this->enterpriseScopedCategoryRule($enterpriseForValidation)],
             'output_quantity' => 'nullable|numeric|min:0.01',
-            'output_unit_id' => 'nullable|exists:units_of_measure,id',
+            'output_unit_id' => ['nullable', $this->enterpriseScopedUnitRule($enterpriseForValidation)],
             'status' => 'nullable|in:draft,pending_approval,active,inactive,archived',
             'version' => 'nullable|string|max:20',
             'notes' => 'nullable|string',
@@ -264,17 +270,18 @@ class RecipeController extends Controller
     {
         $this->assertRecipeBelongsToResolvedEnterprise($recipe, $request);
 
-        $this->versioning->snapshotBeforeUpdate($recipe, $request->user()?->id);
+        // Se resuelve ANTES de validate() por la misma razón que en store().
+        $enterpriseForValidation = $this->resolveEnterprise($request);
 
         $validated = $request->validate([
             'code' => 'sometimes|string|max:50|unique:recipes,code,'.$recipe->id,
             'name' => 'sometimes|string|max:255',
             'slug' => 'nullable|string|max:255|unique:recipes,slug,'.$recipe->id,
             'description' => 'nullable|string',
-            'category_id' => 'nullable|exists:product_categories,id',
+            'category_id' => ['nullable', $this->enterpriseScopedCategoryRule($enterpriseForValidation)],
             'recipe_type' => 'nullable|string|max:50',
             'output_quantity' => 'nullable|numeric|min:0.01',
-            'output_unit_id' => 'nullable|exists:units_of_measure,id',
+            'output_unit_id' => ['nullable', $this->enterpriseScopedUnitRule($enterpriseForValidation)],
             'estimated_cost' => 'nullable|numeric|min:0',
             'status' => 'nullable|in:draft,pending_approval,active,inactive,archived',
             'version' => 'nullable|string|max:20',
@@ -334,6 +341,12 @@ class RecipeController extends Controller
         // camino (ej. una violación de constraint), no debe quedar la receta
         // con menos items/calibres de los que tenía antes de editar.
         DB::transaction(function () use ($recipe, $validated, $items, $calibres, $agroDetails, $request) {
+            // Snapshot DENTRO de la transacción y DESPUÉS de validar: si la
+            // validación falla, o algo dentro de la transacción truena, no
+            // debe quedar una fila de recipe_versions "huérfana" que además
+            // quemó un número de versión sin que la edición se haya aplicado.
+            $this->versioning->snapshotBeforeUpdate($recipe, $request->user()?->id);
+
             $recipe->update($validated);
 
             if ($agroDetails) {
@@ -786,6 +799,46 @@ class RecipeController extends Controller
         $slug = $request->header('X-Enterprise-Slug');
 
         return $slug ? Enterprise::where('slug', $slug)->first() : null;
+    }
+
+    /**
+     * Regla exists() para category_id, scoped a la empresa resuelta vía el
+     * pivote enterprise_product_category — ProductCategory ya está aislada
+     * por empresa (Tasks 1/3) igual que Product; sin este scoping, una
+     * receta de una empresa podía referenciar por ID cruda la categoría de
+     * OTRA empresa y filtrar su nombre/código de vuelta en la relación
+     * `category` eager-cargada en la respuesta. Si no hay empresa resuelta,
+     * no agrega where() extra (mismo exists() global de siempre).
+     */
+    private function enterpriseScopedCategoryRule(?Enterprise $enterprise)
+    {
+        return Rule::exists('product_categories', 'id')->where(function ($query) use ($enterprise) {
+            if ($enterprise) {
+                $query->whereIn('id', function ($sub) use ($enterprise) {
+                    $sub->select('product_category_id')
+                        ->from('enterprise_product_category')
+                        ->where('enterprise_id', $enterprise->id);
+                });
+            }
+        });
+    }
+
+    /**
+     * Misma idea que enterpriseScopedCategoryRule() pero para
+     * output_unit_id / UnitOfMeasure, vía el pivote
+     * enterprise_unit_of_measure.
+     */
+    private function enterpriseScopedUnitRule(?Enterprise $enterprise)
+    {
+        return Rule::exists('units_of_measure', 'id')->where(function ($query) use ($enterprise) {
+            if ($enterprise) {
+                $query->whereIn('id', function ($sub) use ($enterprise) {
+                    $sub->select('unit_of_measure_id')
+                        ->from('enterprise_unit_of_measure')
+                        ->where('enterprise_id', $enterprise->id);
+                });
+            }
+        });
     }
 
     /**
