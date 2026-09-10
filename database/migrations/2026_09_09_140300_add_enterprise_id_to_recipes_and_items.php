@@ -31,6 +31,21 @@ return new class extends Migration
             ');
         }
 
+        // Paso 2.5: verificar que el backfill no dejó huérfanos antes de
+        // forzar NOT NULL — si Splendid by Porvenir (u otra fuente) generó
+        // recetas/items propios sin que el paso 2 los alcanzara, es mejor
+        // fallar la migración con un mensaje claro que correr NOT NULL sobre
+        // filas que se quedarían sin poder guardarse nunca.
+        $missingRecipes = DB::table('recipes')->whereNull('enterprise_id')->count();
+        if ($missingRecipes > 0) {
+            throw new \RuntimeException("No se pudo asignar enterprise_id a {$missingRecipes} receta(s) — revisar antes de continuar.");
+        }
+
+        $missingRecipeItems = DB::table('recipe_items')->whereNull('enterprise_id')->count();
+        if ($missingRecipeItems > 0) {
+            throw new \RuntimeException("No se pudo asignar enterprise_id a {$missingRecipeItems} recipe_item(s) — revisar antes de continuar.");
+        }
+
         // Paso 3: NOT NULL
         Schema::table('recipes', function (Blueprint $table) {
             $table->foreignId('enterprise_id')->nullable(false)->change();
