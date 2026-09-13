@@ -6,6 +6,7 @@ use App\Events\CRM\ZonaUpdated;
 use App\Models\CRM\CrmRegion;
 use App\Models\CRM\CrmZona;
 use App\Traits\CRM\FiltraPorEmpresa;
+use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -17,6 +18,7 @@ use Illuminate\Http\Request;
 class ZonaController extends CrmBaseController
 {
     use FiltraPorEmpresa;
+    use VerificaPermisoSubmodulo;
 
     /**
      * GET /crm/zonas?region_id=
@@ -63,6 +65,7 @@ class ZonaController extends CrmBaseController
     public function store(Request $request): JsonResponse
     {
         $empresaId = $this->getEmpresaId($request);
+        $this->exigirPermisoSubmodulo($empresaId, 'catalogos', 'zonas', 'crear', 'No tienes permiso para crear zonas.');
 
         $validated = $request->validate([
             'region_id' => 'required|integer',
@@ -94,6 +97,7 @@ class ZonaController extends CrmBaseController
     public function update(Request $request, CrmZona $zona): JsonResponse
     {
         $this->verificarEmpresa($request, $zona);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'catalogos', 'zonas', 'editar', 'No tienes permiso para editar zonas.');
 
         $validated = $request->validate([
             'region_id' => 'sometimes|required|integer',
@@ -121,6 +125,7 @@ class ZonaController extends CrmBaseController
     public function destroy(Request $request, CrmZona $zona): JsonResponse
     {
         $this->verificarEmpresa($request, $zona);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'catalogos', 'zonas', 'eliminar', 'No tienes permiso para eliminar zonas.');
 
         if ($zona->bodegas()->exists()) {
             return $this->jsonError('No se puede eliminar la zona porque tiene bodegas asociadas.', 409);

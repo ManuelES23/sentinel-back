@@ -6,6 +6,7 @@ use App\Events\CRM\BodegaUpdated;
 use App\Models\CRM\CrmBodega;
 use App\Models\CRM\CrmZona;
 use App\Traits\CRM\FiltraPorEmpresa;
+use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -17,6 +18,7 @@ use Illuminate\Http\Request;
 class BodegaController extends CrmBaseController
 {
     use FiltraPorEmpresa;
+    use VerificaPermisoSubmodulo;
 
     /**
      * GET /crm/bodegas?zona_id=
@@ -67,6 +69,7 @@ class BodegaController extends CrmBaseController
     public function store(Request $request): JsonResponse
     {
         $empresaId = $this->getEmpresaId($request);
+        $this->exigirPermisoSubmodulo($empresaId, 'catalogos', 'bodegas', 'crear', 'No tienes permiso para crear bodegas.');
 
         $validated = $request->validate([
             'zona_id'   => 'required|integer',
@@ -100,6 +103,7 @@ class BodegaController extends CrmBaseController
     public function update(Request $request, CrmBodega $bodega): JsonResponse
     {
         $this->verificarEmpresa($request, $bodega);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'catalogos', 'bodegas', 'editar', 'No tienes permiso para editar bodegas.');
 
         $validated = $request->validate([
             'zona_id'   => 'sometimes|required|integer',
@@ -128,6 +132,7 @@ class BodegaController extends CrmBaseController
     public function destroy(Request $request, CrmBodega $bodega): JsonResponse
     {
         $this->verificarEmpresa($request, $bodega);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'catalogos', 'bodegas', 'eliminar', 'No tienes permiso para eliminar bodegas.');
 
         $data = $bodega->toArray();
         $bodega->delete();

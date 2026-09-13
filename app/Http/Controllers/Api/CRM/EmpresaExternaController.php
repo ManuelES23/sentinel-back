@@ -5,12 +5,14 @@ namespace App\Http\Controllers\Api\CRM;
 use App\Events\CRM\EmpresaExternaUpdated;
 use App\Models\CRM\CrmEmpresaExterna;
 use App\Traits\CRM\FiltraPorEmpresa;
+use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class EmpresaExternaController extends CrmBaseController
 {
     use FiltraPorEmpresa;
+    use VerificaPermisoSubmodulo;
 
     private const RELACIONES = [
         'contactos:id,entidad_type,entidad_id,nombre,cargo,email,telefono,es_principal',
@@ -59,6 +61,7 @@ class EmpresaExternaController extends CrmBaseController
     public function store(Request $request): JsonResponse
     {
         $empresaId = $this->getEmpresaId($request);
+        $this->exigirPermisoSubmodulo($empresaId, 'empresas-externas', 'empresas-externas', 'crear', 'No tienes permiso para crear empresas externas.');
 
         $validated = $request->validate([
             'razon_social' => 'required|string|max:255',
@@ -83,6 +86,7 @@ class EmpresaExternaController extends CrmBaseController
     public function update(Request $request, CrmEmpresaExterna $empresaExterna): JsonResponse
     {
         $this->verificarEmpresa($request, $empresaExterna);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'empresas-externas', 'empresas-externas', 'editar', 'No tienes permiso para editar empresas externas.');
 
         $validated = $request->validate([
             'razon_social' => 'sometimes|required|string|max:255',
@@ -105,6 +109,7 @@ class EmpresaExternaController extends CrmBaseController
     public function destroy(Request $request, CrmEmpresaExterna $empresaExterna): JsonResponse
     {
         $this->verificarEmpresa($request, $empresaExterna);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'empresas-externas', 'empresas-externas', 'eliminar', 'No tienes permiso para eliminar empresas externas.');
 
         $data = $empresaExterna->toArray();
         $empresaExterna->contactos()->delete();

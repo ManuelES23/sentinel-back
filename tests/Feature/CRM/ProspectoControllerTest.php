@@ -20,6 +20,8 @@ class ProspectoControllerTest extends TestCase
         parent::setUp();
         $this->setUpCrmFixtures();
         Sanctum::actingAs($this->actingUser);
+        // Este archivo prueba el comportamiento, no la autorización (ver CrmPermisosEnforcementTest).
+        $this->otorgarTodosLosPermisosCrm();
     }
 
     private function validPayload(array $overrides = []): array
