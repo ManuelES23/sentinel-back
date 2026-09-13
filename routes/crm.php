@@ -177,6 +177,10 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
         App\Http\Controllers\Api\CRM\MiDiaController::class, 'index'
     ]);
 
+    Route::post('seguimientos', [
+        App\Http\Controllers\Api\CRM\SeguimientoController::class, 'store'
+    ]);
+
     // -------------------------------------------------
     // AGENDA
     // CRUD + completar (genera Actividad automáticamente)
