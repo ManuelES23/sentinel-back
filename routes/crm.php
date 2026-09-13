@@ -169,6 +169,15 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     ]);
 
     // -------------------------------------------------
+    // MI DÍA (fase 2)
+    // Pantalla de inicio del vendedor: vencidos, hoy, tratos detenidos y
+    // cotizaciones por vencer.
+    // -------------------------------------------------
+    Route::get('mi-dia', [
+        App\Http\Controllers\Api\CRM\MiDiaController::class, 'index'
+    ]);
+
+    // -------------------------------------------------
     // AGENDA
     // CRUD + completar (genera Actividad automáticamente)
     // -------------------------------------------------
