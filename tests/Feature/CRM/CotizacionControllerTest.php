@@ -26,6 +26,8 @@ class CotizacionControllerTest extends TestCase
         parent::setUp();
         $this->setUpCrmFixtures();
         Sanctum::actingAs($this->actingUser);
+        // Este archivo prueba el comportamiento, no la autorización (ver CrmPermisosEnforcementTest).
+        $this->otorgarTodosLosPermisosCrm();
 
         $cliente = CrmCliente::create([
             'empresa_id' => $this->enterprise->id, 'nombre' => 'Cliente', 'estatus' => 'activo',
@@ -271,6 +273,7 @@ class CotizacionControllerTest extends TestCase
         // confía en el header sin verificar UserEnterpriseAccess.
         $otraEmpresa = $this->crearOtraEmpresa();
         $this->otorgarAccesoA($otraEmpresa);
+        $this->otorgarTodosLosPermisosCrm($otraEmpresa);
         $otraOportunidad = CrmOportunidad::create([
             'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $this->vendedor->id,
             'nombre' => 'Oportunidad ajena',
@@ -326,6 +329,7 @@ class CotizacionControllerTest extends TestCase
 
         $otraEmpresa = $this->crearOtraEmpresa();
         $this->otorgarAccesoA($otraEmpresa);
+        $this->otorgarTodosLosPermisosCrm($otraEmpresa);
         $otraOportunidad = CrmOportunidad::create([
             'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $this->vendedor->id,
             'nombre' => 'Oportunidad ajena',

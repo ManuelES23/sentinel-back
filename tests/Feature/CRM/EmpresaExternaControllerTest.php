@@ -20,6 +20,8 @@ class EmpresaExternaControllerTest extends TestCase
         parent::setUp();
         $this->setUpCrmFixtures();
         Sanctum::actingAs($this->actingUser);
+        // Este archivo prueba el comportamiento, no la autorización (ver CrmPermisosEnforcementTest).
+        $this->otorgarTodosLosPermisosCrm();
     }
 
     public function test_puede_crear_una_empresa_externa(): void

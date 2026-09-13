@@ -10,6 +10,7 @@ use App\Models\CRM\CrmOportunidadProducto;
 use App\Models\CRM\CrmProducto;
 use App\Services\CRM\CotizacionCalculoService;
 use App\Traits\CRM\FiltraPorEmpresa;
+use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -17,6 +18,7 @@ use Illuminate\Support\Facades\DB;
 class CotizacionController extends CrmBaseController
 {
     use FiltraPorEmpresa;
+    use VerificaPermisoSubmodulo;
 
     public function __construct(private readonly CotizacionCalculoService $calculo) {}
 
@@ -76,6 +78,7 @@ class CotizacionController extends CrmBaseController
     {
         $this->verificarEmpresaOportunidad($oportunidad);
         $empresaId = $this->getEmpresaId();
+        $this->exigirPermisoSubmodulo($empresaId, 'cotizaciones', 'cotizaciones', 'crear', 'No tienes permiso para crear cotizaciones.');
 
         // Una oportunidad perdida ya no admite cotizaciones nuevas: la única
         // razón para cotizar sería aprobarla, y aprobar sobre una perdida está
@@ -137,6 +140,7 @@ class CotizacionController extends CrmBaseController
     public function update(Request $request, CrmCotizacion $cotizacion): JsonResponse
     {
         $this->verificarEmpresa($cotizacion);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'cotizaciones', 'cotizaciones', 'editar', 'No tienes permiso para editar cotizaciones.');
 
         if ($cotizacion->estado !== 'borrador') {
             return $this->jsonError('Solo se puede editar una cotización en borrador.', 422);
@@ -197,6 +201,7 @@ class CotizacionController extends CrmBaseController
     public function enviar(Request $request, CrmCotizacion $cotizacion): JsonResponse
     {
         $this->verificarEmpresa($cotizacion);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'cotizaciones', 'cotizaciones', 'editar', 'No tienes permiso para enviar cotizaciones.');
         if ($cotizacion->estado !== 'borrador') {
             return $this->jsonError('Solo una cotización en borrador se puede enviar.', 422);
         }
@@ -209,6 +214,7 @@ class CotizacionController extends CrmBaseController
     public function rechazar(Request $request, CrmCotizacion $cotizacion): JsonResponse
     {
         $this->verificarEmpresa($cotizacion);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'cotizaciones', 'cotizaciones', 'rechazar', 'No tienes permiso para rechazar cotizaciones.');
         if ($cotizacion->estado !== 'enviado') {
             return $this->jsonError('Solo una cotización enviada se puede rechazar.', 422);
         }
@@ -221,6 +227,7 @@ class CotizacionController extends CrmBaseController
     public function aprobar(Request $request, CrmCotizacion $cotizacion): JsonResponse
     {
         $this->verificarEmpresa($cotizacion);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'cotizaciones', 'cotizaciones', 'aprobar', 'No tienes permiso para aprobar cotizaciones.');
         if ($cotizacion->estado !== 'enviado') {
             return $this->jsonError('Solo una cotización enviada se puede aprobar.', 422);
         }

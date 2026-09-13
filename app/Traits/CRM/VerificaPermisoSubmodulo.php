@@ -49,4 +49,24 @@ trait VerificaPermisoSubmodulo
             ->whereHas('permissionType', fn ($q) => $q->where('slug', $permisoSlug))
             ->exists();
     }
+
+    /**
+     * Aborta con 403 si no hay empresa de contexto o si el usuario no tiene
+     * el permiso. Atajo para las acciones que no necesitan ramificar según el
+     * permiso (la mayoría de los store/update/destroy).
+     */
+    protected function exigirPermisoSubmodulo(
+        ?int $empresaId,
+        string $moduloSlug,
+        string $submoduloSlug,
+        string $permisoSlug,
+        string $mensaje = 'No tienes permiso para realizar esta acción.',
+    ): void {
+        abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
+        abort_unless(
+            $this->tienePermisoSubmodulo($empresaId, $moduloSlug, $submoduloSlug, $permisoSlug),
+            403,
+            $mensaje,
+        );
+    }
 }

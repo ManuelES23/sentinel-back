@@ -9,6 +9,7 @@ use App\Models\CRM\CrmEmpresaExterna;
 use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmProspecto;
 use App\Traits\CRM\FiltraPorEmpresa;
+use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -26,6 +27,7 @@ use Illuminate\Validation\Rule;
 class ActividadController extends CrmBaseController
 {
     use FiltraPorEmpresa;
+    use VerificaPermisoSubmodulo;
 
     /**
      * Alias corto → clase del modelo padre.
@@ -158,6 +160,7 @@ class ActividadController extends CrmBaseController
     public function store(Request $request): JsonResponse
     {
         $empresaId = $this->getEmpresaId($request);
+        $this->exigirPermisoSubmodulo($empresaId, 'actividades', 'actividades', 'crear', 'No tienes permiso para registrar actividades.');
 
         $validated = $request->validate([
             'entidad_tipo'     => ['required', Rule::in(array_keys(self::TIPOS))],
@@ -203,6 +206,7 @@ class ActividadController extends CrmBaseController
     public function update(Request $request, CrmActividad $actividad): JsonResponse
     {
         $this->verificarEmpresa($request, $actividad);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'actividades', 'actividades', 'editar', 'No tienes permiso para editar actividades.');
 
         $validated = $request->validate([
             'tipo'             => ['sometimes', 'required', Rule::in(self::TIPOS_ACTIVIDAD)],
@@ -228,6 +232,7 @@ class ActividadController extends CrmBaseController
     public function destroy(Request $request, CrmActividad $actividad): JsonResponse
     {
         $this->verificarEmpresa($request, $actividad);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'actividades', 'actividades', 'eliminar', 'No tienes permiso para eliminar actividades.');
 
         $data = $actividad->toArray();
         $actividad->delete();

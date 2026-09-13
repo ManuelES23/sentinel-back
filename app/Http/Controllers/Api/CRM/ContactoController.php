@@ -8,6 +8,7 @@ use App\Models\CRM\CrmContacto;
 use App\Models\CRM\CrmEmpresaExterna;
 use App\Models\CRM\CrmProspecto;
 use App\Traits\CRM\FiltraPorEmpresa;
+use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -25,6 +26,7 @@ use Illuminate\Validation\Rule;
 class ContactoController extends CrmBaseController
 {
     use FiltraPorEmpresa;
+    use VerificaPermisoSubmodulo;
 
     /**
      * Alias corto → clase del modelo padre.
@@ -33,6 +35,17 @@ class ContactoController extends CrmBaseController
         'prospecto'       => CrmProspecto::class,
         'cliente'         => CrmCliente::class,
         'empresa_externa' => CrmEmpresaExterna::class,
+    ];
+
+    /**
+     * Permiso de submódulo que exige escribir contactos según la entidad
+     * padre: gestionar los contactos de un prospecto/cliente es editarlo;
+     * los de una empresa externa tienen su permiso propio.
+     */
+    protected const PERMISO_POR_TIPO = [
+        CrmProspecto::class      => ['prospectos', 'prospectos', 'editar'],
+        CrmCliente::class        => ['clientes', 'clientes', 'editar'],
+        CrmEmpresaExterna::class => ['empresas-externas', 'empresas-externas', 'gestionar_contactos'],
     ];
 
     /**
@@ -115,6 +128,8 @@ class ContactoController extends CrmBaseController
         ]);
 
         $modelClass = self::TIPOS[$validated['entidad_tipo']];
+        $this->exigirPermisoContactos($modelClass);
+
         $entidad = $modelClass::where('empresa_id', $empresaId)->find($validated['entidad_id']);
         if (!$entidad) {
             return $this->jsonError('La entidad relacionada no existe o no pertenece a la empresa.', 404);
@@ -154,6 +169,7 @@ class ContactoController extends CrmBaseController
     public function update(Request $request, CrmContacto $contacto): JsonResponse
     {
         $this->verificarEmpresa($request, $contacto);
+        $this->exigirPermisoContactos($contacto->entidad_type);
 
         $validated = $request->validate([
             'nombre'       => 'sometimes|required|string|max:255',
@@ -189,6 +205,7 @@ class ContactoController extends CrmBaseController
     public function destroy(Request $request, CrmContacto $contacto): JsonResponse
     {
         $this->verificarEmpresa($request, $contacto);
+        $this->exigirPermisoContactos($contacto->entidad_type);
 
         $data = $contacto->toArray();
         $contacto->delete();
@@ -196,6 +213,14 @@ class ContactoController extends CrmBaseController
         broadcast(new ContactoUpdated('deleted', $data));
 
         return $this->jsonSuccess(null, 'Contacto eliminado correctamente');
+    }
+
+    private function exigirPermisoContactos(string $entidadType): void
+    {
+        abort_unless(isset(self::PERMISO_POR_TIPO[$entidadType]), 403, 'No tienes permiso para gestionar estos contactos.');
+        [$modulo, $submodulo, $permiso] = self::PERMISO_POR_TIPO[$entidadType];
+
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), $modulo, $submodulo, $permiso, 'No tienes permiso para gestionar estos contactos.');
     }
 
     /**

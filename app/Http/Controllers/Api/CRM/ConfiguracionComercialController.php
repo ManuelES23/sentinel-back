@@ -5,12 +5,14 @@ namespace App\Http\Controllers\Api\CRM;
 use App\Models\CRM\CrmConfiguracionComercial;
 use App\Models\CRM\CrmConfiguracionImpuesto;
 use App\Traits\CRM\FiltraPorEmpresa;
+use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class ConfiguracionComercialController extends CrmBaseController
 {
     use FiltraPorEmpresa;
+    use VerificaPermisoSubmodulo;
 
     /** GET /crm/configuracion-comercial */
     public function show(Request $request): JsonResponse
@@ -32,6 +34,7 @@ class ConfiguracionComercialController extends CrmBaseController
     {
         $empresaId = $this->getEmpresaId();
         abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
+        $this->exigirPermisoSubmodulo($empresaId, 'catalogos', 'configuracion-comercial', 'editar', 'No tienes permiso para editar la configuración comercial.');
 
         $validated = $request->validate([
             'descuento_global_habilitado' => 'required|boolean',
@@ -48,6 +51,7 @@ class ConfiguracionComercialController extends CrmBaseController
     {
         $empresaId = $this->getEmpresaId();
         abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
+        $this->exigirPermisoSubmodulo($empresaId, 'catalogos', 'configuracion-comercial', 'editar', 'No tienes permiso para editar la configuración comercial.');
 
         $validated = $request->validate([
             'nombre' => 'required|string|max:50',
@@ -66,6 +70,7 @@ class ConfiguracionComercialController extends CrmBaseController
     public function updateImpuesto(Request $request, CrmConfiguracionImpuesto $impuesto): JsonResponse
     {
         $this->verificarEmpresa($impuesto);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'catalogos', 'configuracion-comercial', 'editar', 'No tienes permiso para editar la configuración comercial.');
 
         $validated = $request->validate([
             'nombre' => 'sometimes|required|string|max:50',
@@ -82,6 +87,7 @@ class ConfiguracionComercialController extends CrmBaseController
     public function destroyImpuesto(Request $request, CrmConfiguracionImpuesto $impuesto): JsonResponse
     {
         $this->verificarEmpresa($impuesto);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'catalogos', 'configuracion-comercial', 'editar', 'No tienes permiso para editar la configuración comercial.');
         $impuesto->delete();
 
         return $this->jsonSuccess(null, 'Impuesto eliminado correctamente');

@@ -22,6 +22,8 @@ class OportunidadCambiarEtapaTest extends TestCase
         parent::setUp();
         $this->setUpCrmFixtures();
         Sanctum::actingAs($this->actingUser);
+        // Este archivo prueba el comportamiento, no la autorización (ver CrmPermisosEnforcementTest).
+        $this->otorgarTodosLosPermisosCrm();
 
         $cliente = CrmCliente::create([
             'empresa_id' => $this->enterprise->id, 'nombre' => 'Cliente', 'estatus' => 'activo',
