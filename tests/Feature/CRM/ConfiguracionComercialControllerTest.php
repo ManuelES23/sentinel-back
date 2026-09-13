@@ -20,6 +20,8 @@ class ConfiguracionComercialControllerTest extends TestCase
         parent::setUp();
         $this->setUpCrmFixtures();
         Sanctum::actingAs($this->actingUser);
+        // Este archivo prueba el comportamiento, no la autorización (ver CrmPermisosEnforcementTest).
+        $this->otorgarTodosLosPermisosCrm();
     }
 
     public function test_ver_la_configuracion_la_crea_con_default_true_si_no_existe(): void

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\CRM;
 use App\Events\CRM\ProductoUpdated;
 use App\Models\CRM\CrmProducto;
 use App\Traits\CRM\FiltraPorEmpresa;
+use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -17,6 +18,7 @@ use Illuminate\Validation\Rule;
 class ProductoController extends CrmBaseController
 {
     use FiltraPorEmpresa;
+    use VerificaPermisoSubmodulo;
 
     /** Unidades de medida permitidas. */
     private const UNIDADES = ['pieza', 'kg', 'litro', 'servicio', 'hora'];
@@ -92,6 +94,7 @@ class ProductoController extends CrmBaseController
     public function store(Request $request): JsonResponse
     {
         $empresaId = $this->getEmpresaId($request);
+        $this->exigirPermisoSubmodulo($empresaId, 'catalogos', 'productos', 'crear', 'No tienes permiso para crear productos.');
 
         $validated = $request->validate([
             'nombre'        => 'required|string|max:255',
@@ -121,6 +124,7 @@ class ProductoController extends CrmBaseController
     public function update(Request $request, CrmProducto $producto): JsonResponse
     {
         $this->verificarEmpresa($request, $producto);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'catalogos', 'productos', 'editar', 'No tienes permiso para editar productos.');
 
         $validated = $request->validate([
             'nombre'        => 'sometimes|required|string|max:255',
@@ -143,6 +147,7 @@ class ProductoController extends CrmBaseController
     public function toggleActivo(Request $request, CrmProducto $producto): JsonResponse
     {
         $this->verificarEmpresa($request, $producto);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'catalogos', 'productos', 'editar', 'No tienes permiso para editar productos.');
 
         $producto->update(['activo' => ! $producto->activo]);
 
@@ -157,6 +162,7 @@ class ProductoController extends CrmBaseController
     public function destroy(Request $request, CrmProducto $producto): JsonResponse
     {
         $this->verificarEmpresa($request, $producto);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'catalogos', 'productos', 'eliminar', 'No tienes permiso para eliminar productos.');
 
         if ($producto->oportunidadProductos()->exists()) {
             return $this->jsonError('No se puede eliminar el producto porque está asociado a oportunidades.', 409);

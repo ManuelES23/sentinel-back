@@ -7,6 +7,7 @@ use App\Events\CRM\VendedorAsignado;
 use App\Models\CRM\CrmActividad;
 use App\Models\CRM\CrmCliente;
 use App\Traits\CRM\FiltraPorEmpresa;
+use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -14,6 +15,7 @@ use Illuminate\Validation\Rule;
 class ClienteController extends CrmBaseController
 {
     use FiltraPorEmpresa;
+    use VerificaPermisoSubmodulo;
 
     private const RELACIONES = [
         'vendedor:id,nombre,email',
@@ -114,6 +116,7 @@ class ClienteController extends CrmBaseController
     public function store(Request $request): JsonResponse
     {
         $empresaId = $this->getEmpresaId($request);
+        $this->exigirPermisoSubmodulo($empresaId, 'clientes', 'clientes', 'crear', 'No tienes permiso para crear clientes.');
 
         $validated = $request->validate([
             'prospecto_id' => 'nullable|exists:crm_prospectos,id',
@@ -149,6 +152,7 @@ class ClienteController extends CrmBaseController
     public function update(Request $request, CrmCliente $cliente): JsonResponse
     {
         $this->verificarEmpresa($request, $cliente);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'clientes', 'clientes', 'editar', 'No tienes permiso para editar clientes.');
         $empresaId = $this->getEmpresaId($request);
 
         $validated = $request->validate([
@@ -183,6 +187,7 @@ class ClienteController extends CrmBaseController
     public function destroy(Request $request, CrmCliente $cliente): JsonResponse
     {
         $this->verificarEmpresa($request, $cliente);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'clientes', 'clientes', 'eliminar', 'No tienes permiso para eliminar clientes.');
 
         $id = $cliente->id;
         $cliente->delete();
@@ -198,6 +203,7 @@ class ClienteController extends CrmBaseController
     public function asignarVendedor(Request $request, CrmCliente $cliente): JsonResponse
     {
         $this->verificarEmpresa($request, $cliente);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'clientes', 'clientes', 'asignar_vendedor', 'No tienes permiso para asignar vendedor a clientes.');
 
         $validated = $request->validate([
             'vendedor_id' => [

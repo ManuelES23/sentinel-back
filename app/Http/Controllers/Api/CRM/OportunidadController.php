@@ -5,12 +5,14 @@ namespace App\Http\Controllers\Api\CRM;
 use App\Events\CRM\OportunidadUpdated;
 use App\Models\CRM\CrmOportunidad;
 use App\Traits\CRM\FiltraPorEmpresa;
+use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class OportunidadController extends CrmBaseController
 {
     use FiltraPorEmpresa;
+    use VerificaPermisoSubmodulo;
 
     private const RELACIONES = CrmOportunidad::RELACIONES_API;
 
@@ -51,6 +53,7 @@ class OportunidadController extends CrmBaseController
     {
         $empresaId = $this->getEmpresaId();
         abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
+        $this->exigirPermisoSubmodulo($empresaId, 'oportunidades', 'oportunidades', 'crear', 'No tienes permiso para crear oportunidades.');
 
         $validated = $request->validate([
             'prospecto_id' => ['nullable', 'integer', $this->existeEnEmpresa('crm_prospectos', $empresaId)],
@@ -82,6 +85,7 @@ class OportunidadController extends CrmBaseController
     public function update(Request $request, CrmOportunidad $oportunidad): JsonResponse
     {
         $this->verificarEmpresa($oportunidad);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'oportunidades', 'oportunidades', 'editar', 'No tienes permiso para editar oportunidades.');
         $empresaId = (int) $oportunidad->empresa_id;
 
         $validated = $request->validate([
@@ -118,6 +122,7 @@ class OportunidadController extends CrmBaseController
     public function destroy(Request $request, CrmOportunidad $oportunidad): JsonResponse
     {
         $this->verificarEmpresa($oportunidad);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'oportunidades', 'oportunidades', 'eliminar', 'No tienes permiso para eliminar oportunidades.');
 
         $data = $oportunidad->toArray();
         $oportunidad->delete();
@@ -162,6 +167,14 @@ class OportunidadController extends CrmBaseController
         ]);
 
         $nuevaEtapa = $validated['etapa'];
+
+        // Mover entre etapas activas es editar; llevarla a una etapa terminal
+        // (ganada o perdida) es cerrarla y exige el permiso específico.
+        if (in_array($nuevaEtapa, ['cerrado_ganado', 'cerrado_perdido'], true)) {
+            $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'oportunidades', 'oportunidades', 'cerrar', 'No tienes permiso para cerrar oportunidades.');
+        } else {
+            $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'oportunidades', 'oportunidades', 'editar', 'No tienes permiso para editar oportunidades.');
+        }
 
         // Terminal es terminal: una oportunidad ya cerrada (ganada o perdida)
         // no se reabre ni se mueve a la otra etapa terminal. "forzar" solo

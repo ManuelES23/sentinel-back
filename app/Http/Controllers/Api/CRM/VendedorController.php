@@ -7,6 +7,7 @@ use App\Models\CRM\CrmVendedor;
 use App\Models\User;
 use App\Models\UserEnterpriseAccess;
 use App\Traits\CRM\FiltraPorEmpresa;
+use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -20,6 +21,7 @@ use Illuminate\Validation\Rule;
 class VendedorController extends CrmBaseController
 {
     use FiltraPorEmpresa;
+    use VerificaPermisoSubmodulo;
 
     /**
      * GET /crm/vendedores
@@ -60,6 +62,14 @@ class VendedorController extends CrmBaseController
     public function usuariosDisponibles(Request $request): JsonResponse
     {
         $empresaId = $this->getEmpresaId($request);
+        // Expone nombre/email de usuarios: solo para quien da de alta o edita vendedores.
+        abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
+        abort_unless(
+            $this->tienePermisoSubmodulo($empresaId, 'catalogos', 'vendedores', 'crear')
+                || $this->tienePermisoSubmodulo($empresaId, 'catalogos', 'vendedores', 'editar'),
+            403,
+            'No tienes permiso para administrar vendedores.',
+        );
 
         $usuariosVendedores = CrmVendedor::where('empresa_id', $empresaId)
             ->whereNotNull('user_id')
@@ -93,6 +103,7 @@ class VendedorController extends CrmBaseController
     public function store(Request $request): JsonResponse
     {
         $empresaId = $this->getEmpresaId($request);
+        $this->exigirPermisoSubmodulo($empresaId, 'catalogos', 'vendedores', 'crear', 'No tienes permiso para crear vendedores.');
 
         $validated = $request->validate([
             'user_id'  => [
@@ -132,6 +143,7 @@ class VendedorController extends CrmBaseController
     public function update(Request $request, CrmVendedor $vendedor): JsonResponse
     {
         $this->verificarEmpresa($request, $vendedor);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'catalogos', 'vendedores', 'editar', 'No tienes permiso para editar vendedores.');
 
         $validated = $request->validate([
             'user_id'  => [
@@ -165,6 +177,7 @@ class VendedorController extends CrmBaseController
     public function toggleActivo(Request $request, CrmVendedor $vendedor): JsonResponse
     {
         $this->verificarEmpresa($request, $vendedor);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'catalogos', 'vendedores', 'editar', 'No tienes permiso para editar vendedores.');
 
         $vendedor->update(['activo' => ! $vendedor->activo]);
         $vendedor->load('user:id,name,email');
@@ -180,6 +193,7 @@ class VendedorController extends CrmBaseController
     public function destroy(Request $request, CrmVendedor $vendedor): JsonResponse
     {
         $this->verificarEmpresa($request, $vendedor);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'catalogos', 'vendedores', 'eliminar', 'No tienes permiso para eliminar vendedores.');
 
         if ($vendedor->prospectos()->exists() || $vendedor->clientes()->exists()) {
             return $this->jsonError('No se puede eliminar el vendedor porque tiene prospectos o clientes asignados.', 409);

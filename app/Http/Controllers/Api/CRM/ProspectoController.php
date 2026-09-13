@@ -8,6 +8,7 @@ use App\Models\CRM\CrmActividad;
 use App\Models\CRM\CrmCliente;
 use App\Models\CRM\CrmProspecto;
 use App\Traits\CRM\FiltraPorEmpresa;
+use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -16,6 +17,7 @@ use Illuminate\Validation\Rule;
 class ProspectoController extends CrmBaseController
 {
     use FiltraPorEmpresa;
+    use VerificaPermisoSubmodulo;
 
     private const RELACIONES = [
         'vendedor:id,nombre,email',
@@ -83,6 +85,7 @@ class ProspectoController extends CrmBaseController
     {
         $empresaId = $this->getEmpresaId();
         abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
+        $this->exigirPermisoSubmodulo($empresaId, 'prospectos', 'prospectos', 'crear', 'No tienes permiso para crear prospectos.');
 
         $validated = $request->validate([
             'nombre'      => 'required|string|max:255',
@@ -119,6 +122,7 @@ class ProspectoController extends CrmBaseController
     public function update(Request $request, CrmProspecto $prospecto): JsonResponse
     {
         $this->verificarEmpresa($prospecto);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'prospectos', 'prospectos', 'editar', 'No tienes permiso para editar prospectos.');
 
         $validated = $request->validate([
             'nombre'      => 'sometimes|string|max:255',
@@ -153,6 +157,7 @@ class ProspectoController extends CrmBaseController
     public function destroy(CrmProspecto $prospecto): JsonResponse
     {
         $this->verificarEmpresa($prospecto);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'prospectos', 'prospectos', 'eliminar', 'No tienes permiso para eliminar prospectos.');
 
         // Soft-delete impide perder trazabilidad; la validación de dependencias
         // (oportunidades abiertas) puede activarse cuando se implemente en E4.
@@ -171,6 +176,8 @@ class ProspectoController extends CrmBaseController
     public function convertirCliente(CrmProspecto $prospecto): JsonResponse
     {
         $this->verificarEmpresa($prospecto);
+        // Convertir crea un cliente: se exige el permiso de crear clientes.
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'clientes', 'clientes', 'crear', 'No tienes permiso para convertir prospectos en clientes.');
 
         return DB::transaction(function () use ($prospecto) {
             $cliente = CrmCliente::create([
@@ -216,6 +223,7 @@ class ProspectoController extends CrmBaseController
     public function asignarVendedor(Request $request, CrmProspecto $prospecto): JsonResponse
     {
         $this->verificarEmpresa($prospecto);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'prospectos', 'prospectos', 'asignar_vendedor', 'No tienes permiso para asignar vendedor a prospectos.');
 
         $validated = $request->validate([
             'vendedor_id' => [
