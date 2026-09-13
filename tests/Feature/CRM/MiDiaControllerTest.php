@@ -6,7 +6,9 @@ use App\Models\CRM\CrmActividad;
 use App\Models\CRM\CrmAgenda;
 use App\Models\CRM\CrmCliente;
 use App\Models\CRM\CrmCotizacion;
+use App\Models\CRM\CrmEmpresaExterna;
 use App\Models\CRM\CrmOportunidad;
+use App\Models\CRM\CrmProspecto;
 use App\Models\CRM\CrmVendedor;
 use App\Models\UserSubmodulePermission;
 use Carbon\CarbonImmutable;
@@ -113,7 +115,13 @@ class MiDiaControllerTest extends TestCase
 
     public function test_vencidos_incluye_pendientes_cuya_hora_de_fin_paso_y_excluye_completados_y_ajenos(): void
     {
-        $vencido = $this->evento(['fecha_inicio' => $this->ahora->subHour(), 'fecha_fin' => $this->ahora->subMinute()]);
+        $cliente = CrmCliente::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Cliente vencido']);
+        $vencido = $this->evento([
+            'fecha_inicio' => $this->ahora->subHour(),
+            'fecha_fin' => $this->ahora->subMinute(),
+            'entidad_type' => CrmCliente::class,
+            'entidad_id' => $cliente->id,
+        ]);
         $this->evento(['fecha_inicio' => $this->ahora->subHour(), 'fecha_fin' => $this->ahora->subMinute(), 'completado' => true]);
         $this->evento(['fecha_inicio' => $this->ahora->subHour(), 'fecha_fin' => $this->ahora->subMinute(), 'vendedor_id' => $this->vendedor->id]);
 
@@ -121,12 +129,41 @@ class MiDiaControllerTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data.vendedor.id', $this->propio->id)
             ->assertJsonPath('data.contadores.vencidos', 1)
-            ->assertJsonPath('data.vencidos.0.id', $vencido->id);
+            ->assertJsonPath('data.vencidos.0.id', $vencido->id)
+            ->assertJsonPath('data.vencidos.0.entidad', ['tipo' => 'cliente', 'id' => $cliente->id, 'nombre' => 'Cliente vencido'])
+            ->assertJsonPath('data.umbrales', ['dias_trato_detenido' => 7, 'dias_cotizacion_por_vencer' => 3]);
+    }
+
+    public function test_entidad_empresa_externa_usa_razon_social_como_nombre(): void
+    {
+        $empresaExterna = CrmEmpresaExterna::create([
+            'empresa_id' => $this->enterprise->id,
+            'razon_social' => 'Distribuidora Externa SA',
+        ]);
+        $vencido = $this->evento([
+            'fecha_inicio' => $this->ahora->subHour(),
+            'fecha_fin' => $this->ahora->subMinute(),
+            'entidad_type' => CrmEmpresaExterna::class,
+            'entidad_id' => $empresaExterna->id,
+        ]);
+
+        $this->miDia()
+            ->assertOk()
+            ->assertJsonPath('data.vencidos.0.id', $vencido->id)
+            ->assertJsonPath('data.vencidos.0.entidad', [
+                'tipo' => 'empresa_externa',
+                'id' => $empresaExterna->id,
+                'nombre' => 'Distribuidora Externa SA',
+            ]);
     }
 
     public function test_hoy_incluye_de_las_00_a_las_23_59_locales_y_excluye_manana(): void
     {
-        $inicio = $this->evento(['fecha_inicio' => '2026-09-14 00:00:00', 'fecha_fin' => '2026-09-14 00:30:00', 'completado' => true]);
+        $prospecto = CrmProspecto::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Prospecto hoy']);
+        $inicio = $this->evento([
+            'fecha_inicio' => '2026-09-14 00:00:00', 'fecha_fin' => '2026-09-14 00:30:00', 'completado' => true,
+            'entidad_type' => CrmProspecto::class, 'entidad_id' => $prospecto->id,
+        ]);
         $fin = $this->evento(['fecha_inicio' => '2026-09-14 23:59:00', 'fecha_fin' => '2026-09-15 00:30:00']);
         $this->evento(['fecha_inicio' => '2026-09-15 00:00:00', 'fecha_fin' => '2026-09-15 00:30:00']);
 
@@ -134,19 +171,22 @@ class MiDiaControllerTest extends TestCase
 
         $this->assertSame([$inicio->id, $fin->id], array_column($respuesta->json('data.hoy'), 'id'));
         $respuesta->assertJsonPath('data.hoy.0.completado', true);
+        $respuesta->assertJsonPath('data.hoy.0.entidad', ['tipo' => 'prospecto', 'id' => $prospecto->id, 'nombre' => 'Prospecto hoy']);
     }
 
     public function test_tratos_detenidos_respeta_el_limite_de_7_dias(): void
     {
+        $cliente = CrmCliente::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Cliente detenido']);
         $this->oportunidad(6, ['nombre' => 'Seis días']);
-        $siete = $this->oportunidad(7, ['nombre' => 'Siete días']);
+        $siete = $this->oportunidad(7, ['nombre' => 'Siete días', 'cliente_id' => $cliente->id]);
 
         $this->miDia()
             ->assertOk()
             ->assertJsonPath('data.contadores.tratos_detenidos', 1)
             ->assertJsonPath('data.tratos_detenidos.0.id', $siete->id)
             ->assertJsonPath('data.tratos_detenidos.0.dias_sin_actividad', 7)
-            ->assertJsonPath('data.tratos_detenidos.0.ultima_actividad_at', null);
+            ->assertJsonPath('data.tratos_detenidos.0.ultima_actividad_at', null)
+            ->assertJsonPath('data.tratos_detenidos.0.entidad', ['tipo' => 'cliente', 'id' => $cliente->id, 'nombre' => 'Cliente detenido']);
     }
 
     public function test_una_actividad_en_el_cliente_renueva_el_trato_y_las_etapas_cerradas_no_cuentan(): void
@@ -170,7 +210,8 @@ class MiDiaControllerTest extends TestCase
 
     public function test_cotizaciones_por_vencer_con_3_dias_o_menos_incluidas_vencidas(): void
     {
-        $op = $this->oportunidad(1);
+        $cliente = CrmCliente::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Cliente cotización']);
+        $op = $this->oportunidad(1, ['cliente_id' => $cliente->id]);
         $this->cotizacion($op, 6, 10);                       // quedan 4: no
         $tres = $this->cotizacion($op, 7, 10);               // quedan 3: sí
         $cero = $this->cotizacion($op, 10, 10);              // vence hoy: sí
@@ -184,6 +225,7 @@ class MiDiaControllerTest extends TestCase
         $this->assertSame([$vencida->id, $cero->id, $tres->id], array_column($filas, 'id'));
         $this->assertSame([-2, 0, 3], array_column($filas, 'dias_restantes'));
         $this->assertSame('2026-09-14', $filas[1]['vence_el']);
+        $this->assertSame(['tipo' => 'cliente', 'id' => $cliente->id, 'nombre' => 'Cliente cotización'], $filas[1]['entidad']);
     }
 
     public function test_los_bloques_se_cortan_en_50_pero_el_contador_es_real(): void

@@ -189,7 +189,8 @@ class MiDiaService
         return [
             'tipo' => self::ALIAS_ENTIDAD[$modelo::class] ?? null,
             'id' => $modelo->id,
-            'nombre' => $modelo->nombre,
+            // CrmEmpresaExterna no tiene columna `nombre`, usa `razon_social`.
+            'nombre' => $modelo->nombre ?? $modelo->razon_social ?? null,
         ];
     }
 }
