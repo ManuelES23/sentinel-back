@@ -3,18 +3,30 @@
 namespace App\Http\Controllers\Api\SplendidFarms\Inventory;
 
 use App\Http\Controllers\Controller;
+use App\Models\Enterprise;
 use App\Models\UnitOfMeasure;
+use App\Traits\GuardsEnterpriseOwnership;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 
 class UnitOfMeasureController extends Controller
 {
+    use GuardsEnterpriseOwnership;
+
     /**
      * Display a listing of the resource.
      */
     public function index(Request $request): JsonResponse
     {
         $query = UnitOfMeasure::with(['baseUnit:id,name,abbreviation']);
+
+        $enterpriseSlug = $request->header('X-Enterprise-Slug');
+        if ($enterpriseSlug) {
+            $enterprise = Enterprise::where('slug', $enterpriseSlug)->first();
+            if ($enterprise) {
+                $query->forEnterprise($enterprise->id);
+            }
+        }
 
         // Filtrar solo activas
         if ($request->boolean('active_only')) {
@@ -96,6 +108,15 @@ class UnitOfMeasureController extends Controller
         }
 
         $unit = UnitOfMeasure::create($validated);
+
+        $enterpriseSlug = $request->header('X-Enterprise-Slug');
+        if ($enterpriseSlug) {
+            $enterprise = Enterprise::where('slug', $enterpriseSlug)->first();
+            if ($enterprise) {
+                $unit->enterprises()->syncWithoutDetaching([$enterprise->id]);
+            }
+        }
+
         $unit->load('baseUnit:id,name,abbreviation');
 
         return response()->json([
@@ -108,8 +129,10 @@ class UnitOfMeasureController extends Controller
     /**
      * Display the specified resource.
      */
-    public function show(UnitOfMeasure $unit): JsonResponse
+    public function show(Request $request, UnitOfMeasure $unit): JsonResponse
     {
+        $this->assertBelongsToResolvedEnterprise($unit, $request);
+
         $unit->load(['baseUnit', 'derivedUnits']);
 
         return response()->json([
@@ -123,6 +146,8 @@ class UnitOfMeasureController extends Controller
      */
     public function update(Request $request, UnitOfMeasure $unit): JsonResponse
     {
+        $this->assertBelongsToResolvedEnterprise($unit, $request);
+
         $validated = $request->validate([
             'name' => 'sometimes|string|max:100',
             'abbreviation' => 'sometimes|string|max:20',
@@ -154,8 +179,10 @@ class UnitOfMeasureController extends Controller
     /**
      * Remove the specified resource from storage.
      */
-    public function destroy(UnitOfMeasure $unit): JsonResponse
+    public function destroy(Request $request, UnitOfMeasure $unit): JsonResponse
     {
+        $this->assertBelongsToResolvedEnterprise($unit, $request);
+
         // Verificar si tiene unidades derivadas
         if ($unit->derivedUnits()->exists()) {
             return response()->json([

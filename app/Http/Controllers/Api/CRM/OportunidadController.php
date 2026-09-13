@@ -25,6 +25,10 @@ class OportunidadController extends CrmBaseController
             ->with(self::RELACIONES)
             ->when($request->etapa, fn ($q, $etapa) => $q->where('etapa', $etapa))
             ->when($request->vendedor_id, fn ($q, $id) => $q->where('vendedor_id', $id))
+            // Usados por la pestaña "Oportunidades" de la ficha de cliente y
+            // de prospecto, para listar solo las de ese registro.
+            ->when($request->cliente_id, fn ($q, $id) => $q->where('cliente_id', $id))
+            ->when($request->prospecto_id, fn ($q, $id) => $q->where('prospecto_id', $id))
             ->orderByDesc('created_at');
 
         $perPage = (int) $request->query('per_page', 100);

@@ -116,6 +116,63 @@ class OportunidadControllerTest extends TestCase
         $response->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('data.0.nombre', 'Propia');
     }
 
+    public function test_el_listado_filtra_por_cliente(): void
+    {
+        $cliente = $this->crearCliente();
+        $otroCliente = $this->crearCliente();
+
+        CrmOportunidad::create([
+            'empresa_id' => $this->enterprise->id, 'cliente_id' => $cliente->id,
+            'vendedor_id' => $this->vendedor->id, 'nombre' => 'Del cliente',
+        ]);
+        CrmOportunidad::create([
+            'empresa_id' => $this->enterprise->id, 'cliente_id' => $otroCliente->id,
+            'vendedor_id' => $this->vendedor->id, 'nombre' => 'De otro cliente',
+        ]);
+
+        $response = $this->withHeaders($this->crmHeaders())
+            ->getJson(self::BASE_URL."?cliente_id={$cliente->id}");
+
+        $response->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('data.0.nombre', 'Del cliente');
+    }
+
+    public function test_el_listado_filtra_por_prospecto(): void
+    {
+        $prospecto = $this->crearProspecto();
+        $cliente = $this->crearCliente();
+
+        CrmOportunidad::create([
+            'empresa_id' => $this->enterprise->id, 'prospecto_id' => $prospecto->id,
+            'vendedor_id' => $this->vendedor->id, 'nombre' => 'Del prospecto',
+        ]);
+        CrmOportunidad::create([
+            'empresa_id' => $this->enterprise->id, 'cliente_id' => $cliente->id,
+            'vendedor_id' => $this->vendedor->id, 'nombre' => 'Del cliente',
+        ]);
+
+        $response = $this->withHeaders($this->crmHeaders())
+            ->getJson(self::BASE_URL."?prospecto_id={$prospecto->id}");
+
+        $response->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('data.0.nombre', 'Del prospecto');
+    }
+
+    public function test_el_filtro_por_cliente_no_expone_oportunidades_de_otra_empresa(): void
+    {
+        $otraEmpresa = $this->crearOtraEmpresa();
+        $clienteAjeno = CrmCliente::create([
+            'empresa_id' => $otraEmpresa->id, 'nombre' => 'Cliente ajeno', 'estatus' => 'activo',
+        ]);
+        CrmOportunidad::create([
+            'empresa_id' => $otraEmpresa->id, 'cliente_id' => $clienteAjeno->id,
+            'vendedor_id' => $this->vendedor->id, 'nombre' => 'Ajena',
+        ]);
+
+        $response = $this->withHeaders($this->crmHeaders())
+            ->getJson(self::BASE_URL."?cliente_id={$clienteAjeno->id}");
+
+        $response->assertOk()->assertJsonCount(0, 'data');
+    }
+
     // --- Aislamiento multi-tenant en las FK (un id ajeno no debe pasar la validación) ---
 
     public function test_rechaza_crear_una_oportunidad_con_un_cliente_de_otra_empresa(): void

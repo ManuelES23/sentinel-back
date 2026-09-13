@@ -370,6 +370,7 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::post('articulos/import', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'importProducts']);
                 Route::delete('articulos/{product}/unlink', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'unlinkProduct']);
                 Route::get('articulos/{product}/stock', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'stock']);
+                Route::get('articulos/{product}/usado-en-recetas', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'usadoEnRecetas']);
                 Route::apiResource('articulos', App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class)
                     ->parameters(['articulos' => 'product']);
 
@@ -391,6 +392,12 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::put('recetas/{recipe}/items/{item}', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'updateItem']);
                 Route::delete('recetas/{recipe}/items/{item}', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'deleteItem']);
                 Route::post('recetas/{recipe}/recalculate-cost', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'recalculateCost']);
+                Route::get('recetas/{recipe}/uso', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'uso']);
+                Route::get('recetas/{recipe}/versions', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'versions']);
+                Route::post('recetas/{recipe}/versions/{versionNumber}/restore', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'restoreVersion']);
+                Route::post('recetas/{recipe}/submit-for-approval', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'submitForApproval']);
+                Route::post('recetas/{recipe}/approve', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'approve']);
+                Route::post('recetas/{recipe}/reject', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'reject']);
                 Route::apiResource('recetas', App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class)
                     ->parameters(['recetas' => 'recipe']);
             });
@@ -809,6 +816,7 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::post('articulos/import', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'importProducts']);
                 Route::delete('articulos/{product}/unlink', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'unlinkProduct']);
                 Route::get('articulos/{product}/stock', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'stock']);
+                Route::get('articulos/{product}/usado-en-recetas', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'usadoEnRecetas']);
                 Route::apiResource('articulos', App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class)
                     ->parameters(['articulos' => 'product']);
 
@@ -826,6 +834,12 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::put('recetas/{recipe}/items/{item}', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'updateItem']);
                 Route::delete('recetas/{recipe}/items/{item}', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'deleteItem']);
                 Route::post('recetas/{recipe}/recalculate-cost', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'recalculateCost']);
+                Route::get('recetas/{recipe}/uso', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'uso']);
+                Route::get('recetas/{recipe}/versions', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'versions']);
+                Route::post('recetas/{recipe}/versions/{versionNumber}/restore', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'restoreVersion']);
+                Route::post('recetas/{recipe}/submit-for-approval', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'submitForApproval']);
+                Route::post('recetas/{recipe}/approve', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'approve']);
+                Route::post('recetas/{recipe}/reject', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'reject']);
                 Route::apiResource('recetas', App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class)
                     ->parameters(['recetas' => 'recipe']);
             });
@@ -923,6 +937,47 @@ Route::middleware('auth:sanctum')->group(function () {
         // Compras
         Route::prefix('purchases')->group(function () {
             // Rutas de compras...
+        });
+    });
+
+    // Rutas específicas de Canes Agro — solo Inventario/Catálogos.
+    // Reutiliza literalmente los mismos controllers que Splendid Farms
+    // (ya aislados por enterprise_id / enterprise_product* vía header
+    // X-Enterprise-Slug, ver docs/superpowers/specs/2026-09-09-recetas-generalization-design.md).
+    Route::prefix('canes-agro')->group(function () {
+        Route::prefix('inventario')->group(function () {
+            Route::prefix('catalogos')->group(function () {
+                Route::get('categorias/tree', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductCategoryController::class, 'tree']);
+                Route::apiResource('categorias', App\Http\Controllers\Api\SplendidFarms\Inventory\ProductCategoryController::class)
+                    ->parameters(['categorias' => 'category']);
+
+                Route::get('unidades/convert', [App\Http\Controllers\Api\SplendidFarms\Inventory\UnitOfMeasureController::class, 'convert']);
+                Route::apiResource('unidades', App\Http\Controllers\Api\SplendidFarms\Inventory\UnitOfMeasureController::class)
+                    ->parameters(['unidades' => 'unit']);
+
+                Route::get('articulos/available-import', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'availableForImport']);
+                Route::get('articulos/{product}/stock', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'stock']);
+                Route::get('articulos/{product}/usado-en-recetas', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'usadoEnRecetas']);
+                Route::apiResource('articulos', App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class)
+                    ->parameters(['articulos' => 'product']);
+
+                Route::get('marcas/list', [App\Http\Controllers\Api\SplendidFarms\Inventory\BrandController::class, 'list']);
+                Route::apiResource('marcas', App\Http\Controllers\Api\SplendidFarms\Inventory\BrandController::class)
+                    ->parameters(['marcas' => 'brand']);
+
+                Route::post('recetas/{recipe}/items', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'addItem']);
+                Route::put('recetas/{recipe}/items/{item}', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'updateItem']);
+                Route::delete('recetas/{recipe}/items/{item}', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'deleteItem']);
+                Route::post('recetas/{recipe}/recalculate-cost', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'recalculateCost']);
+                Route::get('recetas/{recipe}/uso', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'uso']);
+                Route::get('recetas/{recipe}/versions', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'versions']);
+                Route::post('recetas/{recipe}/versions/{versionNumber}/restore', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'restoreVersion']);
+                Route::post('recetas/{recipe}/submit-for-approval', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'submitForApproval']);
+                Route::post('recetas/{recipe}/approve', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'approve']);
+                Route::post('recetas/{recipe}/reject', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'reject']);
+                Route::apiResource('recetas', App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class)
+                    ->parameters(['recetas' => 'recipe']);
+            });
         });
     });
 

@@ -24,7 +24,7 @@ class RecipeControllerTest extends TestCase
 
     public function test_crear_una_receta_sin_items_no_falla(): void
     {
-        $response = $this->postJson(self::BASE_URL, $this->validRecipePayload());
+        $response = $this->postJson(self::BASE_URL, $this->validRecipePayload(), ['X-Enterprise-Slug' => 'splendidfarms']);
 
         $response->assertOk()->assertJson(['success' => true]);
         $this->assertDatabaseHas('recipes', ['name' => 'Caja Elote Premium 20lb']);
@@ -44,7 +44,7 @@ class RecipeControllerTest extends TestCase
                 ['product_id' => $this->productA->id, 'quantity' => 2],
                 ['product_id' => $this->productB->id, 'quantity' => 10],
             ],
-        ]));
+        ]), ['X-Enterprise-Slug' => 'splendidfarms']);
 
         $response->assertOk();
         $recipeId = $response->json('data.id');
@@ -72,7 +72,7 @@ class RecipeControllerTest extends TestCase
                     ],
                 ],
             ],
-        ]));
+        ]), ['X-Enterprise-Slug' => 'splendidfarms']);
 
         $response->assertOk();
         $recipeId = $response->json('data.id');
@@ -117,6 +117,7 @@ class RecipeControllerTest extends TestCase
         $recipe->items()->create([
             'product_id' => $this->productA->id,
             'quantity' => 1,
+            'enterprise_id' => $recipe->enterprise_id,
         ]);
 
         // Set inválido: dos items con el mismo producto y mismo group_key
@@ -145,6 +146,7 @@ class RecipeControllerTest extends TestCase
         $recipe->items()->create([
             'product_id' => $this->productA->id,
             'quantity' => 1,
+            'enterprise_id' => $recipe->enterprise_id,
         ]);
 
         $response = $this->putJson(self::BASE_URL."/{$recipe->id}", [
@@ -241,6 +243,67 @@ class RecipeControllerTest extends TestCase
             'id' => $recipe->output_product_id,
             'cost_price' => 20,
         ]);
+    }
+
+    /**
+     * Final-review I4: category_id/output_unit_id usaban exists() sin
+     * scoping — desde que ProductCategory/UnitOfMeasure quedaron aisladas
+     * por empresa (Tasks 1/3), una receta de Canes Agro podía referenciar
+     * por ID cruda la categoría/unidad de Splendid Farms y esa relación se
+     * filtraba de vuelta en la respuesta (category/outputUnit eager-cargadas).
+     */
+    public function test_no_se_puede_crear_una_receta_de_canes_agro_con_categoria_de_otra_empresa(): void
+    {
+        \App\Models\Enterprise::create([
+            'name' => 'Canes Agro', 'slug' => 'canes-agro', 'description' => 'Test enterprise', 'is_active' => true,
+        ]);
+
+        // $this->category está vinculada solo a Splendid Farms (fixture).
+        $response = $this->postJson(self::BASE_URL, $this->validRecipePayload([
+            'name' => 'Mezcla Foliar NPK',
+            'category_id' => $this->category->id,
+        ]), ['X-Enterprise-Slug' => 'canes-agro']);
+
+        $response->assertStatus(422);
+        $response->assertJsonValidationErrors(['category_id']);
+        $this->assertDatabaseMissing('recipes', ['name' => 'Mezcla Foliar NPK']);
+    }
+
+    public function test_no_se_puede_crear_una_receta_de_canes_agro_con_unidad_de_otra_empresa(): void
+    {
+        \App\Models\Enterprise::create([
+            'name' => 'Canes Agro', 'slug' => 'canes-agro', 'description' => 'Test enterprise', 'is_active' => true,
+        ]);
+
+        // $this->unit está vinculada solo a Splendid Farms (fixture).
+        $response = $this->postJson(self::BASE_URL, $this->validRecipePayload([
+            'name' => 'Mezcla Foliar NPK',
+            'output_unit_id' => $this->unit->id,
+        ]), ['X-Enterprise-Slug' => 'canes-agro']);
+
+        $response->assertStatus(422);
+        $response->assertJsonValidationErrors(['output_unit_id']);
+        $this->assertDatabaseMissing('recipes', ['name' => 'Mezcla Foliar NPK']);
+    }
+
+    public function test_no_se_puede_actualizar_una_receta_de_canes_agro_con_categoria_de_otra_empresa(): void
+    {
+        \App\Models\Enterprise::create([
+            'name' => 'Canes Agro', 'slug' => 'canes-agro', 'description' => 'Test enterprise', 'is_active' => true,
+        ]);
+
+        $create = $this->postJson(self::BASE_URL,
+            $this->validRecipePayload(['name' => 'Mezcla Foliar NPK']),
+            ['X-Enterprise-Slug' => 'canes-agro']);
+        $recipeId = $create->json('data.id');
+
+        // $this->category está vinculada solo a Splendid Farms (fixture).
+        $response = $this->putJson(self::BASE_URL."/{$recipeId}", [
+            'category_id' => $this->category->id,
+        ], ['X-Enterprise-Slug' => 'canes-agro']);
+
+        $response->assertStatus(422);
+        $response->assertJsonValidationErrors(['category_id']);
     }
 
     /**

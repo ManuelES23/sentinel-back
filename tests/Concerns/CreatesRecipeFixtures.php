@@ -42,12 +42,14 @@ trait CreatesRecipeFixtures
             'name' => 'Consumibles producto terminado',
             'is_active' => true,
         ]);
+        $this->category->enterprises()->attach($this->enterprise->id);
 
         $this->unit = UnitOfMeasure::create([
             'code' => 'PZA',
             'name' => 'Pieza',
             'abbreviation' => 'pza',
         ]);
+        $this->unit->enterprises()->attach($this->enterprise->id);
 
         $this->productA = Product::create([
             'code' => 'PROD-001',
@@ -83,6 +85,12 @@ trait CreatesRecipeFixtures
         return array_merge([
             'name' => 'Caja Elote Premium 20lb',
             'output_quantity' => 1,
+            // Solo se usa cuando el payload se pasa directo a Recipe::create()
+            // en tests que no pasan por el controller (y por lo tanto no
+            // envían X-Enterprise-Slug); recipes.enterprise_id es NOT NULL.
+            // Al ir por HTTP, 'enterprise_id' no está en las reglas de
+            // validate() del controller y se descarta sin efecto.
+            'enterprise_id' => $this->enterprise->id,
         ], $overrides);
     }
 }

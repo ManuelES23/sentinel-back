@@ -192,7 +192,27 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     // DASHBOARD
     // 7 endpoints de métricas ejecutivas
     // -------------------------------------------------
-
+    Route::get('dashboard/kpis', [
+        App\Http\Controllers\Api\CRM\DashboardController::class, 'kpis'
+    ]);
+    Route::get('dashboard/pipeline', [
+        App\Http\Controllers\Api\CRM\DashboardController::class, 'pipeline'
+    ]);
+    Route::get('dashboard/cotizaciones', [
+        App\Http\Controllers\Api\CRM\DashboardController::class, 'cotizaciones'
+    ]);
+    Route::get('dashboard/funnel-conversion', [
+        App\Http\Controllers\Api\CRM\DashboardController::class, 'funnelConversion'
+    ]);
+    Route::get('dashboard/actividad', [
+        App\Http\Controllers\Api\CRM\DashboardController::class, 'actividad'
+    ]);
+    Route::get('dashboard/cumplimiento-metas', [
+        App\Http\Controllers\Api\CRM\DashboardController::class, 'cumplimientoMetas'
+    ]);
+    Route::get('dashboard/ranking-vendedores', [
+        App\Http\Controllers\Api\CRM\DashboardController::class, 'rankingVendedores'
+    ]);
 
     // -------------------------------------------------
     // INTEGRACIONES · DIALPAD
@@ -227,4 +247,16 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::delete('integraciones/outlook/desconectar', [
         App\Http\Controllers\Api\CRM\OutlookIntegracionController::class, 'desconectar'
     ]);
+
+    // -------------------------------------------------
+    // PERFILES DE PERMISOS
+    // Vendedor / gerencia / administración aplicados de un paso a un
+    // usuario. Solo administradores (se valida en el controlador).
+    // -------------------------------------------------
+    Route::get('perfiles', [
+        App\Http\Controllers\Api\CRM\PerfilPermisosController::class, 'index'
+    ]);
+    Route::post('perfiles/usuarios/{user}', [
+        App\Http\Controllers\Api\CRM\PerfilPermisosController::class, 'aplicar'
+    ])->whereNumber('user');
 });

@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class ProductCategory extends Model
 {
@@ -61,6 +62,25 @@ class ProductCategory extends Model
     public function products(): HasMany
     {
         return $this->hasMany(Product::class, 'category_id');
+    }
+
+    /**
+     * Empresas que usan esta categoría
+     */
+    public function enterprises(): BelongsToMany
+    {
+        return $this->belongsToMany(Enterprise::class, 'enterprise_product_category')
+            ->withTimestamps();
+    }
+
+    /**
+     * Scope para filtrar por empresa
+     */
+    public function scopeForEnterprise($query, int $enterpriseId)
+    {
+        return $query->whereHas('enterprises', function ($q) use ($enterpriseId) {
+            $q->where('enterprises.id', $enterpriseId);
+        });
     }
 
     /**

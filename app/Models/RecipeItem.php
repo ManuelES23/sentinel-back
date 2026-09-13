@@ -12,6 +12,7 @@ class RecipeItem extends Model
     use HasFactory, Loggable;
 
     protected $fillable = [
+        'enterprise_id',
         'recipe_id',
         'product_id',
         'quantity',

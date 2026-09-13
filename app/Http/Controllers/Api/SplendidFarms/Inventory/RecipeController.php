@@ -9,14 +9,22 @@ use App\Models\ProductCategory;
 use App\Models\Recipe;
 use App\Models\RecipeItem;
 use App\Models\UnitOfMeasure;
+use App\Services\RecipeApprovalService;
+use App\Services\RecipeVersioningService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
 class RecipeController extends Controller
 {
+    public function __construct(
+        private RecipeVersioningService $versioning,
+        private RecipeApprovalService $approval,
+    ) {}
+
     /**
      * Display a listing of the resource.
      */
@@ -24,11 +32,16 @@ class RecipeController extends Controller
     {
         $query = Recipe::with([
             'category:id,name,code',
-            'cultivo:id,nombre',
-            'variedad:id,nombre',
+            'agroDetails.cultivo:id,nombre',
+            'agroDetails.variedad:id,nombre',
             'outputProduct:id,name,code',
             'outputUnit:id,name,abbreviation',
         ])->withCount('items');
+
+        $enterprise = $this->resolveEnterprise($request);
+        if ($enterprise) {
+            $query->forEnterprise($enterprise->id);
+        }
 
         // Filtrar solo activas
         if ($request->boolean('active_only')) {
@@ -47,7 +60,7 @@ class RecipeController extends Controller
 
         // Filtrar por cultivo
         if ($request->filled('cultivo_id')) {
-            $query->where('cultivo_id', $request->cultivo_id);
+            $query->whereHas('agroDetails', fn ($q) => $q->where('cultivo_id', $request->cultivo_id));
         }
 
         // Filtrar por tipo de receta
@@ -83,18 +96,21 @@ class RecipeController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
+        // Se resuelve ANTES de validate() porque category_id/output_unit_id
+        // necesitan un Rule::exists() con where() para scoping por empresa
+        // (ver enterpriseScopedCategoryRule()/enterpriseScopedUnitRule()).
+        $enterpriseForValidation = $this->resolveEnterprise($request);
+
         $validated = $request->validate([
             'code' => 'nullable|string|max:50|unique:recipes,code',
             'name' => 'required|string|max:255',
             'recipe_type' => 'nullable|string|max:50',
             'slug' => 'nullable|string|max:255|unique:recipes,slug',
             'description' => 'nullable|string',
-            'category_id' => 'nullable|exists:product_categories,id',
-            'cultivo_id' => 'nullable|exists:cultivos,id',
+            'category_id' => ['nullable', $this->enterpriseScopedCategoryRule($enterpriseForValidation)],
             'output_quantity' => 'nullable|numeric|min:0.01',
-            'output_unit_id' => 'nullable|exists:units_of_measure,id',
-            'peso_pieza' => 'nullable|numeric|min:0',
-            'status' => 'nullable|in:draft,active,inactive,archived',
+            'output_unit_id' => ['nullable', $this->enterpriseScopedUnitRule($enterpriseForValidation)],
+            'status' => 'nullable|in:draft,pending_approval,active,inactive,archived',
             'version' => 'nullable|string|max:20',
             'notes' => 'nullable|string',
             'is_active' => 'boolean',
@@ -113,8 +129,6 @@ class RecipeController extends Controller
             'items.*.is_default' => 'nullable|boolean',
             'items.*.solo_interno' => 'nullable|boolean',
             'items.*.calibre_id' => 'nullable|exists:calibres,id',
-            // Variedad
-            'variedad_id' => 'nullable|exists:variedades,id',
             // Calibres y PLUs
             'calibres' => 'nullable|array',
             'calibres.*.calibre_id' => 'required|exists:calibres,id',
@@ -122,6 +136,15 @@ class RecipeController extends Controller
             'calibres.*.plus.*.product_id' => 'required|exists:products,id',
             'calibres.*.plus.*.is_organic' => 'nullable|boolean',
             'calibres.*.plus.*.notes' => 'nullable|string|max:500',
+            // Detalle agrícola: payload anidado (nuevo) o campos planos (legado)
+            'agro_details' => 'nullable|array',
+            'agro_details.cultivo_id' => 'nullable|exists:cultivos,id',
+            'agro_details.variedad_id' => 'nullable|exists:variedades,id',
+            'agro_details.peso_pieza' => 'nullable|numeric|min:0',
+            // Compatibilidad con el frontend actual (payload plano) hasta la Fase 5
+            'cultivo_id' => 'nullable|exists:cultivos,id',
+            'variedad_id' => 'nullable|exists:variedades,id',
+            'peso_pieza' => 'nullable|numeric|min:0',
         ]);
 
         if (empty($validated['code'])) {
@@ -145,13 +168,27 @@ class RecipeController extends Controller
         $this->assertNoDuplicateItems($items);
         $calibres = $validated['calibres'] ?? [];
         unset($validated['items'], $validated['calibres']);
+        $agroDetails = $this->extractAgroDetails($validated);
 
-        $recipe = DB::transaction(function () use ($validated, $items, $calibres, $request) {
-            $recipe = Recipe::create($validated);
+        $enterprise = $this->resolveEnterprise($request);
+        if (! $enterprise) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No se pudo determinar la empresa activa (X-Enterprise-Slug faltante o inválido).',
+            ], 422);
+        }
+
+        $recipe = DB::transaction(function () use ($validated, $items, $calibres, $agroDetails, $request, $enterprise) {
+            $recipe = Recipe::create([...$validated, 'enterprise_id' => $enterprise->id]);
+
+            if ($agroDetails) {
+                $recipe->agroDetails()->create($agroDetails);
+            }
 
             foreach ($items as $index => $item) {
                 $recipe->items()->create(array_merge($item, [
                     'sort_order' => $item['sort_order'] ?? $index,
+                    'enterprise_id' => $recipe->enterprise_id,
                 ]));
             }
 
@@ -179,8 +216,8 @@ class RecipeController extends Controller
 
         $recipe = $recipe->fresh([
             'category:id,name,code',
-            'cultivo:id,nombre',
-            'variedad:id,nombre',
+            'agroDetails.cultivo:id,nombre',
+            'agroDetails.variedad:id,nombre',
             'outputProduct:id,name,code',
             'outputUnit:id,name,abbreviation',
             'items.product:id,name,code,brand_id',
@@ -201,12 +238,14 @@ class RecipeController extends Controller
     /**
      * Display the specified resource.
      */
-    public function show(Recipe $recipe): JsonResponse
+    public function show(Request $request, Recipe $recipe): JsonResponse
     {
+        $this->assertRecipeBelongsToResolvedEnterprise($recipe, $request);
+
         $recipe->load([
             'category:id,name,code',
-            'cultivo:id,nombre',
-            'variedad:id,nombre',
+            'agroDetails.cultivo:id,nombre',
+            'agroDetails.variedad:id,nombre',
             'outputProduct:id,name,code,cost_price',
             'outputUnit:id,name,abbreviation',
             'items.product:id,name,code,cost_price,brand_id',
@@ -229,19 +268,22 @@ class RecipeController extends Controller
      */
     public function update(Request $request, Recipe $recipe): JsonResponse
     {
+        $this->assertRecipeBelongsToResolvedEnterprise($recipe, $request);
+
+        // Se resuelve ANTES de validate() por la misma razón que en store().
+        $enterpriseForValidation = $this->resolveEnterprise($request);
+
         $validated = $request->validate([
             'code' => 'sometimes|string|max:50|unique:recipes,code,'.$recipe->id,
             'name' => 'sometimes|string|max:255',
             'slug' => 'nullable|string|max:255|unique:recipes,slug,'.$recipe->id,
             'description' => 'nullable|string',
-            'category_id' => 'nullable|exists:product_categories,id',
-            'cultivo_id' => 'nullable|exists:cultivos,id',
+            'category_id' => ['nullable', $this->enterpriseScopedCategoryRule($enterpriseForValidation)],
             'recipe_type' => 'nullable|string|max:50',
             'output_quantity' => 'nullable|numeric|min:0.01',
-            'output_unit_id' => 'nullable|exists:units_of_measure,id',
-            'peso_pieza' => 'nullable|numeric|min:0',
+            'output_unit_id' => ['nullable', $this->enterpriseScopedUnitRule($enterpriseForValidation)],
             'estimated_cost' => 'nullable|numeric|min:0',
-            'status' => 'nullable|in:draft,active,inactive,archived',
+            'status' => 'nullable|in:draft,pending_approval,active,inactive,archived',
             'version' => 'nullable|string|max:20',
             'notes' => 'nullable|string',
             'is_active' => 'boolean',
@@ -260,8 +302,6 @@ class RecipeController extends Controller
             'items.*.is_default' => 'nullable|boolean',
             'items.*.solo_interno' => 'nullable|boolean',
             'items.*.calibre_id' => 'nullable|exists:calibres,id',
-            // Variedad
-            'variedad_id' => 'nullable|exists:variedades,id',
             // Calibres y PLUs
             'calibres' => 'nullable|array',
             'calibres.*.calibre_id' => 'required|exists:calibres,id',
@@ -269,6 +309,15 @@ class RecipeController extends Controller
             'calibres.*.plus.*.product_id' => 'required|exists:products,id',
             'calibres.*.plus.*.is_organic' => 'nullable|boolean',
             'calibres.*.plus.*.notes' => 'nullable|string|max:500',
+            // Detalle agrícola: payload anidado (nuevo) o campos planos (legado)
+            'agro_details' => 'nullable|array',
+            'agro_details.cultivo_id' => 'nullable|exists:cultivos,id',
+            'agro_details.variedad_id' => 'nullable|exists:variedades,id',
+            'agro_details.peso_pieza' => 'nullable|numeric|min:0',
+            // Compatibilidad con el frontend actual (payload plano) hasta la Fase 5
+            'cultivo_id' => 'nullable|exists:cultivos,id',
+            'variedad_id' => 'nullable|exists:variedades,id',
+            'peso_pieza' => 'nullable|numeric|min:0',
         ]);
 
         // Extraer items y calibres antes de actualizar la receta
@@ -286,11 +335,26 @@ class RecipeController extends Controller
             unset($validated['calibres']);
         }
 
+        $agroDetails = $this->extractAgroDetails($validated);
+
         // Todo el sync corre en una sola transacción: si algo truena a medio
         // camino (ej. una violación de constraint), no debe quedar la receta
         // con menos items/calibres de los que tenía antes de editar.
-        DB::transaction(function () use ($recipe, $validated, $items, $calibres, $request) {
+        DB::transaction(function () use ($recipe, $validated, $items, $calibres, $agroDetails, $request) {
+            // Snapshot DENTRO de la transacción y DESPUÉS de validar: si la
+            // validación falla, o algo dentro de la transacción truena, no
+            // debe quedar una fila de recipe_versions "huérfana" que además
+            // quemó un número de versión sin que la edición se haya aplicado.
+            $this->versioning->snapshotBeforeUpdate($recipe, $request->user()?->id);
+
             $recipe->update($validated);
+
+            if ($agroDetails) {
+                $recipe->agroDetails()->updateOrCreate(['recipe_id' => $recipe->id], $agroDetails);
+            } elseif ($agroDetails === null && array_key_exists('agro_details', $request->all())) {
+                // Se mandó agro_details explícitamente vacío -> quitar la extensión
+                $recipe->agroDetails()->delete();
+            }
 
             // Recetas que se crearon antes de este fix nunca tienen
             // output_product_id (nunca se implementó) — se autocura aquí.
@@ -304,6 +368,7 @@ class RecipeController extends Controller
                 foreach ($items as $index => $item) {
                     $recipe->items()->create(array_merge($item, [
                         'sort_order' => $item['sort_order'] ?? $index,
+                        'enterprise_id' => $recipe->enterprise_id,
                     ]));
                 }
 
@@ -360,8 +425,8 @@ class RecipeController extends Controller
 
         $recipe = $recipe->fresh([
             'category:id,name,code',
-            'cultivo:id,nombre',
-            'variedad:id,nombre',
+            'agroDetails.cultivo:id,nombre',
+            'agroDetails.variedad:id,nombre',
             'outputProduct:id,name,code',
             'outputUnit:id,name,abbreviation',
             'items.product:id,name,code,brand_id',
@@ -383,8 +448,10 @@ class RecipeController extends Controller
     /**
      * Remove the specified resource from storage.
      */
-    public function destroy(Recipe $recipe): JsonResponse
+    public function destroy(Request $request, Recipe $recipe): JsonResponse
     {
+        $this->assertRecipeBelongsToResolvedEnterprise($recipe, $request);
+
         // No eliminar si está activa y en uso
         if ($recipe->status === 'active') {
             return response()->json([
@@ -408,6 +475,8 @@ class RecipeController extends Controller
      */
     public function addItem(Request $request, Recipe $recipe): JsonResponse
     {
+        $this->assertRecipeBelongsToResolvedEnterprise($recipe, $request);
+
         $validated = $request->validate([
             'product_id' => 'required|exists:products,id',
             'quantity' => 'required|numeric|min:0.01',
@@ -447,6 +516,8 @@ class RecipeController extends Controller
             $validated['sort_order'] = $recipe->items()->max('sort_order') + 1;
         }
 
+        $validated['enterprise_id'] = $recipe->enterprise_id;
+
         $item = $recipe->items()->create($validated);
         $item->load(['product:id,name,code', 'unit:id,name,abbreviation', 'calibre:id,nombre,valor']);
 
@@ -466,6 +537,8 @@ class RecipeController extends Controller
      */
     public function updateItem(Request $request, Recipe $recipe, RecipeItem $item): JsonResponse
     {
+        $this->assertRecipeBelongsToResolvedEnterprise($recipe, $request);
+
         // Verificar que el item pertenezca a la receta
         if ($item->recipe_id !== $recipe->id) {
             return response()->json([
@@ -505,8 +578,10 @@ class RecipeController extends Controller
     /**
      * Eliminar un item de la receta
      */
-    public function deleteItem(Recipe $recipe, RecipeItem $item): JsonResponse
+    public function deleteItem(Request $request, Recipe $recipe, RecipeItem $item): JsonResponse
     {
+        $this->assertRecipeBelongsToResolvedEnterprise($recipe, $request);
+
         if ($item->recipe_id !== $recipe->id) {
             return response()->json([
                 'status' => 'error',
@@ -529,8 +604,10 @@ class RecipeController extends Controller
     /**
      * Recalcular el costo de la receta
      */
-    public function recalculateCost(Recipe $recipe): JsonResponse
+    public function recalculateCost(Request $request, Recipe $recipe): JsonResponse
     {
+        $this->assertRecipeBelongsToResolvedEnterprise($recipe, $request);
+
         $recipe->load('items');
         $recipe->recalculateCost();
 
@@ -714,6 +791,99 @@ class RecipeController extends Controller
     }
 
     /**
+     * Resuelve la empresa activa desde el header X-Enterprise-Slug — mismo
+     * mecanismo que ProductController/ProductCategoryController/etc.
+     */
+    private function resolveEnterprise(Request $request): ?Enterprise
+    {
+        $slug = $request->header('X-Enterprise-Slug');
+
+        return $slug ? Enterprise::where('slug', $slug)->first() : null;
+    }
+
+    /**
+     * Regla exists() para category_id, scoped a la empresa resuelta vía el
+     * pivote enterprise_product_category — ProductCategory ya está aislada
+     * por empresa (Tasks 1/3) igual que Product; sin este scoping, una
+     * receta de una empresa podía referenciar por ID cruda la categoría de
+     * OTRA empresa y filtrar su nombre/código de vuelta en la relación
+     * `category` eager-cargada en la respuesta. Si no hay empresa resuelta,
+     * no agrega where() extra (mismo exists() global de siempre).
+     */
+    private function enterpriseScopedCategoryRule(?Enterprise $enterprise)
+    {
+        return Rule::exists('product_categories', 'id')->where(function ($query) use ($enterprise) {
+            if ($enterprise) {
+                $query->whereIn('id', function ($sub) use ($enterprise) {
+                    $sub->select('product_category_id')
+                        ->from('enterprise_product_category')
+                        ->where('enterprise_id', $enterprise->id);
+                });
+            }
+        });
+    }
+
+    /**
+     * Misma idea que enterpriseScopedCategoryRule() pero para
+     * output_unit_id / UnitOfMeasure, vía el pivote
+     * enterprise_unit_of_measure.
+     */
+    private function enterpriseScopedUnitRule(?Enterprise $enterprise)
+    {
+        return Rule::exists('units_of_measure', 'id')->where(function ($query) use ($enterprise) {
+            if ($enterprise) {
+                $query->whereIn('id', function ($sub) use ($enterprise) {
+                    $sub->select('unit_of_measure_id')
+                        ->from('enterprise_unit_of_measure')
+                        ->where('enterprise_id', $enterprise->id);
+                });
+            }
+        });
+    }
+
+    /**
+     * Normaliza agro_details: acepta tanto el payload anidado nuevo como los
+     * campos planos legado (cultivo_id/variedad_id/peso_pieza a nivel raíz),
+     * y los saca de $validated para que Recipe::create()/update() no truene
+     * por columnas que ya no existen en `recipes`.
+     */
+    private function extractAgroDetails(array &$validated): ?array
+    {
+        $nested = $validated['agro_details'] ?? null;
+        unset($validated['agro_details']);
+
+        $legacyCultivo = $validated['cultivo_id'] ?? null;
+        $legacyVariedad = $validated['variedad_id'] ?? null;
+        $legacyPeso = $validated['peso_pieza'] ?? null;
+        unset($validated['cultivo_id'], $validated['variedad_id'], $validated['peso_pieza']);
+
+        $details = $nested ?? [
+            'cultivo_id' => $legacyCultivo,
+            'variedad_id' => $legacyVariedad,
+            'peso_pieza' => $legacyPeso,
+        ];
+
+        $hasAnyValue = collect($details)->filter(fn ($v) => $v !== null)->isNotEmpty();
+
+        return $hasAnyValue ? $details : null;
+    }
+
+    /**
+     * Aborta con 404 si la receta pertenece a una empresa distinta de la
+     * resuelta desde el header X-Enterprise-Slug. Si el header está ausente
+     * o no resuelve a ninguna Enterprise conocida, no bloquea — mismo patrón
+     * "lenient-if-absent" que ProductController y sus hermanos.
+     */
+    private function assertRecipeBelongsToResolvedEnterprise(Recipe $recipe, Request $request): void
+    {
+        $enterprise = $this->resolveEnterprise($request);
+
+        if ($enterprise && $recipe->enterprise_id !== $enterprise->id) {
+            abort(404);
+        }
+    }
+
+    /**
      * Valida que no haya dos items para el mismo producto dentro del mismo
      * contexto (mismo group_key, o ambos sin grupo). La unicidad real a
      * nivel de BD es (recipe_id, product_id, group_key) — el mismo producto
@@ -739,5 +909,87 @@ class RecipeController extends Controller
 
             $seen[$key] = true;
         }
+    }
+
+    /**
+     * Historial de versiones de la receta.
+     */
+    public function versions(Request $request, Recipe $recipe): JsonResponse
+    {
+        $this->assertRecipeBelongsToResolvedEnterprise($recipe, $request);
+
+        $versions = $recipe->versions()->with('createdBy:id,name')->orderByDesc('version_number')->get();
+
+        return response()->json(['success' => true, 'data' => $versions]);
+    }
+
+    /**
+     * Restaura una versión anterior como una edición nueva.
+     */
+    public function restoreVersion(Request $request, Recipe $recipe, int $versionNumber): JsonResponse
+    {
+        $this->assertRecipeBelongsToResolvedEnterprise($recipe, $request);
+
+        $restored = $this->versioning->restore($recipe, $versionNumber, $request->user()?->id);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Receta restaurada exitosamente',
+            'data' => $restored,
+        ]);
+    }
+
+    /**
+     * Producciones/empaques que han usado esta receta.
+     */
+    public function uso(Request $request, Recipe $recipe): JsonResponse
+    {
+        $this->assertRecipeBelongsToResolvedEnterprise($recipe, $request);
+
+        $producciones = DB::table('produccion_empaque')
+            ->where('recipe_id', $recipe->id)
+            ->orderByDesc('created_at')
+            ->get(['id', 'fecha_produccion', 'created_at']);
+
+        return response()->json(['success' => true, 'data' => ['producciones' => $producciones]]);
+    }
+
+    // ── Flujo de aprobación ─────────────────────────────────────
+
+    /**
+     * Envía la receta a revisión (draft -> pending_approval).
+     */
+    public function submitForApproval(Request $request, Recipe $recipe): JsonResponse
+    {
+        $this->assertRecipeBelongsToResolvedEnterprise($recipe, $request);
+
+        $recipe = $this->approval->submit($recipe);
+
+        return response()->json(['success' => true, 'message' => 'Receta enviada a revisión', 'data' => $recipe]);
+    }
+
+    /**
+     * Aprueba una receta pendiente (pending_approval -> active).
+     */
+    public function approve(Request $request, Recipe $recipe): JsonResponse
+    {
+        $this->assertRecipeBelongsToResolvedEnterprise($recipe, $request);
+
+        $recipe = $this->approval->approve($recipe, $request->user());
+
+        return response()->json(['success' => true, 'message' => 'Receta aprobada', 'data' => $recipe]);
+    }
+
+    /**
+     * Rechaza una receta pendiente (pending_approval -> draft).
+     */
+    public function reject(Request $request, Recipe $recipe): JsonResponse
+    {
+        $this->assertRecipeBelongsToResolvedEnterprise($recipe, $request);
+
+        $validated = $request->validate(['reason' => 'required|string|max:500']);
+        $recipe = $this->approval->reject($recipe, $request->user(), $validated['reason']);
+
+        return response()->json(['success' => true, 'message' => 'Receta rechazada', 'data' => $recipe]);
     }
 }

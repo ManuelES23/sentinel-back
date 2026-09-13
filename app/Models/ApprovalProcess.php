@@ -31,6 +31,7 @@ class ApprovalProcess extends Model
     const PURCHASE_ORDERS = 'purchase_orders';
     const INCIDENTS = 'incidents';
     const INVENTORY_MOVEMENTS = 'inventory_movements';
+    const RECIPE_APPROVAL = 'recipe_approval';
 
     // ===== Relaciones =====
 

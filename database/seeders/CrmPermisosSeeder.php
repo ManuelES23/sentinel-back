@@ -47,7 +47,11 @@ class CrmPermisosSeeder extends Seeder
         );
 
         // ── Módulos y submódulos ──────────────────────────────────────────
-        $this->crearModulo($app, 'catalogos', 'Catálogos', 'Settings2', 1, [
+        // Orden del menú según la jornada del vendedor (fase 1 de la
+        // reorganización del CRM). La migración
+        // 2026_09_12_100000_reorder_crm_modules_by_seller_workflow aplica el
+        // mismo orden a las empresas ya sembradas; mantener ambos iguales.
+        $this->crearModulo($app, 'catalogos', 'Catálogos', 'Settings2', 10, [
             ['slug' => 'vendedores',  'name' => 'Vendedores',  'icon' => 'UserCheck',  'order' => 1, 'permisos' => $this->permisosBase()],
             ['slug' => 'regiones',    'name' => 'Regiones',    'icon' => 'Map',         'order' => 2, 'permisos' => $this->permisosBase()],
             ['slug' => 'zonas',       'name' => 'Zonas',       'icon' => 'MapPin',      'order' => 3, 'permisos' => $this->permisosBase()],
@@ -59,7 +63,7 @@ class CrmPermisosSeeder extends Seeder
             ]],
         ]);
 
-        $this->crearModulo($app, 'prospectos', 'Prospectos', 'UserPlus', 2, [
+        $this->crearModulo($app, 'prospectos', 'Prospectos', 'UserPlus', 4, [
             ['slug' => 'prospectos', 'name' => 'Prospectos', 'icon' => 'UserPlus', 'order' => 1, 'permisos' => array_merge(
                 $this->permisosBase(),
                 [['slug' => 'asignar_vendedor', 'name' => 'Asignar vendedor', 'order' => 5]]
@@ -73,25 +77,25 @@ class CrmPermisosSeeder extends Seeder
             )],
         ]);
 
-        $this->crearModulo($app, 'empresas-externas', 'Empresas Externas', 'Building2', 4, [
+        $this->crearModulo($app, 'empresas-externas', 'Empresas Externas', 'Building2', 7, [
             ['slug' => 'empresas-externas', 'name' => 'Empresas Externas', 'icon' => 'Building2', 'order' => 1, 'permisos' => array_merge(
                 $this->permisosBase(),
                 [['slug' => 'gestionar_contactos', 'name' => 'Gestionar contactos', 'order' => 5]]
             )],
         ]);
 
-        $this->crearModulo($app, 'actividades', 'Actividades', 'Activity', 5, [
+        $this->crearModulo($app, 'actividades', 'Actividades', 'Activity', 6, [
             ['slug' => 'actividades', 'name' => 'Actividades', 'icon' => 'Activity', 'order' => 1, 'permisos' => $this->permisosBase()],
         ]);
 
-        $this->crearModulo($app, 'oportunidades', 'Oportunidades', 'TrendingUp', 6, [
+        $this->crearModulo($app, 'oportunidades', 'Oportunidades', 'TrendingUp', 2, [
             ['slug' => 'oportunidades', 'name' => 'Oportunidades', 'icon' => 'TrendingUp', 'order' => 1, 'permisos' => array_merge(
                 $this->permisosBase(),
                 [['slug' => 'cerrar', 'name' => 'Cerrar oportunidad', 'order' => 5]]
             )],
         ]);
 
-        $this->crearModulo($app, 'cotizaciones', 'Cotizaciones', 'FileText', 7, [
+        $this->crearModulo($app, 'cotizaciones', 'Cotizaciones', 'FileText', 5, [
             ['slug' => 'cotizaciones', 'name' => 'Cotizaciones', 'icon' => 'FileText', 'order' => 1, 'permisos' => [
                 ['slug' => 'ver',       'name' => 'Ver cotizaciones',       'order' => 1],
                 ['slug' => 'crear',     'name' => 'Crear cotización',       'order' => 2],
@@ -101,7 +105,7 @@ class CrmPermisosSeeder extends Seeder
             ]],
         ]);
 
-        $this->crearModulo($app, 'presupuestos', 'Presupuestos', 'Target', 8, [
+        $this->crearModulo($app, 'presupuestos', 'Presupuestos', 'Target', 9, [
             ['slug' => 'presupuestos', 'name' => 'Presupuestos', 'icon' => 'Target', 'order' => 1, 'permisos' => [
                 ['slug' => 'ver',    'name' => 'Ver presupuestos',    'order' => 1],
                 ['slug' => 'crear',  'name' => 'Crear presupuesto',   'order' => 2],
@@ -109,11 +113,11 @@ class CrmPermisosSeeder extends Seeder
             ]],
         ]);
 
-        $this->crearModulo($app, 'agenda', 'Agenda', 'CalendarDays', 9, [
+        $this->crearModulo($app, 'agenda', 'Agenda', 'CalendarDays', 1, [
             ['slug' => 'agenda', 'name' => 'Agenda', 'icon' => 'CalendarDays', 'order' => 1, 'permisos' => $this->permisosBase()],
         ]);
 
-        $this->crearModulo($app, 'dashboard', 'Dashboard', 'BarChart2', 10, [
+        $this->crearModulo($app, 'dashboard', 'Dashboard', 'BarChart2', 8, [
             ['slug' => 'dashboard', 'name' => 'Dashboard', 'icon' => 'BarChart2', 'order' => 1, 'permisos' => [
                 ['slug' => 'ver',       'name' => 'Ver dashboard',           'order' => 1],
                 ['slug' => 'ejecutivo', 'name' => 'Ver dashboard ejecutivo', 'order' => 2],

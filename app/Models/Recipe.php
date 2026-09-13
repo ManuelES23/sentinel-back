@@ -8,24 +8,23 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Recipe extends Model
 {
     use HasFactory, SoftDeletes, Loggable;
 
     protected $fillable = [
+        'enterprise_id',
         'code',
         'name',
         'recipe_type',
         'slug',
         'description',
         'category_id',
-        'cultivo_id',
-        'variedad_id',
         'output_product_id',
         'output_quantity',
         'output_unit_id',
-        'peso_pieza',
         'estimated_cost',
         'status',
         'version',
@@ -37,7 +36,6 @@ class Recipe extends Model
     protected $casts = [
         'is_active' => 'boolean',
         'output_quantity' => 'decimal:4',
-        'peso_pieza' => 'decimal:4',
         'estimated_cost' => 'decimal:4',
         'metadata' => 'array',
     ];
@@ -53,19 +51,12 @@ class Recipe extends Model
     }
 
     /**
-     * Cultivo asociado a la receta
+     * Detalle agrícola de la receta (cultivo/variedad/peso por pieza).
+     * Nula para recetas que no son de empaque agrícola (ej. Canes Agro).
      */
-    public function cultivo(): BelongsTo
+    public function agroDetails(): HasOne
     {
-        return $this->belongsTo(Cultivo::class, 'cultivo_id');
-    }
-
-    /**
-     * Variedad asociada a la receta
-     */
-    public function variedad(): BelongsTo
-    {
-        return $this->belongsTo(Variedad::class, 'variedad_id');
+        return $this->hasOne(RecipeAgroDetail::class);
     }
 
     /**
@@ -100,6 +91,14 @@ class Recipe extends Model
         return $this->hasMany(RecipeItem::class)->orderBy('sort_order');
     }
 
+    /**
+     * Historial de versiones de la receta (snapshots previos a cada edición).
+     */
+    public function versions(): HasMany
+    {
+        return $this->hasMany(RecipeVersion::class)->orderByDesc('version_number');
+    }
+
     // ── Scopes ──────────────────────────────────────────────────
 
     /**
@@ -116,6 +115,14 @@ class Recipe extends Model
     public function scopeByStatus($query, string $status)
     {
         return $query->where('status', $status);
+    }
+
+    /**
+     * Scope para filtrar por empresa
+     */
+    public function scopeForEnterprise($query, int $enterpriseId)
+    {
+        return $query->where('enterprise_id', $enterpriseId);
     }
 
     // ── Accessors / Helpers ─────────────────────────────────────
