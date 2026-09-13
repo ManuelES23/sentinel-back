@@ -73,11 +73,15 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/{id}/dismiss', [App\Http\Controllers\Api\NotificationController::class, 'dismiss']);
     });
 
-    // Rutas de administración de usuarios
-    Route::apiResource('users', App\Http\Controllers\Api\UserController::class);
-    Route::post('users/{user}/enterprises', [App\Http\Controllers\Api\UserController::class, 'assignEnterprises']);
-    Route::post('users/{user}/enterprises/{enterprise}/applications', [App\Http\Controllers\Api\UserController::class, 'assignApplications']);
-    Route::get('users-employees-available', [App\Http\Controllers\Api\UserController::class, 'employeesWithoutUser']);
+    // Rutas de administración de usuarios — solo administradores.
+    // Sin este guard cualquier usuario podía hacer PUT /users/{su_id} con
+    // role=admin y saltarse el resto de los guards de administración.
+    Route::middleware('admin')->group(function () {
+        Route::apiResource('users', App\Http\Controllers\Api\UserController::class);
+        Route::post('users/{user}/enterprises', [App\Http\Controllers\Api\UserController::class, 'assignEnterprises']);
+        Route::post('users/{user}/enterprises/{enterprise}/applications', [App\Http\Controllers\Api\UserController::class, 'assignApplications']);
+        Route::get('users-employees-available', [App\Http\Controllers\Api\UserController::class, 'employeesWithoutUser']);
+    });
 
     // Rutas de empresas
     Route::apiResource('enterprises', App\Http\Controllers\Api\EnterpriseController::class);
@@ -85,46 +89,55 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('enterprises/{enterprise}/applications', [App\Http\Controllers\Api\EnterpriseController::class, 'applications']);
     Route::get('enterprises/{enterprise}/profile', [App\Http\Controllers\Api\EnterpriseController::class, 'profile']);
 
-    // Rutas de aplicaciones
+    // Rutas de aplicaciones (lectura abierta; escritura solo administradores)
     Route::prefix('applications')->group(function () {
         Route::get('/', [App\Http\Controllers\Api\ApplicationController::class, 'index']);
-        Route::post('/', [App\Http\Controllers\Api\ApplicationController::class, 'store']);
         Route::get('/{application}', [App\Http\Controllers\Api\ApplicationController::class, 'show']);
-        Route::put('/{application}', [App\Http\Controllers\Api\ApplicationController::class, 'update']);
-        Route::delete('/{application}', [App\Http\Controllers\Api\ApplicationController::class, 'destroy']);
         Route::get('/{application}/modules', [App\Http\Controllers\Api\ModuleController::class, 'byApplication']);
+        Route::middleware('admin')->group(function () {
+            Route::post('/', [App\Http\Controllers\Api\ApplicationController::class, 'store']);
+            Route::put('/{application}', [App\Http\Controllers\Api\ApplicationController::class, 'update']);
+            Route::delete('/{application}', [App\Http\Controllers\Api\ApplicationController::class, 'destroy']);
+        });
     });
 
-    // Rutas de módulos
+    // Rutas de módulos (lectura abierta; escritura solo administradores)
     Route::prefix('modules')->group(function () {
         Route::get('/', [App\Http\Controllers\Api\ModuleController::class, 'index']);
-        Route::post('/', [App\Http\Controllers\Api\ModuleController::class, 'store']);
         Route::get('/{module}', [App\Http\Controllers\Api\ModuleController::class, 'show']);
-        Route::put('/{module}', [App\Http\Controllers\Api\ModuleController::class, 'update']);
-        Route::delete('/{module}', [App\Http\Controllers\Api\ModuleController::class, 'destroy']);
-        Route::post('/reorder', [App\Http\Controllers\Api\ModuleController::class, 'reorder']);
         Route::get('/{module}/submodules', [App\Http\Controllers\Api\SubmoduleController::class, 'byModule']);
+        Route::middleware('admin')->group(function () {
+            Route::post('/', [App\Http\Controllers\Api\ModuleController::class, 'store']);
+            Route::put('/{module}', [App\Http\Controllers\Api\ModuleController::class, 'update']);
+            Route::delete('/{module}', [App\Http\Controllers\Api\ModuleController::class, 'destroy']);
+            Route::post('/reorder', [App\Http\Controllers\Api\ModuleController::class, 'reorder']);
+        });
     });
 
-    // Rutas de submódulos
+    // Rutas de submódulos (lectura abierta; escritura solo administradores)
     Route::prefix('submodules')->group(function () {
         Route::get('/', [App\Http\Controllers\Api\SubmoduleController::class, 'index']);
-        Route::post('/', [App\Http\Controllers\Api\SubmoduleController::class, 'store']);
         Route::get('/{submodule}', [App\Http\Controllers\Api\SubmoduleController::class, 'show']);
-        Route::put('/{submodule}', [App\Http\Controllers\Api\SubmoduleController::class, 'update']);
-        Route::delete('/{submodule}', [App\Http\Controllers\Api\SubmoduleController::class, 'destroy']);
-        Route::post('/reorder', [App\Http\Controllers\Api\SubmoduleController::class, 'reorder']);
+        Route::middleware('admin')->group(function () {
+            Route::post('/', [App\Http\Controllers\Api\SubmoduleController::class, 'store']);
+            Route::put('/{submodule}', [App\Http\Controllers\Api\SubmoduleController::class, 'update']);
+            Route::delete('/{submodule}', [App\Http\Controllers\Api\SubmoduleController::class, 'destroy']);
+            Route::post('/reorder', [App\Http\Controllers\Api\SubmoduleController::class, 'reorder']);
+        });
     });
 
-    // Rutas de permisos de usuario (legacy)
+    // Rutas de permisos de usuario (legacy): consultar los propios o, si es
+    // administrador, los de cualquiera; asignar/revocar solo administradores.
     Route::prefix('users/{user}/permissions')->group(function () {
-        Route::get('/', [App\Http\Controllers\Api\UserPermissionController::class, 'index']);
-        Route::get('/available', [App\Http\Controllers\Api\UserPermissionController::class, 'getAvailablePermissions']);
-        Route::post('/bulk', [App\Http\Controllers\Api\UserPermissionController::class, 'assignBulkPermissions']);
-        Route::post('/module', [App\Http\Controllers\Api\UserPermissionController::class, 'assignModulePermission']);
-        Route::post('/submodule', [App\Http\Controllers\Api\UserPermissionController::class, 'assignSubmodulePermission']);
-        Route::delete('/module/{module}', [App\Http\Controllers\Api\UserPermissionController::class, 'revokeModulePermission']);
-        Route::delete('/submodule/{submodule}', [App\Http\Controllers\Api\UserPermissionController::class, 'revokeSubmodulePermission']);
+        Route::get('/', [App\Http\Controllers\Api\UserPermissionController::class, 'index'])->middleware('admin:self');
+        Route::middleware('admin')->group(function () {
+            Route::get('/available', [App\Http\Controllers\Api\UserPermissionController::class, 'getAvailablePermissions']);
+            Route::post('/bulk', [App\Http\Controllers\Api\UserPermissionController::class, 'assignBulkPermissions']);
+            Route::post('/module', [App\Http\Controllers\Api\UserPermissionController::class, 'assignModulePermission']);
+            Route::post('/submodule', [App\Http\Controllers\Api\UserPermissionController::class, 'assignSubmodulePermission']);
+            Route::delete('/module/{module}', [App\Http\Controllers\Api\UserPermissionController::class, 'revokeModulePermission']);
+            Route::delete('/submodule/{submodule}', [App\Http\Controllers\Api\UserPermissionController::class, 'revokeSubmodulePermission']);
+        });
     });
 
     // =====================================================
@@ -132,40 +145,48 @@ Route::middleware('auth:sanctum')->group(function () {
     // Sistema de permisos: Usuario → Empresa → Aplicación → Módulo → Submódulo → Permisos
     // =====================================================
 
-    // Obtener jerarquía completa de una empresa
+    // Obtener jerarquía completa de una empresa (la usa WorkspaceContext para
+    // cualquier usuario, no solo el panel de administración)
     Route::get('/enterprises/{enterprise}/hierarchy', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'getEnterpriseHierarchy']);
 
-    // Gestión de tipos de permisos de submódulos
-    Route::post('/submodules/permission-types/bulk-defaults', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'createDefaultPermissionsForAll']);
+    // Gestión de tipos de permisos de submódulos (escritura solo administradores)
+    Route::post('/submodules/permission-types/bulk-defaults', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'createDefaultPermissionsForAll'])->middleware('admin');
     Route::prefix('submodules/{submodule}/permission-types')->group(function () {
         Route::get('/', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'getSubmodulePermissionTypes']);
-        Route::post('/', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'addPermissionType']);
-        Route::post('/defaults', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'createDefaultPermissions']);
-        Route::delete('/{permissionType}', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'removePermissionType']);
+        Route::middleware('admin')->group(function () {
+            Route::post('/', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'addPermissionType']);
+            Route::post('/defaults', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'createDefaultPermissions']);
+            Route::delete('/{permissionType}', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'removePermissionType']);
+        });
     });
 
     // Permisos jerárquicos por usuario
     Route::prefix('users/{user}/hierarchical-permissions')->group(function () {
-        // Obtener todos los permisos del usuario
-        Route::get('/', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'getUserPermissions']);
+        // Obtener todos los permisos del usuario: el propio usuario
+        // (WorkspaceContext arma el sidebar con esto) o un administrador.
+        Route::get('/', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'getUserPermissions'])->middleware('admin:self');
 
-        // Asignación masiva de permisos
-        Route::post('/bulk', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'bulkAssignPermissions']);
+        // Asignar/revocar: solo administradores. Sin este guard cualquier
+        // usuario autenticado podía otorgarse a sí mismo cualquier permiso.
+        Route::middleware('admin')->group(function () {
+            // Asignación masiva de permisos
+            Route::post('/bulk', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'bulkAssignPermissions']);
 
-        // Acceso a empresas
-        Route::post('/enterprise', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'assignEnterpriseAccess']);
+            // Acceso a empresas
+            Route::post('/enterprise', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'assignEnterpriseAccess']);
 
-        // Acceso a aplicaciones
-        Route::post('/application', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'assignApplicationAccess']);
+            // Acceso a aplicaciones
+            Route::post('/application', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'assignApplicationAccess']);
 
-        // Acceso a módulos
-        Route::post('/module', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'assignModuleAccess']);
+            // Acceso a módulos
+            Route::post('/module', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'assignModuleAccess']);
 
-        // Acceso a submódulos
-        Route::post('/submodule', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'assignSubmoduleAccess']);
+            // Acceso a submódulos
+            Route::post('/submodule', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'assignSubmoduleAccess']);
 
-        // Permisos específicos de submódulo
-        Route::post('/submodule-permission', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'assignSubmodulePermission']);
+            // Permisos específicos de submódulo
+            Route::post('/submodule-permission', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'assignSubmodulePermission']);
+        });
     });
 
     // Rutas específicas de Splendid Farms
