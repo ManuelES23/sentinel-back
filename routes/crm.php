@@ -247,4 +247,16 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::delete('integraciones/outlook/desconectar', [
         App\Http\Controllers\Api\CRM\OutlookIntegracionController::class, 'desconectar'
     ]);
+
+    // -------------------------------------------------
+    // PERFILES DE PERMISOS
+    // Vendedor / gerencia / administración aplicados de un paso a un
+    // usuario. Solo administradores (se valida en el controlador).
+    // -------------------------------------------------
+    Route::get('perfiles', [
+        App\Http\Controllers\Api\CRM\PerfilPermisosController::class, 'index'
+    ]);
+    Route::post('perfiles/usuarios/{user}', [
+        App\Http\Controllers\Api\CRM\PerfilPermisosController::class, 'aplicar'
+    ])->whereNumber('user');
 });

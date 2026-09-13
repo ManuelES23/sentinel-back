@@ -38,6 +38,9 @@ class AgendaController extends CrmBaseController
 
     protected const TIPOS_AGENDA = ['llamada', 'visita', 'reunion', 'tarea', 'correo'];
 
+    /** Tope de pendientes vencidos devueltos de una vez (los más antiguos primero). */
+    protected const LIMITE_VENCIDOS = 100;
+
     /** Agenda tiene 'tarea'; ActividadController::TIPOS_ACTIVIDAD no -- se traduce a 'nota'. */
     protected const TIPO_ACTIVIDAD_PARA = [
         'llamada' => 'llamada',
@@ -47,7 +50,7 @@ class AgendaController extends CrmBaseController
         'tarea' => 'nota',
     ];
 
-    /** GET /crm/agenda?desde=&hasta=&vendedor_id=&tipo=&completado= */
+    /** GET /crm/agenda?desde=&hasta=&vendedor_id=&tipo=&completado=&vencidos= */
     public function index(Request $request): JsonResponse
     {
         $empresaId = $this->getEmpresaId();
@@ -64,9 +67,26 @@ class AgendaController extends CrmBaseController
             'hasta' => 'nullable|date',
             'tipo' => ['nullable', Rule::in(self::TIPOS_AGENDA)],
             'completado' => 'nullable|boolean',
+            'vencidos' => 'nullable|boolean',
         ]);
 
         $vendedorId = $this->resolverVendedorId($empresaId, (int) $validated['vendedor_id']);
+
+        // Pendientes vencidos: eventos no completados cuya hora de fin ya
+        // pasó, sin importar el rango. Sin esto, la vista de lista (que
+        // arranca en "hoy") hacía desaparecer lo que no se hizo ayer.
+        if ($request->boolean('vencidos')) {
+            $vencidos = CrmAgenda::with('vendedor:id,nombre')
+                ->where('empresa_id', $empresaId)
+                ->where('vendedor_id', $vendedorId)
+                ->where('completado', false)
+                ->where('fecha_fin', '<', now())
+                ->orderBy('fecha_inicio')
+                ->limit(self::LIMITE_VENCIDOS)
+                ->get();
+
+            return $this->jsonSuccess($vencidos);
+        }
         $desde = $validated['desde'] ?? now()->startOfDay()->toDateTimeString();
         $hasta = $validated['hasta'] ?? now()->addDays(30)->endOfDay()->toDateTimeString();
 

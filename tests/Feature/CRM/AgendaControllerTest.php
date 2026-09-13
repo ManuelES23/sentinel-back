@@ -471,4 +471,63 @@ class AgendaControllerTest extends TestCase
 
         $response->assertStatus(404);
     }
+
+    // --- Pendientes vencidos (fase 1 de la reorganización del CRM) ---
+
+    public function test_vencidos_devuelve_solo_pendientes_cuya_hora_de_fin_ya_paso(): void
+    {
+        $this->otorgarPermisosAgenda(['ver', 'crear']);
+        $base = ['empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id, 'tipo' => 'llamada'];
+
+        CrmAgenda::create($base + [
+            'titulo' => 'Vencido de ayer',
+            'fecha_inicio' => now()->subDay(), 'fecha_fin' => now()->subDay()->addHour(),
+        ]);
+        CrmAgenda::create($base + [
+            'titulo' => 'Vencido de hace una semana',
+            'fecha_inicio' => now()->subWeek(), 'fecha_fin' => now()->subWeek()->addHour(),
+        ]);
+        CrmAgenda::create($base + [
+            'titulo' => 'Completado de ayer', 'completado' => true,
+            'fecha_inicio' => now()->subDay(), 'fecha_fin' => now()->subDay()->addHour(),
+        ]);
+        CrmAgenda::create($base + [
+            'titulo' => 'Futuro',
+            'fecha_inicio' => now()->addDay(), 'fecha_fin' => now()->addDay()->addHour(),
+        ]);
+
+        $response = $this->withHeaders($this->crmHeaders())
+            ->getJson("/api/crm/agenda?vendedor_id={$this->vendedor->id}&vencidos=1");
+
+        $response->assertOk()->assertJsonCount(2, 'data')
+            ->assertJsonPath('data.0.titulo', 'Vencido de hace una semana')
+            ->assertJsonPath('data.1.titulo', 'Vencido de ayer');
+    }
+
+    public function test_vencidos_no_incluye_eventos_de_otro_vendedor(): void
+    {
+        $this->otorgarPermisosAgenda(['ver', 'crear']);
+        $otroVendedor = CrmVendedor::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Otro vendedor']);
+        CrmAgenda::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $otroVendedor->id,
+            'tipo' => 'llamada', 'titulo' => 'Vencido ajeno',
+            'fecha_inicio' => now()->subDay(), 'fecha_fin' => now()->subDay()->addHour(),
+        ]);
+
+        $response = $this->withHeaders($this->crmHeaders())
+            ->getJson("/api/crm/agenda?vendedor_id={$this->vendedor->id}&vencidos=1");
+
+        $response->assertOk()->assertJsonCount(0, 'data');
+    }
+
+    public function test_vencidos_con_solo_ver_rechaza_vendedor_ajeno(): void
+    {
+        $this->otorgarPermisosAgenda(['ver']);
+        $this->crearVendedorPropio();
+
+        $response = $this->withHeaders($this->crmHeaders())
+            ->getJson("/api/crm/agenda?vendedor_id={$this->vendedor->id}&vencidos=1");
+
+        $response->assertStatus(403);
+    }
 }
