@@ -68,6 +68,9 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::patch('prospectos/{prospecto}/asignar-vendedor', [
         App\Http\Controllers\Api\CRM\ProspectoController::class, 'asignarVendedor'
     ]);
+    Route::post('prospectos/rapido', [
+        App\Http\Controllers\Api\CRM\ProspectoController::class, 'storeRapido'
+    ]);
     Route::apiResource('prospectos', App\Http\Controllers\Api\CRM\ProspectoController::class)
         ->parameters(['prospectos' => 'prospecto']);
 
