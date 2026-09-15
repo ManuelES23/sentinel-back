@@ -78,6 +78,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // role=admin y saltarse el resto de los guards de administración.
     Route::middleware('admin')->group(function () {
         Route::apiResource('users', App\Http\Controllers\Api\UserController::class);
+        Route::post('users/{user}/reset-password', [App\Http\Controllers\Api\UserController::class, 'resetPassword']);
         Route::post('users/{user}/enterprises', [App\Http\Controllers\Api\UserController::class, 'assignEnterprises']);
         Route::post('users/{user}/enterprises/{enterprise}/applications', [App\Http\Controllers\Api\UserController::class, 'assignApplications']);
         Route::get('users-employees-available', [App\Http\Controllers\Api\UserController::class, 'employeesWithoutUser']);

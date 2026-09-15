@@ -6,11 +6,14 @@ use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Models\Employee;
 use App\Models\UserEnterpriseAccess;
+use App\Models\ActivityLog;
 use Illuminate\Auth\Access\Response as AccessResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
 class UserController extends Controller
@@ -148,6 +151,52 @@ class UserController extends Controller
 
         return response()->json([
             'message' => 'Usuario eliminado exitosamente'
+        ]);
+    }
+
+    /**
+     * Restablece la contraseña de un usuario: escrita por el admin (manual) o
+     * generada por el sistema (generate, se devuelve una sola vez). Cierra todas
+     * las sesiones del usuario y opcionalmente lo obliga a cambiarla al entrar.
+     */
+    public function resetPassword(Request $request, string $id)
+    {
+        $user = User::findOrFail($id);
+
+        $permiso = Gate::inspect('resetPassword', $user);
+        if ($permiso->denied()) {
+            return $this->prohibido($permiso);
+        }
+
+        $validated = $request->validate([
+            'mode' => 'required|in:manual,generate',
+            'password' => 'required_if:mode,manual|nullable|string|min:8|confirmed',
+            'force_change' => 'required|boolean',
+        ]);
+
+        $generada = $validated['mode'] === 'generate';
+        // Sin símbolos: la temporal suele dictarse o copiarse a mano.
+        $nueva = $generada ? Str::password(12, symbols: false) : $validated['password'];
+        $forzar = (bool) $validated['force_change'];
+
+        DB::transaction(function () use ($user, $nueva, $forzar, $validated) {
+            $user->forceFill([
+                'password' => Hash::make($nueva),
+                'must_change_password' => $forzar,
+            ])->save();
+
+            $user->tokens()->delete();
+
+            ActivityLog::log('password_reset', User::class, $user->id, null, [
+                'mode' => $validated['mode'],
+                'force_change' => $forzar,
+            ]);
+        });
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Contraseña restablecida. Se cerraron las sesiones activas del usuario.',
+            'data' => ['must_change_password' => $forzar] + ($generada ? ['temporary_password' => $nueva] : []),
         ]);
     }
 
