@@ -753,6 +753,9 @@ Route::middleware('auth:sanctum')->group(function () {
     // Accesibles solo para usuarios administradores
     // =====================================================
     Route::middleware('admin')->prefix('admin')->group(function () {
+        // Resumen del panel (Dashboard)
+        Route::get('dashboard', [App\Http\Controllers\Api\Admin\DashboardController::class, 'index']);
+
         // Logs de actividad
         Route::get('logs', [App\Http\Controllers\Api\Admin\ActivityLogController::class, 'index']);
         Route::get('logs/stats', [App\Http\Controllers\Api\Admin\ActivityLogController::class, 'stats']);
