@@ -35,7 +35,8 @@ class ProduccionEmpaqueController extends Controller
         'proceso.recepcion.salidaCampo.lote:id,nombre,numero_lote,codigo',
         'proceso.recepcion.salidaCampo.variedad:id,nombre',
         'variedad:id,nombre',
-        'recipe:id,name,code,recipe_type,peso_pieza,output_quantity,output_product_id',
+        'recipe:id,name,code,recipe_type,output_quantity,output_product_id',
+        'recipe.agroDetails:id,recipe_id,peso_pieza',
         'recipe.items:id,recipe_id,group_key,quantity',
         'recipe.outputProduct:id,name,brand_id',
         'recipe.outputProduct.brand:id,name,code',
@@ -221,9 +222,10 @@ class ProduccionEmpaqueController extends Controller
         $validated['is_cola'] = (bool) ($validated['is_cola'] ?? false);
 
         if (empty($validated['peso_neto_kg']) && !empty($validated['recipe_id'])) {
-            $recipe = Recipe::find($validated['recipe_id']);
-            if ($recipe && (float) $recipe->peso_pieza > 0) {
-                $validated['peso_neto_kg'] = round(((int) $validated['total_cajas']) * (float) $recipe->peso_pieza, 2);
+            // peso_pieza vive en recipe_agro_details desde la generalización de Recetas.
+            $pesoPieza = (float) Recipe::find($validated['recipe_id'])?->agroDetails?->peso_pieza;
+            if ($pesoPieza > 0) {
+                $validated['peso_neto_kg'] = round(((int) $validated['total_cajas']) * $pesoPieza, 2);
             }
         }
 
@@ -1217,9 +1219,9 @@ class ProduccionEmpaqueController extends Controller
             // Auto-calcular peso si hay receta en esta entrada
             $recipeId = $validated['recipe_id'] ?? $produccion->recipe_id;
             if (empty($validated['peso_neto_kg']) && $recipeId) {
-                $recipe = Recipe::find($recipeId);
-                if ($recipe && $recipe->peso_pieza > 0) {
-                    $validated['peso_neto_kg'] = round($validated['total_cajas'] * (float) $recipe->peso_pieza, 2);
+                $pesoPieza = (float) Recipe::find($recipeId)?->agroDetails?->peso_pieza;
+                if ($pesoPieza > 0) {
+                    $validated['peso_neto_kg'] = round($validated['total_cajas'] * $pesoPieza, 2);
                 }
             }
 
