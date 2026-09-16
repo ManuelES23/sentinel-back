@@ -244,6 +244,7 @@ class ProfileController extends Controller
 
         $user->update([
             'password' => Hash::make($validated['password']),
+            'must_change_password' => false,
         ]);
 
         return response()->json([

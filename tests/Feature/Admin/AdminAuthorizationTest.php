@@ -153,8 +153,6 @@ class AdminAuthorizationTest extends TestCase
             ['POST', '/api/users', ['name' => 'X', 'email' => 'x@example.com', 'password' => 'password123']],
             ['PUT', "/api/users/{$u}", ['role' => 'admin']],
             ['DELETE', "/api/users/{$this->admin->id}", []],
-            ['POST', "/api/users/{$u}/enterprises", ['enterprise_ids' => [$e]]],
-            ['POST', "/api/users/{$u}/enterprises/{$e}/applications", ['application_ids' => [$a]]],
             ['GET', '/api/users-employees-available', []],
         ];
 

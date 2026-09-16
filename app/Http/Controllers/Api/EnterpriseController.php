@@ -3,7 +3,9 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Middleware\EnsureUserIsAdmin;
 use App\Models\Enterprise;
+use App\Models\UserEnterpriseAccess;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Storage;
@@ -18,10 +20,17 @@ class EnterpriseController extends Controller
     public function index(Request $request): JsonResponse
     {
         // Si es admin, mostrar todas las empresas con más detalles
-        if ($request->user() && $request->user()->role === 'admin') {
+        if ($request->user() && EnsureUserIsAdmin::esAdmin($request->user())) {
+            // Los accesos reales viven en user_enterprise_access; Enterprise::users()
+            // apunta al pivote legacy user_enterprises y daría conteos falsos.
+            $usuariosPorEmpresa = UserEnterpriseAccess::where('is_active', true)
+                ->selectRaw('enterprise_id, COUNT(DISTINCT user_id) as total')
+                ->groupBy('enterprise_id')
+                ->pluck('total', 'enterprise_id');
+
             $enterprises = Enterprise::with('activeApplications')
                 ->get()
-                ->map(function ($enterprise) {
+                ->map(function ($enterprise) use ($usuariosPorEmpresa) {
                     return [
                         'id' => $enterprise->id,
                         'slug' => $enterprise->slug,
@@ -32,7 +41,8 @@ class EnterpriseController extends Controller
                         'color' => $enterprise->color,
                         'active' => (bool) $enterprise->is_active,
                         'created_at' => $enterprise->created_at,
-                        'applications_count' => $enterprise->activeApplications->count()
+                        'applications_count' => $enterprise->activeApplications->count(),
+                        'users_count' => (int) ($usuariosPorEmpresa[$enterprise->id] ?? 0),
                     ];
                 });
 
@@ -148,7 +158,7 @@ class EnterpriseController extends Controller
         }
 
         // Si es admin, devolver detalles completos
-        if ($request->user() && $request->user()->role === 'admin') {
+        if ($request->user() && EnsureUserIsAdmin::esAdmin($request->user())) {
             return response()->json([
                 'status' => 'success',
                 'data' => [

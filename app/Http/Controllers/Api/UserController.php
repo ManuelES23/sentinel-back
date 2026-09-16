@@ -5,8 +5,15 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Models\Employee;
+use App\Models\UserEnterpriseAccess;
+use App\Models\ActivityLog;
+use Illuminate\Auth\Access\Response as AccessResponse;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
 class UserController extends Controller
@@ -16,16 +23,24 @@ class UserController extends Controller
      */
     public function index()
     {
-        $users = User::with(['enterprises', 'applications'])->get()->map(function ($user) {
+        // Las empresas asignadas viven en user_enterprise_access (donde escribe el
+        // modal de permisos jerárquicos), no en el pivote legacy user_enterprises.
+        $empresasPorUsuario = UserEnterpriseAccess::where('is_active', true)
+            ->get(['user_id', 'enterprise_id'])
+            ->groupBy('user_id');
+
+        $users = User::with('applications')->get()->map(function ($user) use ($empresasPorUsuario) {
             return [
                 'id' => $user->id,
                 'name' => $user->name,
                 'email' => $user->email,
                 'phone' => $user->phone ?? null,
                 'role' => $user->role ?? 'user',
+                'must_change_password' => (bool) $user->must_change_password,
                 'created_at' => $user->created_at,
                 'permissions' => [
-                    'enterprises' => $user->enterprises->pluck('id')->toArray(),
+                    'enterprises' => ($empresasPorUsuario->get($user->id) ?? collect())
+                        ->pluck('enterprise_id')->unique()->values()->toArray(),
                     'applications' => $user->applications->groupBy('enterprise_id')->map(function ($apps) {
                         return $apps->pluck('id')->toArray();
                     })->toArray()
@@ -46,9 +61,14 @@ class UserController extends Controller
             'email' => 'required|string|email|max:255|unique:users',
             'password' => 'required|string|min:8',
             'phone' => 'nullable|string|max:20',
-            'role' => 'nullable|in:user,admin',
+            'role' => 'nullable|in:user,admin,superadmin',
             'employee_id' => 'nullable|exists:employees,id',
         ]);
+
+        $permiso = Gate::inspect('create', [User::class, $validated['role'] ?? null]);
+        if ($permiso->denied()) {
+            return $this->prohibido($permiso);
+        }
 
         $employeeId = $validated['employee_id'] ?? null;
         unset($validated['employee_id']);
@@ -86,16 +106,25 @@ class UserController extends Controller
     {
         $user = User::findOrFail($id);
 
+        $permiso = Gate::inspect('update', $user);
+        if ($permiso->denied()) {
+            return $this->prohibido($permiso);
+        }
+
+        // La contraseña ya no se edita aquí: la única vía administrativa es
+        // POST /users/{user}/reset-password. Si llega "password", se ignora.
         $validated = $request->validate([
             'name' => 'sometimes|string|max:255',
             'email' => ['sometimes', 'string', 'email', 'max:255', Rule::unique('users')->ignore($user->id)],
-            'password' => 'sometimes|string|min:8',
             'phone' => 'nullable|string|max:20',
-            'role' => 'sometimes|in:user,admin',
+            'role' => 'sometimes|in:user,admin,superadmin',
         ]);
 
-        if (isset($validated['password'])) {
-            $validated['password'] = Hash::make($validated['password']);
+        if (isset($validated['role']) && $validated['role'] !== $user->role) {
+            $permiso = Gate::inspect('changeRole', [$user, $validated['role']]);
+            if ($permiso->denied()) {
+                return $this->prohibido($permiso);
+            }
         }
 
         $user->update($validated);
@@ -112,6 +141,12 @@ class UserController extends Controller
     public function destroy(string $id)
     {
         $user = User::findOrFail($id);
+
+        $permiso = Gate::inspect('delete', $user);
+        if ($permiso->denied()) {
+            return $this->prohibido($permiso);
+        }
+
         $user->delete();
 
         return response()->json([
@@ -120,43 +155,48 @@ class UserController extends Controller
     }
 
     /**
-     * Assign enterprises to user
+     * Restablece la contraseña de un usuario: escrita por el admin (manual) o
+     * generada por el sistema (generate, se devuelve una sola vez). Cierra todas
+     * las sesiones del usuario y opcionalmente lo obliga a cambiarla al entrar.
      */
-    public function assignEnterprises(Request $request, string $id)
+    public function resetPassword(Request $request, string $id)
     {
         $user = User::findOrFail($id);
-        
+
+        $permiso = Gate::inspect('resetPassword', $user);
+        if ($permiso->denied()) {
+            return $this->prohibido($permiso);
+        }
+
         $validated = $request->validate([
-            'enterprise_ids' => 'required|array',
-            'enterprise_ids.*' => 'exists:enterprises,id',
+            'mode' => 'required|in:manual,generate',
+            'password' => 'required_if:mode,manual|nullable|string|min:8|confirmed',
+            'force_change' => 'required|boolean',
         ]);
 
-        $user->enterprises()->sync($validated['enterprise_ids']);
+        $generada = $validated['mode'] === 'generate';
+        // Sin símbolos: la temporal suele dictarse o copiarse a mano.
+        $nueva = $generada ? Str::password(12, symbols: false) : $validated['password'];
+        $forzar = (bool) $validated['force_change'];
+
+        DB::transaction(function () use ($user, $nueva, $forzar, $validated) {
+            $user->forceFill([
+                'password' => Hash::make($nueva),
+                'must_change_password' => $forzar,
+            ])->save();
+
+            $user->tokens()->delete();
+
+            ActivityLog::log('password_reset', User::class, $user->id, null, [
+                'mode' => $validated['mode'],
+                'force_change' => $forzar,
+            ]);
+        });
 
         return response()->json([
-            'message' => 'Empresas asignadas exitosamente',
-            'user' => $user->load('enterprises')
-        ]);
-    }
-
-    /**
-     * Assign applications to user for specific enterprise
-     */
-    public function assignApplications(Request $request, string $userId, string $enterpriseId)
-    {
-        $user = User::findOrFail($userId);
-        
-        $validated = $request->validate([
-            'application_ids' => 'required|array',
-            'application_ids.*' => 'exists:applications,id',
-        ]);
-
-        // Sync applications for this user and enterprise
-        $user->applications()->syncWithoutDetaching($validated['application_ids']);
-
-        return response()->json([
-            'message' => 'Aplicaciones asignadas exitosamente',
-            'user' => $user->load('applications')
+            'success' => true,
+            'message' => 'Contraseña restablecida. Se cerraron las sesiones activas del usuario.',
+            'data' => ['must_change_password' => $forzar] + ($generada ? ['temporary_password' => $nueva] : []),
         ]);
     }
 
@@ -191,5 +231,16 @@ class UserController extends Controller
         });
 
         return response()->json($employees);
+    }
+
+    /**
+     * 403 con el formato de error estándar del proyecto y el motivo de la policy.
+     */
+    private function prohibido(AccessResponse $permiso): JsonResponse
+    {
+        return response()->json([
+            'status' => 'error',
+            'message' => $permiso->message() ?? 'No tienes permiso para realizar esta acción.',
+        ], 403);
     }
 }
