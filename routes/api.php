@@ -79,8 +79,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware('admin')->group(function () {
         Route::apiResource('users', App\Http\Controllers\Api\UserController::class);
         Route::post('users/{user}/reset-password', [App\Http\Controllers\Api\UserController::class, 'resetPassword']);
-        Route::post('users/{user}/enterprises', [App\Http\Controllers\Api\UserController::class, 'assignEnterprises']);
-        Route::post('users/{user}/enterprises/{enterprise}/applications', [App\Http\Controllers\Api\UserController::class, 'assignApplications']);
         Route::get('users-employees-available', [App\Http\Controllers\Api\UserController::class, 'employeesWithoutUser']);
     });
 
@@ -753,9 +751,13 @@ Route::middleware('auth:sanctum')->group(function () {
     // Accesibles solo para usuarios administradores
     // =====================================================
     Route::middleware('admin')->prefix('admin')->group(function () {
+        // Resumen del panel (Dashboard)
+        Route::get('dashboard', [App\Http\Controllers\Api\Admin\DashboardController::class, 'index']);
+
         // Logs de actividad
         Route::get('logs', [App\Http\Controllers\Api\Admin\ActivityLogController::class, 'index']);
         Route::get('logs/stats', [App\Http\Controllers\Api\Admin\ActivityLogController::class, 'stats']);
+        Route::get('logs/models', [App\Http\Controllers\Api\Admin\ActivityLogController::class, 'models']);
         Route::get('logs/{id}', [App\Http\Controllers\Api\Admin\ActivityLogController::class, 'show']);
 
         // Horarios de trabajo globales
