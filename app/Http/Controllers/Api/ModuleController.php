@@ -16,7 +16,7 @@ class ModuleController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $query = Module::with(['application', 'submodules'])
+        $query = Module::with(['application.enterprise', 'submodules'])
             ->withCount('submodules');
 
         // Filtrar por aplicación si se especifica

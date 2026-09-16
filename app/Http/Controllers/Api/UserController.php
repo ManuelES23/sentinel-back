@@ -201,47 +201,6 @@ class UserController extends Controller
     }
 
     /**
-     * Assign enterprises to user
-     */
-    public function assignEnterprises(Request $request, string $id)
-    {
-        $user = User::findOrFail($id);
-        
-        $validated = $request->validate([
-            'enterprise_ids' => 'required|array',
-            'enterprise_ids.*' => 'exists:enterprises,id',
-        ]);
-
-        $user->enterprises()->sync($validated['enterprise_ids']);
-
-        return response()->json([
-            'message' => 'Empresas asignadas exitosamente',
-            'user' => $user->load('enterprises')
-        ]);
-    }
-
-    /**
-     * Assign applications to user for specific enterprise
-     */
-    public function assignApplications(Request $request, string $userId, string $enterpriseId)
-    {
-        $user = User::findOrFail($userId);
-        
-        $validated = $request->validate([
-            'application_ids' => 'required|array',
-            'application_ids.*' => 'exists:applications,id',
-        ]);
-
-        // Sync applications for this user and enterprise
-        $user->applications()->syncWithoutDetaching($validated['application_ids']);
-
-        return response()->json([
-            'message' => 'Aplicaciones asignadas exitosamente',
-            'user' => $user->load('applications')
-        ]);
-    }
-
-    /**
      * Get employees without linked user account
      */
     public function employeesWithoutUser(Request $request)
