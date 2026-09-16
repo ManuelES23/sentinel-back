@@ -18,9 +18,13 @@ return Application::configure(basePath: dirname(__DIR__))
         // de Apache (OOM, timeout) donde el pipeline de Laravel no alcanza a correr.
         $middleware->prepend(\Illuminate\Http\Middleware\HandleCors::class);
 
+        // Bloquea la API a usuarios con cambio de contraseña pendiente.
+        $middleware->appendToGroup('api', \App\Http\Middleware\EnsurePasswordIsChanged::class);
+
         $middleware->alias([
             'device.token' => \App\Http\Middleware\AuthenticateDeviceToken::class,
             'admin' => \App\Http\Middleware\EnsureUserIsAdmin::class,
+            'password.changed' => \App\Http\Middleware\EnsurePasswordIsChanged::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {

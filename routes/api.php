@@ -78,13 +78,18 @@ Route::middleware('auth:sanctum')->group(function () {
     // role=admin y saltarse el resto de los guards de administración.
     Route::middleware('admin')->group(function () {
         Route::apiResource('users', App\Http\Controllers\Api\UserController::class);
+        Route::post('users/{user}/reset-password', [App\Http\Controllers\Api\UserController::class, 'resetPassword']);
         Route::post('users/{user}/enterprises', [App\Http\Controllers\Api\UserController::class, 'assignEnterprises']);
         Route::post('users/{user}/enterprises/{enterprise}/applications', [App\Http\Controllers\Api\UserController::class, 'assignApplications']);
         Route::get('users-employees-available', [App\Http\Controllers\Api\UserController::class, 'employeesWithoutUser']);
     });
 
-    // Rutas de empresas
-    Route::apiResource('enterprises', App\Http\Controllers\Api\EnterpriseController::class);
+    // Rutas de empresas: lectura para cualquier usuario (el selector de empresa
+    // la usa), escritura solo administradores.
+    Route::apiResource('enterprises', App\Http\Controllers\Api\EnterpriseController::class)->only(['index', 'show']);
+    Route::middleware('admin')->group(function () {
+        Route::apiResource('enterprises', App\Http\Controllers\Api\EnterpriseController::class)->only(['store', 'update', 'destroy']);
+    });
     Route::get('enterprises/{enterprise}/logo-data', [App\Http\Controllers\Api\EnterpriseController::class, 'logoData']);
     Route::get('enterprises/{enterprise}/applications', [App\Http\Controllers\Api\EnterpriseController::class, 'applications']);
     Route::get('enterprises/{enterprise}/profile', [App\Http\Controllers\Api\EnterpriseController::class, 'profile']);
@@ -747,7 +752,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // RUTAS DE ADMINISTRACIÓN GLOBAL
     // Accesibles solo para usuarios administradores
     // =====================================================
-    Route::prefix('admin')->group(function () {
+    Route::middleware('admin')->prefix('admin')->group(function () {
         // Logs de actividad
         Route::get('logs', [App\Http\Controllers\Api\Admin\ActivityLogController::class, 'index']);
         Route::get('logs/stats', [App\Http\Controllers\Api\Admin\ActivityLogController::class, 'stats']);

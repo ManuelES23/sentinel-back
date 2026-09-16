@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Middleware\EnsureUserIsAdmin;
 use App\Models\Enterprise;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -18,7 +19,7 @@ class EnterpriseController extends Controller
     public function index(Request $request): JsonResponse
     {
         // Si es admin, mostrar todas las empresas con más detalles
-        if ($request->user() && $request->user()->role === 'admin') {
+        if ($request->user() && EnsureUserIsAdmin::esAdmin($request->user())) {
             $enterprises = Enterprise::with('activeApplications')
                 ->get()
                 ->map(function ($enterprise) {
@@ -148,7 +149,7 @@ class EnterpriseController extends Controller
         }
 
         // Si es admin, devolver detalles completos
-        if ($request->user() && $request->user()->role === 'admin') {
+        if ($request->user() && EnsureUserIsAdmin::esAdmin($request->user())) {
             return response()->json([
                 'status' => 'success',
                 'data' => [

@@ -42,6 +42,7 @@ class AuthController extends Controller
                 'name' => $user->name,
                 'email' => $user->email,
                 'role' => $user->role ?? 'user',
+                'must_change_password' => (bool) $user->must_change_password,
             ],
             'token' => $token,
             'permissions' => $permissions
@@ -98,6 +99,7 @@ class AuthController extends Controller
                 'name' => $user->name,
                 'email' => $user->email,
                 'role' => $user->role ?? 'user',
+                'must_change_password' => (bool) $user->must_change_password,
             ],
             'permissions' => $permissions
         ]);
