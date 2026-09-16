@@ -69,6 +69,15 @@ class UserPolicy
             : Response::allow();
     }
 
+    /**
+     * Asignar o revocar accesos y permisos: un admin no puede dejar a un
+     * superadmin fuera del workspace quitándole sus empresas.
+     */
+    public function managePermissions(User $actor, User $target): Response
+    {
+        return $this->gestionar($actor, $target);
+    }
+
     private function gestionar(User $actor, User $target): Response
     {
         if (! EnsureUserIsAdmin::esAdmin($actor)) {
