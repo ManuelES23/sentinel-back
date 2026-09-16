@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Middleware\EnsureUserIsAdmin;
 use App\Models\ActivityLog;
 use App\Models\Application;
 use App\Models\Enterprise;
@@ -26,7 +27,11 @@ class DashboardController extends Controller
         $conEmpresa = UserEnterpriseAccess::where('is_active', true)->select('user_id');
 
         $alertas = collect([
-            'users_without_enterprise' => User::whereNotIn('id', $conEmpresa)->count(),
+            // Usuarios sin empresa que no sean administradores (los administradores
+            // gestionan el sistema y normalmente carecen de empresa asignada).
+            'users_without_enterprise' => User::whereNotIn('role', EnsureUserIsAdmin::ROLES_ADMIN)
+                ->whereNotIn('id', $conEmpresa)
+                ->count(),
             'users_must_change_password' => User::where('must_change_password', true)->count(),
         ])
             ->filter(fn (int $count) => $count > 0)

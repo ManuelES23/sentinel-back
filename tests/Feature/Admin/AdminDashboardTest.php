@@ -126,4 +126,27 @@ class AdminDashboardTest extends TestCase
         $this->assertStringNotContainsString('secreto', $json);
         $this->assertStringNotContainsString('AgenteSecreto', $json);
     }
+
+    public function test_la_alerta_sin_empresa_no_cuenta_administradores(): void
+    {
+        $empresa = $this->empresa('dash-roles');
+        User::all()->each(fn (User $u) => UserEnterpriseAccess::create([
+            'user_id' => $u->id, 'enterprise_id' => $empresa->id, 'is_active' => true,
+        ]));
+
+        // Administradores sin empresa: no deben generar alerta.
+        User::factory()->create(['role' => 'admin']);
+        User::factory()->create(['role' => 'superadmin']);
+
+        Sanctum::actingAs($this->admin);
+        $this->getJson('/api/admin/dashboard')->assertOk()->assertJsonPath('data.alerts', []);
+
+        // Un usuario normal sin empresa sí cuenta.
+        User::factory()->create(['role' => 'user']);
+
+        $this->assertSame(
+            [['key' => 'users_without_enterprise', 'count' => 1]],
+            $this->getJson('/api/admin/dashboard')->assertOk()->json('data.alerts')
+        );
+    }
 }
