@@ -2,7 +2,6 @@
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Broadcast;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -16,16 +15,9 @@ use Illuminate\Support\Facades\Route;
 |
 */
 
-// Ruta de autenticación para broadcasting (WebSockets)
-// Logging para debug de autenticación de broadcasting
+// Ruta de autenticación para broadcasting (WebSockets). No registrar las
+// cabeceras: incluyen el token Bearer del usuario.
 Route::post('broadcasting/auth', function (Request $request) {
-    Log::info('Broadcasting Auth Request', [
-        'user' => $request->user() ? $request->user()->id : 'No user',
-        'channel' => $request->input('channel_name'),
-        'socket_id' => $request->input('socket_id'),
-        'headers' => $request->headers->all(),
-    ]);
-
     return Broadcast::auth($request);
 })->middleware('auth:sanctum');
 
@@ -130,11 +122,12 @@ Route::middleware('auth:sanctum')->group(function () {
     });
 
     // Rutas de permisos de usuario (legacy): consultar los propios o, si es
-    // administrador, los de cualquiera; asignar/revocar solo administradores.
+    // administrador, los de cualquiera; asignar/revocar solo administradores
+    // que puedan gestionar a ese usuario (UserPolicy).
     Route::prefix('users/{user}/permissions')->group(function () {
         Route::get('/', [App\Http\Controllers\Api\UserPermissionController::class, 'index'])->middleware('admin:self');
-        Route::middleware('admin')->group(function () {
-            Route::get('/available', [App\Http\Controllers\Api\UserPermissionController::class, 'getAvailablePermissions']);
+        Route::get('/available', [App\Http\Controllers\Api\UserPermissionController::class, 'getAvailablePermissions'])->middleware('admin');
+        Route::middleware('admin:gestiona')->group(function () {
             Route::post('/bulk', [App\Http\Controllers\Api\UserPermissionController::class, 'assignBulkPermissions']);
             Route::post('/module', [App\Http\Controllers\Api\UserPermissionController::class, 'assignModulePermission']);
             Route::post('/submodule', [App\Http\Controllers\Api\UserPermissionController::class, 'assignSubmodulePermission']);
@@ -169,9 +162,10 @@ Route::middleware('auth:sanctum')->group(function () {
         // (WorkspaceContext arma el sidebar con esto) o un administrador.
         Route::get('/', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'getUserPermissions'])->middleware('admin:self');
 
-        // Asignar/revocar: solo administradores. Sin este guard cualquier
-        // usuario autenticado podía otorgarse a sí mismo cualquier permiso.
-        Route::middleware('admin')->group(function () {
+        // Asignar/revocar: solo administradores que puedan gestionar a ese
+        // usuario (UserPolicy: un admin no toca a un superadmin). Sin este guard
+        // cualquier usuario autenticado podía otorgarse cualquier permiso.
+        Route::middleware('admin:gestiona')->group(function () {
             // Asignación masiva de permisos
             Route::post('/bulk', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'bulkAssignPermissions']);
 
