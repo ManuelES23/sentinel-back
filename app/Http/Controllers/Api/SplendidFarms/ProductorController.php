@@ -36,7 +36,7 @@ class ProductorController extends Controller
             'apellido' => 'nullable|string|max:255',
             'telefono' => 'nullable|string|max:20',
             'email' => 'nullable|email|max:255',
-            'direccion' => 'nullable|string|max:500',
+            'direccion' => 'nullable|string|max:255',
             'rfc' => 'nullable|string|max:13',
             'notas' => 'nullable|string',
             'maquila' => 'boolean',
@@ -86,7 +86,7 @@ class ProductorController extends Controller
             'apellido' => 'nullable|string|max:255',
             'telefono' => 'nullable|string|max:20',
             'email' => 'nullable|email|max:255',
-            'direccion' => 'nullable|string|max:500',
+            'direccion' => 'nullable|string|max:255',
             'rfc' => 'nullable|string|max:13',
             'notas' => 'nullable|string',
             'maquila' => 'boolean',
@@ -119,6 +119,16 @@ class ProductorController extends Controller
      */
     public function destroy(Productor $productor): JsonResponse
     {
+        // El productor se borra en lógico, así que la cascada de lotes nunca
+        // entra: los lotes quedaban apuntando a un productor invisible.
+        $lotes = $productor->lotes()->count();
+        if ($lotes > 0) {
+            return response()->json([
+                'status' => 'error',
+                'message' => "No se puede eliminar: el productor tiene {$lotes} lote(s) asignado(s). Reasígnalos o elimínalos primero.",
+            ], 422);
+        }
+
         $productorData = $productor->toArray();
         /** @phpstan-ignore-next-line */
         $productor->delete();

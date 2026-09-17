@@ -36,19 +36,20 @@ class RequisicionCampoController extends Controller
             ])
             ->withCount('detalles');
 
-        if ($request->has('status')) {
+        // filled() y no has(): un filtro vacío (?status=) dejaba la lista en blanco
+        if ($request->filled('status')) {
             $query->byStatus($request->status);
         }
 
-        if ($request->has('prioridad')) {
+        if ($request->filled('prioridad')) {
             $query->where('prioridad', $request->prioridad);
         }
 
-        if ($request->has('fecha_desde')) {
+        if ($request->filled('fecha_desde')) {
             $query->where('fecha_solicitud', '>=', $request->fecha_desde);
         }
 
-        if ($request->has('fecha_hasta')) {
+        if ($request->filled('fecha_hasta')) {
             $query->where('fecha_solicitud', '<=', $request->fecha_hasta);
         }
 
@@ -84,39 +85,55 @@ class RequisicionCampoController extends Controller
             'detalles.*.observaciones' => 'nullable|string',
         ]);
 
-        DB::beginTransaction();
-        try {
-            $validated['numero_requisicion'] = RequisicionCampo::generateNumero();
-            $validated['solicitante_user_id'] = Auth::id();
-            $validated['status'] = RequisicionCampo::STATUS_BORRADOR;
+        // Reintentos por si dos usuarios toman el mismo número a la vez
+        $intentos = 0;
+        while (true) {
+            DB::beginTransaction();
+            try {
+                $validated['numero_requisicion'] = RequisicionCampo::generateNumero();
+                $validated['solicitante_user_id'] = Auth::id();
+                $validated['status'] = RequisicionCampo::STATUS_BORRADOR;
 
-            $requisicion = RequisicionCampo::create($validated);
+                $requisicion = RequisicionCampo::create($validated);
 
-            foreach ($validated['detalles'] as $detalle) {
-                $requisicion->detalles()->create($detalle);
+                foreach ($validated['detalles'] as $detalle) {
+                    $requisicion->detalles()->create($detalle);
+                }
+
+                $requisicion->load([
+                    'solicitante:id,name',
+                    'detalles.product:id,name,code',
+                    'detalles.unit:id,name,abbreviation',
+                    'detalles.etapa:id,nombre,codigo,lote_id',
+                    'detalles.etapa.lote:id,nombre',
+                ]);
+
+                DB::commit();
+
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Requisición creada exitosamente',
+                    'data' => $requisicion,
+                ], 201);
+            } catch (\Illuminate\Database\QueryException $e) {
+                DB::rollBack();
+                // 23000: número de requisición duplicado, se vuelve a intentar
+                if ((string) $e->getCode() === '23000' && ++$intentos < 3) {
+                    continue;
+                }
+
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Error al crear la requisición: ' . $e->getMessage(),
+                ], 500);
+            } catch (\Exception $e) {
+                DB::rollBack();
+
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Error al crear la requisición: ' . $e->getMessage(),
+                ], 500);
             }
-
-            $requisicion->load([
-                'solicitante:id,name',
-                'detalles.product:id,name,code',
-                'detalles.unit:id,name,abbreviation',
-                'detalles.etapa:id,nombre,codigo,lote_id',
-                'detalles.etapa.lote:id,nombre',
-            ]);
-
-            DB::commit();
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Requisición creada exitosamente',
-                'data' => $requisicion,
-            ], 201);
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json([
-                'success' => false,
-                'message' => 'Error al crear la requisición: ' . $e->getMessage(),
-            ], 500);
         }
     }
 
@@ -227,7 +244,9 @@ class RequisicionCampoController extends Controller
             ], 422);
         }
 
-        $requisicion->detalles()->delete();
+        // Los renglones no se borran: la cabecera se elimina en lógico
+        // (SoftDeletes) y borrarlos en duro dejaba una requisición restaurada
+        // sin partidas y con total en cero.
         $requisicion->delete();
 
         return response()->json([
@@ -434,27 +453,39 @@ class RequisicionCampoController extends Controller
                 'purchase_order_id' => $order->id,
             ]);
 
-            // Crear registros de costeo vinculados
-            foreach ($requisicion->detalles as $det) {
-                if ($det->subtotal_estimado > 0) {
-                    CosteoAgricola::create([
-                        'temporada_id' => $requisicion->temporada_id,
-                        'lote_id' => $det->lote_id,
-                        'etapa_id' => $det->etapa_id,
-                        'tipo_fuente' => CosteoAgricola::TIPO_FUENTE_REQUISICION,
-                        'fuente_id' => $requisicion->id,
-                        'product_id' => $det->product_id,
-                        'descripcion' => $det->nombre_producto,
-                        'categoria' => $det->product?->category?->name ?? 'otro',
-                        'cantidad' => $det->cantidad,
-                        'unit_id' => $det->unit_id,
-                        'costo_unitario' => $det->precio_estimado,
-                        'costo_total' => $det->subtotal_estimado,
-                        'fecha' => $requisicion->fecha_solicitud,
-                        'user_id' => Auth::id(),
-                        'notas' => "Requisición {$requisicion->numero_requisicion} → OC {$order->order_number}",
-                    ]);
+            // Crear registros de costeo a partir de las líneas reales de la OC:
+            // con los detalles de la requisición, un override de cantidades o
+            // precios dejaba el costeo desfasado del total de la orden.
+            $order->load(['details.product.category']);
+            $detallesRequisicion = $requisicion->detalles()->with('product.category')->get();
+
+            foreach ($order->details as $linea) {
+                $costoTotal = (float) $linea->quantity_ordered * (float) $linea->unit_price;
+                if ($costoTotal <= 0) {
+                    continue;
                 }
+
+                // Lote/etapa y descripción se toman del renglón equivalente de
+                // la requisición, que es quien los conoce.
+                $det = $detallesRequisicion->firstWhere('product_id', $linea->product_id);
+
+                CosteoAgricola::create([
+                    'temporada_id' => $requisicion->temporada_id,
+                    'lote_id' => $det?->lote_id,
+                    'etapa_id' => $det?->etapa_id,
+                    'tipo_fuente' => CosteoAgricola::TIPO_FUENTE_REQUISICION,
+                    'fuente_id' => $requisicion->id,
+                    'product_id' => $linea->product_id,
+                    'descripcion' => $det?->nombre_producto ?? $linea->product?->name,
+                    'categoria' => $this->mapearCategoria($linea->product?->category?->name),
+                    'cantidad' => $linea->quantity_ordered,
+                    'unit_id' => $linea->unit_id ?? $det?->unit_id,
+                    'costo_unitario' => $linea->unit_price,
+                    'costo_total' => $costoTotal,
+                    'fecha' => $requisicion->fecha_solicitud,
+                    'user_id' => Auth::id(),
+                    'notas' => "Requisición {$requisicion->numero_requisicion} → OC {$order->order_number}",
+                ]);
             }
 
             $order->load(['supplier', 'details.product', 'details.unit']);
@@ -476,6 +507,45 @@ class RequisicionCampoController extends Controller
                 'message' => 'Error al generar orden de compra: ' . $e->getMessage(),
             ], 500);
         }
+    }
+
+    /**
+     * Traduce el nombre de la categoría del producto de inventario a una de
+     * las claves de CosteoAgricola::CATEGORIAS. Antes se guardaba el nombre
+     * tal cual ("Fertilizantes") y el dashboard de costeo no sabía etiquetarlo.
+     */
+    protected function mapearCategoria(?string $nombreCategoria): string
+    {
+        if (!$nombreCategoria) {
+            return 'otro';
+        }
+
+        $normalizado = strtolower(trim($nombreCategoria));
+        // Sin acentos, para que "Agroquímicos" también coincida
+        $normalizado = str_replace(
+            ['á', 'é', 'í', 'ó', 'ú', 'ñ'],
+            ['a', 'e', 'i', 'o', 'u', 'n'],
+            $normalizado
+        );
+
+        $equivalencias = [
+            'fertilizante' => 'fertilizante',
+            'agroquimico' => 'agroquimico',
+            'semilla' => 'semilla',
+            'mano de obra' => 'mano_de_obra',
+            'maquinaria' => 'maquinaria',
+            'riego' => 'riego',
+            'transporte' => 'transporte',
+            'empaque' => 'empaque',
+        ];
+
+        foreach ($equivalencias as $aguja => $clave) {
+            if (str_contains($normalizado, $aguja)) {
+                return $clave;
+            }
+        }
+
+        return 'otro';
     }
 
     /**

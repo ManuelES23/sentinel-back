@@ -134,6 +134,17 @@ class LoteSimpleController extends Controller
             }
         }
 
+        // No dejar el lote por debajo de lo ya asignado a sus etapas
+        if (array_key_exists('superficie', $validated) && $validated['superficie'] !== null) {
+            $asignada = (float) \App\Models\Etapa::where('lote_id', $lote->id)->sum('superficie');
+            if ((float) $validated['superficie'] < $asignada) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => "La superficie ({$validated['superficie']} ha) es menor a la ya asignada a las etapas del lote ({$asignada} ha)",
+                ], 422);
+            }
+        }
+
         $lote->update($validated);
         // refresh() antes de load(): fresh() devolvía el modelo sin relaciones
         // y la card del front perdía productor, zona y etapas al editar.

@@ -29,12 +29,12 @@ class DiagnosticoIAController extends Controller
             'observaciones' => 'nullable|string|max:500',
         ]);
 
+        // Contexto primero: si falla, no deja la imagen huérfana en disco
+        $contexto = $this->buildContexto($request);
+
         // Guardar imagen
         $imagePath = $request->file('imagen')->store('diagnosticos-ia', 'public');
         $imageUrl = Storage::disk('public')->url($imagePath);
-
-        // Construir contexto agrícola
-        $contexto = $this->buildContexto($request);
 
         // Crear registro en procesando
         $diagnostico = DiagnosticoIA::create([
@@ -123,7 +123,11 @@ class DiagnosticoIAController extends Controller
         $contexto = [];
 
         if ($request->etapa_id) {
-            $etapa = Etapa::with(['lote.zona.productor', 'variedad.cultivo', 'tipoVariedad'])->find($request->etapa_id);
+            // La relación del lote se llama zonaCultivo (no zona): con
+            // 'lote.zona' el eager load lanzaba RelationNotFoundException y
+            // el análisis respondía 500.
+            $etapa = Etapa::with(['lote.zonaCultivo', 'lote.productor', 'variedad.cultivo', 'tipoVariedad'])
+                ->find($request->etapa_id);
 
             if ($etapa) {
                 $contexto['lote'] = $etapa->lote?->nombre;
@@ -142,8 +146,8 @@ class DiagnosticoIAController extends Controller
                     $contexto['tipo_variedad'] = $etapa->tipoVariedad->nombre;
                 }
 
-                if ($etapa->lote?->zona) {
-                    $contexto['ubicacion'] = $etapa->lote->zona->nombre;
+                if ($etapa->lote?->zonaCultivo) {
+                    $contexto['ubicacion'] = $etapa->lote->zonaCultivo->nombre;
                 }
             }
         }

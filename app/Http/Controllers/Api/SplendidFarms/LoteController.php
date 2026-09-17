@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\SplendidFarms;
 
 use App\Events\LoteUpdated;
 use App\Http\Controllers\Controller;
+use App\Models\Etapa;
 use App\Models\Lote;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -63,6 +64,13 @@ class LoteController extends Controller
             'is_active' => 'boolean',
         ]);
 
+        // Si el lote se dibujó en el mapa, la superficie calculada también se
+        // guarda en superficie: el tope de hectáreas de las etapas y varios
+        // reportes leen ese campo, y el lote quedaba con 0 ha.
+        if (empty($validated['superficie']) && !empty($validated['superficie_calculada'])) {
+            $validated['superficie'] = $validated['superficie_calculada'];
+        }
+
         // numero_lote y codigo se generan automáticamente en el modelo
         $lote = Lote::create($validated);
         $lote->load(['productor:id,nombre,apellido,tipo', 'zonaCultivo:id,nombre']);
@@ -112,6 +120,21 @@ class LoteController extends Controller
             'descripcion' => 'nullable|string',
             'is_active' => 'boolean',
         ]);
+
+        if (empty($validated['superficie']) && !empty($validated['superficie_calculada'])) {
+            $validated['superficie'] = $validated['superficie_calculada'];
+        }
+
+        // No dejar el lote por debajo de lo que ya tienen asignado sus etapas
+        if (array_key_exists('superficie', $validated) && $validated['superficie'] !== null) {
+            $asignada = (float) Etapa::where('lote_id', $lote->id)->sum('superficie');
+            if ((float) $validated['superficie'] < $asignada) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => "La superficie ({$validated['superficie']} ha) es menor a la ya asignada a las etapas del lote ({$asignada} ha)",
+                ], 422);
+            }
+        }
 
         $lote->update($validated);
         $lote->load(['productor:id,nombre,apellido,tipo', 'zonaCultivo:id,nombre']);

@@ -116,6 +116,16 @@ class ProductorSimpleController extends Controller
 
     public function destroy(Productor $productor): JsonResponse
     {
+        // Igual que en Administración: con SoftDeletes la cascada no entra y
+        // los lotes quedarían apuntando a un productor invisible.
+        $lotes = $productor->lotes()->count();
+        if ($lotes > 0) {
+            return response()->json([
+                'status' => 'error',
+                'message' => "No se puede eliminar: el productor tiene {$lotes} lote(s) asignado(s).",
+            ], 422);
+        }
+
         $productor->delete();
 
         return response()->json([

@@ -87,7 +87,10 @@ class Etapa extends Model
     public static function superficieDisponible(int $loteId, ?int $excludeId = null): float
     {
         $lote = Lote::findOrFail($loteId);
-        $superficieLote = (float) ($lote->superficie ?? 0);
+        // superficie_efectiva: un lote dibujado en el mapa puede tener solo
+        // superficie_calculada, y mirando únicamente superficie el lote
+        // aparecía con 0 ha disponibles y no admitía etapas.
+        $superficieLote = (float) ($lote->superficie_efectiva ?? 0);
 
         $query = self::where('lote_id', $loteId)->whereNull('deleted_at');
         if ($excludeId) {
