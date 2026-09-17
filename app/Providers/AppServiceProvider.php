@@ -46,8 +46,13 @@ class AppServiceProvider extends ServiceProvider
                 return false;
             }
 
+            $ajustes = app(SettingsService::class);
+            if (! $ajustes->get('session.idle_enabled')) {
+                return true;
+            }
+
             $ultimoUso = $token->last_used_at ?? $token->created_at;
-            $limite = (int) app(SettingsService::class)->get('session.idle_minutes');
+            $limite = (int) $ajustes->get('session.idle_minutes');
 
             return $ultimoUso !== null && $ultimoUso->gt(now()->subMinutes($limite));
         });
