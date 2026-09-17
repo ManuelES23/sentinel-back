@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Services\SettingsService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Hash;
@@ -43,6 +44,7 @@ class AuthController extends Controller
                 'email' => $user->email,
                 'role' => $user->role ?? 'user',
                 'must_change_password' => (bool) $user->must_change_password,
+                'session_idle_minutes' => (int) app(SettingsService::class)->get('session.idle_minutes'),
             ],
             'token' => $token,
             'permissions' => $permissions
@@ -100,6 +102,7 @@ class AuthController extends Controller
                 'email' => $user->email,
                 'role' => $user->role ?? 'user',
                 'must_change_password' => (bool) $user->must_change_password,
+                'session_idle_minutes' => (int) app(SettingsService::class)->get('session.idle_minutes'),
             ],
             'permissions' => $permissions
         ]);
