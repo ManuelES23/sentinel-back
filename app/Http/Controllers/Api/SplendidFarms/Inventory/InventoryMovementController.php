@@ -12,6 +12,7 @@ use App\Models\InventoryStock;
 use App\Models\InventoryKardex;
 use App\Models\MovementType;
 use App\Models\Product;
+use App\Services\Inventory\AlmacenAccessService;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -21,6 +22,10 @@ use Symfony\Component\HttpFoundation\Response;
 
 class InventoryMovementController extends Controller
 {
+    public function __construct(private AlmacenAccessService $almacenes)
+    {
+    }
+
     /**
      * Obtiene el enterprise actual a partir del header X-Enterprise-Slug.
      */
@@ -32,35 +37,59 @@ class InventoryMovementController extends Controller
     }
 
     /**
-     * IDs de entidades accesibles por la empresa actual.
+     * IDs de entidades que el usuario puede ver en la empresa actual
+     * (asignadas en user_entity_access, o todas con ver_todos_almacenes).
+     * Lanza 422/403 si la empresa del header no es válida para el usuario.
      */
     private function getAccessibleEntityIds(Request $request): array
     {
-        $enterprise = $this->getEnterprise($request);
-        if (!$enterprise) return [];
+        $empresa = $this->almacenes->resolverEmpresa($request);
 
-        // Entidades propias (vinculadas a sucursales de esta empresa)
-        $ownIds = Entity::whereHas('branch', function ($q) use ($enterprise) {
-            $q->where('enterprise_id', $enterprise->id);
-        })->pluck('id')->toArray();
-
-        // Entidades compartidas (pivot enterprise_entity de otras empresas)
-        $linkedIds = $enterprise->accessibleEntities()->pluck('entities.id')->toArray();
-
-        return array_unique(array_merge($ownIds, $linkedIds));
+        return $this->almacenes->idsVisibles($request->user(), $empresa);
     }
 
     /**
-     * IDs de entidades propias (la sucursal pertenece a la empresa actual).
+     * IDs de entidades propias (la sucursal pertenece a la empresa actual)
+     * que además son visibles para el usuario.
      */
     private function getOwnEntityIds(Request $request): array
     {
-        $enterprise = $this->getEnterprise($request);
-        if (!$enterprise) return [];
+        $enterprise = $this->almacenes->resolverEmpresa($request);
 
-        return Entity::whereHas('branch', function ($q) use ($enterprise) {
+        $own = Entity::whereHas('branch', function ($q) use ($enterprise) {
             $q->where('enterprise_id', $enterprise->id);
-        })->pluck('id')->toArray();
+        })->pluck('id')->map(fn ($id) => (int) $id)->all();
+
+        return array_values(array_intersect($own, $this->getAccessibleEntityIds($request)));
+    }
+
+    private function movimientoVisible(Request $request, InventoryMovement $movement): bool
+    {
+        $ids = $this->getAccessibleEntityIds($request);
+
+        return in_array((int) $movement->source_entity_id, $ids, true)
+            || in_array((int) $movement->destination_entity_id, $ids, true);
+    }
+
+    /**
+     * Entidad cuyo stock afecta la acción: destino en entradas, ajustes
+     * positivos y transferencias (el receptor aprueba); origen en salidas
+     * y ajustes negativos.
+     */
+    private function entidadOperada(MovementType $type, InventoryMovement $movement): ?int
+    {
+        $usaDestino = $type->direction === 'in'
+            || $type->direction === 'transfer'
+            || ($type->direction === 'adjustment' && $type->effect === 'increase');
+
+        $id = $usaDestino ? $movement->destination_entity_id : $movement->source_entity_id;
+
+        return $id ? (int) $id : null;
+    }
+
+    private function noVisible(string $mensaje = 'Movimiento no encontrado', int $status = 404): JsonResponse
+    {
+        return response()->json(['status' => 'error', 'message' => $mensaje], $status);
     }
 
     private function getEntityOwnerEnterprise(?int $entityId): ?Enterprise
@@ -121,15 +150,14 @@ class InventoryMovementController extends Controller
      */
     public function accessibleEntities(Request $request): JsonResponse
     {
-        $enterprise = $this->getEnterprise($request);
-        if (!$enterprise) {
-            return response()->json(['success' => true, 'data' => []]);
-        }
+        $enterprise = $this->almacenes->resolverEmpresa($request);
+        $visibles = $this->almacenes->idsVisibles($request->user(), $enterprise);
 
         // 1. Entidades propias
         $ownEntities = Entity::with(['branch:id,name,enterprise_id', 'branch.enterprise:id,name,slug', 'entityType:id,name,icon,color'])
             ->active()
             ->whereHas('branch', fn ($q) => $q->where('enterprise_id', $enterprise->id))
+            ->whereIn('id', $visibles)
             ->get()
             ->map(fn ($entity) => [
                 'id'             => $entity->id,
@@ -153,7 +181,7 @@ class InventoryMovementController extends Controller
         if ($linkedIds->isNotEmpty()) {
             $linkedEntities = Entity::with(['branch:id,name,enterprise_id', 'branch.enterprise:id,name,slug', 'entityType:id,name,icon,color'])
                 ->active()
-                ->whereIn('id', $linkedIds)
+                ->whereIn('id', $linkedIds->intersect($visibles)->values())
                 ->whereHas('branch', fn ($q) => $q->where('enterprise_id', '!=', $enterprise->id))
                 ->get()
                 ->map(fn ($entity) => [
@@ -243,14 +271,12 @@ class InventoryMovementController extends Controller
 
         $query = InventoryMovement::with($with)->withCount('details');
 
-        // Filtrar por entidades accesibles de la empresa actual
+        // Filtrar por entidades visibles para el usuario (vacío = no ve nada)
         $entityIds = $this->getAccessibleEntityIds($request);
-        if (!empty($entityIds)) {
-            $query->where(function ($q) use ($entityIds) {
-                $q->whereIn('source_entity_id', $entityIds)
-                  ->orWhereIn('destination_entity_id', $entityIds);
-            });
-        }
+        $query->where(function ($q) use ($entityIds) {
+            $q->whereIn('source_entity_id', $entityIds)
+              ->orWhereIn('destination_entity_id', $entityIds);
+        });
 
         // Filtrar por estado
         if ($request->filled('status')) {
@@ -363,19 +389,17 @@ class InventoryMovementController extends Controller
 
         // Validar que las entidades sean accesibles por la empresa actual
         $entityIds = $this->getAccessibleEntityIds($request);
-        if (!empty($entityIds)) {
-            if (!empty($validated['source_entity_id']) && !in_array($validated['source_entity_id'], $entityIds)) {
-                return response()->json([
-                    'status' => 'error',
-                    'message' => 'No tienes acceso a la entidad origen seleccionada'
-                ], 403);
-            }
-            if (!empty($validated['destination_entity_id']) && !in_array($validated['destination_entity_id'], $entityIds)) {
-                return response()->json([
-                    'status' => 'error',
-                    'message' => 'No tienes acceso a la entidad destino seleccionada'
-                ], 403);
-            }
+        if (!empty($validated['source_entity_id']) && !in_array((int) $validated['source_entity_id'], $entityIds, true)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No tienes acceso a la entidad origen seleccionada'
+            ], 403);
+        }
+        if (!empty($validated['destination_entity_id']) && !in_array((int) $validated['destination_entity_id'], $entityIds, true)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No tienes acceso a la entidad destino seleccionada'
+            ], 403);
         }
 
         // ── Restricciones de ownership por dirección ─────────────────────────
@@ -523,8 +547,12 @@ class InventoryMovementController extends Controller
     /**
      * Display the specified resource.
      */
-    public function show(InventoryMovement $movement): JsonResponse
+    public function show(Request $request, InventoryMovement $movement): JsonResponse
     {
+        if (! $this->movimientoVisible($request, $movement)) {
+            return $this->noVisible();
+        }
+
         $movement->load([
             'movementType',
             'sourceEntity',
@@ -580,23 +608,21 @@ class InventoryMovementController extends Controller
 
         // Validar que las entidades finales sean accesibles por la empresa actual
         $entityIds = $this->getAccessibleEntityIds($request);
-        if (!empty($entityIds)) {
-            $sourceId = $validated['source_entity_id'] ?? $movement->source_entity_id;
-            $destinationId = $validated['destination_entity_id'] ?? $movement->destination_entity_id;
+        $sourceId = $validated['source_entity_id'] ?? $movement->source_entity_id;
+        $destinationId = $validated['destination_entity_id'] ?? $movement->destination_entity_id;
 
-            if (!empty($sourceId) && !in_array((int) $sourceId, array_map('intval', $entityIds))) {
-                return response()->json([
-                    'status' => 'error',
-                    'message' => 'No tienes acceso a la entidad origen seleccionada',
-                ], 403);
-            }
+        if (!empty($sourceId) && !in_array((int) $sourceId, array_map('intval', $entityIds))) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No tienes acceso a la entidad origen seleccionada',
+            ], 403);
+        }
 
-            if (!empty($destinationId) && !in_array((int) $destinationId, array_map('intval', $entityIds))) {
-                return response()->json([
-                    'status' => 'error',
-                    'message' => 'No tienes acceso a la entidad destino seleccionada',
-                ], 403);
-            }
+        if (!empty($destinationId) && !in_array((int) $destinationId, array_map('intval', $entityIds))) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No tienes acceso a la entidad destino seleccionada',
+            ], 403);
         }
 
         // ── Restricciones de ownership en update ─────────────────────────────
@@ -749,8 +775,12 @@ class InventoryMovementController extends Controller
     /**
      * Remove the specified resource from storage.
      */
-    public function destroy(InventoryMovement $movement): JsonResponse
+    public function destroy(Request $request, InventoryMovement $movement): JsonResponse
     {
+        if (! $this->movimientoVisible($request, $movement)) {
+            return $this->noVisible();
+        }
+
         // Solo se pueden eliminar movimientos pendientes o cancelados
         if (!in_array($movement->status, ['pending', 'cancelled'])) {
             return response()->json([
@@ -815,6 +845,12 @@ class InventoryMovementController extends Controller
                 'status' => 'error',
                 'message' => 'Solo se pueden aprobar movimientos pendientes'
             ], 422);
+        }
+
+        $tipoOperado = $movement->movementType;
+        $entidad = $tipoOperado ? $this->entidadOperada($tipoOperado, $movement) : null;
+        if (! in_array((int) $entidad, $this->getAccessibleEntityIds($request), true)) {
+            return $this->noVisible('No tienes acceso al almacén de este movimiento', 403);
         }
 
         $userEnterpriseId = $this->resolveUserEnterpriseId($request);
@@ -1037,16 +1073,7 @@ class InventoryMovementController extends Controller
      */
     public function pdf(Request $request, InventoryMovement $movement): Response
     {
-        $entityIds = $this->getAccessibleEntityIds($request);
-        if (!empty($entityIds)) {
-            $sourceId = (int) ($movement->source_entity_id ?? 0);
-            $destinationId = (int) ($movement->destination_entity_id ?? 0);
-            $hasAccess = in_array($sourceId, $entityIds, true) || in_array($destinationId, $entityIds, true);
-
-            if (!$hasAccess) {
-                abort(403, 'No tienes acceso a este movimiento');
-            }
-        }
+        abort_unless($this->movimientoVisible($request, $movement), 404);
 
         $movement->load([
             'movementType:id,code,name,direction,effect',
@@ -1191,6 +1218,10 @@ class InventoryMovementController extends Controller
      */
     public function cancel(InventoryMovement $movement, Request $request): JsonResponse
     {
+        if (! $this->movimientoVisible($request, $movement)) {
+            return $this->noVisible('No tienes acceso al almacén de este movimiento', 403);
+        }
+
         if (!in_array($movement->status, ['pending', 'approved'])) {
             return response()->json([
                 'status' => 'error',
