@@ -105,31 +105,51 @@ class AplicacionController extends Controller
             'productos.*.unidad_medida' => 'required|string|max:50',
         ]);
 
-        // Folio: autogenerar si se pide o no viene ninguno
-        $folio = $validated['folio'] ?? null;
-        if (empty($folio) || ($validated['autogenerar_folio'] ?? false)) {
-            $folio = Aplicacion::generarFolio($validated['temporada_id']);
-        }
+        $folioManual = $validated['folio'] ?? null;
+        $autogenerar = empty($folioManual) || ($validated['autogenerar_folio'] ?? false);
 
         $productos = $validated['productos'];
         unset($validated['productos'], $validated['autogenerar_folio']);
-        $validated['folio'] = $folio;
         $validated['created_by'] = Auth::id();
 
-        $aplicacion = DB::transaction(function () use ($validated, $productos) {
-            $aplicacion = Aplicacion::create($validated);
+        // El folio se genera dentro de la transacción (con bloqueo) y se
+        // reintenta si otro usuario tomó el mismo número al mismo tiempo.
+        $intentos = 0;
+        while (true) {
+            try {
+                $aplicacion = DB::transaction(function () use ($validated, $productos, $autogenerar, $folioManual) {
+                    $validated['folio'] = $autogenerar
+                        ? Aplicacion::generarFolio($validated['temporada_id'])
+                        : $folioManual;
 
-            foreach ($productos as $item) {
-                AplicacionDetalle::create([
-                    'aplicacion_id' => $aplicacion->id,
-                    'producto_id'   => $item['producto_id'],
-                    'dosis'         => $item['dosis'],
-                    'unidad_medida' => $item['unidad_medida'],
-                ]);
+                    $aplicacion = Aplicacion::create($validated);
+
+                    foreach ($productos as $item) {
+                        AplicacionDetalle::create([
+                            'aplicacion_id' => $aplicacion->id,
+                            'producto_id'   => $item['producto_id'],
+                            'dosis'         => $item['dosis'],
+                            'unidad_medida' => $item['unidad_medida'],
+                        ]);
+                    }
+
+                    return $aplicacion;
+                });
+                break;
+            } catch (\Illuminate\Database\QueryException $e) {
+                // 23000: folio duplicado en la temporada
+                if ((string) $e->getCode() === '23000' && $autogenerar && ++$intentos < 3) {
+                    continue;
+                }
+                if ((string) $e->getCode() === '23000' && !$autogenerar) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'El folio ya existe en esta temporada.',
+                    ], 422);
+                }
+                throw $e;
             }
-
-            return $aplicacion;
-        });
+        }
 
         $aplicacion->load([
             'productor:id,nombre,apellido',

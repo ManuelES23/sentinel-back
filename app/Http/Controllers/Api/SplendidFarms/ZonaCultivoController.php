@@ -37,7 +37,7 @@ class ZonaCultivoController extends Controller
     {
         $validated = $request->validate([
             'nombre' => 'required|string|max:255',
-            'ubicacion' => 'nullable|string|max:500',
+            'ubicacion' => 'nullable|string|max:255',
             'descripcion' => 'nullable|string',
             'is_active' => 'boolean',
         ]);
@@ -74,7 +74,7 @@ class ZonaCultivoController extends Controller
     {
         $validated = $request->validate([
             'nombre' => 'sometimes|required|string|max:255',
-            'ubicacion' => 'nullable|string|max:500',
+            'ubicacion' => 'nullable|string|max:255',
             'descripcion' => 'nullable|string',
             'is_active' => 'boolean',
         ]);
@@ -96,6 +96,16 @@ class ZonaCultivoController extends Controller
      */
     public function destroy(ZonaCultivo $zonas_cultivo): JsonResponse
     {
+        // Con SoftDeletes la cascada no entra: los lotes seguirían apuntando
+        // a una zona invisible.
+        $lotes = $zonas_cultivo->lotes()->count();
+        if ($lotes > 0) {
+            return response()->json([
+                'status' => 'error',
+                'message' => "No se puede eliminar: la zona tiene {$lotes} lote(s). Reasígnalos o elimínalos primero.",
+            ], 422);
+        }
+
         $zonaData = $zonas_cultivo->toArray();
         /** @phpstan-ignore-next-line */
         $zonas_cultivo->delete();

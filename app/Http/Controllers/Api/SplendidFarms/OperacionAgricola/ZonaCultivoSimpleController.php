@@ -40,7 +40,7 @@ class ZonaCultivoSimpleController extends Controller
     {
         $validated = $request->validate([
             'nombre' => 'required|string|max:255',
-            'ubicacion' => 'nullable|string|max:500',
+            'ubicacion' => 'nullable|string|max:255',
             'descripcion' => 'nullable|string',
             'temporada_id' => 'nullable|exists:temporadas,id',
         ]);
@@ -78,22 +78,34 @@ class ZonaCultivoSimpleController extends Controller
     {
         $validated = $request->validate([
             'nombre' => 'sometimes|required|string|max:255',
-            'ubicacion' => 'nullable|string|max:500',
+            'ubicacion' => 'nullable|string|max:255',
             'descripcion' => 'nullable|string',
         ]);
 
         $zona->update($validated);
-        $zona->load('lotes:id,zona_cultivo_id,nombre,codigo,superficie');
+        // refresh() antes de load(): con fresh() la respuesta perdía la lista
+        // de lotes que el front pinta en la card de la zona.
+        $zona->refresh()->load('lotes:id,zona_cultivo_id,nombre,codigo,superficie');
 
         return response()->json([
             'success' => true,
             'message' => 'Zona de cultivo actualizada',
-            'data' => $zona->fresh(),
+            'data' => $zona,
         ]);
     }
 
     public function destroy(ZonaCultivo $zona): JsonResponse
     {
+        // Con SoftDeletes la cascada no entra: los lotes quedarían apuntando
+        // a una zona invisible.
+        $lotes = $zona->lotes()->count();
+        if ($lotes > 0) {
+            return response()->json([
+                'status' => 'error',
+                'message' => "No se puede eliminar: la zona tiene {$lotes} lote(s).",
+            ], 422);
+        }
+
         $zona->delete();
 
         return response()->json([

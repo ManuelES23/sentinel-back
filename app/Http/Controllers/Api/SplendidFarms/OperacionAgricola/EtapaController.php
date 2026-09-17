@@ -178,14 +178,16 @@ class EtapaController extends Controller
             'temporada_id' => 'nullable|exists:temporadas,id',
         ]);
 
-        // Si cambia la superficie, validar contra el lote
-        if (isset($validated['superficie'])) {
-            $loteId = $validated['lote_id'] ?? $etapa->lote_id;
+        // Revalidar el tope si cambia la superficie o el lote: moviendo la
+        // etapa a otro lote sin tocar su superficie se podía exceder el lote.
+        $loteId = $validated['lote_id'] ?? $etapa->lote_id;
+        $superficie = $validated['superficie'] ?? (float) $etapa->superficie;
+        if (isset($validated['superficie']) || $loteId != $etapa->lote_id) {
             $disponible = Etapa::superficieDisponible($loteId, $etapa->id);
-            if ($validated['superficie'] > $disponible) {
+            if ($superficie > $disponible) {
                 return response()->json([
                     'status' => 'error',
-                    'message' => "La superficie ({$validated['superficie']} ha) excede la disponible en el lote ({$disponible} ha)",
+                    'message' => "La superficie ({$superficie} ha) excede la disponible en el lote ({$disponible} ha)",
                 ], 422);
             }
         }
@@ -257,7 +259,8 @@ class EtapaController extends Controller
         $excludeId = $request->exclude_id;
 
         $lote = Lote::findOrFail($loteId);
-        $superficieTotal = (float) ($lote->superficie ?? 0);
+        // Igual que superficieDisponible(): contempla el lote dibujado en mapa
+        $superficieTotal = (float) ($lote->superficie_efectiva ?? 0);
 
         $queryAsignada = Etapa::where('lote_id', $loteId)->whereNull('deleted_at');
         if ($excludeId) {
