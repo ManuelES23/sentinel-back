@@ -62,6 +62,19 @@ class SessionIdleTest extends TestCase
 
         $this->postJson('/api/auth/login', ['email' => $user->email, 'password' => 'password'])
             ->assertOk()
+            ->assertJsonPath('user.session_idle_enabled', true)
             ->assertJsonPath('user.session_idle_minutes', 120);
+    }
+
+    public function test_desactivar_el_interruptor_mantiene_activo_un_token_inactivo(): void
+    {
+        $token = User::factory()->create()->createToken('auth-token')->plainTextToken;
+        app(SettingsService::class)->update(['session.idle_enabled' => false]);
+
+        $this->travel(200)->minutes();
+
+        $this->pedirUsuario($token)
+            ->assertOk()
+            ->assertJsonPath('user.session_idle_enabled', false);
     }
 }
