@@ -31,9 +31,20 @@ return new class extends Migration
 
             // El primero conserva el folio original
             foreach ($ids->skip(1)->values() as $i => $id) {
-                DB::table('aplicaciones')
-                    ->where('id', $id)
-                    ->update(['folio' => substr($dup->folio, 0, 45) . '-' . ($i + 2)]);
+                $sufijo = $i + 2;
+
+                // Buscar un folio libre: el renombrado podría coincidir con
+                // otro folio que ya exista en la misma temporada.
+                do {
+                    $nuevo = substr($dup->folio, 0, 45) . '-' . $sufijo;
+                    $ocupado = DB::table('aplicaciones')
+                        ->where('temporada_id', $dup->temporada_id)
+                        ->where('folio', $nuevo)
+                        ->exists();
+                    $sufijo++;
+                } while ($ocupado);
+
+                DB::table('aplicaciones')->where('id', $id)->update(['folio' => $nuevo]);
             }
         }
 

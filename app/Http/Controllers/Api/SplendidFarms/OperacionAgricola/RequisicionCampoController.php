@@ -459,15 +459,26 @@ class RequisicionCampoController extends Controller
             $order->load(['details.product.category']);
             $detallesRequisicion = $requisicion->detalles()->with('product.category')->get();
 
+            // Renglones de la requisición por producto, en orden: se van
+            // consumiendo para que dos partidas del mismo producto en etapas
+            // distintas no acaben atribuidas a la misma etapa.
+            $pendientesPorProducto = $detallesRequisicion->groupBy('product_id')
+                ->map(fn ($grupo) => $grupo->values()->all())
+                ->all();
+
             foreach ($order->details as $linea) {
-                $costoTotal = (float) $linea->quantity_ordered * (float) $linea->unit_price;
+                $impuesto = 1 + ((float) ($linea->tax_rate ?? 0) / 100);
+                $costoTotal = (float) $linea->quantity_ordered * (float) $linea->unit_price * $impuesto;
                 if ($costoTotal <= 0) {
                     continue;
                 }
 
                 // Lote/etapa y descripción se toman del renglón equivalente de
                 // la requisición, que es quien los conoce.
-                $det = $detallesRequisicion->firstWhere('product_id', $linea->product_id);
+                $det = null;
+                if (!empty($pendientesPorProducto[$linea->product_id])) {
+                    $det = array_shift($pendientesPorProducto[$linea->product_id]);
+                }
 
                 CosteoAgricola::create([
                     'temporada_id' => $requisicion->temporada_id,

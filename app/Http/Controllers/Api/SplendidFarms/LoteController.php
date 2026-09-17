@@ -125,13 +125,18 @@ class LoteController extends Controller
             $validated['superficie'] = $validated['superficie_calculada'];
         }
 
-        // No dejar el lote por debajo de lo que ya tienen asignado sus etapas
-        if (array_key_exists('superficie', $validated) && $validated['superficie'] !== null) {
+        // No dejar el lote por debajo de lo ya asignado a sus etapas. Se compara
+        // la superficie EFECTIVA que quedará (la calculada del mapa manda sobre
+        // la manual, igual que Etapa::superficieDisponible).
+        if (array_key_exists('superficie', $validated)
+            || array_key_exists('superficie_calculada', $validated)) {
             $asignada = (float) Etapa::where('lote_id', $lote->id)->sum('superficie');
-            if ((float) $validated['superficie'] < $asignada) {
+            $efectiva = $this->superficieEfectivaResultante($lote, $validated);
+
+            if ($asignada > 0 && $efectiva < $asignada) {
                 return response()->json([
                     'status' => 'error',
-                    'message' => "La superficie ({$validated['superficie']} ha) es menor a la ya asignada a las etapas del lote ({$asignada} ha)",
+                    'message' => "La superficie ({$efectiva} ha) es menor a la ya asignada a las etapas del lote ({$asignada} ha)",
                 ], 422);
             }
         }
@@ -147,6 +152,27 @@ class LoteController extends Controller
             'message' => 'Lote actualizado exitosamente',
             'data' => $lote
         ]);
+    }
+
+    /**
+     * Superficie efectiva que tendrá el lote después de aplicar $validated,
+     * con la misma preferencia que el accessor del modelo: la calculada del
+     * mapa manda sobre la capturada a mano.
+     */
+    private function superficieEfectivaResultante(Lote $lote, array $validated): float
+    {
+        $superficie = array_key_exists('superficie', $validated)
+            ? $validated['superficie']
+            : $lote->superficie;
+        $calculada = array_key_exists('superficie_calculada', $validated)
+            ? $validated['superficie_calculada']
+            : $lote->superficie_calculada;
+
+        if ($calculada !== null && (float) $calculada > 0) {
+            return (float) $calculada;
+        }
+
+        return (float) ($superficie ?? 0);
     }
 
     /**

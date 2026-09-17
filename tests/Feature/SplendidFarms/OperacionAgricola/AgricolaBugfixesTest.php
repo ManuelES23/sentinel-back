@@ -181,7 +181,15 @@ class AgricolaBugfixesTest extends TestCase
 
     public function test_no_se_puede_bajar_la_superficie_del_lote_debajo_de_sus_etapas(): void
     {
-        $lote = $this->loteConMapa();
+        // Lote capturado a mano (sin mapa): la superficie manual es la efectiva
+        $lote = Lote::create([
+            'productor_id' => $this->productor->id,
+            'nombre' => 'Manual',
+            'superficie' => 12,
+            'is_active' => true,
+        ]);
+        $this->temporada->asignarLote($lote->id, $this->temporada->cultivo_id);
+
         Etapa::create([
             'lote_id' => $lote->id,
             'nombre' => 'Etapa 1',
@@ -199,7 +207,44 @@ class AgricolaBugfixesTest extends TestCase
             'coordenadas' => [],
         ])->assertStatus(422);
 
+        $this->assertEquals(12, (float) $lote->fresh()->superficie_efectiva);
+    }
+
+    public function test_no_se_puede_bajar_la_superficie_calculada_debajo_de_las_etapas(): void
+    {
+        $lote = $this->loteConMapa(); // 12.5 ha calculadas
+        Etapa::create([
+            'lote_id' => $lote->id,
+            'nombre' => 'Etapa 1',
+            'superficie' => 10,
+            'orden' => 1,
+            'is_active' => true,
+        ]);
+
+        // La superficie efectiva la manda la calculada: bajarla a 1 ha
+        // dejaría 10 ha de etapas en un lote de 1 ha.
+        $this->putJson(self::ADMIN.'/lotes/'.$lote->id, [
+            'superficie' => 100,
+            'superficie_calculada' => 1,
+        ])->assertStatus(422);
+
         $this->assertEquals(12.5, (float) $lote->fresh()->superficie_efectiva);
+    }
+
+    public function test_subir_la_superficie_manual_con_mapa_vigente_no_se_rechaza(): void
+    {
+        $lote = $this->loteConMapa();
+        Etapa::create([
+            'lote_id' => $lote->id,
+            'nombre' => 'Etapa 1',
+            'superficie' => 10,
+            'orden' => 1,
+            'is_active' => true,
+        ]);
+
+        // Baja la manual pero la calculada (12.5) sigue cubriendo las etapas
+        $this->putJson(self::ADMIN.'/lotes/'.$lote->id, ['superficie' => 5])
+            ->assertOk();
     }
 
     public function test_zonas_de_la_temporada_se_listan_y_se_asignan(): void
