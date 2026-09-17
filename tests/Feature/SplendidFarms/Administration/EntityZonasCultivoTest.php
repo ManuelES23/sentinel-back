@@ -21,6 +21,7 @@ class EntityZonasCultivoTest extends TestCase
         Sanctum::actingAs($this->crearAdmin());
         $url = "/api/splendidfarms/administration/organizacion/entidades/{$this->almacenA->id}";
 
+        // 1. Asignar ambas zonas: la respuesta las incluye.
         $response = $this->putJson($url, ['zona_cultivo_ids' => [$norte->id, $sur->id]], $this->headersEmpresa());
 
         $response->assertOk();
@@ -28,11 +29,20 @@ class EntityZonasCultivoTest extends TestCase
             ['Zona Norte', 'Zona Sur'],
             collect($response->json('data.zonas_cultivo'))->pluck('nombre')->all(),
         );
+        $this->assertDatabaseCount('entity_zona_cultivo', 2);
 
+        // 2. Update sin zona_cultivo_ids (null = no tocar): las dos zonas siguen ahí.
+        $renombrar = $this->putJson($url, ['name' => 'Almacén A renombrado'], $this->headersEmpresa());
+
+        $renombrar->assertOk();
+        $this->assertEqualsCanonicalizing(
+            ['Zona Norte', 'Zona Sur'],
+            collect($renombrar->json('data.zonas_cultivo'))->pluck('nombre')->all(),
+        );
+        $this->assertDatabaseCount('entity_zona_cultivo', 2);
+
+        // 3. zona_cultivo_ids = [] (limpiar): las quita todas.
         $this->putJson($url, ['zona_cultivo_ids' => []], $this->headersEmpresa())->assertOk();
-        $this->assertDatabaseCount('entity_zona_cultivo', 0);
-
-        $this->putJson($url, ['name' => 'Almacén A renombrado'], $this->headersEmpresa())->assertOk();
         $this->assertDatabaseCount('entity_zona_cultivo', 0);
     }
 }
