@@ -598,7 +598,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
                 // Catálogo de productos de aplicación
                 Route::apiResource('productos-aplicacion', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\ProductoAplicacionController::class)
-                    ->parameters(['productos-aplicacion' => 'productoAplicacion'])
+                    ->parameters(['productos-aplicacion' => 'producto'])
                     ->only(['index', 'store', 'update']);
 
                 // Costeo agrícola (Fase 2)

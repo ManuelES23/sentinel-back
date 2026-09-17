@@ -5,13 +5,22 @@ namespace App\Http\Controllers\Api\SplendidFarms\OperacionAgricola;
 use App\Http\Controllers\Controller;
 use App\Models\Aplicacion;
 use App\Models\AplicacionDetalle;
+use App\Models\Enterprise;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 
 class AplicacionController extends Controller
 {
+    private function reglaProducto(Request $request): \Illuminate\Validation\Rules\Exists
+    {
+        $empresaId = Enterprise::where('slug', $request->header('X-Enterprise-Slug'))->value('id') ?? 0;
+
+        return Rule::exists('enterprise_product', 'product_id')->where('enterprise_id', $empresaId);
+    }
+
     /**
      * GET /aplicaciones?temporada_id=X&tipo_aplicacion=X&productor_id=X&fecha_inicio=X&fecha_fin=X&folio=X
      */
@@ -28,6 +37,8 @@ class AplicacionController extends Controller
                 'lote:id,nombre,numero_lote',
                 'variedad:id,nombre',
                 'detalles.producto:id,nombre,tipo',
+                'detalles.product:id,name,ingrediente_activo,brand_id,unit_id',
+                'detalles.product.brand:id,name',
                 'createdBy:id,name',
             ])
             ->withCount('detalles');
@@ -100,7 +111,7 @@ class AplicacionController extends Controller
             'problematica'       => 'required|string',
             'observaciones'      => 'nullable|string',
             'productos'          => 'required|array|min:1',
-            'productos.*.producto_id' => 'required|exists:productos_aplicacion,id',
+            'productos.*.product_id' => ['required', 'integer', $this->reglaProducto($request)],
             'productos.*.dosis'       => 'required|numeric|min:0',
             'productos.*.unidad_medida' => 'required|string|max:50',
         ]);
@@ -122,7 +133,7 @@ class AplicacionController extends Controller
             foreach ($productos as $item) {
                 AplicacionDetalle::create([
                     'aplicacion_id' => $aplicacion->id,
-                    'producto_id'   => $item['producto_id'],
+                    'product_id'    => $item['product_id'],
                     'dosis'         => $item['dosis'],
                     'unidad_medida' => $item['unidad_medida'],
                 ]);
@@ -137,6 +148,8 @@ class AplicacionController extends Controller
             'lote:id,nombre,numero_lote',
             'variedad:id,nombre',
             'detalles.producto:id,nombre,tipo',
+            'detalles.product:id,name,ingrediente_activo,brand_id,unit_id',
+            'detalles.product.brand:id,name',
             'createdBy:id,name',
         ]);
         $aplicacion->loadCount('detalles');
@@ -159,6 +172,8 @@ class AplicacionController extends Controller
             'lote:id,nombre,numero_lote',
             'variedad:id,nombre',
             'detalles.producto:id,nombre,ingrediente_activo,marca,tipo',
+            'detalles.product:id,name,ingrediente_activo,brand_id,unit_id',
+            'detalles.product.brand:id,name',
             'createdBy:id,name',
             'temporada:id,nombre,anio',
         ]);
@@ -193,7 +208,7 @@ class AplicacionController extends Controller
             'problematica'       => 'sometimes|string',
             'observaciones'      => 'nullable|string',
             'productos'          => 'sometimes|array|min:1',
-            'productos.*.producto_id' => 'required_with:productos|exists:productos_aplicacion,id',
+            'productos.*.product_id' => ['required_with:productos', 'integer', $this->reglaProducto($request)],
             'productos.*.dosis'       => 'required_with:productos|numeric|min:0',
             'productos.*.unidad_medida' => 'required_with:productos|string|max:50',
         ]);
@@ -209,7 +224,7 @@ class AplicacionController extends Controller
                 foreach ($productos as $item) {
                     AplicacionDetalle::create([
                         'aplicacion_id' => $aplicacion->id,
-                        'producto_id'   => $item['producto_id'],
+                        'product_id'    => $item['product_id'],
                         'dosis'         => $item['dosis'],
                         'unidad_medida' => $item['unidad_medida'],
                     ]);
@@ -223,6 +238,8 @@ class AplicacionController extends Controller
             'lote:id,nombre,numero_lote',
             'variedad:id,nombre',
             'detalles.producto:id,nombre,tipo',
+            'detalles.product:id,name,ingrediente_activo,brand_id,unit_id',
+            'detalles.product.brand:id,name',
             'createdBy:id,name',
         ]);
         $aplicacion->loadCount('detalles');
