@@ -72,7 +72,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::apiResource('users', App\Http\Controllers\Api\UserController::class);
         Route::post('users/{user}/reset-password', [App\Http\Controllers\Api\UserController::class, 'resetPassword']);
         Route::get('users-employees-available', [App\Http\Controllers\Api\UserController::class, 'employeesWithoutUser']);
+        Route::get('users/{user}/almacenes', [App\Http\Controllers\Api\Admin\UserAlmacenController::class, 'index']);
     });
+    Route::put('users/{user}/almacenes', [App\Http\Controllers\Api\Admin\UserAlmacenController::class, 'update'])
+        ->middleware('admin:gestiona');
 
     // Rutas de empresas: lectura para cualquier usuario (el selector de empresa
     // la usa), escritura solo administradores.

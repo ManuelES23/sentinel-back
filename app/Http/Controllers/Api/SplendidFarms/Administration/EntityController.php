@@ -126,7 +126,7 @@ class EntityController extends Controller
             ], 422);
         }
 
-        $relations = ['branch.enterprise:id,name,slug', 'entityType', 'areas', 'cultivos:id,nombre'];
+        $relations = ['branch.enterprise:id,name,slug', 'entityType', 'areas', 'cultivos:id,nombre', 'zonasCultivo:id,nombre'];
 
         // ── 1. Entidades propias ──────────────────────────────────────────
         $ownQuery = Entity::with($relations)
@@ -190,7 +190,7 @@ class EntityController extends Controller
             ], 422);
         }
 
-        $entity = Entity::with(['branch.enterprise:id,name,slug', 'entityType', 'areas', 'cultivos:id,nombre'])
+        $entity = Entity::with(['branch.enterprise:id,name,slug', 'entityType', 'areas', 'cultivos:id,nombre', 'zonasCultivo:id,nombre'])
             ->findOrFail($validated['entity_id']);
 
         // Debe pertenecer a una empresa diferente
@@ -297,6 +297,8 @@ class EntityController extends Controller
             'slug' => 'nullable|string|max:255|unique:entities,slug',
             'cultivo_ids' => 'nullable|array',
             'cultivo_ids.*' => 'integer|exists:cultivos,id',
+            'zona_cultivo_ids' => 'nullable|array',
+            'zona_cultivo_ids.*' => 'integer|exists:zonas_cultivo,id',
             'description' => 'nullable|string',
             'location' => 'nullable|string|max:255',
             'responsible' => 'nullable|string|max:255',
@@ -333,6 +335,8 @@ class EntityController extends Controller
 
         $cultivoIds = $validated['cultivo_ids'] ?? [];
         unset($validated['cultivo_ids']);
+        $zonaIds = $validated['zona_cultivo_ids'] ?? [];
+        unset($validated['zona_cultivo_ids']);
 
         $isAutoCode = empty($validated['code']);
         $maxAttempts = $isAutoCode ? 5 : 1;
@@ -340,7 +344,7 @@ class EntityController extends Controller
 
         for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
             try {
-                $entity = DB::transaction(function () use ($validated, $isAutoCode, $cultivoIds) {
+                $entity = DB::transaction(function () use ($validated, $isAutoCode, $cultivoIds, $zonaIds) {
                     $data = $validated;
 
                     // Generación atómica del código por tipo para evitar colisiones en concurrencia.
@@ -374,6 +378,10 @@ class EntityController extends Controller
 
                     if (!empty($cultivoIds)) {
                         $created->cultivos()->sync($cultivoIds);
+                    }
+
+                    if (!empty($zonaIds)) {
+                        $created->zonasCultivo()->sync($zonaIds);
                     }
 
                     return $created;
@@ -424,7 +432,7 @@ class EntityController extends Controller
             ], 422);
         }
 
-        $entity->load(['branch.enterprise:id,name,slug', 'entityType', 'areas', 'cultivos:id,nombre']);
+        $entity->load(['branch.enterprise:id,name,slug', 'entityType', 'areas', 'cultivos:id,nombre', 'zonasCultivo:id,nombre']);
 
         // Broadcast evento en tiempo real
         broadcast(new EntityUpdated('created', $entity->toArray()));
@@ -456,7 +464,7 @@ class EntityController extends Controller
             ], 404);
         }
 
-        $entity->load(['branch.enterprise:id,name,slug', 'entityType', 'areas', 'cultivos:id,nombre']);
+        $entity->load(['branch.enterprise:id,name,slug', 'entityType', 'areas', 'cultivos:id,nombre', 'zonasCultivo:id,nombre']);
 
         return response()->json([
             'success' => true,
@@ -500,6 +508,8 @@ class EntityController extends Controller
             'slug' => 'nullable|string|max:255|unique:entities,slug,' . $entity->id,
             'cultivo_ids' => 'nullable|array',
             'cultivo_ids.*' => 'integer|exists:cultivos,id',
+            'zona_cultivo_ids' => 'nullable|array',
+            'zona_cultivo_ids.*' => 'integer|exists:zonas_cultivo,id',
             'description' => 'nullable|string',
             'location' => 'nullable|string|max:255',
             'responsible' => 'nullable|string|max:255',
@@ -530,6 +540,8 @@ class EntityController extends Controller
 
         $cultivoIds = $validated['cultivo_ids'] ?? null;
         unset($validated['cultivo_ids']);
+        $zonaIds = $validated['zona_cultivo_ids'] ?? null;
+        unset($validated['zona_cultivo_ids']);
 
         $entity->update($validated);
 
@@ -538,8 +550,13 @@ class EntityController extends Controller
             $entity->cultivos()->sync($cultivoIds);
         }
 
+        // Zonas que surte un almacén de campo (null = no tocar, [] = limpiar)
+        if ($zonaIds !== null) {
+            $entity->zonasCultivo()->sync($zonaIds);
+        }
+
         // Recargar la entidad con sus relaciones
-        $entity = $entity->fresh(['branch.enterprise:id,name,slug', 'entityType', 'areas', 'cultivos:id,nombre']);
+        $entity = $entity->fresh(['branch.enterprise:id,name,slug', 'entityType', 'areas', 'cultivos:id,nombre', 'zonasCultivo:id,nombre']);
 
         // Broadcast evento en tiempo real
         broadcast(new EntityUpdated('updated', $entity->toArray()));
