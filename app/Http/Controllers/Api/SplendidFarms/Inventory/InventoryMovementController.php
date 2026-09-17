@@ -13,6 +13,7 @@ use App\Models\InventoryKardex;
 use App\Models\MovementType;
 use App\Models\Product;
 use App\Services\Inventory\AlmacenAccessService;
+use App\Services\Inventory\LoteCaducidadValidator;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -22,8 +23,10 @@ use Symfony\Component\HttpFoundation\Response;
 
 class InventoryMovementController extends Controller
 {
-    public function __construct(private AlmacenAccessService $almacenes)
-    {
+    public function __construct(
+        private AlmacenAccessService $almacenes,
+        private LoteCaducidadValidator $lotes,
+    ) {
     }
 
     /**
@@ -90,6 +93,15 @@ class InventoryMovementController extends Controller
     private function noVisible(string $mensaje = 'Movimiento no encontrado', int $status = 404): JsonResponse
     {
         return response()->json(['status' => 'error', 'message' => $mensaje], $status);
+    }
+
+    private function erroresDeLote(array $errores): JsonResponse
+    {
+        return response()->json([
+            'status' => 'error',
+            'message' => reset($errores),
+            'errors' => $errores,
+        ], 422);
     }
 
     private function getEntityOwnerEnterprise(?int $entityId): ?Enterprise
@@ -430,6 +442,20 @@ class InventoryMovementController extends Controller
             }
         }
 
+        // Lotes y caducidad: las salidas heredan la caducidad del stock de origen.
+        if (LoteCaducidadValidator::esSalida($movementType)) {
+            $validated['details'] = $this->lotes->completarCaducidad($validated['source_entity_id'] ?? null, $validated['details']);
+        }
+        $erroresLote = $this->lotes->validar(
+            $movementType,
+            $validated['source_entity_id'] ?? null,
+            $validated['destination_entity_id'] ?? null,
+            $validated['details'],
+        );
+        if ($erroresLote) {
+            return $this->erroresDeLote($erroresLote);
+        }
+
         // Validar stock desde la creación para salidas/transferencias/ajustes negativos.
         // Esto evita que se registren operaciones inviables que luego fallen al aprobar.
         $requiresStockValidation =
@@ -652,6 +678,22 @@ class InventoryMovementController extends Controller
             }
         }
 
+        if ($movementType && isset($validated['details'])) {
+            $origenFinal = $validated['source_entity_id'] ?? $movement->source_entity_id;
+            if (LoteCaducidadValidator::esSalida($movementType)) {
+                $validated['details'] = $this->lotes->completarCaducidad($origenFinal, $validated['details']);
+            }
+            $erroresLote = $this->lotes->validar(
+                $movementType,
+                $origenFinal,
+                $validated['destination_entity_id'] ?? $movement->destination_entity_id,
+                $validated['details'],
+            );
+            if ($erroresLote) {
+                return $this->erroresDeLote($erroresLote);
+            }
+        }
+
         $requiresStockValidation =
             ($movementType && in_array($movementType->direction, ['out', 'transfer'])) ||
             ($movementType && $movementType->direction === 'adjustment' && $movementType->effect === 'decrease');
@@ -851,6 +893,23 @@ class InventoryMovementController extends Controller
         $entidad = $tipoOperado ? $this->entidadOperada($tipoOperado, $movement) : null;
         if (! in_array((int) $entidad, $this->getAccessibleEntityIds($request), true)) {
             return $this->noVisible('No tienes acceso al almacén de este movimiento', 403);
+        }
+
+        $movement->loadMissing('details');
+        $yaDescontado = (bool) data_get($movement->metadata, 'stock_deducted_at_creation', false);
+        $erroresLote = $this->lotes->validar(
+            $tipoOperado,
+            $movement->source_entity_id,
+            $movement->destination_entity_id,
+            $movement->details->map(fn ($d) => [
+                'product_id' => $d->product_id,
+                'lot_number' => $d->lot_number,
+                'expiry_date' => $d->expiry_date?->toDateString(),
+            ])->all(),
+            ! $yaDescontado,
+        );
+        if ($erroresLote) {
+            return $this->erroresDeLote($erroresLote);
         }
 
         $userEnterpriseId = $this->resolveUserEnterpriseId($request);
