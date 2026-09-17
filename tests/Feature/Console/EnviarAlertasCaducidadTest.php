@@ -120,4 +120,58 @@ class EnviarAlertasCaducidadTest extends TestCase
             ->where('user_id', $usuario->id)
             ->get());
     }
+
+    public function test_no_notifica_por_entidades_staladas_o_no_pertenecientes(): void
+    {
+        $this->setUpAlmacenFixtures();
+        $this->insumo->update(['dias_alerta_caducidad' => 30]);
+
+        // Stock con vencimiento en almacénA (válido)
+        $this->darStock($this->almacenA, $this->insumo, 2, 'VENC', now()->subDay()->toDateString());
+
+        // Crear almacén en otra sucursal (no perteneciente a la empresa del usuario)
+        $otraEmpresa = Enterprise::create([
+            'name' => 'Otra Empresa',
+            'slug' => 'otra-empresa',
+            'description' => 'Empresa para test de staladas',
+            'is_active' => true,
+        ]);
+        $otraSucursal = Branch::create([
+            'enterprise_id' => $otraEmpresa->id,
+            'code' => 'SUC-X',
+            'name' => 'Sucursal X',
+            'slug' => 'sucursal-x',
+        ]);
+        $almacenAjeno = Entity::create([
+            'branch_id' => $otraSucursal->id,
+            'entity_type_id' => $this->tipoCampo->id,
+            'code' => 'ALM-X',
+            'name' => 'Almacén Ajeno',
+        ]);
+
+        // Stock con vencimiento en almacénAjeno
+        $this->darStock($almacenAjeno, $this->insumo, 2, 'VENC-X', now()->subDay()->toDateString());
+
+        // Usuario con acceso en la empresa correcta
+        $usuario = $this->crearUsuarioDeCampo([$this->almacenA]);
+
+        // Asignar usuario al almacén ajeno (stale grant)
+        UserEntityAccess::create([
+            'user_id' => $usuario->id,
+            'entity_id' => $almacenAjeno->id,
+            'enterprise_id' => $this->empresa->id,  // Empresa incorrecta
+        ]);
+
+        // Ejecutar comando
+        $this->artisan('inventario:alertas-caducidad')->assertSuccessful();
+
+        // Debe haber exactamente 1 notificación (solo para almacénA)
+        $avisos = SystemNotification::where('title', EnviarAlertasCaducidad::TITULO)
+            ->where('user_id', $usuario->id)
+            ->get();
+
+        $this->assertCount(1, $avisos);
+        $this->assertStringContainsString('Almacén Campo A', $avisos->first()->message);
+        $this->assertStringNotContainsString('Almacén Ajeno', $avisos->first()->message);
+    }
 }

@@ -110,7 +110,8 @@ class EnviarAlertasCaducidad extends Command
      * Compute visible warehouse IDs for a user in an enterprise without calling
      * AlmacenAccessService per user (which would cause N+1 queries).
      * Replicates the logic: admin/superadmin or ver_todos_almacenes permission
-     * sees all enterprise warehouses; otherwise sees only assigned in user_entity_access.
+     * sees all enterprise warehouses; otherwise sees only assigned in user_entity_access
+     * (intersected with valid enterprise entities to exclude stale grants).
      */
     private function idsVisiblesLocal(User $user, Enterprise $empresa, AlmacenAccessService $almacenes, array $idsDeEmpresa, $userEntityAccessCollection): array
     {
@@ -122,10 +123,12 @@ class EnviarAlertasCaducidad extends Command
             return $idsDeEmpresa;
         }
 
-        // User can only see assigned warehouses
-        return $userEntityAccessCollection
+        // User can only see assigned warehouses that are still part of the enterprise
+        $asignadas = $userEntityAccessCollection
             ->pluck('entity_id')
             ->map(fn ($id) => (int) $id)
-            ->toArray();
+            ->all();
+
+        return array_values(array_intersect($idsDeEmpresa, $asignadas));
     }
 }
