@@ -15,6 +15,7 @@ class AplicacionDetalle extends Model
     protected $fillable = [
         'aplicacion_id',
         'producto_id',
+        'product_id',
         'dosis',
         'unidad_medida',
     ];
@@ -33,5 +34,10 @@ class AplicacionDetalle extends Model
     public function producto(): BelongsTo
     {
         return $this->belongsTo(ProductoAplicacion::class, 'producto_id');
+    }
+
+    public function product(): BelongsTo
+    {
+        return $this->belongsTo(Product::class, 'product_id');
     }
 }
