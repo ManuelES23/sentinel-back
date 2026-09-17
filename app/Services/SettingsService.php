@@ -22,6 +22,7 @@ class SettingsService
     public const CACHE_KEY = 'system_settings';
 
     public const DEFINITIONS = [
+        'session.idle_enabled' => ['default' => true, 'rules' => ['boolean']],
         'session.idle_minutes' => ['default' => 120, 'rules' => ['integer', 'min:5', 'max:1440']],
         'password.min_length' => ['default' => 8, 'rules' => ['integer', 'min:8', 'max:64']],
         'password.require_mixed_case' => ['default' => false, 'rules' => ['boolean']],
@@ -160,6 +161,7 @@ class SettingsService
     public static function attributesForRequest(): array
     {
         return [
+            'session.idle_enabled' => 'el cierre de sesión por inactividad',
             'session.idle_minutes' => 'la duración de sesión',
             'password.min_length' => 'la longitud mínima',
             'password.require_mixed_case' => 'mayúsculas y minúsculas',

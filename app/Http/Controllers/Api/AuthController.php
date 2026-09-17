@@ -46,6 +46,7 @@ class AuthController extends Controller
                 'email' => $user->email,
                 'role' => $user->role ?? 'user',
                 'must_change_password' => (bool) $user->must_change_password,
+                'session_idle_enabled' => (bool) app(SettingsService::class)->get('session.idle_enabled'),
                 'session_idle_minutes' => (int) app(SettingsService::class)->get('session.idle_minutes'),
             ],
             'token' => $token,
@@ -104,6 +105,7 @@ class AuthController extends Controller
                 'email' => $user->email,
                 'role' => $user->role ?? 'user',
                 'must_change_password' => (bool) $user->must_change_password,
+                'session_idle_enabled' => (bool) app(SettingsService::class)->get('session.idle_enabled'),
                 'session_idle_minutes' => (int) app(SettingsService::class)->get('session.idle_minutes'),
             ],
             'permissions' => $permissions
