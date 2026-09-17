@@ -10,6 +10,7 @@ use App\Models\Productor;
 use App\Models\Temporada;
 use App\Models\UnitOfMeasure;
 use App\Models\User;
+use App\Models\UserEnterpriseAccess;
 use App\Services\Inventory\CatalogoAgricolaService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
@@ -34,6 +35,7 @@ class AplicacionesCatalogoTest extends TestCase
         Sanctum::actingAs($user);
 
         $this->empresa = Enterprise::create(['name' => 'Splendid Farms', 'slug' => 'splendidfarms', 'is_active' => true, 'description' => 'x']);
+        UserEnterpriseAccess::create(['user_id' => $user->id, 'enterprise_id' => $this->empresa->id, 'is_active' => true]);
         UnitOfMeasure::create(['code' => 'LT', 'name' => 'Litro', 'abbreviation' => 'L']);
         UnitOfMeasure::create(['code' => 'KG', 'name' => 'Kilogramo', 'abbreviation' => 'kg']);
 
@@ -74,6 +76,14 @@ class AplicacionesCatalogoTest extends TestCase
     public function test_index_sin_header_da_422(): void
     {
         $this->getJson(self::BASE . '/productos-aplicacion')->assertStatus(422);
+    }
+
+    public function test_index_sin_membresia_en_la_empresa_da_403(): void
+    {
+        $ajeno = User::factory()->create();
+        Sanctum::actingAs($ajeno);
+
+        $this->getJson(self::BASE . '/productos-aplicacion', $this->h)->assertStatus(403);
     }
 
     public function test_store_crea_el_articulo_en_el_catalogo(): void

@@ -79,7 +79,7 @@ class EnviarAlertasCaducidad extends Command
                 }
 
                 // Build visible warehouse IDs for this user
-                $visibles = $this->idsVisiblesLocal($user, $empresa, $almacenes, $idsDeEmpresa, $userEntityAccesses[$user->id] ?? []);
+                $visibles = $this->idsVisiblesLocal($user, $empresa, $almacenes, $idsDeEmpresa, collect($userEntityAccesses[$user->id] ?? []));
 
                 $suyas = $filasEmpresa->filter(fn ($s) => in_array((int) $s->entity_id, $visibles, true));
 

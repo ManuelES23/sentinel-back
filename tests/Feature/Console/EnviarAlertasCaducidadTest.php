@@ -174,4 +174,28 @@ class EnviarAlertasCaducidadTest extends TestCase
         $this->assertStringContainsString('Almacén Campo A', $avisos->first()->message);
         $this->assertStringNotContainsString('Almacén Ajeno', $avisos->first()->message);
     }
+
+    public function test_miembro_sin_almacenes_asignados_no_hace_fallar_el_comando(): void
+    {
+        $this->setUpAlmacenFixtures();
+        $this->insumo->update(['dias_alerta_caducidad' => 30]);
+        $this->darStock($this->almacenA, $this->insumo, 2, 'VENC', now()->subDay()->toDateString());
+
+        // Miembro de la empresa (user_enterprise_access activo) pero SIN ninguna
+        // fila en user_entity_access y sin permiso ver_todos_almacenes: antes
+        // esto hacía fallar el comando completo con un fatal error.
+        $sinGrants = $this->crearUsuarioDeCampo();
+        $conGrants = $this->crearUsuarioDeCampo([$this->almacenA]);
+
+        $this->artisan('inventario:alertas-caducidad')->assertSuccessful();
+
+        $this->assertSame(0, SystemNotification::where('user_id', $sinGrants->id)
+            ->where('title', EnviarAlertasCaducidad::TITULO)
+            ->count());
+
+        $avisos = SystemNotification::where('title', EnviarAlertasCaducidad::TITULO)
+            ->where('user_id', $conGrants->id)
+            ->get();
+        $this->assertCount(1, $avisos);
+    }
 }

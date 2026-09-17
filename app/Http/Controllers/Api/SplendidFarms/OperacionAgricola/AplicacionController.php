@@ -5,7 +5,7 @@ namespace App\Http\Controllers\Api\SplendidFarms\OperacionAgricola;
 use App\Http\Controllers\Controller;
 use App\Models\Aplicacion;
 use App\Models\AplicacionDetalle;
-use App\Models\Enterprise;
+use App\Services\Inventory\AlmacenAccessService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -14,11 +14,15 @@ use Illuminate\Validation\Rule;
 
 class AplicacionController extends Controller
 {
+    public function __construct(private AlmacenAccessService $almacenes)
+    {
+    }
+
     private function reglaProducto(Request $request): \Illuminate\Validation\Rules\Exists
     {
-        $empresaId = Enterprise::where('slug', $request->header('X-Enterprise-Slug'))->value('id') ?? 0;
+        $empresa = $this->almacenes->resolverEmpresa($request);
 
-        return Rule::exists('enterprise_product', 'product_id')->where('enterprise_id', $empresaId);
+        return Rule::exists('enterprise_product', 'product_id')->where('enterprise_id', $empresa->id);
     }
 
     /**

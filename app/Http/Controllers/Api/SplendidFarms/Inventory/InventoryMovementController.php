@@ -79,13 +79,23 @@ class InventoryMovementController extends Controller
      * positivos y transferencias (el receptor aprueba); origen en salidas
      * y ajustes negativos.
      */
-    private function entidadOperada(MovementType $type, InventoryMovement $movement): ?int
+    /**
+     * Si la dirección/efecto del tipo de movimiento opera sobre el destino
+     * (entradas, transferencias y ajustes positivos) o sobre el origen
+     * (salidas y ajustes negativos). La usan tanto entidadOperada() (con un
+     * InventoryMovement ya persistido) como las restricciones de ownership
+     * en store()/update() (con datos de la request, antes de crear el modelo).
+     */
+    private function usaDestino(MovementType $type): bool
     {
-        $usaDestino = $type->direction === 'in'
+        return $type->direction === 'in'
             || $type->direction === 'transfer'
             || ($type->direction === 'adjustment' && $type->effect === 'increase');
+    }
 
-        $id = $usaDestino ? $movement->destination_entity_id : $movement->source_entity_id;
+    private function entidadOperada(MovementType $type, InventoryMovement $movement): ?int
+    {
+        $id = $this->usaDestino($type) ? $movement->destination_entity_id : $movement->source_entity_id;
 
         return $id ? (int) $id : null;
     }
@@ -460,7 +470,7 @@ class InventoryMovementController extends Controller
         $ownIds = $this->getOwnEntityIds($request);
 
         if (in_array($movementType->direction, ['in', 'out', 'adjustment'])) {
-            $operatedEntityId = $movementType->direction === 'in'
+            $operatedEntityId = $this->usaDestino($movementType)
                 ? ($validated['destination_entity_id'] ?? null)
                 : ($validated['source_entity_id'] ?? null);
 
@@ -696,7 +706,7 @@ class InventoryMovementController extends Controller
         $movementType = $movement->movementType;
 
         if ($movementType && in_array($movementType->direction, ['in', 'out', 'adjustment'])) {
-            $operatedEntityId = $movementType->direction === 'in'
+            $operatedEntityId = $this->usaDestino($movementType)
                 ? ($validated['destination_entity_id'] ?? $movement->destination_entity_id)
                 : ($validated['source_entity_id'] ?? $movement->source_entity_id);
 

@@ -11,7 +11,8 @@ use Illuminate\Support\Carbon;
  * Reglas de lote y caducidad para movimientos de inventario:
  * - Entradas (entrada o ajuste positivo) de artículos con lotes exigen lote;
  *   con caducidad exigen además la fecha. Un lote existente no puede llegar
- *   con otra fecha. Una compra no puede traer un lote ya vencido.
+ *   con otra fecha (esto también aplica al destino de una transferencia).
+ *   Una compra no puede traer un lote ya vencido.
  * - Salidas (salida, transferencia o ajuste negativo) exigen un lote que
  *   exista en el almacén de origen y que no esté vencido, salvo merma y
  *   ajuste negativo (baja de producto vencido).
@@ -58,7 +59,11 @@ class LoteCaducidadValidator
                 continue;
             }
 
-            if (self::esEntrada($tipo) && $destinoId) {
+            // El chequeo de colisión de lote en destino aplica a entradas y a
+            // transferencias (que también escriben en destino); la regla de
+            // "no se puede dar entrada a un lote vencido" queda limitada a
+            // entradas puras dentro de errorEntrada().
+            if ($destinoId && (self::esEntrada($tipo) || $tipo->direction === 'transfer')) {
                 $error = $this->errorEntrada($tipo, $producto, $destinoId, $lote, $detalle['expiry_date'] ?? null, $hoy);
                 if ($error) {
                     $errores["details.$i." . $error[0]] = $error[1];

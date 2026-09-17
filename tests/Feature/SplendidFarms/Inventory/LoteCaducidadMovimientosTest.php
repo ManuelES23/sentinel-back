@@ -123,4 +123,34 @@ class LoteCaducidadMovimientosTest extends TestCase
 
         $this->mover($this->tipoEntrada->id, [], null, $this->almacenA->id)->assertCreated();
     }
+
+    public function test_transferencia_a_lote_existente_con_otra_caducidad_da_422_y_no_pisa_destino(): void
+    {
+        $fechaDestino = now()->addMonths(2)->toDateString();
+        $fechaOrigen = now()->addMonths(5)->toDateString();
+        $this->darStock($this->almacenB, $this->insumo, 3, 'L1', $fechaDestino);
+        $this->darStock($this->almacenA, $this->insumo, 5, 'L1', $fechaOrigen);
+
+        $this->mover($this->tipoTransferencia->id, ['lot_number' => 'L1'], $this->almacenA->id, $this->almacenB->id)
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['details.0.lot_number'], 'errors');
+
+        $destino = InventoryStock::where('entity_id', $this->almacenB->id)->where('lot_number', 'L1')->first();
+        $this->assertSame($fechaDestino, $destino->expiry_date->toDateString());
+        $this->assertEquals(3, $destino->quantity);
+    }
+
+    public function test_ajuste_negativo_puede_tomar_lote_vencido(): void
+    {
+        $this->darStock($this->almacenA, $this->insumo, 5, 'LV', now()->subDay()->toDateString());
+
+        $this->mover($this->tipoAjusteMenos->id, ['lot_number' => 'LV'], $this->almacenA->id)->assertCreated();
+    }
+
+    public function test_lote_que_vence_hoy_no_se_considera_vencido_en_salida(): void
+    {
+        $this->darStock($this->almacenA, $this->insumo, 5, 'HOY', now()->toDateString());
+
+        $this->mover($this->tipoSalida->id, ['lot_number' => 'HOY'], $this->almacenA->id)->assertCreated();
+    }
 }

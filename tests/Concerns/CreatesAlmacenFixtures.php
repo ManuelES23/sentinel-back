@@ -37,6 +37,7 @@ trait CreatesAlmacenFixtures
     protected MovementType $tipoTransferencia;
     protected MovementType $tipoMerma;
     protected MovementType $tipoAjusteMas;
+    protected MovementType $tipoAjusteMenos;
 
     protected function setUpAlmacenFixtures(): void
     {
@@ -87,6 +88,7 @@ trait CreatesAlmacenFixtures
         $this->tipoTransferencia = MovementType::create(['code' => 'TRANSFERENCIA', 'name' => 'Transferencia', 'direction' => 'transfer', 'effect' => 'neutral', 'requires_source_entity' => true, 'requires_destination_entity' => true]);
         $this->tipoMerma = MovementType::create(['code' => 'MERMA', 'name' => 'Merma', 'direction' => 'out', 'effect' => 'decrease', 'requires_source_entity' => true]);
         $this->tipoAjusteMas = MovementType::create(['code' => 'AJUSTE+', 'name' => 'Ajuste positivo', 'direction' => 'adjustment', 'effect' => 'increase', 'requires_destination_entity' => true]);
+        $this->tipoAjusteMenos = MovementType::create(['code' => 'AJUSTE-', 'name' => 'Ajuste negativo', 'direction' => 'adjustment', 'effect' => 'decrease', 'requires_source_entity' => true]);
     }
 
     protected function crearUsuarioDeCampo(array $almacenes = []): User

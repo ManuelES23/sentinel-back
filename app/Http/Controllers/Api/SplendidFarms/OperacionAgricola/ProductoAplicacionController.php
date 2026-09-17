@@ -3,10 +3,9 @@
 namespace App\Http\Controllers\Api\SplendidFarms\OperacionAgricola;
 
 use App\Http\Controllers\Controller;
-use App\Models\Enterprise;
 use App\Models\Product;
+use App\Services\Inventory\AlmacenAccessService;
 use App\Services\Inventory\CatalogoAgricolaService;
-use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -17,8 +16,10 @@ use Illuminate\Http\Request;
  */
 class ProductoAplicacionController extends Controller
 {
-    public function __construct(private CatalogoAgricolaService $catalogo)
-    {
+    public function __construct(
+        private CatalogoAgricolaService $catalogo,
+        private AlmacenAccessService $almacenes,
+    ) {
     }
 
     /**
@@ -26,7 +27,7 @@ class ProductoAplicacionController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $empresa = $this->empresa($request);
+        $empresa = $this->almacenes->resolverEmpresa($request);
         $categorias = $request->filled('tipo') && isset(CatalogoAgricolaService::CATEGORIAS[$request->tipo])
             ? [CatalogoAgricolaService::CATEGORIAS[$request->tipo]]
             : array_values(CatalogoAgricolaService::CATEGORIAS);
@@ -55,7 +56,7 @@ class ProductoAplicacionController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
-        $empresa = $this->empresa($request);
+        $empresa = $this->almacenes->resolverEmpresa($request);
         $validated = $request->validate([
             'nombre'             => 'required|string|max:200',
             'ingrediente_activo' => 'nullable|string|max:200',
@@ -78,7 +79,7 @@ class ProductoAplicacionController extends Controller
      */
     public function update(Request $request, Product $producto): JsonResponse
     {
-        $empresa = $this->empresa($request);
+        $empresa = $this->almacenes->resolverEmpresa($request);
         if (! $producto->enterprises()->where('enterprises.id', $empresa->id)->exists()) {
             return response()->json(['status' => 'error', 'message' => 'Producto no encontrado'], 404);
         }
@@ -124,20 +125,5 @@ class ProductoAplicacionController extends Controller
             'unidad' => $p->unit?->abbreviation,
             'requiere_revision' => (bool) $p->requiere_revision,
         ];
-    }
-
-    private function empresa(Request $request): Enterprise
-    {
-        $slug = $request->header('X-Enterprise-Slug');
-        $empresa = $slug ? Enterprise::where('slug', $slug)->first() : null;
-
-        if (! $empresa) {
-            throw new HttpResponseException(response()->json([
-                'status' => 'error',
-                'message' => 'No se pudo determinar la empresa actual desde el header X-Enterprise-Slug',
-            ], 422));
-        }
-
-        return $empresa;
     }
 }
