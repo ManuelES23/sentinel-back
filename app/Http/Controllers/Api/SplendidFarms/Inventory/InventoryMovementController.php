@@ -246,6 +246,46 @@ class InventoryMovementController extends Controller
             'data' => $stock,
         ]);
     }
+
+    /**
+     * Lotes con existencia de un artículo en un almacén, primero los que
+     * caducan antes (FEFO). Lo usa el selector de lotes de salidas.
+     */
+    public function lotesDisponibles(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'product_id' => 'required|integer|exists:products,id',
+            'entity_id' => 'required|integer',
+        ]);
+
+        if (! in_array((int) $validated['entity_id'], $this->getAccessibleEntityIds($request), true)) {
+            return $this->noVisible('No tienes acceso a este almacén', 403);
+        }
+
+        $product = Product::findOrFail($validated['product_id']);
+        $hoy = now()->startOfDay();
+        $limite = $hoy->copy()->addDays((int) ($product->dias_alerta_caducidad ?? 30));
+
+        $lotes = InventoryStock::where('product_id', $product->id)
+            ->where('entity_id', $validated['entity_id'])
+            ->where('quantity', '>', 0)
+            ->orderByRaw('expiry_date IS NULL')
+            ->orderBy('expiry_date')
+            ->orderBy('id')
+            ->get(['id', 'lot_number', 'expiry_date', 'quantity', 'unit_cost'])
+            ->map(fn ($s) => [
+                'lot_number' => $s->lot_number,
+                'expiry_date' => $s->expiry_date?->toDateString(),
+                'quantity' => (float) $s->quantity,
+                'unit_cost' => (float) $s->unit_cost,
+                'vencido' => (bool) ($s->expiry_date && $s->expiry_date->lt($hoy)),
+                'por_caducar' => (bool) ($s->expiry_date && ! $s->expiry_date->lt($hoy) && $s->expiry_date->lte($limite)),
+            ])
+            ->values();
+
+        return response()->json(['success' => true, 'data' => $lotes]);
+    }
+
     /**
      * Retorna el siguiente número de folio para una dirección dada.
      * GET ?direction=transfer|in|out|adjustment
