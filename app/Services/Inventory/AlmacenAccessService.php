@@ -2,6 +2,7 @@
 
 namespace App\Services\Inventory;
 
+use App\Http\Middleware\EnsureUserIsAdmin;
 use App\Models\Enterprise;
 use App\Models\Entity;
 use App\Models\User;
@@ -43,7 +44,7 @@ class AlmacenAccessService
 
     public function esAdmin(User $user): bool
     {
-        return in_array($user->role, ['admin', 'superadmin'], true);
+        return EnsureUserIsAdmin::esAdmin($user);
     }
 
     public function perteneceAEmpresa(User $user, Enterprise $empresa): bool

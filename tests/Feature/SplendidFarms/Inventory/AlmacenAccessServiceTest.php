@@ -2,11 +2,15 @@
 
 namespace Tests\Feature\SplendidFarms\Inventory;
 
+use App\Models\Branch;
 use App\Models\Enterprise;
+use App\Models\Entity;
+use App\Models\UserEntityAccess;
 use App\Services\Inventory\AlmacenAccessService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Tests\Concerns\CreatesAlmacenFixtures;
 use Tests\TestCase;
 
@@ -89,5 +93,55 @@ class AlmacenAccessServiceTest extends TestCase
         $propia = Request::create('/x', 'GET', [], [], [], ['HTTP_X_ENTERPRISE_SLUG' => 'splendidfarms']);
         $propia->setUserResolver(fn () => $user);
         $this->assertSame($this->empresa->id, $this->servicio->resolverEmpresa($propia)->id);
+    }
+
+    public function test_entidades_vinculadas_via_enterprise_entity(): void
+    {
+        // Crear segunda empresa con su rama y entidad
+        $otra = Enterprise::create(['name' => 'Canes Agro', 'slug' => 'canes-agro', 'is_active' => true, 'description' => 'Empresa de caña']);
+        $sucursalOtra = Branch::create([
+            'enterprise_id' => $otra->id,
+            'code' => 'SUC-02',
+            'name' => 'Central Caña',
+            'slug' => 'central-cana',
+        ]);
+        $almacenCana = Entity::create([
+            'branch_id' => $sucursalOtra->id,
+            'entity_type_id' => $this->tipoCampo->id,
+            'code' => 'ALM-CANA',
+            'name' => 'Almacén Caña',
+        ]);
+
+        // Vincularlo a Splendid Farms (el almacén ya está en enterprise_entity para Canes Agro por el migration)
+        DB::table('enterprise_entity')->insert([
+            'enterprise_id' => $this->empresa->id,
+            'entity_id' => $almacenCana->id,
+            'access_level' => 'read',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        // (a) idsDeEmpresa debe incluir la entidad vinculada
+        $ids = $this->servicio->idsDeEmpresa($this->empresa);
+        sort($ids);
+        $esperado = [$this->almacenA->id, $this->almacenB->id, $almacenCana->id];
+        sort($esperado);
+        $this->assertSame($esperado, $ids);
+
+        // (b) usuario con otorgarVerTodos ve la entidad vinculada
+        $userConVerTodos = $this->crearUsuarioDeCampo();
+        $this->otorgarVerTodos($userConVerTodos);
+        $ids = $this->servicio->idsVisibles($userConVerTodos, $this->empresa);
+        sort($ids);
+        $this->assertSame($esperado, $ids);
+
+        // (c) usuario asignado a la entidad vinculada la ve
+        $userAsignado = $this->crearUsuarioDeCampo([$almacenCana]);
+        $this->assertSame([$almacenCana->id], $this->servicio->idsVisibles($userAsignado, $this->empresa));
+        $this->assertTrue($this->servicio->puedeVer($userAsignado, $this->empresa, $almacenCana->id));
+
+        // (d) usuario sin asignación a la entidad vinculada no la ve
+        $userSinAsignacion = $this->crearUsuarioDeCampo();
+        $this->assertFalse($this->servicio->puedeVer($userSinAsignacion, $this->empresa, $almacenCana->id));
     }
 }
