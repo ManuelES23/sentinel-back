@@ -1218,8 +1218,17 @@ class InventoryMovementController extends Controller
      */
     public function cancel(InventoryMovement $movement, Request $request): JsonResponse
     {
-        if (! $this->movimientoVisible($request, $movement)) {
-            return $this->noVisible('No tienes acceso al almacén de este movimiento', 403);
+        $tipoParaCancelar = $movement->movementType;
+
+        if ($tipoParaCancelar?->direction === 'transfer') {
+            if (! $this->movimientoVisible($request, $movement)) {
+                return $this->noVisible('No tienes acceso al almacén de este movimiento', 403);
+            }
+        } else {
+            $entidad = $tipoParaCancelar ? $this->entidadOperada($tipoParaCancelar, $movement) : null;
+            if (! in_array((int) $entidad, $this->getAccessibleEntityIds($request), true)) {
+                return $this->noVisible('No tienes acceso al almacén de este movimiento', 403);
+            }
         }
 
         if (!in_array($movement->status, ['pending', 'approved'])) {

@@ -4,6 +4,7 @@ namespace Tests\Feature\SplendidFarms\Inventory;
 
 use App\Models\Enterprise;
 use App\Models\InventoryMovement;
+use App\Models\InventoryMovementDetail;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Tests\Concerns\CreatesAlmacenFixtures;
@@ -122,5 +123,93 @@ class MovimientosPorAlmacenTest extends TestCase
 
         $response->assertOk();
         $this->assertSame([$this->almacenA->id], collect($response->json('data'))->pluck('id')->all());
+    }
+
+    public function test_approve_entrada_en_almacen_asignado_funciona(): void
+    {
+        $mov = InventoryMovement::create([
+            'document_number' => 'IN-TEST-A',
+            'movement_type_id' => $this->tipoEntrada->id,
+            'destination_entity_id' => $this->almacenA->id,
+            'movement_date' => now(),
+            'status' => 'pending',
+        ]);
+        Sanctum::actingAs($this->crearUsuarioDeCampo([$this->almacenA]));
+
+        $this->postJson(self::URL . "/{$mov->id}/approve", [], $this->headersEmpresa())->assertOk();
+    }
+
+    public function test_approve_entrada_en_almacen_no_asignado_da_403(): void
+    {
+        $mov = InventoryMovement::create([
+            'document_number' => 'IN-TEST-B',
+            'movement_type_id' => $this->tipoEntrada->id,
+            'destination_entity_id' => $this->almacenB->id,
+            'movement_date' => now(),
+            'status' => 'pending',
+        ]);
+        Sanctum::actingAs($this->crearUsuarioDeCampo([$this->almacenA]));
+
+        $this->postJson(self::URL . "/{$mov->id}/approve", [], $this->headersEmpresa())->assertStatus(403);
+    }
+
+    public function test_approve_transferencia_hacia_almacen_visible_no_es_403(): void
+    {
+        $this->darStock($this->almacenB, $this->insumo, 50);
+        $mov = InventoryMovement::create([
+            'document_number' => 'TR-TEST-1',
+            'movement_type_id' => $this->tipoTransferencia->id,
+            'source_entity_id' => $this->almacenB->id,
+            'destination_entity_id' => $this->almacenA->id,
+            'movement_date' => now(),
+            'status' => 'pending',
+            'metadata' => ['stock_deducted_at_creation' => true],
+        ]);
+        InventoryMovementDetail::create([
+            'movement_id' => $mov->id,
+            'product_id' => $this->insumo->id,
+            'quantity' => 5,
+            'base_quantity' => 5,
+            'conversion_factor' => 1,
+            'unit_cost' => 10,
+            'total_cost' => 50,
+        ]);
+        Sanctum::actingAs($this->crearUsuarioDeCampo([$this->almacenA]));
+
+        $response = $this->postJson(self::URL . "/{$mov->id}/approve", [], $this->headersEmpresa());
+
+        $this->assertNotEquals(403, $response->status());
+    }
+
+    public function test_cancel_entrada_en_almacen_no_asignado_da_403(): void
+    {
+        $mov = InventoryMovement::create([
+            'document_number' => 'IN-TEST-C',
+            'movement_type_id' => $this->tipoEntrada->id,
+            'destination_entity_id' => $this->almacenB->id,
+            'movement_date' => now(),
+            'status' => 'pending',
+        ]);
+        Sanctum::actingAs($this->crearUsuarioDeCampo([$this->almacenA]));
+
+        $this->postJson(self::URL . "/{$mov->id}/cancel", [], $this->headersEmpresa())->assertStatus(403);
+    }
+
+    public function test_cancel_transferencia_desde_almacen_visible_no_es_403(): void
+    {
+        $mov = InventoryMovement::create([
+            'document_number' => 'TR-TEST-2',
+            'movement_type_id' => $this->tipoTransferencia->id,
+            'source_entity_id' => $this->almacenA->id,
+            'destination_entity_id' => $this->almacenB->id,
+            'movement_date' => now(),
+            'status' => 'pending',
+            'metadata' => ['stock_deducted_at_creation' => true],
+        ]);
+        Sanctum::actingAs($this->crearUsuarioDeCampo([$this->almacenA]));
+
+        $response = $this->postJson(self::URL . "/{$mov->id}/cancel", [], $this->headersEmpresa());
+
+        $this->assertNotEquals(403, $response->status());
     }
 }
