@@ -141,6 +141,41 @@ class SettingsService
         return $reglas;
     }
 
+    /** Mensajes genéricos por regla (no por campo): cubren los 13 ajustes con pocas entradas. */
+    public static function messagesForRequest(): array
+    {
+        return [
+            'integer' => 'Debe ser un número entero.',
+            'string' => 'Debe ser texto.',
+            'boolean' => 'Debe ser verdadero o falso.',
+            'email' => 'Debe ser un correo válido.',
+            'min' => 'El valor mínimo permitido es :min.',
+            'max' => 'El valor máximo permitido es :max.',
+            'in' => 'El valor seleccionado no es válido.',
+            'required_if_accepted' => 'Este campo es obligatorio.',
+        ];
+    }
+
+    /** Nombres en español de cada ajuste, para que el mensaje de validación los use. */
+    public static function attributesForRequest(): array
+    {
+        return [
+            'session.idle_minutes' => 'la duración de sesión',
+            'password.min_length' => 'la longitud mínima',
+            'password.require_mixed_case' => 'mayúsculas y minúsculas',
+            'password.require_numbers' => 'exigir números',
+            'password.require_symbols' => 'exigir símbolos',
+            'mail.enabled' => 'activar SMTP',
+            'mail.host' => 'el servidor SMTP',
+            'mail.port' => 'el puerto SMTP',
+            'mail.encryption' => 'el cifrado',
+            'mail.username' => 'el usuario SMTP',
+            'mail.password' => 'la contraseña SMTP',
+            'mail.from_address' => 'el correo del remitente',
+            'mail.from_name' => 'el nombre del remitente',
+        ];
+    }
+
     public function flush(): void
     {
         Cache::forget(self::CACHE_KEY);

@@ -29,7 +29,11 @@ class SystemSettingsController extends Controller
 
     public function update(Request $request): JsonResponse
     {
-        $validated = $request->validate(SettingsService::rulesForRequest());
+        $validated = $request->validate(
+            SettingsService::rulesForRequest(),
+            SettingsService::messagesForRequest(),
+            SettingsService::attributesForRequest(),
+        );
 
         $cambios = $this->settings->update(Arr::dot($validated), $request->user());
 

@@ -75,6 +75,17 @@ class MailSettingsTest extends TestCase
         $this->assertFalse(config('mail.mailers.smtp.auto_tls'));
     }
 
+    public function test_cifrado_tls_activa_starttls_obligatorio(): void
+    {
+        $this->activarSmtp(['mail.encryption' => 'tls', 'mail.port' => 587]);
+
+        app(MailSettings::class)->apply();
+
+        $this->assertSame('smtp', config('mail.mailers.smtp.scheme'));
+        $this->assertTrue(config('mail.mailers.smtp.auto_tls'));
+        $this->assertTrue(config('mail.mailers.smtp.require_tls'));
+    }
+
     public function test_correo_de_prueba_con_smtp_desactivado_da_422(): void
     {
         Sanctum::actingAs($this->admin);

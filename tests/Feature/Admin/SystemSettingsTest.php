@@ -65,7 +65,7 @@ class SystemSettingsTest extends TestCase
     {
         Sanctum::actingAs($this->admin);
 
-        $this->putJson('/api/admin/settings', [
+        $respuesta = $this->putJson('/api/admin/settings', [
             'session' => ['idle_minutes' => 2],
             'password' => ['min_length' => 100],
             'mail' => ['enabled' => true, 'encryption' => 'starttls'],
@@ -74,6 +74,13 @@ class SystemSettingsTest extends TestCase
             ->assertJsonValidationErrors([
                 'session.idle_minutes', 'password.min_length', 'mail.encryption', 'mail.host', 'mail.from_address',
             ]);
+
+        // Las claves de "errors" traen puntos literales (p. ej. "session.idle_minutes"):
+        // ->json('errors.session.idle_minutes.0') usaría dot-notation y las confundiría
+        // con rutas anidadas, así que se leen directo del array decodificado.
+        $mensaje = $respuesta->json('errors')['session.idle_minutes'][0];
+        $this->assertStringContainsString('mínimo', $mensaje);
+        $this->assertStringNotContainsString('field', $mensaje);
     }
 
     public function test_audita_solo_cambios_y_oculta_la_contrasena(): void

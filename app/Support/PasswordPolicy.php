@@ -48,9 +48,9 @@ class PasswordPolicy
     {
         return [
             "{$campo}.min" => 'La contraseña debe tener al menos :min caracteres.',
-            'password.mixed' => 'La contraseña debe incluir al menos una mayúscula y una minúscula.',
-            'password.numbers' => 'La contraseña debe incluir al menos un número.',
-            'password.symbols' => 'La contraseña debe incluir al menos un símbolo.',
+            "{$campo}.mixed" => 'La contraseña debe incluir al menos una mayúscula y una minúscula.',
+            "{$campo}.numbers" => 'La contraseña debe incluir al menos un número.',
+            "{$campo}.symbols" => 'La contraseña debe incluir al menos un símbolo.',
         ];
     }
 

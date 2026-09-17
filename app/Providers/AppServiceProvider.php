@@ -71,7 +71,12 @@ class AppServiceProvider extends ServiceProvider
             ];
         });
 
-        // SMTP configurado desde /admin/settings (si está activado).
-        $this->app->make(MailSettings::class)->apply();
+        // SMTP configurado desde /admin/settings (si está activado). Se omite bajo
+        // config:cache/optimize: si no, la contraseña SMTP desencriptada quedaría
+        // en texto plano en bootstrap/cache/config.php, y un "desactivar SMTP"
+        // posterior no se reflejaría hasta un config:clear manual.
+        if (! $this->app->runningConsoleCommand(['config:cache', 'optimize'])) {
+            $this->app->make(MailSettings::class)->apply();
+        }
     }
 }
