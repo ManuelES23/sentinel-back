@@ -135,7 +135,9 @@ class LoteSimpleController extends Controller
         }
 
         $lote->update($validated);
-        $lote->load([
+        // refresh() antes de load(): fresh() devolvía el modelo sin relaciones
+        // y la card del front perdía productor, zona y etapas al editar.
+        $lote->refresh()->load([
             'productor:id,nombre,apellido,tipo',
             'zonaCultivo:id,nombre',
             'etapas:id,lote_id,nombre,codigo,superficie,orden,is_active',
@@ -144,7 +146,7 @@ class LoteSimpleController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Lote actualizado',
-            'data' => $lote->fresh(),
+            'data' => $lote,
         ]);
     }
 
