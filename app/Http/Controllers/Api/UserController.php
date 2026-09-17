@@ -7,14 +7,15 @@ use App\Models\User;
 use App\Models\Employee;
 use App\Models\UserEnterpriseAccess;
 use App\Models\ActivityLog;
+use App\Support\PasswordPolicy;
 use Illuminate\Auth\Access\Response as AccessResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\Rules\Password;
 
 class UserController extends Controller
 {
@@ -59,11 +60,11 @@ class UserController extends Controller
         $validated = $request->validate([
             'name' => 'required|string|max:255',
             'email' => 'required|string|email|max:255|unique:users',
-            'password' => 'required|string|min:8',
+            'password' => ['required', 'string', Password::defaults()],
             'phone' => 'nullable|string|max:20',
             'role' => 'nullable|in:user,admin,superadmin',
             'employee_id' => 'nullable|exists:employees,id',
-        ]);
+        ], PasswordPolicy::messages());
 
         $permiso = Gate::inspect('create', [User::class, $validated['role'] ?? null]);
         if ($permiso->denied()) {
@@ -170,13 +171,13 @@ class UserController extends Controller
 
         $validated = $request->validate([
             'mode' => 'required|in:manual,generate',
-            'password' => 'required_if:mode,manual|nullable|string|min:8|confirmed',
+            'password' => ['required_if:mode,manual', 'nullable', 'string', 'confirmed', Password::defaults()],
             'force_change' => 'required|boolean',
-        ]);
+        ], PasswordPolicy::messages());
 
         $generada = $validated['mode'] === 'generate';
-        // Sin símbolos: la temporal suele dictarse o copiarse a mano.
-        $nueva = $generada ? Str::password(12, symbols: false) : $validated['password'];
+        // La temporal cumple la política (sin símbolos salvo que se exijan).
+        $nueva = $generada ? PasswordPolicy::generate() : $validated['password'];
         $forzar = (bool) $validated['force_change'];
 
         DB::transaction(function () use ($user, $nueva, $forzar, $validated) {

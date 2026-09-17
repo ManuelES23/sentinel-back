@@ -7,10 +7,12 @@ use App\Events\VacationRequestUpdated;
 use App\Models\VacationRequest;
 use App\Models\VacationBalance;
 use App\Services\ApprovalNotificationService;
+use App\Support\PasswordPolicy;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\Rules\Password;
 
 class ProfileController extends Controller
 {
@@ -230,8 +232,8 @@ class ProfileController extends Controller
     {
         $validated = $request->validate([
             'current_password' => 'required|string',
-            'password' => 'required|string|min:8|confirmed',
-        ]);
+            'password' => ['required', 'string', 'confirmed', Password::defaults()],
+        ], PasswordPolicy::messages());
 
         $user = $request->user();
 
