@@ -4,8 +4,12 @@ namespace App\Providers;
 
 use App\Services\SettingsService;
 use App\Support\PasswordPolicy;
+use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rules\Password;
 use Laravel\Sanctum\Sanctum;
 use SocialiteProviders\Manager\SocialiteWasCalled;
@@ -49,5 +53,23 @@ class AppServiceProvider extends ServiceProvider
         // Política de contraseñas configurada en /admin/settings (Password::defaults()
         // se aplica automáticamente a cualquier regla 'password' o Password::defaults()).
         Password::defaults(fn () => PasswordPolicy::rule());
+
+        // Límite fijo de intentos de login (no configurable): 5/min por
+        // correo+IP y 20/min por IP.
+        RateLimiter::for('login', function (Request $request) {
+            $respuesta = fn (Request $request, array $headers) => response()->json([
+                'status' => 'error',
+                'message' => 'Demasiados intentos. Intenta de nuevo en '.($headers['Retry-After'] ?? 60).' segundos.',
+                'retry_after' => (int) ($headers['Retry-After'] ?? 60),
+            ], 429, $headers);
+
+            return [
+                Limit::perMinute(5)->by(Str::lower((string) $request->input('email')).'|'.$request->ip())->response($respuesta),
+                Limit::perMinute(20)->by('ip:'.$request->ip())->response($respuesta),
+            ];
+        });
+
+        // Próxima tarea: registrar MailSettings como singleton y aplicar su
+        // configuración aquí.
     }
 }
