@@ -161,24 +161,31 @@ class CosteoAgricolaController extends Controller
                 'user:id,name',
             ]);
 
-        if ($request->has('lote_id')) {
+        // filled() y no has(): un filtro vacío (?lote_id=) filtraba por ''
+        // y devolvía la lista en blanco.
+        if ($request->filled('lote_id')) {
             $query->byLote($request->lote_id);
         }
 
-        if ($request->has('etapa_id')) {
+        if ($request->filled('etapa_id')) {
             $query->byEtapa($request->etapa_id);
         }
 
-        if ($request->has('categoria')) {
+        if ($request->filled('categoria')) {
             $query->byCategoria($request->categoria);
         }
 
-        if ($request->has('tipo_fuente')) {
+        if ($request->filled('tipo_fuente')) {
             $query->where('tipo_fuente', $request->tipo_fuente);
         }
 
-        if ($request->has('fecha_desde') && $request->has('fecha_hasta')) {
-            $query->entreFechas($request->fecha_desde, $request->fecha_hasta);
+        // Cada extremo del rango se aplica por separado
+        if ($request->filled('fecha_desde')) {
+            $query->whereDate('fecha', '>=', $request->fecha_desde);
+        }
+
+        if ($request->filled('fecha_hasta')) {
+            $query->whereDate('fecha', '<=', $request->fecha_hasta);
         }
 
         $costeos = $query->orderByDesc('fecha')->get();

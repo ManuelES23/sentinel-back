@@ -152,9 +152,12 @@ class RequisicionCampo extends Model
     public static function generateNumero(): string
     {
         $year = date('Y');
+        // lockForUpdate: sin el bloqueo, dos altas simultáneas leían el mismo
+        // último número y la segunda tronaba por el índice único.
         $last = self::withTrashed()
             ->where('numero_requisicion', 'like', "RC-{$year}-%")
             ->orderByRaw('CAST(SUBSTRING(numero_requisicion, -5) AS UNSIGNED) DESC')
+            ->lockForUpdate()
             ->first();
 
         $nextNum = 1;

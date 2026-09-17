@@ -96,10 +96,13 @@ class Aplicacion extends Model
         $anio = now()->year;
         $prefix = "APL-{$anio}-";
 
+        // lockForUpdate: sin el bloqueo, dos altas simultáneas leían el mismo
+        // último folio y guardaban folios duplicados.
         $ultimo = self::withTrashed()
             ->where('temporada_id', $temporadaId)
             ->where('folio', 'like', "{$prefix}%")
             ->orderByDesc('folio')
+            ->lockForUpdate()
             ->value('folio');
 
         $siguiente = $ultimo

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\SplendidFarms;
 
 use App\Events\LoteUpdated;
 use App\Http\Controllers\Controller;
+use App\Models\Etapa;
 use App\Models\Lote;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -63,6 +64,13 @@ class LoteController extends Controller
             'is_active' => 'boolean',
         ]);
 
+        // Si el lote se dibujó en el mapa, la superficie calculada también se
+        // guarda en superficie: el tope de hectáreas de las etapas y varios
+        // reportes leen ese campo, y el lote quedaba con 0 ha.
+        if (empty($validated['superficie']) && !empty($validated['superficie_calculada'])) {
+            $validated['superficie'] = $validated['superficie_calculada'];
+        }
+
         // numero_lote y codigo se generan automáticamente en el modelo
         $lote = Lote::create($validated);
         $lote->load(['productor:id,nombre,apellido,tipo', 'zonaCultivo:id,nombre']);
@@ -113,6 +121,26 @@ class LoteController extends Controller
             'is_active' => 'boolean',
         ]);
 
+        if (empty($validated['superficie']) && !empty($validated['superficie_calculada'])) {
+            $validated['superficie'] = $validated['superficie_calculada'];
+        }
+
+        // No dejar el lote por debajo de lo ya asignado a sus etapas. Se compara
+        // la superficie EFECTIVA que quedará (la calculada del mapa manda sobre
+        // la manual, igual que Etapa::superficieDisponible).
+        if (array_key_exists('superficie', $validated)
+            || array_key_exists('superficie_calculada', $validated)) {
+            $asignada = (float) Etapa::where('lote_id', $lote->id)->sum('superficie');
+            $efectiva = $this->superficieEfectivaResultante($lote, $validated);
+
+            if ($asignada > 0 && $efectiva < $asignada) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => "La superficie ({$efectiva} ha) es menor a la ya asignada a las etapas del lote ({$asignada} ha)",
+                ], 422);
+            }
+        }
+
         $lote->update($validated);
         $lote->load(['productor:id,nombre,apellido,tipo', 'zonaCultivo:id,nombre']);
         $lote->append(['superficie_efectiva', 'tiene_ubicacion', 'fuente_superficie']);
@@ -124,6 +152,27 @@ class LoteController extends Controller
             'message' => 'Lote actualizado exitosamente',
             'data' => $lote
         ]);
+    }
+
+    /**
+     * Superficie efectiva que tendrá el lote después de aplicar $validated,
+     * con la misma preferencia que el accessor del modelo: la calculada del
+     * mapa manda sobre la capturada a mano.
+     */
+    private function superficieEfectivaResultante(Lote $lote, array $validated): float
+    {
+        $superficie = array_key_exists('superficie', $validated)
+            ? $validated['superficie']
+            : $lote->superficie;
+        $calculada = array_key_exists('superficie_calculada', $validated)
+            ? $validated['superficie_calculada']
+            : $lote->superficie_calculada;
+
+        if ($calculada !== null && (float) $calculada > 0) {
+            return (float) $calculada;
+        }
+
+        return (float) ($superficie ?? 0);
     }
 
     /**
