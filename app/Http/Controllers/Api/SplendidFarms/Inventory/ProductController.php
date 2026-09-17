@@ -5,8 +5,11 @@ namespace App\Http\Controllers\Api\SplendidFarms\Inventory;
 use App\Http\Controllers\Controller;
 use App\Models\Product;
 use App\Models\Enterprise;
+use App\Models\InventoryStock;
+use App\Services\Inventory\LoteCaducidadValidator;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 
 class ProductController extends Controller
@@ -45,6 +48,11 @@ class ProductController extends Controller
         // Filtrar que controlan inventario
         if ($request->boolean('tracks_inventory')) {
             $query->tracksInventory();
+        }
+
+        // Filtrar artículos pendientes de revisión (p. ej. migrados de Aplicaciones)
+        if ($request->boolean('requiere_revision')) {
+            $query->where('requiere_revision', true);
         }
 
         // Búsqueda por texto
@@ -110,7 +118,13 @@ class ProductController extends Controller
             'image' => 'nullable|image|mimes:jpeg,jpg,png,gif,webp|max:2048',
             'is_active' => 'boolean',
             'metadata' => 'nullable|array',
+            'ingrediente_activo' => 'nullable|string|max:255',
+            'dias_alerta_caducidad' => 'nullable|integer|min:0|max:3650',
         ]);
+
+        if (filter_var($validated['track_expiry'] ?? false, FILTER_VALIDATE_BOOLEAN)) {
+            $validated['track_lots'] = true;
+        }
 
         // Generar código automático si no se proporciona
         if (empty($validated['code'])) {
@@ -199,7 +213,34 @@ class ProductController extends Controller
             'image' => 'nullable|image|mimes:jpeg,jpg,png,gif,webp|max:2048',
             'is_active' => 'boolean',
             'metadata' => 'nullable|array',
+            'ingrediente_activo' => 'nullable|string|max:255',
+            'dias_alerta_caducidad' => 'nullable|integer|min:0|max:3650',
         ]);
+
+        if (filter_var($validated['track_expiry'] ?? false, FILTER_VALIDATE_BOOLEAN)) {
+            $validated['track_lots'] = true;
+        }
+
+        $lotesAntes = (bool) $product->track_lots;
+        $lotesDespues = array_key_exists('track_lots', $validated)
+            ? filter_var($validated['track_lots'], FILTER_VALIDATE_BOOLEAN)
+            : $lotesAntes;
+
+        if ($lotesAntes && ! $lotesDespues) {
+            $lotesConExistencia = $product->stock()->where('quantity', '>', 0)->distinct()->count('lot_number');
+            if ($lotesConExistencia > 1) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'No se puede desactivar el control por lotes: el artículo tiene existencias en varios lotes.',
+                    'errors' => [
+                        'track_lots' => ['No se puede desactivar el control por lotes: el artículo tiene existencias en varios lotes.'],
+                    ],
+                ], 422);
+            }
+        }
+
+        // Guardar desde el catálogo cuenta como revisión del artículo.
+        $validated['requiere_revision'] = false;
 
         // Manejar imagen
         if ($request->hasFile('image')) {
@@ -210,8 +251,14 @@ class ProductController extends Controller
             $validated['image'] = $request->file('image')->store('products', 'public');
         }
 
-        $product->update($validated);
-        
+        DB::transaction(function () use ($product, $validated, $lotesAntes, $lotesDespues) {
+            $product->update($validated);
+
+            if (! $lotesAntes && $lotesDespues) {
+                $this->marcarExistenciasSinLote($product);
+            }
+        });
+
         $product = $product->fresh(['category:id,name,code', 'unit:id,name,abbreviation', 'brand:id,name,code']);
 
         return response()->json([
@@ -219,6 +266,37 @@ class ProductController extends Controller
             'message' => 'Artículo actualizado exitosamente',
             'data' => $product
         ]);
+    }
+
+    /**
+     * Al activar lotes, las existencias previas sin lote pasan a SIN-LOTE
+     * (fusionándose si ya existe esa fila en el mismo almacén/área).
+     */
+    private function marcarExistenciasSinLote(Product $product): void
+    {
+        $sinLote = InventoryStock::where('product_id', $product->id)->whereNull('lot_number')->get();
+
+        foreach ($sinLote as $fila) {
+            $destino = InventoryStock::where('product_id', $product->id)
+                ->where('entity_id', $fila->entity_id)
+                ->where('area_id', $fila->area_id)
+                ->where('lot_number', LoteCaducidadValidator::SIN_LOTE)
+                ->first();
+
+            if (! $destino) {
+                $fila->update(['lot_number' => LoteCaducidadValidator::SIN_LOTE]);
+                continue;
+            }
+
+            $cantidad = (float) $destino->quantity + (float) $fila->quantity;
+            $valor = (float) $destino->total_cost + (float) $fila->total_cost;
+            $destino->update([
+                'quantity' => $cantidad,
+                'unit_cost' => $cantidad > 0 ? $valor / $cantidad : $destino->unit_cost,
+                'total_cost' => $valor,
+            ]);
+            $fila->delete();
+        }
     }
 
     /**

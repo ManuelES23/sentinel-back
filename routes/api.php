@@ -75,7 +75,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::apiResource('users', App\Http\Controllers\Api\UserController::class);
         Route::post('users/{user}/reset-password', [App\Http\Controllers\Api\UserController::class, 'resetPassword']);
         Route::get('users-employees-available', [App\Http\Controllers\Api\UserController::class, 'employeesWithoutUser']);
+        Route::get('users/{user}/almacenes', [App\Http\Controllers\Api\Admin\UserAlmacenController::class, 'index']);
     });
+    Route::put('users/{user}/almacenes', [App\Http\Controllers\Api\Admin\UserAlmacenController::class, 'update'])
+        ->middleware('admin:gestiona');
 
     // Rutas de empresas: lectura para cualquier usuario (el selector de empresa
     // la usa), escritura solo administradores.
@@ -445,6 +448,7 @@ Route::middleware('auth:sanctum')->group(function () {
                 // Entidades accesibles para selects
                 Route::get('entidades-accesibles', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'accessibleEntities']);
                 Route::get('entidades/{entity}/stock', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'entityStock']);
+                Route::get('stock/lotes', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'lotesDisponibles']);
 
                 // Movimientos generales
                 Route::get('movimientos/next-folio', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'nextFolio']);
@@ -596,7 +600,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
                 // Catálogo de productos de aplicación
                 Route::apiResource('productos-aplicacion', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\ProductoAplicacionController::class)
-                    ->parameters(['productos-aplicacion' => 'productoAplicacion'])
+                    ->parameters(['productos-aplicacion' => 'producto'])
                     ->only(['index', 'store', 'update']);
 
                 // Costeo agrícola (Fase 2)
@@ -896,6 +900,7 @@ Route::middleware('auth:sanctum')->group(function () {
                 // Entidades accesibles para selects
                 Route::get('entidades-accesibles', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'accessibleEntities']);
                 Route::get('entidades/{entity}/stock', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'entityStock']);
+                Route::get('stock/lotes', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'lotesDisponibles']);
 
                 // Movimientos generales
                 Route::get('movimientos/next-folio', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'nextFolio']);

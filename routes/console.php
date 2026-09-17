@@ -32,3 +32,7 @@ Schedule::command('agenda:sincronizar-outlook')->everyFiveMinutes();
 // suficiente para que las llamadas recientes aparezcan sin sobrecargar la
 // API de Dialpad con corridas más frecuentes.
 Schedule::command('crm:sincronizar-dialpad')->everyFifteenMinutes()->withoutOverlapping();
+
+// Alertas de caducidad de inventario: una vez al día, antes de la jornada,
+// para que cada encargado vea sus lotes vencidos o por caducar.
+Schedule::command('inventario:alertas-caducidad')->dailyAt('07:00');

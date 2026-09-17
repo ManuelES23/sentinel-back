@@ -10,14 +10,36 @@ use App\Models\InventoryKardex;
 use App\Models\Product;
 use App\Models\ProduccionEmpaque;
 use App\Models\ProduccionEmpaqueDetalle;
+use App\Services\Inventory\AlmacenAccessService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
 
 class InventoryReportController extends Controller
 {
+    public function __construct(private AlmacenAccessService $almacenes)
+    {
+    }
+
+    /**
+     * Entidades propias de la empresa del header que el usuario puede ver.
+     *
+     * @return array<int>
+     */
+    private function visibles(Request $request): array
+    {
+        $empresa = $this->almacenes->resolverEmpresa($request);
+
+        $propias = Entity::whereHas('branch', fn ($q) => $q->where('enterprise_id', $empresa->id))
+            ->pluck('id')->map(fn ($id) => (int) $id)->all();
+
+        return array_values(array_intersect($propias, $this->almacenes->idsVisibles($request->user(), $empresa)));
+    }
+
     /**
      * Obtiene la empresa actual desde el header X-Enterprise-Slug.
+     *
+     * Usado solo por productionConsumption(), que no forma parte de este cambio.
      */
     private function getEnterprise(Request $request): ?Enterprise
     {
@@ -31,6 +53,8 @@ class InventoryReportController extends Controller
 
     /**
      * IDs de entidades propias de la empresa en sesión.
+     *
+     * Usado solo por productionConsumption(), que no forma parte de este cambio.
      */
     private function getOwnEntityIds(Request $request): array
     {
@@ -53,7 +77,8 @@ class InventoryReportController extends Controller
             'product:id,code,name,sku',
             'movement:id,document_number,movement_type_id,movement_date',
             'movement.movementType:id,code,name,direction,color,icon',
-        ])->where('productor_id', $productorId);
+        ])->where('productor_id', $productorId)
+            ->whereIn('entity_id', $this->visibles($request));
 
         // Filtros opcionales
         if ($request->filled('product_id')) {
@@ -84,7 +109,7 @@ class InventoryReportController extends Controller
      */
     public function stock(Request $request): JsonResponse
     {
-        $ownEntityIds = $this->getOwnEntityIds($request);
+        $ownEntityIds = $this->visibles($request);
 
         if (empty($ownEntityIds)) {
             return response()->json([
@@ -112,7 +137,7 @@ class InventoryReportController extends Controller
         $consumptionMap = $productionConsumption['map_by_entity_product'];
 
         $query = InventoryStock::with([
-            'product:id,code,name,sku,min_stock,max_stock,reorder_point,cost_price,sale_price,image,brand_id,category_id,unit_id',
+            'product:id,code,name,sku,min_stock,max_stock,reorder_point,cost_price,sale_price,image,brand_id,category_id,unit_id,dias_alerta_caducidad',
             'product.brand:id,name,code',
             'product.category:id,name,code',
             'product.unit:id,name,abbreviation',
@@ -208,6 +233,12 @@ class InventoryReportController extends Controller
 
                 $item->setAttribute('production_consumed_quantity', round((float) ($consumed['quantity'] ?? 0), 4));
                 $item->setAttribute('production_consumed_cost', round((float) ($consumed['cost'] ?? 0), 4));
+
+                $hoy = now()->startOfDay();
+                $dias = (int) ($item->product?->dias_alerta_caducidad ?? 30);
+                $vence = $item->expiry_date;
+                $item->setAttribute('vencido', (bool) ($vence && $vence->lt($hoy)));
+                $item->setAttribute('por_caducar', (bool) ($vence && ! $vence->lt($hoy) && $vence->lte($hoy->copy()->addDays($dias))));
             });
         }
 
@@ -590,6 +621,7 @@ class InventoryReportController extends Controller
             'movement:id,document_number,movement_type_id,movement_date',
             'movement.movementType:id,code,name,direction,color,icon',
         ]);
+        $query->whereIn('entity_id', $this->visibles($request));
 
         // Filtrar por producto (requerido o todos)
         if ($request->filled('product_id')) {
@@ -636,8 +668,11 @@ class InventoryReportController extends Controller
      */
     public function valued(Request $request): JsonResponse
     {
+        $ids = $this->visibles($request);
+        $empresa = $this->almacenes->resolverEmpresa($request);
         $query = Product::with(['category:id,name,code', 'unit:id,name,abbreviation'])
-            ->withSum('stock as total_stock', 'quantity')
+            ->forEnterprise($empresa->id)
+            ->withSum(['stock as total_stock' => fn ($q) => $q->whereIn('entity_id', $ids)], 'quantity')
             ->where('track_inventory', true);
 
         // Filtrar por categoría
@@ -647,11 +682,14 @@ class InventoryReportController extends Controller
 
         // Solo con stock
         if ($request->boolean('with_stock_only')) {
-            $query->having('total_stock', '>', 0);
+            $query->groupBy('products.id')->having('total_stock', '>', 0);
         }
 
         $products = $query->get()->map(function ($product) {
-            $stock = $product->total_stock ?? 0;
+            // total_stock viene del withSum filtrado por almacenes visibles; Product
+            // define un accessor getTotalStockAttribute() que recalcula sin filtrar,
+            // así que se lee el atributo crudo para respetar el filtro por almacén.
+            $stock = (float) ($product->getAttributes()['total_stock'] ?? 0);
             $costValue = $stock * ($product->cost_price ?? 0);
             $saleValue = $stock * ($product->sale_price ?? 0);
             
@@ -713,33 +751,45 @@ class InventoryReportController extends Controller
     public function alerts(Request $request): JsonResponse
     {
         $alerts = [];
+        $ids = $this->visibles($request);
+        $empresaId = $this->almacenes->resolverEmpresa($request)->id;
 
         // Productos con stock bajo
         $lowStock = Product::with(['category:id,name', 'unit:id,abbreviation'])
-            ->withSum('stock as total_stock', 'quantity')
+            ->forEnterprise($empresaId)
+            ->withSum(['stock as total_stock' => fn ($q) => $q->whereIn('entity_id', $ids)], 'quantity')
             ->where('track_inventory', true)
             ->whereNotNull('min_stock')
+            ->groupBy('products.id')
             ->having('total_stock', '<=', DB::raw('min_stock'))
             ->get()
-            ->map(fn($p) => [
-                'type' => 'low_stock',
-                'severity' => 'warning',
-                'product' => [
-                    'id' => $p->id,
-                    'code' => $p->code,
-                    'name' => $p->name,
-                    'min_stock' => $p->min_stock,
-                ],
-                'current_stock' => $p->total_stock,
-                'message' => "Stock bajo: {$p->name} ({$p->total_stock} de mínimo {$p->min_stock})",
-            ]);
+            ->map(function ($p) {
+                // Leer el atributo crudo: Product::getTotalStockAttribute() recalcula
+                // sin filtrar por almacén y pisaría el total_stock del withSum.
+                $totalStock = (float) ($p->getAttributes()['total_stock'] ?? 0);
+
+                return [
+                    'type' => 'low_stock',
+                    'severity' => 'warning',
+                    'product' => [
+                        'id' => $p->id,
+                        'code' => $p->code,
+                        'name' => $p->name,
+                        'min_stock' => $p->min_stock,
+                    ],
+                    'current_stock' => $totalStock,
+                    'message' => "Stock bajo: {$p->name} ({$totalStock} de mínimo {$p->min_stock})",
+                ];
+            });
         $alerts = array_merge($alerts, $lowStock->toArray());
 
         // Productos sin stock
         $noStock = Product::with(['category:id,name', 'unit:id,abbreviation'])
-            ->withSum('stock as total_stock', 'quantity')
+            ->forEnterprise($empresaId)
+            ->withSum(['stock as total_stock' => fn ($q) => $q->whereIn('entity_id', $ids)], 'quantity')
             ->where('track_inventory', true)
             ->where('is_active', true)
+            ->groupBy('products.id')
             ->having('total_stock', '<=', 0)
             ->get()
             ->map(fn($p) => [
@@ -757,6 +807,7 @@ class InventoryReportController extends Controller
 
         // Lotes vencidos
         $expired = InventoryStock::with(['product:id,code,name'])
+            ->whereIn('entity_id', $ids)
             ->whereNotNull('expiry_date')
             ->where('expiry_date', '<', now())
             ->where('quantity', '>', 0)
@@ -772,12 +823,14 @@ class InventoryReportController extends Controller
             ]);
         $alerts = array_merge($alerts, $expired->toArray());
 
-        // Lotes por vencer (próximos 30 días)
-        $expiringSoon = InventoryStock::with(['product:id,code,name'])
+        // Lotes por vencer (según días de alerta del artículo)
+        $expiringSoon = InventoryStock::with(['product:id,code,name,dias_alerta_caducidad'])
+            ->whereIn('entity_id', $ids)
             ->whereNotNull('expiry_date')
-            ->whereBetween('expiry_date', [now(), now()->addDays(30)])
+            ->where('expiry_date', '>=', now()->startOfDay())
             ->where('quantity', '>', 0)
             ->get()
+            ->filter(fn ($s) => $s->expiry_date->lte(now()->startOfDay()->addDays((int) ($s->product->dias_alerta_caducidad ?? 30))))
             ->map(fn($s) => [
                 'type' => 'expiring_soon',
                 'severity' => 'warning',
@@ -812,10 +865,13 @@ class InventoryReportController extends Controller
      */
     public function productKardex(Product $product, Request $request): JsonResponse
     {
+        $ids = $this->visibles($request);
+
         $query = InventoryKardex::with([
             'movement:id,document_number,movement_type_id,movement_date,reference_number',
             'movement.movementType:id,code,name,direction,color,icon',
-        ])->where('product_id', $product->id);
+        ])->where('product_id', $product->id)
+            ->whereIn('entity_id', $ids);
 
         // Filtrar por entidad
         if ($request->filled('entity_id')) {
@@ -842,6 +898,7 @@ class InventoryReportController extends Controller
         $initialBalance = 0;
         if ($request->filled('date_from')) {
             $initialBalance = InventoryKardex::where('product_id', $product->id)
+                ->whereIn('entity_id', $ids)
                 ->whereHas('movement', function ($q) use ($request) {
                     $q->whereDate('movement_date', '<', $request->date_from);
                 })
