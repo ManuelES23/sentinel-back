@@ -278,7 +278,6 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::apiResource('zonas-cultivo', App\Http\Controllers\Api\SplendidFarms\ZonaCultivoController::class);
                 // Lotes
                 Route::apiResource('lotes', App\Http\Controllers\Api\SplendidFarms\LoteController::class);
-                Route::get('lotes/siguiente-numero', [App\Http\Controllers\Api\SplendidFarms\LoteController::class, 'siguienteNumero']);
                 // Calibres
                 Route::get('calibres/list', [App\Http\Controllers\Api\SplendidFarms\CalibreController::class, 'list']);
                 Route::apiResource('calibres', App\Http\Controllers\Api\SplendidFarms\CalibreController::class);

@@ -17,13 +17,7 @@ class AgricultureCycleController extends Controller
         $ciclos = CicloAgricola::with(['usuario:id,name,email', 'cultivo:id,nombre,imagen'])
             ->orderBy('año', 'desc')
             ->orderBy('fecha_inicio', 'desc')
-            ->get()
-            ->map(function ($ciclo) {
-                if ($ciclo->cultivo && $ciclo->cultivo->imagen) {
-                    $ciclo->cultivo->imagen_url = asset('storage/' . $ciclo->cultivo->imagen);
-                }
-                return $ciclo;
-            });
+            ->get();
 
         return response()->json([
             'success' => true,
@@ -84,10 +78,6 @@ class AgricultureCycleController extends Controller
         ]);
 
         $ciclo->load(['usuario:id,name,email', 'cultivo:id,nombre,imagen']);
-        
-        if ($ciclo->cultivo && $ciclo->cultivo->imagen) {
-            $ciclo->cultivo->imagen_url = asset('storage/' . $ciclo->cultivo->imagen);
-        }
 
         return response()->json([
             'success' => true,
@@ -108,10 +98,6 @@ class AgricultureCycleController extends Controller
                 'success' => false,
                 'message' => 'Ciclo agrícola no encontrado',
             ], 404);
-        }
-
-        if ($ciclo->cultivo && $ciclo->cultivo->imagen) {
-            $ciclo->cultivo->imagen_url = asset('storage/' . $ciclo->cultivo->imagen);
         }
 
         return response()->json([
@@ -181,10 +167,6 @@ class AgricultureCycleController extends Controller
         ]);
 
         $ciclo->load(['usuario:id,name,email', 'cultivo:id,nombre,imagen']);
-        
-        if ($ciclo->cultivo && $ciclo->cultivo->imagen) {
-            $ciclo->cultivo->imagen_url = asset('storage/' . $ciclo->cultivo->imagen);
-        }
 
         return response()->json([
             'success' => true,
