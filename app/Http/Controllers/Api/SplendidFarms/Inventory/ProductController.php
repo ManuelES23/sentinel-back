@@ -232,6 +232,9 @@ class ProductController extends Controller
                 return response()->json([
                     'status' => 'error',
                     'message' => 'No se puede desactivar el control por lotes: el artículo tiene existencias en varios lotes.',
+                    'errors' => [
+                        'track_lots' => ['No se puede desactivar el control por lotes: el artículo tiene existencias en varios lotes.'],
+                    ],
                 ], 422);
             }
         }

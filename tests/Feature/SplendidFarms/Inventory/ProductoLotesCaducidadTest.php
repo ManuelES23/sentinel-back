@@ -39,14 +39,28 @@ class ProductoLotesCaducidadTest extends TestCase
 
     public function test_sin_lote_se_fusiona_si_ya_existe_una_fila_sin_lote(): void
     {
+        // qty 5 @ unit_cost 10 (total 50) desde darStock, más una fila SIN-LOTE
+        // ya existente con costo distinto (qty 3 @ 30, total 90) para verificar
+        // que la fusión promedia el costo por cantidad, no solo suma unidades.
         $this->darStock($this->almacenA, $this->insumo, 5);
-        $this->darStock($this->almacenA, $this->insumo, 2, 'SIN-LOTE');
+        InventoryStock::create([
+            'product_id' => $this->insumo->id,
+            'entity_id' => $this->almacenA->id,
+            'quantity' => 3,
+            'reserved_quantity' => 0,
+            'unit_cost' => 30,
+            'total_cost' => 90,
+            'lot_number' => 'SIN-LOTE',
+        ]);
 
         $this->putJson($this->url, ['track_lots' => true], $this->headersEmpresa())->assertOk();
 
         $filas = InventoryStock::where('product_id', $this->insumo->id)->get();
         $this->assertCount(1, $filas);
-        $this->assertEquals(7, $filas->first()->quantity);
+        $fila = $filas->first();
+        $this->assertEquals(8, $fila->quantity);
+        $this->assertEquals(140, $fila->total_cost);
+        $this->assertEqualsWithDelta(17.5, (float) $fila->unit_cost, 0.0001);
     }
 
     public function test_no_se_desactivan_lotes_con_varios_lotes_en_existencia(): void
@@ -55,7 +69,10 @@ class ProductoLotesCaducidadTest extends TestCase
         $this->darStock($this->almacenA, $this->insumo, 1, 'L1');
         $this->darStock($this->almacenA, $this->insumo, 1, 'L2');
 
-        $this->putJson($this->url, ['track_lots' => false], $this->headersEmpresa())->assertStatus(422);
+        $response = $this->putJson($this->url, ['track_lots' => false], $this->headersEmpresa());
+        $response->assertStatus(422);
+        $response->assertJsonPath('status', 'error');
+        $response->assertJsonStructure(['errors' => ['track_lots']]);
         $this->assertTrue($this->insumo->fresh()->track_lots);
     }
 

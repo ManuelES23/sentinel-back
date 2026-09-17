@@ -893,6 +893,7 @@ Route::middleware('auth:sanctum')->group(function () {
                 // Entidades accesibles para selects
                 Route::get('entidades-accesibles', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'accessibleEntities']);
                 Route::get('entidades/{entity}/stock', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'entityStock']);
+                Route::get('stock/lotes', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'lotesDisponibles']);
 
                 // Movimientos generales
                 Route::get('movimientos/next-folio', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'nextFolio']);
