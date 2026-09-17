@@ -38,13 +38,6 @@ class VariedadController extends Controller
 
             $variedades = $query->orderBy('created_at', 'desc')->get();
 
-            // Agregar imagen_url de cultivo
-            $variedades->each(function ($variedad) {
-                if ($variedad->cultivo && $variedad->cultivo->imagen) {
-                    $variedad->cultivo->imagen_url = asset('storage/' . $variedad->cultivo->imagen);
-                }
-            });
-
             return response()->json($variedades);
         } catch (\Exception $e) {
             Log::error('Error al listar variedades: ' . $e->getMessage());
@@ -89,11 +82,6 @@ class VariedadController extends Controller
             // Cargar relaciones
             $variedad->load(['cultivo', 'usuario']);
 
-            // Agregar imagen_url
-            if ($variedad->cultivo && $variedad->cultivo->imagen) {
-                $variedad->cultivo->imagen_url = asset('storage/' . $variedad->cultivo->imagen);
-            }
-
             return response()->json([
                 'message' => 'Variedad creada exitosamente',
                 'variedad' => $variedad
@@ -114,11 +102,6 @@ class VariedadController extends Controller
     {
         try {
             $variedad = Variedad::with(['cultivo', 'usuario'])->findOrFail($id);
-
-            // Agregar imagen_url
-            if ($variedad->cultivo && $variedad->cultivo->imagen) {
-                $variedad->cultivo->imagen_url = asset('storage/' . $variedad->cultivo->imagen);
-            }
 
             return response()->json($variedad);
         } catch (\Exception $e) {
@@ -164,11 +147,6 @@ class VariedadController extends Controller
 
             // Cargar relaciones
             $variedad->load(['cultivo', 'usuario']);
-
-            // Agregar imagen_url
-            if ($variedad->cultivo && $variedad->cultivo->imagen) {
-                $variedad->cultivo->imagen_url = asset('storage/' . $variedad->cultivo->imagen);
-            }
 
             return response()->json([
                 'message' => 'Variedad actualizada exitosamente',

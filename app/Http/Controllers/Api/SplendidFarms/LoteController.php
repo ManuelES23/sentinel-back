@@ -207,17 +207,4 @@ class LoteController extends Controller
             'data' => $lotes
         ]);
     }
-
-    /**
-     * Get siguiente número de lote.
-     */
-    public function siguienteNumero(): JsonResponse
-    {
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'siguiente_numero' => Lote::generarSiguienteNumeroLote()
-            ]
-        ]);
-    }
 }

@@ -150,6 +150,8 @@ class CosteoAgricolaController extends Controller
     {
         $request->validate([
             'temporada_id' => 'required|exists:temporadas,id',
+            'page' => 'nullable|integer|min:1',
+            'per_page' => 'nullable|integer|min:1|max:200',
         ]);
 
         $query = CosteoAgricola::byTemporada($request->temporada_id)
@@ -188,16 +190,27 @@ class CosteoAgricolaController extends Controller
             $query->whereDate('fecha', '<=', $request->fecha_hasta);
         }
 
-        $costeos = $query->orderByDesc('fecha')->get();
+        // La suma se calcula sobre todo el filtro, no sobre la página, para que
+        // "Total filtrado" siga siendo el total real al paginar.
+        $total = (clone $query)->sum('costo_total');
 
-        $total = $costeos->sum('costo_total');
+        // id como segundo criterio: con solo la fecha, dos registros del mismo
+        // día podían cambiar de orden entre páginas y repetirse o perderse.
+        $costeos = $query->orderByDesc('fecha')
+            ->orderByDesc('id')
+            // integer() ?: 50 y no input('per_page', 50): con ?per_page= vacío
+            // la clave existe como null y el default no se aplicaba.
+            ->paginate($request->integer('per_page') ?: 50);
 
         return response()->json([
             'success' => true,
-            'data' => $costeos,
+            'data' => $costeos->items(),
             'meta' => [
                 'total' => (float) $total,
-                'registros' => $costeos->count(),
+                'registros' => $costeos->total(),
+                'current_page' => $costeos->currentPage(),
+                'last_page' => $costeos->lastPage(),
+                'per_page' => $costeos->perPage(),
             ],
         ]);
     }

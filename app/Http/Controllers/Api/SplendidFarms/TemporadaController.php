@@ -50,13 +50,6 @@ class TemporadaController extends Controller
 
             $temporadas = $query->orderBy('created_at', 'desc')->get();
 
-            // Agregar imagen_url de cultivo
-            $temporadas->each(function ($temporada) {
-                if ($temporada->cultivo && $temporada->cultivo->imagen) {
-                    $temporada->cultivo->imagen_url = asset('storage/' . $temporada->cultivo->imagen);
-                }
-            });
-
             return response()->json($temporadas);
         } catch (\Exception $e) {
             Log::error('Error al listar temporadas: ' . $e->getMessage());
@@ -129,11 +122,6 @@ class TemporadaController extends Controller
             // Cargar relaciones
             $temporada->load(['cultivo', 'usuario']);
 
-            // Agregar imagen_url
-            if ($temporada->cultivo && $temporada->cultivo->imagen) {
-                $temporada->cultivo->imagen_url = asset('storage/' . $temporada->cultivo->imagen);
-            }
-
             return response()->json([
                 'message' => 'Temporada creada exitosamente',
                 'temporada' => $temporada
@@ -154,11 +142,6 @@ class TemporadaController extends Controller
     {
         try {
             $temporada = Temporada::with(['cultivo', 'usuario'])->findOrFail($id);
-
-            // Agregar imagen_url
-            if ($temporada->cultivo && $temporada->cultivo->imagen) {
-                $temporada->cultivo->imagen_url = asset('storage/' . $temporada->cultivo->imagen);
-            }
 
             return response()->json($temporada);
         } catch (\Exception $e) {
@@ -235,11 +218,6 @@ class TemporadaController extends Controller
             // Cargar relaciones
             $temporada->load(['cultivo', 'usuario']);
 
-            // Agregar imagen_url
-            if ($temporada->cultivo && $temporada->cultivo->imagen) {
-                $temporada->cultivo->imagen_url = asset('storage/' . $temporada->cultivo->imagen);
-            }
-
             return response()->json([
                 'message' => 'Temporada actualizada exitosamente',
                 'temporada' => $temporada
@@ -298,11 +276,6 @@ class TemporadaController extends Controller
 
             // Cargar relaciones
             $temporada->load(['cultivo', 'usuario']);
-
-            // Agregar imagen_url
-            if ($temporada->cultivo && $temporada->cultivo->imagen) {
-                $temporada->cultivo->imagen_url = asset('storage/' . $temporada->cultivo->imagen);
-            }
 
             return response()->json([
                 'message' => 'Temporada cerrada exitosamente',
