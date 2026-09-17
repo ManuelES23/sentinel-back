@@ -754,6 +754,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // Ajustes del sistema
         Route::get('settings', [App\Http\Controllers\Api\Admin\SystemSettingsController::class, 'show']);
         Route::put('settings', [App\Http\Controllers\Api\Admin\SystemSettingsController::class, 'update']);
+        Route::post('settings/mail/test', [App\Http\Controllers\Api\Admin\SystemSettingsController::class, 'sendTestMail']);
 
         // Logs de actividad
         Route::get('logs', [App\Http\Controllers\Api\Admin\ActivityLogController::class, 'index']);

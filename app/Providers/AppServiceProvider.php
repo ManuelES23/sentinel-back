@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Services\MailSettings;
 use App\Services\SettingsService;
 use App\Support\PasswordPolicy;
 use Illuminate\Cache\RateLimiting\Limit;
@@ -23,6 +24,7 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->singleton(\App\Services\SettingsService::class);
+        $this->app->singleton(\App\Services\MailSettings::class);
     }
 
     /**
@@ -69,7 +71,7 @@ class AppServiceProvider extends ServiceProvider
             ];
         });
 
-        // Próxima tarea: registrar MailSettings como singleton y aplicar su
-        // configuración aquí.
+        // SMTP configurado desde /admin/settings (si está activado).
+        $this->app->make(MailSettings::class)->apply();
     }
 }
