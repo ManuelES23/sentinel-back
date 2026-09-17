@@ -4,9 +4,12 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Services\SettingsService;
+use App\Support\PasswordPolicy;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\Rules\Password;
 use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
@@ -43,6 +46,7 @@ class AuthController extends Controller
                 'email' => $user->email,
                 'role' => $user->role ?? 'user',
                 'must_change_password' => (bool) $user->must_change_password,
+                'session_idle_minutes' => (int) app(SettingsService::class)->get('session.idle_minutes'),
             ],
             'token' => $token,
             'permissions' => $permissions
@@ -57,8 +61,8 @@ class AuthController extends Controller
         $request->validate([
             'name' => 'required|string|max:255',
             'email' => 'required|string|email|max:255|unique:users',
-            'password' => 'required|string|min:8|confirmed',
-        ]);
+            'password' => ['required', 'string', 'confirmed', Password::defaults()],
+        ], PasswordPolicy::messages());
 
         $user = User::create([
             'name' => $request->name,
@@ -100,6 +104,7 @@ class AuthController extends Controller
                 'email' => $user->email,
                 'role' => $user->role ?? 'user',
                 'must_change_password' => (bool) $user->must_change_password,
+                'session_idle_minutes' => (int) app(SettingsService::class)->get('session.idle_minutes'),
             ],
             'permissions' => $permissions
         ]);

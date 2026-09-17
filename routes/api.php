@@ -23,7 +23,7 @@ Route::post('broadcasting/auth', function (Request $request) {
 
 // Rutas de autenticación
 Route::prefix('auth')->group(function () {
-    Route::post('login', [App\Http\Controllers\Api\AuthController::class, 'login']);
+    Route::post('login', [App\Http\Controllers\Api\AuthController::class, 'login'])->middleware('throttle:login');
     Route::post('register', [App\Http\Controllers\Api\AuthController::class, 'register']);
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('logout', [App\Http\Controllers\Api\AuthController::class, 'logout']);
@@ -33,6 +33,9 @@ Route::prefix('auth')->group(function () {
 
 // Rutas protegidas
 Route::middleware('auth:sanctum')->group(function () {
+
+    // Requisitos de contraseña vigentes (también en la pantalla de cambio obligatorio)
+    Route::get('password-policy', [App\Http\Controllers\Api\PasswordPolicyController::class, 'show']);
 
     // Rutas de perfil del usuario autenticado
     Route::prefix('profile')->group(function () {
@@ -747,6 +750,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware('admin')->prefix('admin')->group(function () {
         // Resumen del panel (Dashboard)
         Route::get('dashboard', [App\Http\Controllers\Api\Admin\DashboardController::class, 'index']);
+
+        // Ajustes del sistema
+        Route::get('settings', [App\Http\Controllers\Api\Admin\SystemSettingsController::class, 'show']);
+        Route::put('settings', [App\Http\Controllers\Api\Admin\SystemSettingsController::class, 'update']);
+        Route::post('settings/mail/test', [App\Http\Controllers\Api\Admin\SystemSettingsController::class, 'sendTestMail']);
 
         // Logs de actividad
         Route::get('logs', [App\Http\Controllers\Api\Admin\ActivityLogController::class, 'index']);
