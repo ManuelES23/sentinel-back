@@ -748,6 +748,10 @@ Route::middleware('auth:sanctum')->group(function () {
         // Resumen del panel (Dashboard)
         Route::get('dashboard', [App\Http\Controllers\Api\Admin\DashboardController::class, 'index']);
 
+        // Ajustes del sistema
+        Route::get('settings', [App\Http\Controllers\Api\Admin\SystemSettingsController::class, 'show']);
+        Route::put('settings', [App\Http\Controllers\Api\Admin\SystemSettingsController::class, 'update']);
+
         // Logs de actividad
         Route::get('logs', [App\Http\Controllers\Api\Admin\ActivityLogController::class, 'index']);
         Route::get('logs/stats', [App\Http\Controllers\Api\Admin\ActivityLogController::class, 'stats']);
