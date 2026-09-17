@@ -7,6 +7,7 @@ use App\Models\InventoryStock;
 use App\Models\SystemNotification;
 use App\Models\User;
 use App\Models\UserEnterpriseAccess;
+use App\Models\UserEntityAccess;
 use App\Services\Inventory\AlmacenAccessService;
 use App\Services\NotificationService;
 use Illuminate\Console\Command;
@@ -48,15 +49,41 @@ class EnviarAlertasCaducidad extends Command
                 continue;
             }
 
+            // Fetch all user IDs with active access in this enterprise
             $usuarioIds = UserEnterpriseAccess::where('enterprise_id', $empresa->id)
                 ->where('is_active', true)
-                ->pluck('user_id');
+                ->pluck('user_id')
+                ->toArray();
+
+            // Prefetch all user_entity_access for this enterprise in one query
+            $userEntityAccesses = UserEntityAccess::where('enterprise_id', $empresa->id)
+                ->whereIn('user_id', $usuarioIds)
+                ->get()
+                ->groupBy('user_id');
+
+            // Prefetch already-notified user IDs for this enterprise today in one query
+            $yaAvisados = SystemNotification::where('title', self::TITULO)
+                ->whereDate('created_at', $hoy->toDateString())
+                ->whereIn('user_id', $usuarioIds)
+                ->whereJsonContains('data->enterprise_id', $empresa->id)
+                ->pluck('user_id')
+                ->toArray();
+
+            // Cache enterprise-wide data to avoid recomputation per user
+            $idsDeEmpresa = $almacenes->idsDeEmpresa($empresa);
 
             foreach (User::whereIn('id', $usuarioIds)->get() as $user) {
-                $visibles = $almacenes->idsVisibles($user, $empresa);
+                // Skip if already notified today for this enterprise
+                if (in_array($user->id, $yaAvisados, true)) {
+                    continue;
+                }
+
+                // Build visible warehouse IDs for this user
+                $visibles = $this->idsVisiblesLocal($user, $empresa, $almacenes, $idsDeEmpresa, $userEntityAccesses[$user->id] ?? []);
+
                 $suyas = $filasEmpresa->filter(fn ($s) => in_array((int) $s->entity_id, $visibles, true));
 
-                if ($suyas->isEmpty() || $this->yaAvisado($user)) {
+                if ($suyas->isEmpty()) {
                     continue;
                 }
 
@@ -67,7 +94,7 @@ class EnviarAlertasCaducidad extends Command
                 NotificationService::toUser($user)
                     ->high()
                     ->withAction("/{$empresa->slug}/inventario/reportes/stock", 'Ver stock')
-                    ->withData(['tipo' => 'alertas_caducidad', 'vencidos' => $vencidos, 'por_caducar' => $porCaducar])
+                    ->withData(['tipo' => 'alertas_caducidad', 'vencidos' => $vencidos, 'por_caducar' => $porCaducar, 'enterprise_id' => $empresa->id])
                     ->alert(self::TITULO, "Tienes {$vencidos} lote(s) vencido(s) y {$porCaducar} por caducar en: {$nombres}.");
 
                 $enviadas++;
@@ -79,11 +106,26 @@ class EnviarAlertasCaducidad extends Command
         return self::SUCCESS;
     }
 
-    private function yaAvisado(User $user): bool
+    /**
+     * Compute visible warehouse IDs for a user in an enterprise without calling
+     * AlmacenAccessService per user (which would cause N+1 queries).
+     * Replicates the logic: admin/superadmin or ver_todos_almacenes permission
+     * sees all enterprise warehouses; otherwise sees only assigned in user_entity_access.
+     */
+    private function idsVisiblesLocal(User $user, Enterprise $empresa, AlmacenAccessService $almacenes, array $idsDeEmpresa, $userEntityAccessCollection): array
     {
-        return SystemNotification::where('user_id', $user->id)
-            ->where('title', self::TITULO)
-            ->whereDate('created_at', now()->toDateString())
-            ->exists();
+        if ($almacenes->esAdmin($user)) {
+            return $idsDeEmpresa;
+        }
+
+        if ($almacenes->puedeVerTodos($user, $empresa)) {
+            return $idsDeEmpresa;
+        }
+
+        // User can only see assigned warehouses
+        return $userEntityAccessCollection
+            ->pluck('entity_id')
+            ->map(fn ($id) => (int) $id)
+            ->toArray();
     }
 }
