@@ -71,6 +71,11 @@ class AplicacionesCatalogoTest extends TestCase
         $this->getJson(self::BASE . '/productos-aplicacion?tipo=fertilizante', $this->h)->assertJsonCount(0, 'data');
     }
 
+    public function test_index_sin_header_da_422(): void
+    {
+        $this->getJson(self::BASE . '/productos-aplicacion')->assertStatus(422);
+    }
+
     public function test_store_crea_el_articulo_en_el_catalogo(): void
     {
         $response = $this->postJson(self::BASE . '/productos-aplicacion', [
@@ -81,6 +86,44 @@ class AplicacionesCatalogoTest extends TestCase
         $producto = Product::find($response->json('data.id'));
         $this->assertTrue($producto->requiere_revision);
         $this->assertTrue($producto->enterprises()->where('enterprises.id', $this->empresa->id)->exists());
+    }
+
+    public function test_update_edita_el_articulo(): void
+    {
+        $response = $this->putJson(self::BASE . '/productos-aplicacion/' . $this->insumo->id, [
+            'nombre' => 'Clorotalonil 720 SC',
+            'ingrediente_activo' => 'Clorotalonil 72%',
+            'marca' => 'Bayer',
+            'activo' => false,
+        ], $this->h);
+
+        $response->assertOk();
+        $this->assertSame([
+            'id' => $this->insumo->id,
+            'nombre' => 'Clorotalonil 720 SC',
+            'ingrediente_activo' => 'Clorotalonil 72%',
+            'marca' => 'Bayer',
+            'tipo' => 'agroquimico',
+            'activo' => false,
+            'unidad' => 'L',
+            'requiere_revision' => true,
+        ], $response->json('data'));
+
+        $producto = $this->insumo->fresh(['brand']);
+        $this->assertSame('Clorotalonil 720 SC', $producto->name);
+        $this->assertSame('Clorotalonil 72%', $producto->ingrediente_activo);
+        $this->assertSame('Bayer', $producto->brand->name);
+        $this->assertFalse($producto->is_active);
+        $this->assertTrue($producto->brand->enterprises()->where('enterprises.id', $this->empresa->id)->exists());
+    }
+
+    public function test_update_de_articulo_de_otra_empresa_da_404(): void
+    {
+        $ajeno = Product::create(['code' => 'PROD-07777', 'name' => 'Ajeno']);
+
+        $this->putJson(self::BASE . '/productos-aplicacion/' . $ajeno->id, [
+            'nombre' => 'Intento',
+        ], $this->h)->assertStatus(404);
     }
 
     public function test_aplicacion_guarda_product_id(): void
