@@ -15,12 +15,11 @@ use Illuminate\Support\Carbon;
  *   Una compra no puede traer un lote ya vencido.
  * - Salidas (salida, transferencia o ajuste negativo) exigen un lote que
  *   exista en el almacén de origen y que no esté vencido, salvo merma y
- *   ajuste negativo (baja de producto vencido).
+ *   ajuste negativo (baja de producto vencido o para deshacerse de vencidas).
  */
 class LoteCaducidadValidator
 {
     public const SIN_LOTE = 'SIN-LOTE';
-    public const TIPOS_BAJA = ['MERMA', 'AJUSTE-'];
 
     public static function esEntrada(MovementType $tipo): bool
     {
@@ -31,6 +30,16 @@ class LoteCaducidadValidator
     public static function esSalida(MovementType $tipo): bool
     {
         return in_array($tipo->direction, ['out', 'transfer'], true)
+            || ($tipo->direction === 'adjustment' && $tipo->effect === 'decrease');
+    }
+
+    /**
+     * Una baja permite sacar lotes vencidos: merma o ajuste negativo.
+     * Se identifica por código MERMA o por ser un ajuste con efecto decrease.
+     */
+    public static function esBaja(MovementType $tipo): bool
+    {
+        return $tipo->code === 'MERMA'
             || ($tipo->direction === 'adjustment' && $tipo->effect === 'decrease');
     }
 
@@ -153,7 +162,7 @@ class LoteCaducidadValidator
             return "El lote {$lote} de {$producto->name} no existe en el almacén de origen.";
         }
 
-        if ($stock->expiry_date && $stock->expiry_date->lt($hoy) && ! in_array($tipo->code, self::TIPOS_BAJA, true)) {
+        if ($stock->expiry_date && $stock->expiry_date->lt($hoy) && ! self::esBaja($tipo)) {
             return "El lote {$lote} venció el " . $stock->expiry_date->format('d/m/Y') . '.';
         }
 
