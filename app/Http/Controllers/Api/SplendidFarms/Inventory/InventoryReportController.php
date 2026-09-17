@@ -682,7 +682,7 @@ class InventoryReportController extends Controller
 
         // Solo con stock
         if ($request->boolean('with_stock_only')) {
-            $query->having('total_stock', '>', 0);
+            $query->groupBy('products.id')->having('total_stock', '>', 0);
         }
 
         $products = $query->get()->map(function ($product) {

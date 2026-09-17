@@ -4,6 +4,7 @@ namespace Tests\Feature\SplendidFarms\Inventory;
 
 use App\Models\InventoryKardex;
 use App\Models\InventoryMovement;
+use App\Models\Product;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Tests\Concerns\CreatesAlmacenFixtures;
@@ -43,6 +44,27 @@ class ReportesPorAlmacenTest extends TestCase
         $response->assertOk();
         $fila = collect($response->json('data.products'))->firstWhere('id', $this->insumo->id);
         $this->assertEquals(5, $fila['quantity']);
+    }
+
+    public function test_valorizado_con_stock_only_filtra_por_stock_visible(): void
+    {
+        $sinStock = Product::create([
+            'code' => 'PROD-00002',
+            'name' => 'Sin existencias',
+            'unit_id' => $this->unidad->id,
+            'product_type' => 'consumable',
+            'track_inventory' => true,
+        ]);
+        $sinStock->enterprises()->attach($this->empresa->id);
+
+        $response = $this->getJson(self::BASE . '/valorizado?with_stock_only=1', $this->headersEmpresa());
+
+        $response->assertOk();
+        $productos = collect($response->json('data.products'));
+        $conStock = $productos->firstWhere('id', $this->insumo->id);
+        $this->assertNotNull($conStock);
+        $this->assertEquals(5, $conStock['quantity']);
+        $this->assertNull($productos->firstWhere('id', $sinStock->id));
     }
 
     public function test_alertas_no_incluyen_lotes_de_almacenes_ajenos(): void
