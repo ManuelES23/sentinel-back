@@ -67,9 +67,11 @@ class AlmacenAccessService
         $propias = Entity::whereHas('branch', fn ($q) => $q->where('enterprise_id', $empresa->id))
             ->pluck('id');
 
-        $vinculadas = DB::table('enterprise_entity')
-            ->where('enterprise_id', $empresa->id)
-            ->pluck('entity_id');
+        $vinculadas = DB::table('enterprise_entity as ee')
+            ->join('entities as e', 'e.id', '=', 'ee.entity_id')
+            ->where('ee.enterprise_id', $empresa->id)
+            ->whereNull('e.deleted_at')
+            ->pluck('ee.entity_id');
 
         return $propias->merge($vinculadas)
             ->map(fn ($id) => (int) $id)

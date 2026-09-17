@@ -95,9 +95,11 @@ class AsignacionInicialAlmacenes
             ->whereNull('e.deleted_at')
             ->pluck('e.id');
 
-        $vinculadas = DB::table('enterprise_entity')
-            ->where('enterprise_id', $empresaId)
-            ->pluck('entity_id');
+        $vinculadas = DB::table('enterprise_entity as ee')
+            ->join('entities as e', 'e.id', '=', 'ee.entity_id')
+            ->where('ee.enterprise_id', $empresaId)
+            ->whereNull('e.deleted_at')
+            ->pluck('ee.entity_id');
 
         return $propias->merge($vinculadas)->map(fn ($id) => (int) $id)->unique()->values()->all();
     }

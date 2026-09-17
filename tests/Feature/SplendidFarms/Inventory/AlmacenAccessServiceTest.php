@@ -144,4 +144,51 @@ class AlmacenAccessServiceTest extends TestCase
         $userSinAsignacion = $this->crearUsuarioDeCampo();
         $this->assertFalse($this->servicio->puedeVer($userSinAsignacion, $this->empresa, $almacenCana->id));
     }
+
+    public function test_entidades_vinculadas_soft_deleted_no_aparecen(): void
+    {
+        // Crear segunda empresa con su rama y entidad
+        $otra = Enterprise::create(['name' => 'Canes Agro', 'slug' => 'canes-agro', 'is_active' => true, 'description' => 'Empresa de caña']);
+        $sucursalOtra = Branch::create([
+            'enterprise_id' => $otra->id,
+            'code' => 'SUC-02',
+            'name' => 'Central Caña',
+            'slug' => 'central-cana',
+        ]);
+        $almacenCanaActivo = Entity::create([
+            'branch_id' => $sucursalOtra->id,
+            'entity_type_id' => $this->tipoCampo->id,
+            'code' => 'ALM-CANA-ACTIVO',
+            'name' => 'Almacén Caña Activo',
+        ]);
+        $almacenCanaDeleted = Entity::create([
+            'branch_id' => $sucursalOtra->id,
+            'entity_type_id' => $this->tipoCampo->id,
+            'code' => 'ALM-CANA-DELETED',
+            'name' => 'Almacén Caña Deletado',
+        ]);
+
+        // Vincularlo a Splendid Farms
+        DB::table('enterprise_entity')->insert([
+            ['enterprise_id' => $this->empresa->id, 'entity_id' => $almacenCanaActivo->id, 'access_level' => 'read', 'created_at' => now(), 'updated_at' => now()],
+            ['enterprise_id' => $this->empresa->id, 'entity_id' => $almacenCanaDeleted->id, 'access_level' => 'read', 'created_at' => now(), 'updated_at' => now()],
+        ]);
+
+        // Soft-delete el segundo almacén
+        $almacenCanaDeleted->delete();
+
+        // idsDeEmpresa solo incluye el almacén activo
+        $ids = $this->servicio->idsDeEmpresa($this->empresa);
+        sort($ids);
+        $esperado = [$this->almacenA->id, $this->almacenB->id, $almacenCanaActivo->id];
+        sort($esperado);
+        $this->assertSame($esperado, $ids);
+
+        // idsVisibles también excluye el deletado
+        $userConVerTodos = $this->crearUsuarioDeCampo();
+        $this->otorgarVerTodos($userConVerTodos);
+        $ids = $this->servicio->idsVisibles($userConVerTodos, $this->empresa);
+        sort($ids);
+        $this->assertSame($esperado, $ids);
+    }
 }
