@@ -3,8 +3,10 @@
 namespace App\Providers;
 
 use App\Services\SettingsService;
+use App\Support\PasswordPolicy;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
+use Illuminate\Validation\Rules\Password;
 use Laravel\Sanctum\Sanctum;
 use SocialiteProviders\Manager\SocialiteWasCalled;
 use SocialiteProviders\Microsoft\Provider as MicrosoftSocialiteProvider;
@@ -43,5 +45,9 @@ class AppServiceProvider extends ServiceProvider
 
             return $ultimoUso !== null && $ultimoUso->gt(now()->subMinutes($limite));
         });
+
+        // Política de contraseñas configurada en /admin/settings (Password::defaults()
+        // se aplica automáticamente a cualquier regla 'password' o Password::defaults()).
+        Password::defaults(fn () => PasswordPolicy::rule());
     }
 }

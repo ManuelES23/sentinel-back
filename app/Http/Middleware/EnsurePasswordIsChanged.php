@@ -21,6 +21,7 @@ class EnsurePasswordIsChanged
         'api/auth/user',
         'api/auth/logout',
         'api/profile/password',
+        'api/password-policy',
         'api/broadcasting/auth',
     ];
 

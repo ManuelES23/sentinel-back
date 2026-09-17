@@ -34,6 +34,9 @@ Route::prefix('auth')->group(function () {
 // Rutas protegidas
 Route::middleware('auth:sanctum')->group(function () {
 
+    // Requisitos de contraseña vigentes (también en la pantalla de cambio obligatorio)
+    Route::get('password-policy', [App\Http\Controllers\Api\PasswordPolicyController::class, 'show']);
+
     // Rutas de perfil del usuario autenticado
     Route::prefix('profile')->group(function () {
         Route::get('/', [App\Http\Controllers\Api\ProfileController::class, 'show']);
