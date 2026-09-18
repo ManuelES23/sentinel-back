@@ -274,4 +274,62 @@ class ConsumoInventarioAplicacionTest extends TestCase
         $this->assertEquals(20, $this->stockTotal($this->almacenA, $this->insumo));
         $this->assertSame(0, CosteoAgricola::count());
     }
+
+    public function test_una_fila_de_stock_con_area_no_se_usa(): void
+    {
+        $area = \App\Models\Area::create(['code' => 'AR-X', 'name' => 'Área X', 'is_active' => true]);
+        $fila = $this->darLote($this->almacenA, $this->insumo, 20, 'L-1', 10);
+        $fila->update(['area_id' => $area->id]);
+        $aplicacion = $this->crearAplicacion(); // necesita 8 L
+
+        $this->esperarError($aplicacion, 'productos.0.dosis');
+
+        $this->assertEquals(20, $this->stockTotal($this->almacenA, $this->insumo));
+        $this->assertSame(0, InventoryMovement::withTrashed()->count());
+    }
+
+    public function test_el_movimiento_guarda_total_de_cantidad_e_importe(): void
+    {
+        $this->darLote($this->almacenA, $this->insumo, 5, 'L-1', 10);
+        $this->darLote($this->almacenA, $this->insumo, 10, 'L-2', 20);
+        $aplicacion = $this->crearAplicacion(); // 5 x 10 + 3 x 20
+
+        $this->consumidor->consumir($aplicacion);
+
+        $movimiento = InventoryMovement::findOrFail($aplicacion->fresh()->inventory_movement_id);
+        $this->assertEquals(8, $movimiento->total_quantity);
+        $this->assertEquals(110, $movimiento->total_amount);
+    }
+
+    public function test_consumir_dos_veces_la_misma_aplicacion_da_422_y_no_cambia_nada(): void
+    {
+        $this->darLote($this->almacenA, $this->insumo, 20, 'L-1', 10);
+        $aplicacion = $this->crearAplicacion();
+        $this->consumidor->consumir($aplicacion);
+
+        $this->esperarError($aplicacion, 'movimiento');
+
+        $this->assertEquals(12, $this->stockTotal($this->almacenA, $this->insumo));
+        $this->assertSame(1, InventoryMovement::withTrashed()->count());
+        $this->assertSame(1, CosteoAgricola::count());
+    }
+
+    public function test_lotes_duplicados_en_el_almacen_dan_422_y_no_dejan_nada(): void
+    {
+        $this->darStock($this->almacenA, $this->insumo, 5); // sin lote
+        $this->darStock($this->almacenA, $this->insumo, 3); // sin lote: misma clave
+        $aplicacion = $this->crearAplicacion(); // necesita 8 L
+
+        try {
+            $this->consumidor->consumir($aplicacion);
+            $this->fail('Se esperaba una ValidationException.');
+        } catch (ValidationException $e) {
+            $this->assertArrayHasKey('productos.0.dosis', $e->errors());
+            $this->assertStringContainsString('lotes duplicados', $e->errors()['productos.0.dosis'][0]);
+        }
+
+        $this->assertEquals(8, $this->stockTotal($this->almacenA, $this->insumo));
+        $this->assertSame(0, InventoryMovement::withTrashed()->count());
+        $this->assertSame(0, CosteoAgricola::withTrashed()->count());
+    }
 }

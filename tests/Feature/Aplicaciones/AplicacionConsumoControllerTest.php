@@ -207,4 +207,61 @@ class AplicacionConsumoControllerTest extends TestCase
 
         $this->assertFalse($aplicacion->fresh()->trashed());
     }
+
+    public function test_update_a_un_almacen_no_visible_da_403_y_no_cambia_nada(): void
+    {
+        $this->darLote($this->almacenA, $this->insumo, 20, 'L-1', 10);
+        $this->darLote($this->almacenB, $this->insumo, 20, 'L-1', 10);
+        $id = $this->crearPorApi(); // el usuario solo ve el almacén A
+
+        $this->putJson(self::BASE . '/' . $id, ['almacen_id' => $this->almacenB->id], $this->headersEmpresa())
+            ->assertStatus(403);
+
+        $this->assertEquals(12, $this->stockTotal($this->almacenA, $this->insumo));
+        $this->assertEquals(20, $this->stockTotal($this->almacenB, $this->insumo));
+        $this->assertSame(1, InventoryMovement::where('reference_type', 'aplicacion')->count());
+        $this->assertEquals(8, CosteoAgricola::where('fuente_id', $id)->sole()->cantidad);
+        $this->assertSame($this->almacenA->id, (int) Aplicacion::findOrFail($id)->almacen_id);
+    }
+
+    public function test_store_guarda_la_etiqueta_de_unidad_por_codigo_aunque_la_abreviatura_sea_minuscula(): void
+    {
+        $this->unidad->update(['abbreviation' => 'lt']);
+        $this->darLote($this->almacenA, $this->insumo, 20, 'L-1', 10);
+
+        $id = $this->crearPorApi();
+
+        $this->assertSame('L/ha', Aplicacion::findOrFail($id)->detalles()->first()->unidad_medida);
+    }
+
+    public function test_store_con_unidad_de_dosis_dada_de_baja_da_422(): void
+    {
+        $this->darLote($this->almacenA, $this->insumo, 20, 'L-1', 10);
+        $this->mililitro->delete();
+
+        $this->postJson(self::BASE, $this->payload([
+            'productos' => [['product_id' => $this->insumo->id, 'dosis' => 1, 'unidad_dosis_id' => $this->mililitro->id]],
+        ]), $this->headersEmpresa())
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['productos.0.unidad_dosis_id']);
+
+        $this->assertSame(0, Aplicacion::withTrashed()->count());
+        $this->assertEquals(20, $this->stockTotal($this->almacenA, $this->insumo));
+    }
+
+    public function test_una_aplicacion_historica_que_recibe_almacen_consume_por_primera_vez(): void
+    {
+        $this->darLote($this->almacenA, $this->insumo, 20, 'L-1', 10);
+        $aplicacion = $this->crearAplicacion(['almacen_id' => null, 'enterprise_id' => null]); // 2 L/ha x 4 ha
+
+        $this->putJson(self::BASE . '/' . $aplicacion->id, ['almacen_id' => $this->almacenA->id], $this->headersEmpresa())->assertOk();
+
+        $aplicacion->refresh();
+        $this->assertSame($this->almacenA->id, (int) $aplicacion->almacen_id);
+        $this->assertSame($this->empresa->id, (int) $aplicacion->enterprise_id);
+        $this->assertNotNull($aplicacion->inventory_movement_id);
+        $this->assertEquals(12, $this->stockTotal($this->almacenA, $this->insumo));
+        $this->assertSame(1, InventoryMovement::where('reference_type', 'aplicacion')->count());
+        $this->assertEquals(80, CosteoAgricola::where('fuente_id', $aplicacion->id)->sole()->costo_total);
+    }
 }

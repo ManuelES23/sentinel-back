@@ -7,6 +7,7 @@ use App\Models\InventoryMovement;
 use App\Models\InventoryStock;
 use App\Services\Inventory\ConsumidorInventarioAplicacion;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 use Tests\Concerns\CreatesAlmacenFixtures;
 use Tests\Concerns\CreatesAplicacionesFixtures;
@@ -139,5 +140,37 @@ class RevertirConsumoAplicacionTest extends TestCase
         $this->assertSame(1, $this->movimientosDeAplicacion());
         $this->assertSame(1, CosteoAgricola::count());
         $this->assertEquals(8, CosteoAgricola::first()->cantidad);
+    }
+
+    public function test_revertir_dos_veces_no_devuelve_el_stock_dos_veces(): void
+    {
+        $this->darLote($this->almacenA, $this->insumo, 20, 'L-1', 10);
+        $aplicacion = $this->crearAplicacion();
+        $this->consumidor->consumir($aplicacion);
+        $copiaObsoleta = $aplicacion->fresh(); // simula la segunda petición, cargada antes de que la primera terminara
+
+        $this->consumidor->revertir($aplicacion);
+        $this->consumidor->revertir($copiaObsoleta);
+
+        $this->assertEquals(20, $this->stockTotal($this->almacenA, $this->insumo));
+        $this->assertSame(1, InventoryMovement::withTrashed()->where('reference_type', 'aplicacion')->count());
+    }
+
+    public function test_revertir_con_movimiento_inexistente_registra_aviso_y_limpia_el_puntero(): void
+    {
+        $this->darLote($this->almacenA, $this->insumo, 20, 'L-1', 10);
+        $aplicacion = $this->crearAplicacion();
+        $this->consumidor->consumir($aplicacion);
+        $movimientoId = $aplicacion->fresh()->inventory_movement_id;
+        InventoryMovement::whereKey($movimientoId)->delete(); // borrado lógico: find() ya no lo ve
+
+        Log::shouldReceive('warning')
+            ->once()
+            ->withArgs(fn ($mensaje, $contexto = []) => str_contains($mensaje . json_encode($contexto), (string) $movimientoId));
+
+        $this->consumidor->revertir($aplicacion->fresh());
+
+        $this->assertNull($aplicacion->fresh()->inventory_movement_id);
+        $this->assertSame(0, CosteoAgricola::count());
     }
 }

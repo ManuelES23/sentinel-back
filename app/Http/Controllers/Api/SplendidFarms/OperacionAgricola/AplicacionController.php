@@ -47,9 +47,15 @@ class AplicacionController extends Controller
         );
     }
 
+    /** Etiqueta canónica por código de unidad (las abreviaturas de la BD no son uniformes). */
+    private static function etiquetaUnidad(UnitOfMeasure $unidad): string
+    {
+        return ['GR' => 'g', 'KG' => 'kg', 'ML' => 'mL', 'LT' => 'L', 'OZ' => 'oz'][$unidad->code] ?? $unidad->abbreviation;
+    }
+
     /**
      * Crea los renglones. `unidad_medida` (texto NOT NULL) se deriva de la unidad
-     * real como "{abreviatura}/ha" para que los listados sigan mostrando la dosis.
+     * real como "{etiqueta}/ha" para que los listados sigan mostrando la dosis.
      */
     private function guardarRenglones(Aplicacion $aplicacion, array $productos): void
     {
@@ -60,7 +66,7 @@ class AplicacionController extends Controller
                 'aplicacion_id' => $aplicacion->id,
                 'product_id' => $item['product_id'],
                 'dosis' => $item['dosis'],
-                'unidad_medida' => $unidades[$item['unidad_dosis_id']]->abbreviation . '/ha',
+                'unidad_medida' => self::etiquetaUnidad($unidades[$item['unidad_dosis_id']]) . '/ha',
                 'unidad_dosis_id' => $item['unidad_dosis_id'],
             ]);
         }

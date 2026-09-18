@@ -9,6 +9,7 @@ use App\Models\InventoryMovement;
 use App\Models\InventoryStock;
 use App\Models\MovementType;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
@@ -28,6 +29,12 @@ class ConsumidorInventarioAplicacion
     public function consumir(Aplicacion $aplicacion): void
     {
         DB::transaction(function () use ($aplicacion) {
+            $this->bloquear($aplicacion);
+
+            if ($aplicacion->inventory_movement_id) {
+                throw ValidationException::withMessages(['movimiento' => 'La aplicación ya tiene un consumo de inventario aplicado.']);
+            }
+
             $aplicacion->load('detalles.product.unit', 'detalles.unidadDosis');
 
             $tipo = MovementType::where('code', 'CONSUMO')->first()
@@ -78,14 +85,21 @@ class ConsumidorInventarioAplicacion
 
     public function revertir(Aplicacion $aplicacion): void
     {
-        if (! $aplicacion->inventory_movement_id) {
-            return;
-        }
-
         DB::transaction(function () use ($aplicacion) {
+            $this->bloquear($aplicacion);
+
+            if (! $aplicacion->inventory_movement_id) {
+                return;
+            }
+
             $movimiento = InventoryMovement::with('details')->find($aplicacion->inventory_movement_id);
 
-            if ($movimiento) {
+            if (! $movimiento) {
+                Log::warning('Al revertir el consumo, el movimiento de la aplicación ya no existe.', [
+                    'aplicacion_id' => $aplicacion->id,
+                    'inventory_movement_id' => $aplicacion->inventory_movement_id,
+                ]);
+            } else {
                 // Se devuelve al almacén del movimiento, no al de la aplicación (en una
                 // edición este ya puede venir cambiado). Es una entrada normal con el
                 // costo original de cada porción: el promedio de la fila no se altera y
@@ -111,6 +125,13 @@ class ConsumidorInventarioAplicacion
             $this->revertir($aplicacion);
             $this->consumir($aplicacion);
         });
+    }
+
+    /** Serializa los cambios sobre el puntero de la aplicación y lo relee de la BD. */
+    private function bloquear(Aplicacion $aplicacion): void
+    {
+        Aplicacion::whereKey($aplicacion->id)->lockForUpdate()->first();
+        $aplicacion->refresh();
     }
 
     /**
@@ -151,7 +172,12 @@ class ConsumidorInventarioAplicacion
 
             $factor = (float) $unidadDosis->conversion_factor / (float) $unidadStock->conversion_factor;
             $necesaria = round((float) $detalle->dosis * $superficie * $factor, 4);
-            [$porciones, $faltante] = $this->repartir((int) $aplicacion->almacen_id, (int) $producto->id, $necesaria, $tomado);
+            [$porciones, $faltante, $duplicado] = $this->repartir((int) $aplicacion->almacen_id, (int) $producto->id, $necesaria, $tomado);
+
+            if ($duplicado) {
+                $errores["productos.$i.dosis"] = "Inventario inconsistente: hay lotes duplicados de {$producto->name} en el almacén; corrígelo antes de registrar el consumo.";
+                continue;
+            }
 
             if ($faltante > self::TOLERANCIA) {
                 $errores["productos.$i.dosis"] = "Stock insuficiente de {$producto->name} en el almacén: faltan " . round($faltante, 4) . " {$unidadStock->abbreviation}.";
@@ -174,7 +200,7 @@ class ConsumidorInventarioAplicacion
      * mismo producto se disputen la misma existencia.
      *
      * @param  array<int, float>  $tomado
-     * @return array{0: array<int, array{stock: InventoryStock, cantidad: float}>, 1: float}  porciones y faltante
+     * @return array{0: array<int, array{stock: InventoryStock, cantidad: float}>, 1: float, 2: bool}  porciones, faltante y si hay lotes duplicados
      */
     private function repartir(int $almacenId, int $productoId, float $necesaria, array &$tomado): array
     {
@@ -184,6 +210,12 @@ class ConsumidorInventarioAplicacion
             ->orderBy('id')
             ->lockForUpdate()
             ->get();
+
+        // updateStock resuelve la fila por producto+almacén+área+lote: con lotes repetidos
+        // descontaría siempre de la primera y stock, kardex y costo divergirían.
+        if ($filas->count() !== $filas->unique(fn ($fila) => (string) $fila->lot_number)->count()) {
+            return [[], 0.0, true];
+        }
 
         $porciones = [];
         $restante = $necesaria;
@@ -204,7 +236,7 @@ class ConsumidorInventarioAplicacion
             $restante = round($restante - $toma, 4);
         }
 
-        return [$porciones, max(0.0, $restante)];
+        return [$porciones, max(0.0, $restante), false];
     }
 
     /**
