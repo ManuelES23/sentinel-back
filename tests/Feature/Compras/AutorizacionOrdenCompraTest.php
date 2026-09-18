@@ -91,4 +91,14 @@ class AutorizacionOrdenCompraTest extends TestCase
         $this->actingAs($gerente)->postJson("/api/pending-approvals/purchase_order/{$oc->id}/approve")->assertOk();
         $this->assertSame('approved', $oc->fresh()->status);
     }
+
+    public function test_mostrar_oc_con_requisicion_ligada_no_falla_por_status_label(): void
+    {
+        $requisicion = $this->crearRequisicion($this->compras);
+        $oc = $this->crearOrden(['created_by' => $this->compras->id, 'requisicion_campo_id' => $requisicion->id]);
+
+        $this->actingAs($this->compras)->getJson(self::URL . "/{$oc->id}", $this->headersEmpresa())
+            ->assertOk()
+            ->assertJsonPath('data.requisicion.status_label', $requisicion->status_label);
+    }
 }

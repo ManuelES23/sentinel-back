@@ -99,7 +99,7 @@ class PurchaseOrderController extends Controller
     {
         $empresa = $this->almacenes->resolverEmpresa($request);
         $query = $this->alcance->aplicar(PurchaseOrder::query(), 'almacen_destino_id', $request->user(), $empresa)
-            ->with(['supplier', 'details.product', 'createdByUser', 'approvedByUser', 'rejectedByUser:id,name', 'almacenDestino:id,code,name', 'requisicion:id,numero_requisicion']);
+            ->with(['supplier', 'details.product', 'createdByUser', 'approvedByUser', 'rejectedByUser:id,name', 'almacenDestino:id,code,name', 'requisicion:id,numero_requisicion,status,prioridad']);
 
         // Filtros
         if ($request->has('search')) {
@@ -252,7 +252,7 @@ class PurchaseOrderController extends Controller
             'createdByUser',
             'approvedByUser',
             'almacenDestino:id,code,name',
-            'requisicion:id,numero_requisicion,solicitante_user_id',
+            'requisicion:id,numero_requisicion,solicitante_user_id,status,prioridad',
             'cotizacion:id,folio_proveedor,total,archivo_path',
             'rejectedByUser:id,name',
         ]);
