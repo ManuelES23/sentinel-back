@@ -481,14 +481,11 @@ Route::middleware('auth:sanctum')->group(function () {
                     ->parameters(['ordenes' => 'order']);
 
                 // Recepciones de Mercancía
+                Route::get('recepciones/ordenes-recibibles', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'ordenesRecibibles']);
                 Route::post('recepciones/from-order/{order}', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'fromPurchaseOrder']);
                 Route::post('recepciones/{receipt}/submit', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'submit']);
-                Route::post('recepciones/{receipt}/complete', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'complete']);
+                Route::post('recepciones/{receipt}/regresar', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'regresar']);
                 Route::post('recepciones/{receipt}/cancel', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'cancel']);
-                // Detalles de recepción
-                Route::post('recepciones/{receipt}/details', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'addDetail']);
-                Route::put('recepciones/{receipt}/details/{detail}', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'updateDetail']);
-                Route::delete('recepciones/{receipt}/details/{detail}', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'deleteDetail']);
                 Route::apiResource('recepciones', App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class)
                     ->parameters(['recepciones' => 'receipt']);
             });
@@ -941,13 +938,11 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::apiResource('ordenes', App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class)
                     ->parameters(['ordenes' => 'order']);
 
+                Route::get('recepciones/ordenes-recibibles', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'ordenesRecibibles']);
                 Route::post('recepciones/from-order/{order}', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'fromPurchaseOrder']);
                 Route::post('recepciones/{receipt}/submit', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'submit']);
-                Route::post('recepciones/{receipt}/complete', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'complete']);
+                Route::post('recepciones/{receipt}/regresar', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'regresar']);
                 Route::post('recepciones/{receipt}/cancel', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'cancel']);
-                Route::post('recepciones/{receipt}/details', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'addDetail']);
-                Route::put('recepciones/{receipt}/details/{detail}', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'updateDetail']);
-                Route::delete('recepciones/{receipt}/details/{detail}', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'deleteDetail']);
                 Route::apiResource('recepciones', App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class)
                     ->parameters(['recepciones' => 'receipt']);
             });
