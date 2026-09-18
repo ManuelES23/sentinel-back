@@ -72,6 +72,13 @@ class FlujoComprasCompletoTest extends TestCase
         $this->assertSame('completed', PurchaseOrder::find($ocId)->status);
         $this->assertSame('completada', RequisicionCampo::find($reqId)->status);
         $this->assertSame(2, AccountPayable::where('purchase_order_id', $ocId)->count());
+        $montos = AccountPayable::where('purchase_order_id', $ocId)
+            ->pluck('total_amount')
+            ->map(fn ($v) => round((float) $v, 2))
+            ->sort()
+            ->values()
+            ->all();
+        $this->assertEquals([464.0, 696.0], $montos);
         $this->assertEquals(100, (float) PurchaseOrder::find($ocId)->details()->value('unit_price'));
 
         $tipos = collect($this->actingAs($ingeniero)->getJson("$req/$reqId/seguimiento", $h)->assertOk()->json('data.eventos'))->pluck('tipo');
