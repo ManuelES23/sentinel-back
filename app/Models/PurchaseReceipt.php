@@ -109,6 +109,11 @@ class PurchaseReceipt extends Model
         return $this->belongsTo(Entity::class, 'almacen_id');
     }
 
+    public function empresa(): BelongsTo
+    {
+        return $this->belongsTo(Enterprise::class, 'enterprise_id');
+    }
+
     public function capturadaPor(): BelongsTo
     {
         return $this->belongsTo(User::class, 'capturada_por');

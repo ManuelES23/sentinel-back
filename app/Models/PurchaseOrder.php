@@ -152,6 +152,11 @@ class PurchaseOrder extends Model
         return $this->belongsTo(User::class, 'rejected_by');
     }
 
+    public function empresa(): BelongsTo
+    {
+        return $this->belongsTo(Enterprise::class, 'enterprise_id');
+    }
+
     public function details(): HasMany
     {
         return $this->hasMany(PurchaseOrderDetail::class);
