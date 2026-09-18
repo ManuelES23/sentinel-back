@@ -3,7 +3,6 @@
 namespace App\Http\Controllers\Api\SplendidFarms\OperacionAgricola;
 
 use App\Http\Controllers\Controller;
-use App\Models\CosteoAgricola;
 use App\Models\Enterprise;
 use App\Models\Entity;
 use App\Models\InventoryStock;
@@ -13,6 +12,7 @@ use App\Models\RequisicionCampo;
 use App\Models\Supplier;
 use App\Services\Compras\AlcanceCompras;
 use App\Services\Compras\AvisosCompras;
+use App\Services\Compras\GeneradorOrdenCompra;
 use App\Services\Compras\PermisosCompras;
 use App\Services\Inventory\AlmacenAccessService;
 use Illuminate\Http\JsonResponse;
@@ -28,6 +28,7 @@ class RequisicionCampoController extends Controller
         private AlcanceCompras $alcance,
         private PermisosCompras $permisos,
         private AvisosCompras $avisos,
+        private GeneradorOrdenCompra $generador,
     ) {
     }
 
@@ -416,198 +417,26 @@ class RequisicionCampoController extends Controller
     }
 
     /**
-     * Generar Orden de Compra a partir de la requisición aprobada.
+     * Generar Orden de Compra a partir de la cotización ganadora.
      */
     public function generarOrden(Request $request, RequisicionCampo $requisicion): JsonResponse
     {
-        $this->empresaConAcceso($request, $requisicion);
+        $empresa = $this->empresaConAcceso($request, $requisicion);
+        abort_unless($this->permisos->puedeCotizar($request->user(), $empresa), 403, 'Solo Compras genera órdenes de compra');
 
-        if ($requisicion->status !== RequisicionCampo::STATUS_COTIZADA) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Solo se pueden generar OC de requisiciones aprobadas',
-            ], 422);
-        }
-
-        $validated = $request->validate([
-            'supplier_id' => 'required|exists:suppliers,id',
+        $datos = $request->validate([
             'order_date' => 'required|date',
             'expected_date' => 'nullable|date|after_or_equal:order_date',
             'notes' => 'nullable|string',
-            'detalles_override' => 'nullable|array',
-            'detalles_override.*.product_id' => 'required|exists:products,id',
-            'detalles_override.*.quantity_ordered' => 'required|numeric|min:0.01',
-            'detalles_override.*.unit_id' => 'nullable|exists:units_of_measure,id',
-            'detalles_override.*.unit_price' => 'required|numeric|min:0',
-            'detalles_override.*.tax_rate' => 'nullable|numeric|min:0|max:100',
         ]);
 
-        DB::beginTransaction();
-        try {
-            $supplier = Supplier::findOrFail($validated['supplier_id']);
+        $orden = $this->generador->desdeCotizacion($requisicion->load('solicitante'), $datos, $request->user());
 
-            // Crear Orden de Compra
-            $order = PurchaseOrder::create([
-                'order_number' => PurchaseOrder::generateOrderNumber(),
-                'supplier_id' => $supplier->id,
-                'order_date' => $validated['order_date'],
-                'expected_date' => $validated['expected_date'] ?? null,
-                'status' => PurchaseOrder::STATUS_DRAFT,
-                'currency_code' => 'MXN',
-                'payment_terms' => $supplier->has_credit ? ($supplier->payment_terms ?? 0) : 0,
-                'notes' => ($validated['notes'] ?? '') . "\nGenerada desde Requisición: {$requisicion->numero_requisicion}",
-                'requested_by' => $requisicion->solicitante->name ?? '',
-                'created_by' => Auth::id(),
-                'metadata' => [
-                    'requisicion_campo_id' => $requisicion->id,
-                    'temporada_id' => $requisicion->temporada_id,
-                ],
-            ]);
-
-            // Usar detalles override o los de la requisición
-            $detalles = $validated['detalles_override'] ?? null;
-
-            if ($detalles) {
-                foreach ($detalles as $index => $det) {
-                    $order->details()->create([
-                        'product_id' => $det['product_id'],
-                        'quantity_ordered' => $det['quantity_ordered'],
-                        'unit_id' => $det['unit_id'] ?? null,
-                        'unit_price' => $det['unit_price'],
-                        'tax_rate' => $det['tax_rate'] ?? 0,
-                        'line_number' => $index + 1,
-                    ]);
-                }
-            } else {
-                // Usar detalles de requisición que tengan product_id
-                $requisicionDetalles = $requisicion->detalles()
-                    ->whereNotNull('product_id')
-                    ->with('product')
-                    ->get();
-
-                foreach ($requisicionDetalles as $index => $det) {
-                    $order->details()->create([
-                        'product_id' => $det->product_id,
-                        'quantity_ordered' => $det->cantidad,
-                        'unit_id' => $det->unit_id,
-                        'unit_price' => $det->precio_estimado ?? $det->product->cost_price ?? 0,
-                        'line_number' => $index + 1,
-                    ]);
-                }
-            }
-
-            $order->recalculateTotals();
-
-            // Actualizar requisición
-            $requisicion->update([
-                'status' => RequisicionCampo::STATUS_ORDEN_GENERADA,
-                'purchase_order_id' => $order->id,
-            ]);
-
-            // Crear registros de costeo a partir de las líneas reales de la OC:
-            // con los detalles de la requisición, un override de cantidades o
-            // precios dejaba el costeo desfasado del total de la orden.
-            $order->load(['details.product.category']);
-            $detallesRequisicion = $requisicion->detalles()->with('product.category')->get();
-
-            // Renglones de la requisición por producto, en orden: se van
-            // consumiendo para que dos partidas del mismo producto en etapas
-            // distintas no acaben atribuidas a la misma etapa.
-            $pendientesPorProducto = $detallesRequisicion->groupBy('product_id')
-                ->map(fn ($grupo) => $grupo->values()->all())
-                ->all();
-
-            foreach ($order->details as $linea) {
-                $impuesto = 1 + ((float) ($linea->tax_rate ?? 0) / 100);
-                $costoTotal = (float) $linea->quantity_ordered * (float) $linea->unit_price * $impuesto;
-                if ($costoTotal <= 0) {
-                    continue;
-                }
-
-                // Lote/etapa y descripción se toman del renglón equivalente de
-                // la requisición, que es quien los conoce.
-                $det = null;
-                if (!empty($pendientesPorProducto[$linea->product_id])) {
-                    $det = array_shift($pendientesPorProducto[$linea->product_id]);
-                }
-
-                CosteoAgricola::create([
-                    'temporada_id' => $requisicion->temporada_id,
-                    'lote_id' => $det?->lote_id,
-                    'etapa_id' => $det?->etapa_id,
-                    'tipo_fuente' => CosteoAgricola::TIPO_FUENTE_REQUISICION,
-                    'fuente_id' => $requisicion->id,
-                    'product_id' => $linea->product_id,
-                    'descripcion' => $det?->nombre_producto ?? $linea->product?->name,
-                    'categoria' => $this->mapearCategoria($linea->product?->category?->name),
-                    'cantidad' => $linea->quantity_ordered,
-                    'unit_id' => $linea->unit_id ?? $det?->unit_id,
-                    'costo_unitario' => $linea->unit_price,
-                    'costo_total' => $costoTotal,
-                    'fecha' => $requisicion->fecha_solicitud,
-                    'user_id' => Auth::id(),
-                    'notas' => "Requisición {$requisicion->numero_requisicion} → OC {$order->order_number}",
-                ]);
-            }
-
-            $order->load(['supplier', 'details.product', 'details.unit']);
-
-            DB::commit();
-
-            return response()->json([
-                'success' => true,
-                'message' => "Orden de compra {$order->order_number} generada exitosamente",
-                'data' => [
-                    'requisicion' => $requisicion->fresh(),
-                    'purchase_order' => $order,
-                ],
-            ]);
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json([
-                'success' => false,
-                'message' => 'Error al generar orden de compra: ' . $e->getMessage(),
-            ], 500);
-        }
-    }
-
-    /**
-     * Traduce el nombre de la categoría del producto de inventario a una de
-     * las claves de CosteoAgricola::CATEGORIAS. Antes se guardaba el nombre
-     * tal cual ("Fertilizantes") y el dashboard de costeo no sabía etiquetarlo.
-     */
-    protected function mapearCategoria(?string $nombreCategoria): string
-    {
-        if (!$nombreCategoria) {
-            return 'otro';
-        }
-
-        $normalizado = strtolower(trim($nombreCategoria));
-        // Sin acentos, para que "Agroquímicos" también coincida
-        $normalizado = str_replace(
-            ['á', 'é', 'í', 'ó', 'ú', 'ñ'],
-            ['a', 'e', 'i', 'o', 'u', 'n'],
-            $normalizado
-        );
-
-        $equivalencias = [
-            'fertilizante' => 'fertilizante',
-            'agroquimico' => 'agroquimico',
-            'semilla' => 'semilla',
-            'mano de obra' => 'mano_de_obra',
-            'maquinaria' => 'maquinaria',
-            'riego' => 'riego',
-            'transporte' => 'transporte',
-            'empaque' => 'empaque',
-        ];
-
-        foreach ($equivalencias as $aguja => $clave) {
-            if (str_contains($normalizado, $aguja)) {
-                return $clave;
-            }
-        }
-
-        return 'otro';
+        return response()->json([
+            'success' => true,
+            'message' => "Orden de compra {$orden->order_number} generada exitosamente",
+            'data' => ['requisicion' => $requisicion->fresh(self::RELACIONES), 'purchase_order' => $orden],
+        ]);
     }
 
     public function suppliers(): JsonResponse
