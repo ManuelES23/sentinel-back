@@ -5,7 +5,10 @@ namespace App\Http\Controllers\Api\SplendidFarms\OperacionAgricola;
 use App\Http\Controllers\Controller;
 use App\Models\Aplicacion;
 use App\Models\AplicacionDetalle;
+use App\Models\Enterprise;
+use App\Models\UnitOfMeasure;
 use App\Services\Inventory\AlmacenAccessService;
+use App\Services\Inventory\ConsumidorInventarioAplicacion;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -14,8 +17,10 @@ use Illuminate\Validation\Rule;
 
 class AplicacionController extends Controller
 {
-    public function __construct(private AlmacenAccessService $almacenes)
-    {
+    public function __construct(
+        private AlmacenAccessService $almacenes,
+        private ConsumidorInventarioAplicacion $consumidor,
+    ) {
     }
 
     private function reglaProducto(Request $request): \Illuminate\Validation\Rules\Exists
@@ -23,6 +28,48 @@ class AplicacionController extends Controller
         $empresa = $this->almacenes->resolverEmpresa($request);
 
         return Rule::exists('enterprise_product', 'product_id')->where('enterprise_id', $empresa->id);
+    }
+
+    /** Solo unidades reales de peso o volumen (las que se pueden convertir a la unidad de stock). */
+    private function reglaUnidadDosis(): \Illuminate\Validation\Rules\Exists
+    {
+        return Rule::exists('units_of_measure', 'id')
+            ->whereIn('type', ['weight', 'volume'])
+            ->whereNull('deleted_at');
+    }
+
+    private function exigirAlmacen(Request $request, Enterprise $empresa, int $almacenId): void
+    {
+        abort_unless(
+            $this->almacenes->puedeVer($request->user(), $empresa, $almacenId),
+            403,
+            'No tienes acceso a ese almacén'
+        );
+    }
+
+    /** Etiqueta canónica por código de unidad (las abreviaturas de la BD no son uniformes). */
+    private static function etiquetaUnidad(UnitOfMeasure $unidad): string
+    {
+        return ['GR' => 'g', 'KG' => 'kg', 'ML' => 'mL', 'LT' => 'L', 'OZ' => 'oz'][$unidad->code] ?? $unidad->abbreviation;
+    }
+
+    /**
+     * Crea los renglones. `unidad_medida` (texto NOT NULL) se deriva de la unidad
+     * real como "{etiqueta}/ha" para que los listados sigan mostrando la dosis.
+     */
+    private function guardarRenglones(Aplicacion $aplicacion, array $productos): void
+    {
+        $unidades = UnitOfMeasure::whereIn('id', array_column($productos, 'unidad_dosis_id'))->get()->keyBy('id');
+
+        foreach ($productos as $item) {
+            AplicacionDetalle::create([
+                'aplicacion_id' => $aplicacion->id,
+                'product_id' => $item['product_id'],
+                'dosis' => $item['dosis'],
+                'unidad_medida' => self::etiquetaUnidad($unidades[$item['unidad_dosis_id']]) . '/ha',
+                'unidad_dosis_id' => $item['unidad_dosis_id'],
+            ]);
+        }
     }
 
     /**
@@ -95,6 +142,7 @@ class AplicacionController extends Controller
 
         $validated = $request->validate([
             'temporada_id'       => 'required|exists:temporadas,id',
+            'almacen_id'         => 'required|integer|exists:entities,id',
             'fecha'              => 'required|date',
             'autogenerar_folio'  => 'boolean',
             'folio'              => [
@@ -110,15 +158,19 @@ class AplicacionController extends Controller
             'zona_cultivo_id'    => 'nullable|exists:zonas_cultivo,id',
             'lote_id'            => 'nullable|exists:lotes,id',
             'variedad_id'        => 'nullable|exists:variedades,id',
-            'superficie_aplicada'=> 'nullable|numeric|min:0.01',
+            'superficie_aplicada'=> 'required|numeric|min:0.01',
             'metodo_aplicacion'  => 'nullable|string|max:150',
             'problematica'       => 'required|string',
             'observaciones'      => 'nullable|string',
             'productos'          => 'required|array|min:1',
             'productos.*.product_id' => ['required', 'integer', $this->reglaProducto($request)],
             'productos.*.dosis'       => 'required|numeric|min:0',
-            'productos.*.unidad_medida' => 'required|string|max:50',
+            'productos.*.unidad_dosis_id' => ['required', 'integer', $this->reglaUnidadDosis()],
         ]);
+
+        $empresa = $this->almacenes->resolverEmpresa($request);
+        $this->exigirAlmacen($request, $empresa, (int) $validated['almacen_id']);
+        $validated['enterprise_id'] = $empresa->id;
 
         $folioManual = $validated['folio'] ?? null;
         $autogenerar = empty($folioManual) || ($validated['autogenerar_folio'] ?? false);
@@ -139,14 +191,8 @@ class AplicacionController extends Controller
 
                     $aplicacion = Aplicacion::create($validated);
 
-                    foreach ($productos as $item) {
-                        AplicacionDetalle::create([
-                            'aplicacion_id' => $aplicacion->id,
-                            'product_id'    => $item['product_id'],
-                            'dosis'         => $item['dosis'],
-                            'unidad_medida' => $item['unidad_medida'],
-                        ]);
-                    }
+                    $this->guardarRenglones($aplicacion, $productos);
+                    $this->consumidor->consumir($aplicacion);
 
                     return $aplicacion;
                 });
@@ -210,10 +256,16 @@ class AplicacionController extends Controller
      */
     public function update(Request $request, Aplicacion $aplicacion): JsonResponse
     {
+        $empresa = $this->almacenes->resolverEmpresa($request);
+        if ($aplicacion->almacen_id) {
+            $this->exigirAlmacen($request, $empresa, (int) $aplicacion->almacen_id);
+        }
+
         $temporadaId = $aplicacion->temporada_id;
 
         $validated = $request->validate([
-            'fecha'              => 'sometimes|date',
+            'almacen_id'         => 'sometimes|integer|exists:entities,id',
+            'fecha'             => 'sometimes|date',
             'folio'              => [
                 'nullable', 'string', 'max:50',
                 function ($attr, $value, $fail) use ($aplicacion, $temporadaId) {
@@ -234,8 +286,13 @@ class AplicacionController extends Controller
             'productos'          => 'sometimes|array|min:1',
             'productos.*.product_id' => ['required_with:productos', 'integer', $this->reglaProducto($request)],
             'productos.*.dosis'       => 'required_with:productos|numeric|min:0',
-            'productos.*.unidad_medida' => 'required_with:productos|string|max:50',
+            'productos.*.unidad_dosis_id' => ['required_with:productos', 'integer', $this->reglaUnidadDosis()],
         ]);
+
+        if (isset($validated['almacen_id'])) {
+            $this->exigirAlmacen($request, $empresa, (int) $validated['almacen_id']);
+            $validated['enterprise_id'] = $empresa->id;
+        }
 
         $productos = $validated['productos'] ?? null;
         unset($validated['productos']);
@@ -245,14 +302,13 @@ class AplicacionController extends Controller
 
             if ($productos !== null) {
                 AplicacionDetalle::where('aplicacion_id', $aplicacion->id)->delete();
-                foreach ($productos as $item) {
-                    AplicacionDetalle::create([
-                        'aplicacion_id' => $aplicacion->id,
-                        'product_id'    => $item['product_id'],
-                        'dosis'         => $item['dosis'],
-                        'unidad_medida' => $item['unidad_medida'],
-                    ]);
-                }
+                $this->guardarRenglones($aplicacion, $productos);
+            }
+
+            // Una aplicación histórica sin almacén no toca inventario; con almacén
+            // (el que ya tenía o el que se envía ahora) se revierte y se vuelve a consumir.
+            if ($aplicacion->almacen_id) {
+                $this->consumidor->reconsumir($aplicacion);
             }
         });
 
@@ -278,9 +334,16 @@ class AplicacionController extends Controller
     /**
      * DELETE /aplicaciones/{id}
      */
-    public function destroy(Aplicacion $aplicacion): JsonResponse
+    public function destroy(Request $request, Aplicacion $aplicacion): JsonResponse
     {
-        $aplicacion->delete(); // soft delete; cascade eliminará detalles en hard delete
+        if ($aplicacion->almacen_id) {
+            $this->exigirAlmacen($request, $this->almacenes->resolverEmpresa($request), (int) $aplicacion->almacen_id);
+        }
+
+        DB::transaction(function () use ($aplicacion) {
+            $this->consumidor->revertir($aplicacion);
+            $aplicacion->delete(); // soft delete; cascade eliminará detalles en hard delete
+        });
 
         return response()->json([
             'success' => true,

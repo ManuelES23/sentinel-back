@@ -18,10 +18,15 @@ class AplicacionDetalle extends Model
         'product_id',
         'dosis',
         'unidad_medida',
+        'unidad_dosis_id',
+        'conversion_factor',
+        'base_quantity',
     ];
 
     protected $casts = [
         'dosis' => 'decimal:4',
+        'conversion_factor' => 'decimal:6',
+        'base_quantity' => 'decimal:4',
     ];
 
     // ═══════ RELACIONES ═══════
@@ -39,5 +44,10 @@ class AplicacionDetalle extends Model
     public function product(): BelongsTo
     {
         return $this->belongsTo(Product::class, 'product_id');
+    }
+
+    public function unidadDosis(): BelongsTo
+    {
+        return $this->belongsTo(UnitOfMeasure::class, 'unidad_dosis_id');
     }
 }
