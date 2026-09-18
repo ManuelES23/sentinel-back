@@ -102,4 +102,39 @@ class CotizacionesTest extends TestCase
         $this->cotizar($this->proveedor2->id, 90)->assertStatus(422);
         $this->actingAs($this->compras)->deleteJson($this->url("/$id"), [], $this->headersEmpresa())->assertStatus(422);
     }
+
+    public function test_cotizar_sin_acceso_al_almacen_devuelve_403(): void
+    {
+        $sinAlmacen = $this->crearUsuarioDeCampo([$this->almacenB]);
+        $this->otorgarCotizar($sinAlmacen);
+
+        $this->actingAs($sinAlmacen)->postJson($this->url(), [
+            'supplier_id' => $this->proveedor->id,
+            'fecha' => now()->toDateString(),
+            'detalles' => [[
+                'requisicion_detalle_id' => $this->req->detalles->first()->id,
+                'disponible' => true, 'cantidad' => 10, 'precio_unitario' => 100, 'tax_rate' => 16,
+            ]],
+        ], $this->headersEmpresa())->assertForbidden();
+    }
+
+    public function test_archivo_rechaza_si_no_es_pdf(): void
+    {
+        Storage::fake('public');
+        $id = $this->cotizar($this->proveedor->id, 100)->json('data.id');
+
+        $this->actingAs($this->compras)->post($this->url("/$id/archivo"), [
+            'archivo' => UploadedFile::fake()->create('cot.txt', 10, 'text/plain'),
+        ], $this->headersEmpresa() + ['Accept' => 'application/json'])->assertStatus(422)->assertJsonValidationErrors(['archivo']);
+    }
+
+    public function test_archivo_rechaza_pdf_mayor_a_10mb(): void
+    {
+        Storage::fake('public');
+        $id = $this->cotizar($this->proveedor->id, 100)->json('data.id');
+
+        $this->actingAs($this->compras)->post($this->url("/$id/archivo"), [
+            'archivo' => UploadedFile::fake()->create('cot.pdf', 10241, 'application/pdf'),
+        ], $this->headersEmpresa() + ['Accept' => 'application/json'])->assertStatus(422)->assertJsonValidationErrors(['archivo']);
+    }
 }
