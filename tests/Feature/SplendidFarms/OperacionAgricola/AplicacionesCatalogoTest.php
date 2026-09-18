@@ -3,14 +3,20 @@
 namespace Tests\Feature\SplendidFarms\OperacionAgricola;
 
 use App\Models\AplicacionDetalle;
+use App\Models\Branch;
 use App\Models\Cultivo;
 use App\Models\Enterprise;
+use App\Models\Entity;
+use App\Models\EntityType;
+use App\Models\InventoryStock;
+use App\Models\MovementType;
 use App\Models\Product;
 use App\Models\Productor;
 use App\Models\Temporada;
 use App\Models\UnitOfMeasure;
 use App\Models\User;
 use App\Models\UserEnterpriseAccess;
+use App\Models\UserEntityAccess;
 use App\Services\Inventory\CatalogoAgricolaService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
@@ -26,6 +32,8 @@ class AplicacionesCatalogoTest extends TestCase
     private Temporada $temporada;
     private Productor $productor;
     private Product $insumo;
+    private Entity $almacen;
+    private UnitOfMeasure $unidadLt;
     private array $h = ['X-Enterprise-Slug' => 'splendidfarms'];
 
     protected function setUp(): void
@@ -36,8 +44,14 @@ class AplicacionesCatalogoTest extends TestCase
 
         $this->empresa = Enterprise::create(['name' => 'Splendid Farms', 'slug' => 'splendidfarms', 'is_active' => true, 'description' => 'x']);
         UserEnterpriseAccess::create(['user_id' => $user->id, 'enterprise_id' => $this->empresa->id, 'is_active' => true]);
-        UnitOfMeasure::create(['code' => 'LT', 'name' => 'Litro', 'abbreviation' => 'L']);
-        UnitOfMeasure::create(['code' => 'KG', 'name' => 'Kilogramo', 'abbreviation' => 'kg']);
+        $this->unidadLt = UnitOfMeasure::create(['code' => 'LT', 'name' => 'Litro', 'abbreviation' => 'L', 'type' => 'volume', 'conversion_factor' => 1000]);
+        UnitOfMeasure::create(['code' => 'KG', 'name' => 'Kilogramo', 'abbreviation' => 'kg', 'type' => 'weight', 'conversion_factor' => 1000]);
+
+        $sucursal = Branch::create(['enterprise_id' => $this->empresa->id, 'code' => 'SUC-01', 'name' => 'Rancho Norte', 'slug' => 'rancho-norte']);
+        $tipoCampo = EntityType::create(['code' => 'CAMPO', 'name' => 'Campo', 'slug' => 'campo']);
+        $this->almacen = Entity::create(['branch_id' => $sucursal->id, 'entity_type_id' => $tipoCampo->id, 'code' => 'ALM-A', 'name' => 'Almacén Campo A']);
+        UserEntityAccess::create(['user_id' => $user->id, 'entity_id' => $this->almacen->id, 'enterprise_id' => $this->empresa->id]);
+        MovementType::create(['code' => 'CONSUMO', 'name' => 'Consumo', 'direction' => 'out', 'effect' => 'decrease', 'requires_source_entity' => true]);
 
         $cultivo = Cultivo::create(['nombre' => 'Chile']);
         $this->temporada = Temporada::create([
@@ -49,6 +63,11 @@ class AplicacionesCatalogoTest extends TestCase
 
         $this->insumo = app(CatalogoAgricolaService::class)->crearProducto($this->empresa, [
             'nombre' => 'Clorotalonil 720', 'ingrediente_activo' => 'Clorotalonil', 'marca' => 'Syngenta', 'tipo' => 'agroquimico',
+        ]);
+
+        InventoryStock::create([
+            'product_id' => $this->insumo->id, 'entity_id' => $this->almacen->id, 'quantity' => 10,
+            'reserved_quantity' => 0, 'unit_cost' => 10, 'total_cost' => 100, 'lot_number' => 'L-1',
         ]);
     }
 
@@ -143,6 +162,7 @@ class AplicacionesCatalogoTest extends TestCase
         $response->assertCreated();
         $this->assertSame($this->insumo->id, AplicacionDetalle::first()->product_id);
         $this->assertSame('Clorotalonil 720', $response->json('data.detalles.0.product.name'));
+        $this->assertSame('L/ha', AplicacionDetalle::first()->unidad_medida);
     }
 
     public function test_aplicacion_con_articulo_de_otra_empresa_da_422(): void
@@ -158,11 +178,13 @@ class AplicacionesCatalogoTest extends TestCase
     {
         return [
             'temporada_id' => $this->temporada->id,
+            'almacen_id' => $this->almacen->id,
             'fecha' => '2026-09-17',
             'tipo_aplicacion' => 'agroquimico',
             'productor_id' => $this->productor->id,
+            'superficie_aplicada' => 1,
             'problematica' => 'Tizón tardío',
-            'productos' => [['product_id' => $productId, 'dosis' => 2, 'unidad_medida' => 'L/ha']],
+            'productos' => [['product_id' => $productId, 'dosis' => 2, 'unidad_dosis_id' => $this->unidadLt->id]],
         ];
     }
 }
