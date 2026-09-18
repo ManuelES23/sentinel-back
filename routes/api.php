@@ -461,6 +461,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
             // Módulo Compras
             Route::prefix('compras')->group(function () {
+                // Contexto y capacidades
+                Route::get('contexto', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'contexto']);
+                Route::get('ordenes/{order}/capacidades', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'capacidades']);
                 // Órdenes de Compra
                 Route::post('ordenes/{order}/submit', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'submit']);
                 Route::post('ordenes/{order}/approve', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'approve']);
@@ -922,6 +925,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
             // Módulo Compras
             Route::prefix('compras')->group(function () {
+                Route::get('contexto', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'contexto']);
+                Route::get('ordenes/{order}/capacidades', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'capacidades']);
                 Route::post('ordenes/{order}/submit', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'submit']);
                 Route::post('ordenes/{order}/approve', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'approve']);
                 Route::post('ordenes/{order}/reject', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'reject']);
