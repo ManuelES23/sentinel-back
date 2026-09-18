@@ -44,6 +44,18 @@ class GenerarOrdenTest extends TestCase
     {
         [$d1, $d2] = $this->req->detalles()->orderBy('id')->get()->all();
         $servicio = app(CotizacionService::class);
+
+        // Perdedora: proveedor2, más barata y con otras condiciones — no debe
+        // ser la que use la OC.
+        $perdedora = $servicio->guardar($this->req, [
+            'supplier_id' => $this->proveedor2->id, 'fecha' => now()->toDateString(), 'dias_entrega' => 10, 'condiciones_pago' => 'Contado',
+            'detalles' => [
+                ['requisicion_detalle_id' => $d1->id, 'disponible' => true, 'cantidad' => 10, 'precio_unitario' => 70, 'tax_rate' => 16],
+                ['requisicion_detalle_id' => $d2->id, 'disponible' => false, 'cantidad' => 3, 'precio_unitario' => 0, 'tax_rate' => 16],
+            ],
+        ], $this->compras);
+
+        // Ganadora: proveedor, marcada explícitamente con marcarGanadora().
         $cot = $servicio->guardar($this->req, [
             'supplier_id' => $this->proveedor->id, 'fecha' => now()->toDateString(), 'dias_entrega' => 4, 'condiciones_pago' => '15 días',
             'detalles' => [
@@ -60,7 +72,9 @@ class GenerarOrdenTest extends TestCase
 
         $res->assertOk();
         $oc = PurchaseOrder::with('details')->first();
+        // Datos de la GANADORA, no de la perdedora (más barata).
         $this->assertSame($this->proveedor->id, $oc->supplier_id);
+        $this->assertNotSame($perdedora->id, $oc->cotizacion_id);
         $this->assertSame($this->empresa->id, $oc->enterprise_id);
         $this->assertSame($this->almacenA->id, $oc->almacen_destino_id);
         $this->assertSame($this->req->id, $oc->requisicion_campo_id);
