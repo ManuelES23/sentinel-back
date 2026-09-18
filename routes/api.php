@@ -594,6 +594,12 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::post('requisiciones/{requisicion}/cancelar', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCampoController::class, 'cancel']);
                 Route::post('requisiciones/{requisicion}/generar-orden', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCampoController::class, 'generarOrden']);
                 Route::get('requisiciones/{requisicion}/seguimiento', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCampoController::class, 'seguimiento']);
+                Route::get('requisiciones/{requisicion}/cotizaciones', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCotizacionController::class, 'index']);
+                Route::post('requisiciones/{requisicion}/cotizaciones', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCotizacionController::class, 'store']);
+                Route::put('requisiciones/{requisicion}/cotizaciones/{cotizacion}', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCotizacionController::class, 'update']);
+                Route::delete('requisiciones/{requisicion}/cotizaciones/{cotizacion}', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCotizacionController::class, 'destroy']);
+                Route::post('requisiciones/{requisicion}/cotizaciones/{cotizacion}/archivo', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCotizacionController::class, 'archivo']);
+                Route::post('requisiciones/{requisicion}/cotizaciones/{cotizacion}/ganadora', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCotizacionController::class, 'ganadora']);
                 Route::apiResource('requisiciones', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCampoController::class)
                     ->parameters(['requisiciones' => 'requisicion']);
 
