@@ -65,4 +65,21 @@ class OrdenCompraModeloTest extends TestCase
         $this->oc->updateStatusFromReceipts();
         $this->assertSame('completed', $this->oc->fresh()->status);
     }
+
+    public function test_recalculate_totals_no_duplica_el_iva(): void
+    {
+        $supplier = Supplier::create(['code' => 'PRV-2', 'business_name' => 'Insumos del Sur', 'is_active' => true]);
+        $oc = PurchaseOrder::create([
+            'order_number' => 'OC-2026-00099', 'supplier_id' => $supplier->id, 'order_date' => now()->toDateString(),
+            'status' => 'pending', 'currency_code' => 'MXN', 'created_by' => $this->user->id,
+        ]);
+        $oc->details()->create(['product_id' => $this->insumo->id, 'quantity_ordered' => 5, 'unit_price' => 150, 'tax_rate' => 16, 'line_number' => 1]);
+
+        $oc->recalculateTotals();
+        $oc->refresh();
+
+        $this->assertSame(750.0, (float) $oc->subtotal);
+        $this->assertSame(120.0, (float) $oc->tax_amount);
+        $this->assertSame(870.0, (float) $oc->total_amount);
+    }
 }

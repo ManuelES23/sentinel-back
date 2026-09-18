@@ -231,12 +231,12 @@ class PurchaseOrder extends Model
      */
     public function recalculateTotals(): void
     {
-        $subtotal = $this->details()->sum('line_total');
         $taxAmount = $this->details()->sum('tax_amount');
+        $lineTotal = $this->details()->sum('line_total');
 
-        $this->subtotal = $subtotal;
+        $this->subtotal = $lineTotal - $taxAmount;
         $this->tax_amount = $taxAmount;
-        $this->total_amount = $subtotal + $taxAmount - (float) $this->discount_amount;
+        $this->total_amount = $lineTotal - (float) $this->discount_amount;
         $this->save();
     }
 
