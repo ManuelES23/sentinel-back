@@ -13,6 +13,7 @@ use App\Models\InventoryKardex;
 use App\Models\MovementType;
 use App\Models\Product;
 use App\Services\Inventory\AlmacenAccessService;
+use App\Services\Inventory\AplicadorStock;
 use App\Services\Inventory\LoteCaducidadValidator;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
@@ -26,6 +27,7 @@ class InventoryMovementController extends Controller
     public function __construct(
         private AlmacenAccessService $almacenes,
         private LoteCaducidadValidator $lotes,
+        private AplicadorStock $stock,
     ) {
     }
 
@@ -576,7 +578,7 @@ class InventoryMovementController extends Controller
             if ($movementType->direction === 'transfer') {
                 $movement->load('details.product:id,name');
                 foreach ($movement->details as $detail) {
-                    $this->decreaseStock(
+                    $this->stock->disminuir(
                         $detail,
                         $movement->source_entity_id,
                         $movement->source_entity_type,
@@ -892,12 +894,12 @@ class InventoryMovementController extends Controller
                     data_get($movement->metadata, 'stock_deducted_at_creation', false)
                 ) {
                     foreach ($movement->details as $detail) {
-                        $this->increaseStock(
+                        $this->stock->aumentar(
                             $detail,
                             $movement->source_entity_id,
                             $movement->source_entity_type,
                             $movement,
-                            true // isReversal
+                            true // esReversa
                         );
                     }
                 }
@@ -1099,19 +1101,19 @@ class InventoryMovementController extends Controller
 
             foreach ($movement->details as $detail) {
                 // Procesar según dirección y efecto
-                if ($movementType->direction === 'in' || 
+                if ($movementType->direction === 'in' ||
                     ($movementType->direction === 'adjustment' && $movementType->effect === 'increase')) {
                     // Entrada: incrementar stock en destino
-                    $this->increaseStock(
+                    $this->stock->aumentar(
                         $detail,
                         $movement->destination_entity_id,
                         $movement->destination_entity_type,
                         $movement
                     );
-                } elseif ($movementType->direction === 'out' || 
+                } elseif ($movementType->direction === 'out' ||
                           ($movementType->direction === 'adjustment' && $movementType->effect === 'decrease')) {
                     // Salida: decrementar stock en origen
-                    $this->decreaseStock(
+                    $this->stock->disminuir(
                         $detail,
                         $movement->source_entity_id,
                         $movement->source_entity_type,
@@ -1122,14 +1124,14 @@ class InventoryMovementController extends Controller
                     // Para transferencias antiguas (sin la marca) seguir descontando origen.
                     $stockAlreadyDeducted = (bool) data_get($movement->metadata, 'stock_deducted_at_creation', false);
                     if (!$stockAlreadyDeducted) {
-                        $this->decreaseStock(
+                        $this->stock->disminuir(
                             $detail,
                             $movement->source_entity_id,
                             $movement->source_entity_type,
                             $movement
                         );
                     }
-                    $this->increaseStock(
+                    $this->stock->aumentar(
                         $detail,
                         $movement->destination_entity_id,
                         $movement->destination_entity_type,
@@ -1363,12 +1365,12 @@ class InventoryMovementController extends Controller
                 ) {
                     $movement->loadMissing('details.product:id,name');
                     foreach ($movement->details as $detail) {
-                        $this->increaseStock(
+                        $this->stock->aumentar(
                             $detail,
                             $movement->source_entity_id,
                             $movement->source_entity_type,
                             $movement,
-                            true // isReversal
+                            true // esReversa
                         );
                     }
                 }
@@ -1380,18 +1382,18 @@ class InventoryMovementController extends Controller
 
                 foreach ($movement->details as $detail) {
                     // Revertir según dirección (inverso de approve)
-                    if ($movementType->direction === 'in' || 
+                    if ($movementType->direction === 'in' ||
                         ($movementType->direction === 'adjustment' && $movementType->effect === 'increase')) {
-                        $this->decreaseStock(
+                        $this->stock->disminuir(
                             $detail,
                             $movement->destination_entity_id,
                             $movement->destination_entity_type,
                             $movement,
-                            true // isReversal
+                            true // esReversa
                         );
-                    } elseif ($movementType->direction === 'out' || 
+                    } elseif ($movementType->direction === 'out' ||
                               ($movementType->direction === 'adjustment' && $movementType->effect === 'decrease')) {
-                        $this->increaseStock(
+                        $this->stock->aumentar(
                             $detail,
                             $movement->source_entity_id,
                             $movement->source_entity_type,
@@ -1399,14 +1401,14 @@ class InventoryMovementController extends Controller
                             true
                         );
                     } elseif ($movementType->direction === 'transfer') {
-                        $this->increaseStock(
+                        $this->stock->aumentar(
                             $detail,
                             $movement->source_entity_id,
                             $movement->source_entity_type,
                             $movement,
                             true
                         );
-                        $this->decreaseStock(
+                        $this->stock->disminuir(
                             $detail,
                             $movement->destination_entity_id,
                             $movement->destination_entity_type,
@@ -1445,99 +1447,4 @@ class InventoryMovementController extends Controller
         }
     }
 
-    /**
-     * Increase stock for a product.
-     */
-    private function increaseStock($detail, $entityId, $entityType, $movement, $isReversal = false): void
-    {
-        $quantity = $detail->base_quantity ?? $detail->quantity;
-
-        // Actualizar o crear stock
-        InventoryStock::updateStock(
-            $detail->product_id,
-            $entityId,
-            null, // area_id (no manejado en este contexto)
-            $quantity,
-            $detail->unit_cost ?? 0,
-            $detail->lot_number,
-            $detail->expiry_date,
-            $movement->id
-        );
-
-        $productorId = $this->resolveProductorIdFromDetail($detail);
-
-        // Registrar en kardex
-        InventoryKardex::recordEntry(
-            $detail->product_id,
-            $entityId,
-            $entityType,
-            $movement->id,
-            $isReversal ? 'decrease' : 'increase',
-            $quantity,
-            $detail->unit_cost ?? 0,
-            $detail->lot_number,
-            $detail->serial_number,
-            null, // area_id
-            $productorId
-        );
-    }
-
-    /**
-     * Decrease stock for a product.
-     */
-    private function decreaseStock($detail, $entityId, $entityType, $movement, $isReversal = false): void
-    {
-        $quantity = $detail->base_quantity ?? $detail->quantity;
-
-        // Actualizar stock (cantidad negativa para decrementar)
-        InventoryStock::updateStock(
-            $detail->product_id,
-            $entityId,
-            null, // area_id (no manejado en este contexto)
-            -$quantity,
-            $detail->unit_cost ?? 0,
-            $detail->lot_number,
-            $detail->expiry_date,
-            $movement->id
-        );
-
-        $productorId = $this->resolveProductorIdFromDetail($detail);
-
-        // Registrar en kardex
-        InventoryKardex::recordEntry(
-            $detail->product_id,
-            $entityId,
-            $entityType,
-            $movement->id,
-            $isReversal ? 'increase' : 'decrease',
-            $quantity,
-            $detail->unit_cost ?? 0,
-            $detail->lot_number,
-            $detail->serial_number,
-            null, // area_id
-            $productorId
-        );
-    }
-
-    /**
-     * Intenta resolver productor_id para persistirlo en kardex.
-     */
-    private function resolveProductorIdFromDetail($detail): ?int
-    {
-        if (!empty($detail->productor_id)) {
-            return (int) $detail->productor_id;
-        }
-
-        if (!empty($detail->lote_id)) {
-            $lote = \App\Models\Lote::find($detail->lote_id);
-            return $lote?->productor_id ? (int) $lote->productor_id : null;
-        }
-
-        if (!empty($detail->lot_number) && is_numeric($detail->lot_number)) {
-            $lote = \App\Models\Lote::where('numero_lote', (int) $detail->lot_number)->first();
-            return $lote?->productor_id ? (int) $lote->productor_id : null;
-        }
-
-        return null;
-    }
 }
