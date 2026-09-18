@@ -2,12 +2,19 @@
 
 namespace Tests\Feature\SplendidFarms\OperacionAgricola;
 
+use App\Models\Branch;
 use App\Models\Cultivo;
+use App\Models\Enterprise;
+use App\Models\Entity;
+use App\Models\EntityType;
 use App\Models\Etapa;
 use App\Models\Lote;
 use App\Models\Productor;
+use App\Models\RequisicionCampo;
 use App\Models\Temporada;
 use App\Models\User;
+use App\Models\UserEnterpriseAccess;
+use App\Models\UserEntityAccess;
 use App\Models\ZonaCultivo;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
@@ -288,8 +295,31 @@ class AgricolaBugfixesTest extends TestCase
 
     public function test_filtro_de_status_vacio_no_vacia_las_requisiciones(): void
     {
-        $this->getJson(self::OA."/requisiciones?temporada_id={$this->temporada->id}&status=")
+        // Desde el Task 6, index() exige empresa (X-Enterprise-Slug) y filtra
+        // por almacenes visibles, así que la requisición necesita
+        // enterprise_id/almacen_id vinculados al usuario para seguir siendo
+        // visible en la prueba.
+        $empresa = Enterprise::create(['name' => 'Agro Bugfixes', 'slug' => 'agro-bugfixes', 'description' => 'Empresa de prueba', 'is_active' => true]);
+        UserEnterpriseAccess::create(['user_id' => $this->user->id, 'enterprise_id' => $empresa->id, 'is_active' => true]);
+        $sucursal = Branch::create(['enterprise_id' => $empresa->id, 'code' => 'SUC-BF', 'name' => 'Sucursal Bugfixes', 'slug' => 'sucursal-bugfixes']);
+        $tipo = EntityType::create(['code' => 'CAMPO-BF', 'name' => 'Campo', 'slug' => 'campo-bf']);
+        $almacen = Entity::create(['branch_id' => $sucursal->id, 'entity_type_id' => $tipo->id, 'code' => 'ALM-BF', 'name' => 'Almacén Bugfixes']);
+        UserEntityAccess::create(['user_id' => $this->user->id, 'entity_id' => $almacen->id, 'enterprise_id' => $empresa->id]);
+
+        RequisicionCampo::create([
+            'numero_requisicion' => 'RC-2026-00001',
+            'enterprise_id' => $empresa->id,
+            'almacen_id' => $almacen->id,
+            'temporada_id' => $this->temporada->id,
+            'solicitante_user_id' => $this->user->id,
+            'fecha_solicitud' => now()->toDateString(),
+            'prioridad' => 'media',
+            'status' => RequisicionCampo::STATUS_BORRADOR,
+        ]);
+
+        $this->getJson(self::OA."/requisiciones?temporada_id={$this->temporada->id}&status=", ['X-Enterprise-Slug' => 'agro-bugfixes'])
             ->assertOk()
-            ->assertJsonPath('success', true);
+            ->assertJsonPath('success', true)
+            ->assertJsonCount(1, 'data');
     }
 }
