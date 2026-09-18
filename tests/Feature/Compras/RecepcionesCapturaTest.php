@@ -3,6 +3,7 @@
 namespace Tests\Feature\Compras;
 
 use App\Models\PurchaseReceipt;
+use App\Models\PurchaseReceiptDetail;
 use App\Models\SystemNotification;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\Concerns\CreatesComprasFixtures;
@@ -77,6 +78,43 @@ class RecepcionesCapturaTest extends TestCase
         $this->actingAs($this->encargado)->postJson(self::URL, $this->payload(['quantity_received' => 6]), $this->headersEmpresa())->assertCreated();
         $this->actingAs($this->encargado)->postJson(self::URL, $this->payload(['quantity_received' => 5]), $this->headersEmpresa())
             ->assertStatus(422)->assertJsonValidationErrors(['details.0.quantity_accepted']);
+    }
+
+    public function test_quantity_accepted_cero_explicito_no_dispara_fallback_del_modelo(): void
+    {
+        // Solo 2 unidades disponibles en la OC.
+        $oc = $this->crearOrden(['status' => 'approved'], 2, 100);
+
+        $this->actingAs($this->encargado)->postJson(self::URL, [
+            'purchase_order_id' => $oc->id,
+            'receipt_date' => now()->toDateString(),
+            'details' => [[
+                'purchase_order_detail_id' => $oc->details->first()->id,
+                'quantity_received' => 5,
+                'quantity_accepted' => 0,
+                'lot_number' => 'L-100',
+                'expiry_date' => now()->addYear()->toDateString(),
+            ]],
+        ], $this->headersEmpresa())->assertCreated();
+
+        $detalle = PurchaseReceiptDetail::first();
+        $this->assertEquals(0, (float) $detalle->quantity_accepted);
+        $this->assertEquals(5, (float) $detalle->quantity_received);
+    }
+
+    public function test_dos_lineas_del_mismo_renglon_en_el_mismo_envio_exceden_lo_disponible(): void
+    {
+        $renglonId = $this->oc->details->first()->id;
+
+        $this->actingAs($this->encargado)->postJson(self::URL, [
+            'purchase_order_id' => $this->oc->id,
+            'receipt_date' => now()->toDateString(),
+            'details' => [
+                ['purchase_order_detail_id' => $renglonId, 'quantity_received' => 6, 'lot_number' => 'L-100', 'expiry_date' => now()->addYear()->toDateString()],
+                ['purchase_order_detail_id' => $renglonId, 'quantity_received' => 6, 'lot_number' => 'L-200', 'expiry_date' => now()->addYear()->toDateString()],
+            ],
+        ], $this->headersEmpresa())
+            ->assertStatus(422)->assertJsonValidationErrors(['details.1.quantity_accepted']);
     }
 
     public function test_enviar_a_confirmar_bandeja_y_regresar(): void

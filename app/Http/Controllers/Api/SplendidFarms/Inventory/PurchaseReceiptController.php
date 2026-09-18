@@ -85,6 +85,15 @@ class PurchaseReceiptController extends Controller
         ];
     }
 
+    /** Cuánto de un renglón de OC está comprometido en recepciones abiertas (draft/pending). */
+    private function comprometido(int $purchaseOrderDetailId, ?PurchaseReceipt $excluir = null): float
+    {
+        return (float) PurchaseReceiptDetail::where('purchase_order_detail_id', $purchaseOrderDetailId)
+            ->whereHas('purchaseReceipt', fn ($q) => $q->whereIn('status', [PurchaseReceipt::STATUS_DRAFT, PurchaseReceipt::STATUS_PENDING])
+                ->when($excluir, fn ($w) => $w->where('id', '!=', $excluir->id)))
+            ->sum('quantity_accepted');
+    }
+
     /**
      * Arma las líneas desde la OC (producto, unidad, costo) validando que no
      * excedan lo pendiente: pedido − recibido − lo comprometido en otras
@@ -104,13 +113,20 @@ class PurchaseReceiptController extends Controller
             }
 
             $recibido = (float) $d['quantity_received'];
-            $rechazado = (float) ($d['quantity_rejected'] ?? 0);
-            $aceptado = isset($d['quantity_accepted']) ? (float) $d['quantity_accepted'] : max(0, $recibido - $rechazado);
+            // $rechazado se deriva de $aceptado (y no al revés) para que nunca
+            // queden ambos en 0 con $recibido > 0: si eso pasa, el hook del
+            // modelo (PurchaseReceiptDetail::boot) interpreta "no vino nada" y
+            // rellena quantity_accepted con TODO quantity_received, sin pasar
+            // por la validación de disponible de abajo.
+            if (isset($d['quantity_accepted'])) {
+                $aceptado = (float) $d['quantity_accepted'];
+                $rechazado = isset($d['quantity_rejected']) ? (float) $d['quantity_rejected'] : max(0, $recibido - $aceptado);
+            } else {
+                $rechazado = (float) ($d['quantity_rejected'] ?? 0);
+                $aceptado = max(0, $recibido - $rechazado);
+            }
 
-            $comprometido = (float) PurchaseReceiptDetail::where('purchase_order_detail_id', $renglon->id)
-                ->whereHas('purchaseReceipt', fn ($q) => $q->whereIn('status', [PurchaseReceipt::STATUS_DRAFT, PurchaseReceipt::STATUS_PENDING])
-                    ->when($excluir, fn ($w) => $w->where('id', '!=', $excluir->id)))
-                ->sum('quantity_accepted');
+            $comprometido = $this->comprometido($renglon->id, $excluir);
             $disponible = (float) $renglon->quantity_ordered - (float) $renglon->quantity_received - $comprometido - ($usado[$renglon->id] ?? 0);
 
             if ($aceptado > $disponible + 0.0001) {
@@ -354,9 +370,7 @@ class PurchaseReceiptController extends Controller
         // Todo lo pendiente (descontando lo comprometido en recepciones abiertas)
         $pendientes = [];
         foreach ($oc->details as $d) {
-            $comprometido = (float) PurchaseReceiptDetail::where('purchase_order_detail_id', $d->id)
-                ->whereHas('purchaseReceipt', fn ($q) => $q->whereIn('status', [PurchaseReceipt::STATUS_DRAFT, PurchaseReceipt::STATUS_PENDING]))
-                ->sum('quantity_accepted');
+            $comprometido = $this->comprometido($d->id);
             $pendiente = (float) $d->quantity_ordered - (float) $d->quantity_received - $comprometido;
             if ($pendiente > 0) {
                 $pendientes[] = ['purchase_order_detail_id' => $d->id, 'quantity_received' => $pendiente];
