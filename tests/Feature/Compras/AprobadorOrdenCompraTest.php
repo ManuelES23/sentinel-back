@@ -2,11 +2,16 @@
 
 namespace Tests\Feature\Compras;
 
+use App\Models\Department;
+use App\Models\Employee;
+use App\Models\Enterprise;
+use App\Models\Position;
 use App\Models\SystemNotification;
 use App\Models\User;
 use App\Services\Compras\AprobadorOrdenCompra;
 use App\Services\Compras\AvisosCompras;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Str;
 use Tests\Concerns\CreatesComprasFixtures;
 use Tests\TestCase;
 
@@ -46,6 +51,48 @@ class AprobadorOrdenCompraTest extends TestCase
         $oc = $this->crearOrden(['status' => 'pending']); // creador sin empleado
 
         $this->assertFalse(app(AprobadorOrdenCompra::class)->puedeAprobar($gerente, $oc));
+    }
+
+    public function test_empleado_inactivo_no_puede_aprobar(): void
+    {
+        $gerente = $this->crearAprobador('enterprise');
+        $gerente->employee->update(['status' => 'inactive']);
+        $oc = $this->crearOrden(['status' => 'pending']);
+
+        $this->assertFalse(app(AprobadorOrdenCompra::class)->puedeAprobar($gerente, $oc));
+    }
+
+    public function test_empresa_distinta_no_puede_aprobar(): void
+    {
+        $gerente = $this->crearAprobador('enterprise');
+        $otraEmpresa = Enterprise::create([
+            'name' => 'Otra Empresa',
+            'slug' => 'otraempresa',
+            'description' => 'Empresa de prueba distinta',
+            'is_active' => true,
+        ]);
+        $oc = $this->crearOrden(['status' => 'pending', 'enterprise_id' => $otraEmpresa->id]);
+
+        $this->assertFalse(app(AprobadorOrdenCompra::class)->puedeAprobar($gerente, $oc));
+    }
+
+    public function test_puesto_no_aprobador_no_puede_aprobar(): void
+    {
+        $usuario = $this->crearUsuarioDeCampo();
+        $depto = Department::firstOrCreate(['enterprise_id' => $this->empresa->id, 'code' => 'OPS'], ['name' => 'Operaciones']);
+        $puesto = Position::create([
+            'enterprise_id' => $this->empresa->id, 'code' => 'OPS-' . $usuario->id, 'name' => 'Operador',
+            'hierarchy_level' => 5, 'can_approve' => false,
+        ]);
+        Employee::create([
+            'enterprise_id' => $this->empresa->id, 'employee_number' => 'E' . $usuario->id,
+            'first_name' => 'Operador', 'last_name' => 'Campo', 'hire_date' => '2026-01-01',
+            'qr_code' => Str::random(32), 'department_id' => $depto->id, 'position_id' => $puesto->id,
+            'status' => 'active', 'user_id' => $usuario->id,
+        ]);
+        $oc = $this->crearOrden(['status' => 'pending']);
+
+        $this->assertFalse(app(AprobadorOrdenCompra::class)->puedeAprobar($usuario, $oc));
     }
 
     public function test_avisos_de_orden(): void
