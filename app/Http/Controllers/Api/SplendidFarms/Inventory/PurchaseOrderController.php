@@ -532,7 +532,7 @@ class PurchaseOrderController extends Controller
     {
         $pendingItems = $order->details()
             ->with(['product', 'unit'])
-            ->whereRaw('quantity > quantity_received')
+            ->whereColumn('quantity_ordered', '>', 'quantity_received')
             ->get()
             ->map(function ($detail) {
                 return [
@@ -540,7 +540,7 @@ class PurchaseOrderController extends Controller
                     'product_id' => $detail->product_id,
                     'product' => $detail->product,
                     'unit' => $detail->unit,
-                    'quantity_ordered' => $detail->quantity,
+                    'quantity_ordered' => $detail->quantity_ordered,
                     'quantity_received' => $detail->quantity_received,
                     'quantity_pending' => $detail->quantity_pending,
                     'unit_price' => $detail->unit_price,

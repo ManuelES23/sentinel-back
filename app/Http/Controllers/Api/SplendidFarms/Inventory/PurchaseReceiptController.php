@@ -445,11 +445,7 @@ class PurchaseReceiptController extends Controller
      */
     public function fromPurchaseOrder(PurchaseOrder $order): JsonResponse
     {
-        if (!in_array($order->status, [
-            PurchaseOrder::STATUS_SENT,
-            PurchaseOrder::STATUS_CONFIRMED,
-            PurchaseOrder::STATUS_PARTIAL
-        ])) {
+        if (!in_array($order->status, PurchaseOrder::STATUSES_RECIBIBLES)) {
             return response()->json([
                 'success' => false,
                 'message' => 'La orden de compra no está en estado válido para recepción'
@@ -459,7 +455,7 @@ class PurchaseReceiptController extends Controller
         // Obtener items pendientes
         $pendingItems = $order->details()
             ->with(['product', 'unit'])
-            ->whereRaw('quantity > quantity_received')
+            ->whereColumn('quantity_ordered', '>', 'quantity_received')
             ->get();
 
         if ($pendingItems->isEmpty()) {
@@ -487,7 +483,7 @@ class PurchaseReceiptController extends Controller
                 $receipt->details()->create([
                     'purchase_order_detail_id' => $item->id,
                     'product_id' => $item->product_id,
-                    'quantity_ordered' => $item->quantity,
+                    'quantity_ordered' => $item->quantity_ordered,
                     'quantity_received' => $item->quantity_pending, // Por defecto, lo pendiente
                     'quantity_accepted' => $item->quantity_pending,
                     'unit_id' => $item->unit_id,

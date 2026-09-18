@@ -108,9 +108,16 @@ class PurchaseOrder extends Model
         return self::STATUS_LABELS[$this->status] ?? $this->status;
     }
 
+    const STATUSES_RECIBIBLES = [
+        self::STATUS_APPROVED,
+        self::STATUS_SENT,
+        self::STATUS_CONFIRMED,
+        self::STATUS_PARTIAL,
+    ];
+
     public function getIsEditableAttribute(): bool
     {
-        return in_array($this->status, [self::STATUS_DRAFT, self::STATUS_PENDING]);
+        return in_array($this->status, [self::STATUS_DRAFT, self::STATUS_PENDING, self::STATUS_REJECTED]);
     }
 
     public function getIsCancellableAttribute(): bool
@@ -204,11 +211,7 @@ class PurchaseOrder extends Model
 
     public function scopePendingReceipt($query)
     {
-        return $query->whereIn('status', [
-            self::STATUS_SENT,
-            self::STATUS_CONFIRMED,
-            self::STATUS_PARTIAL,
-        ]);
+        return $query->whereIn('status', self::STATUSES_RECIBIBLES);
     }
 
     public function scopeBySupplier($query, int $supplierId)
@@ -225,10 +228,10 @@ class PurchaseOrder extends Model
     {
         $subtotal = $this->details()->sum('line_total');
         $taxAmount = $this->details()->sum('tax_amount');
-        
+
         $this->subtotal = $subtotal;
         $this->tax_amount = $taxAmount;
-        $this->total_amount = $subtotal + $taxAmount - $this->discount_amount + $this->shipping_cost;
+        $this->total_amount = $subtotal + $taxAmount - (float) $this->discount_amount;
         $this->save();
     }
 
@@ -237,15 +240,15 @@ class PurchaseOrder extends Model
      */
     public function updateStatusFromReceipts(): void
     {
-        $totalOrdered = $this->details()->sum('quantity');
-        $totalReceived = $this->details()->sum('quantity_received');
-        
-        if ($totalReceived >= $totalOrdered) {
+        $totalOrdered = (float) $this->details()->sum('quantity_ordered');
+        $totalReceived = (float) $this->details()->sum('quantity_received');
+
+        if ($totalOrdered > 0 && $totalReceived >= $totalOrdered) {
             $this->status = self::STATUS_COMPLETED;
         } elseif ($totalReceived > 0) {
             $this->status = self::STATUS_PARTIAL;
         }
-        
+
         $this->save();
     }
 
@@ -257,11 +260,28 @@ class PurchaseOrder extends Model
         if ($this->status !== self::STATUS_PENDING) {
             return false;
         }
-        
+
         $this->status = self::STATUS_APPROVED;
         $this->approved_by = $userId;
-        $this->approved_date = now();
-        
+        $this->approved_at = now();
+
+        return $this->save();
+    }
+
+    /**
+     * Rechazar orden
+     */
+    public function reject(int $userId, string $reason): bool
+    {
+        if ($this->status !== self::STATUS_PENDING) {
+            return false;
+        }
+
+        $this->status = self::STATUS_REJECTED;
+        $this->rejected_by = $userId;
+        $this->rejected_at = now();
+        $this->rejection_reason = $reason;
+
         return $this->save();
     }
 
