@@ -479,33 +479,43 @@ class PendingApprovalController extends Controller
 
     // ===== Órdenes de Compra =====
 
-    private function getPurchaseOrderQuery(Employee $employee, string $scope)
+    /**
+     * OC pendientes que este empleado puede autorizar (misma regla que el
+     * endpoint de la OC: AprobadorOrdenCompra).
+     */
+    private function purchaseOrdersFor(Employee $employee)
     {
-        $query = PurchaseOrder::where('status', 'pending')
-            ->where('created_by', '!=', $employee->user_id); // No sus propias OC
+        $user = $employee->user;
+        if (! $user) {
+            return collect();
+        }
+        $aprobador = app(\App\Services\Compras\AprobadorOrdenCompra::class);
 
-        $this->applyScopeFilterByCreator($query, $employee, $scope, 'createdByUser');
-
-        return $query;
+        return PurchaseOrder::where('status', 'pending')
+            ->where('created_by', '!=', $employee->user_id)
+            ->where(fn ($q) => $q->where('enterprise_id', $employee->enterprise_id)->orWhereNull('enterprise_id'))
+            ->with(['supplier:id,business_name,trade_name', 'createdByUser:id,name', 'createdByUser.employee'])
+            ->orderBy('created_at', 'desc')
+            ->limit(200)
+            ->get()
+            ->filter(fn ($oc) => $aprobador->puedeAprobar($user, $oc))
+            ->values();
     }
 
     private function countPendingPurchaseOrders(Employee $employee, string $scope): int
     {
-        return $this->getPurchaseOrderQuery($employee, $scope)->count();
+        return $this->purchaseOrdersFor($employee)->count();
     }
 
     private function getPendingPurchaseOrders(Employee $employee, string $scope): array
     {
-        return $this->getPurchaseOrderQuery($employee, $scope)
-            ->with(['supplier:id,name', 'createdByUser:id,name'])
-            ->orderBy('created_at', 'desc')
-            ->limit(50)
-            ->get()
+        return $this->purchaseOrdersFor($employee)
+            ->take(50)
             ->map(fn ($item) => [
                 'id' => $item->id,
                 'type' => 'purchase_order',
                 'title' => $item->order_number ?? "OC-{$item->id}",
-                'subtitle' => $item->supplier->name ?? 'Sin proveedor',
+                'subtitle' => $item->supplier?->trade_name ?: ($item->supplier?->business_name ?? 'Sin proveedor'),
                 'description' => '$'.number_format($item->total_amount ?? 0, 2).
                     ' - '.($item->createdByUser->name ?? 'Usuario'),
                 'department' => null,
@@ -765,7 +775,7 @@ class PendingApprovalController extends Controller
                 'incidentType:id,name,category,description',
             ])->find($id),
             'purchase_order' => PurchaseOrder::with([
-                'supplier:id,name,rfc,phone,email',
+                'supplier:id,business_name,trade_name,rfc,phone,email',
                 'createdByUser:id,name',
                 'details.product:id,name,sku',
                 'details.unit:id,name,abbreviation',
@@ -863,7 +873,7 @@ class PendingApprovalController extends Controller
 
         $purchaseOrders = PurchaseOrder::where('approved_by', $user->id)
             ->whereIn('status', ['approved', 'rejected'])
-            ->with(['supplier:id,name', 'createdByUser:id,name'])
+            ->with(['supplier:id,business_name,trade_name', 'createdByUser:id,name'])
             ->orderBy('approved_at', 'desc')
             ->limit($limit)
             ->get()
@@ -872,7 +882,7 @@ class PendingApprovalController extends Controller
                 'type' => 'purchase_order',
                 'type_label' => 'Orden de Compra',
                 'title' => $item->order_number ?? "OC-{$item->id}",
-                'subtitle' => $item->supplier->name ?? 'Sin proveedor',
+                'subtitle' => $item->supplier?->trade_name ?: ($item->supplier?->business_name ?? 'Sin proveedor'),
                 'description' => '$'.number_format($item->total_amount ?? 0, 2).
                     ' - '.($item->createdByUser->name ?? 'Usuario'),
                 'department' => null,
@@ -1076,11 +1086,13 @@ class PendingApprovalController extends Controller
             return response()->json(['success' => false, 'message' => 'Solo se pueden aprobar órdenes pendientes'], 422);
         }
 
-        $order->update([
-            'status' => 'approved',
-            'approved_by' => $user->id,
-            'approved_at' => now(),
-        ]);
+        $aprobador = app(\App\Services\Compras\AprobadorOrdenCompra::class);
+        if (! $aprobador->puedeAprobar($user, $order)) {
+            return response()->json(['success' => false, 'message' => 'No eres aprobador de esta orden de compra'], 403);
+        }
+
+        $order->approve($user->id);
+        app(\App\Services\Compras\AvisosCompras::class)->ordenResuelta($order, true);
 
         return response()->json([
             'success' => true,
@@ -1101,12 +1113,13 @@ class PendingApprovalController extends Controller
             return response()->json(['success' => false, 'message' => 'Solo se pueden rechazar órdenes pendientes'], 422);
         }
 
-        $order->update([
-            'status' => 'rejected',
-            'approved_by' => $user->id,
-            'approved_at' => now(),
-            'cancellation_reason' => $reason,
-        ]);
+        $aprobador = app(\App\Services\Compras\AprobadorOrdenCompra::class);
+        if (! $aprobador->puedeAprobar($user, $order)) {
+            return response()->json(['success' => false, 'message' => 'No eres aprobador de esta orden de compra'], 403);
+        }
+
+        $order->reject($user->id, $reason);
+        app(\App\Services\Compras\AvisosCompras::class)->ordenResuelta($order, false);
 
         return response()->json([
             'success' => true,
@@ -1241,7 +1254,7 @@ class PendingApprovalController extends Controller
             ],
             'details' => [
                 ['label' => 'Número de orden', 'value' => $item->order_number ?? "OC-{$item->id}"],
-                ['label' => 'Proveedor', 'value' => $item->supplier->name ?? 'Sin proveedor'],
+                ['label' => 'Proveedor', 'value' => $item->supplier?->trade_name ?: ($item->supplier?->business_name ?? 'Sin proveedor')],
                 ['label' => 'RFC', 'value' => $item->supplier->rfc ?? 'N/D'],
                 ['label' => 'Contacto', 'value' => $item->supplier->phone ?? $item->supplier->email ?? 'N/D'],
                 ['label' => 'Total', 'value' => '$'.number_format($item->total_amount ?? 0, 2)],
