@@ -17,6 +17,9 @@ class Aplicacion extends Model
 
     protected $fillable = [
         'temporada_id',
+        'enterprise_id',
+        'almacen_id',
+        'inventory_movement_id',
         'folio',
         'fecha',
         'tipo_aplicacion',
@@ -78,6 +81,21 @@ class Aplicacion extends Model
     public function createdBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+
+    public function empresa(): BelongsTo
+    {
+        return $this->belongsTo(Enterprise::class, 'enterprise_id');
+    }
+
+    public function almacen(): BelongsTo
+    {
+        return $this->belongsTo(Entity::class, 'almacen_id');
+    }
+
+    public function inventoryMovement(): BelongsTo
+    {
+        return $this->belongsTo(InventoryMovement::class, 'inventory_movement_id');
     }
 
     public function detalles(): HasMany
