@@ -278,7 +278,7 @@ class RequisicionCampoController extends Controller
             ], 422);
         }
 
-        $requisicion->update(['status' => RequisicionCampo::STATUS_PENDIENTE]);
+        $requisicion->update(['status' => RequisicionCampo::STATUS_ENVIADA]);
 
         return response()->json([
             'success' => true,
@@ -292,7 +292,7 @@ class RequisicionCampoController extends Controller
      */
     public function approve(RequisicionCampo $requisicion): JsonResponse
     {
-        if ($requisicion->status !== RequisicionCampo::STATUS_PENDIENTE) {
+        if ($requisicion->status !== RequisicionCampo::STATUS_ENVIADA) {
             return response()->json([
                 'success' => false,
                 'message' => 'Solo se pueden aprobar requisiciones pendientes',
@@ -300,7 +300,7 @@ class RequisicionCampoController extends Controller
         }
 
         $requisicion->update([
-            'status' => RequisicionCampo::STATUS_APROBADA,
+            'status' => RequisicionCampo::STATUS_ENVIADA,
             'aprobado_por_user_id' => Auth::id(),
             'fecha_aprobacion' => now(),
         ]);
@@ -317,7 +317,7 @@ class RequisicionCampoController extends Controller
      */
     public function reject(Request $request, RequisicionCampo $requisicion): JsonResponse
     {
-        if ($requisicion->status !== RequisicionCampo::STATUS_PENDIENTE) {
+        if ($requisicion->status !== RequisicionCampo::STATUS_ENVIADA) {
             return response()->json([
                 'success' => false,
                 'message' => 'Solo se pueden rechazar requisiciones pendientes',
@@ -371,7 +371,7 @@ class RequisicionCampoController extends Controller
      */
     public function generarOrden(Request $request, RequisicionCampo $requisicion): JsonResponse
     {
-        if ($requisicion->status !== RequisicionCampo::STATUS_APROBADA) {
+        if ($requisicion->status !== RequisicionCampo::STATUS_ENVIADA) {
             return response()->json([
                 'success' => false,
                 'message' => 'Solo se pueden generar OC de requisiciones aprobadas',

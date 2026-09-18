@@ -19,6 +19,10 @@ class PurchaseOrder extends Model
 
     protected $fillable = [
         'order_number',
+        'enterprise_id',
+        'almacen_destino_id',
+        'requisicion_campo_id',
+        'cotizacion_id',
         'supplier_id',
         'order_date',
         'expected_date',
@@ -43,6 +47,11 @@ class PurchaseOrder extends Model
         'created_by',
         'approved_by',
         'approved_at',
+        'sent_by',
+        'sent_at',
+        'rejected_by',
+        'rejected_at',
+        'rejection_reason',
         'cancelled_by',
         'cancelled_at',
         'cancellation_reason',
@@ -60,6 +69,8 @@ class PurchaseOrder extends Model
         'total_amount' => 'decimal:4',
         'payment_terms' => 'integer',
         'approved_at' => 'datetime',
+        'sent_at' => 'datetime',
+        'rejected_at' => 'datetime',
         'cancelled_at' => 'datetime',
         'metadata' => 'array',
     ];
@@ -76,6 +87,7 @@ class PurchaseOrder extends Model
     const STATUS_PARTIAL = 'partial';
     const STATUS_COMPLETED = 'completed';
     const STATUS_CANCELLED = 'cancelled';
+    const STATUS_REJECTED = 'rejected';
 
     const STATUS_LABELS = [
         'draft' => 'Borrador',
@@ -86,6 +98,7 @@ class PurchaseOrder extends Model
         'partial' => 'Recepción Parcial',
         'completed' => 'Completada',
         'cancelled' => 'Cancelada',
+        'rejected' => 'Rechazada',
     ];
 
     // ==================== ACCESSORS ====================
@@ -110,6 +123,26 @@ class PurchaseOrder extends Model
     public function supplier(): BelongsTo
     {
         return $this->belongsTo(Supplier::class);
+    }
+
+    public function almacenDestino(): BelongsTo
+    {
+        return $this->belongsTo(Entity::class, 'almacen_destino_id');
+    }
+
+    public function requisicion(): BelongsTo
+    {
+        return $this->belongsTo(RequisicionCampo::class, 'requisicion_campo_id');
+    }
+
+    public function cotizacion(): BelongsTo
+    {
+        return $this->belongsTo(RequisicionCotizacion::class, 'cotizacion_id');
+    }
+
+    public function rejectedByUser(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'rejected_by');
     }
 
     public function details(): HasMany

@@ -23,6 +23,8 @@ class PurchaseReceipt extends Model
         'receipt_number',
         'purchase_order_id',
         'supplier_id',
+        'enterprise_id',
+        'almacen_id',
         'receipt_date',
         'supplier_document',
         'supplier_document_date',
@@ -36,6 +38,11 @@ class PurchaseReceipt extends Model
         'notes',
         'quality_notes',
         'received_by',
+        'capturada_por',
+        'enviada_at',
+        'confirmada_por',
+        'confirmada_at',
+        'motivo_rechazo',
         'validated_by',
         'validated_at',
         'cancelled_by',
@@ -51,6 +58,8 @@ class PurchaseReceipt extends Model
         'tax_amount' => 'decimal:4',
         'total_amount' => 'decimal:4',
         'validated_at' => 'datetime',
+        'enviada_at' => 'datetime',
+        'confirmada_at' => 'datetime',
         'cancelled_at' => 'datetime',
         'metadata' => 'array',
     ];
@@ -66,7 +75,7 @@ class PurchaseReceipt extends Model
 
     const STATUS_LABELS = [
         'draft' => 'Borrador',
-        'pending' => 'Pendiente Validación',
+        'pending' => 'Por confirmar',
         'completed' => 'Completada',
         'cancelled' => 'Cancelada',
     ];
@@ -93,6 +102,21 @@ class PurchaseReceipt extends Model
     public function supplier(): BelongsTo
     {
         return $this->belongsTo(Supplier::class);
+    }
+
+    public function almacen(): BelongsTo
+    {
+        return $this->belongsTo(Entity::class, 'almacen_id');
+    }
+
+    public function capturadaPor(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'capturada_por');
+    }
+
+    public function confirmadaPor(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'confirmada_por');
     }
 
     public function details(): HasMany
