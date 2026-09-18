@@ -10,6 +10,7 @@ use App\Models\PurchaseReceipt;
 use App\Models\PurchaseReceiptDetail;
 use App\Services\Compras\AlcanceCompras;
 use App\Services\Compras\AvisosCompras;
+use App\Services\Compras\ConfirmadorRecepcion;
 use App\Services\Compras\PermisosCompras;
 use App\Services\Inventory\AlmacenAccessService;
 use App\Services\Inventory\LoteCaducidadValidator;
@@ -35,6 +36,7 @@ class PurchaseReceiptController extends Controller
         private PermisosCompras $permisos,
         private AvisosCompras $avisos,
         private LoteCaducidadValidator $lotes,
+        private ConfirmadorRecepcion $confirmador,
     ) {
     }
 
@@ -349,6 +351,20 @@ class PurchaseReceiptController extends Controller
         $this->avisos->recepcionRegresada($receipt);
 
         return response()->json(['success' => true, 'message' => 'Recepción regresada al almacén', 'data' => $receipt->fresh(self::RELACIONES)]);
+    }
+
+    public function confirmar(Request $request, PurchaseReceipt $receipt): JsonResponse
+    {
+        $empresa = $this->acceso($request, $receipt);
+        abort_unless($this->permisos->puedeConfirmar($request->user(), $empresa), 403, 'No tienes permiso para confirmar entradas');
+
+        $confirmada = $this->confirmador->confirmar($receipt, $request->user());
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Entrada confirmada: se sumó el stock y se generó la cuenta por pagar.',
+            'data' => $confirmada,
+        ]);
     }
 
     public function cancel(Request $request, PurchaseReceipt $receipt): JsonResponse

@@ -486,6 +486,8 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::post('recepciones/{receipt}/submit', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'submit']);
                 Route::post('recepciones/{receipt}/regresar', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'regresar']);
                 Route::post('recepciones/{receipt}/cancel', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'cancel']);
+                Route::post('recepciones/{receipt}/confirmar', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'confirmar']);
+                Route::post('recepciones/{receipt}/complete', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'confirmar']);
                 Route::apiResource('recepciones', App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class)
                     ->parameters(['recepciones' => 'receipt']);
             });
@@ -943,6 +945,8 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::post('recepciones/{receipt}/submit', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'submit']);
                 Route::post('recepciones/{receipt}/regresar', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'regresar']);
                 Route::post('recepciones/{receipt}/cancel', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'cancel']);
+                Route::post('recepciones/{receipt}/confirmar', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'confirmar']);
+                Route::post('recepciones/{receipt}/complete', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'confirmar']);
                 Route::apiResource('recepciones', App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class)
                     ->parameters(['recepciones' => 'receipt']);
             });
