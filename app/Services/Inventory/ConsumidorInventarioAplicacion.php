@@ -76,6 +76,43 @@ class ConsumidorInventarioAplicacion
         });
     }
 
+    public function revertir(Aplicacion $aplicacion): void
+    {
+        if (! $aplicacion->inventory_movement_id) {
+            return;
+        }
+
+        DB::transaction(function () use ($aplicacion) {
+            $movimiento = InventoryMovement::with('details')->find($aplicacion->inventory_movement_id);
+
+            if ($movimiento) {
+                // Se devuelve al almacén del movimiento, no al de la aplicación (en una
+                // edición este ya puede venir cambiado). Es una entrada normal con el
+                // costo original de cada porción: el promedio de la fila no se altera y
+                // el saldo del kardex vuelve al anterior (esReversa lo desalinearía).
+                foreach ($movimiento->details as $renglon) {
+                    $this->stock->aumentar($renglon, (int) $movimiento->source_entity_id, $movimiento->source_entity_type, $movimiento);
+                }
+
+                $movimiento->delete();
+            }
+
+            CosteoAgricola::where('tipo_fuente', CosteoAgricola::TIPO_FUENTE_MOVIMIENTO)
+                ->where('fuente_id', $aplicacion->id)
+                ->delete();
+
+            $aplicacion->update(['inventory_movement_id' => null]);
+        });
+    }
+
+    public function reconsumir(Aplicacion $aplicacion): void
+    {
+        DB::transaction(function () use ($aplicacion) {
+            $this->revertir($aplicacion);
+            $this->consumir($aplicacion);
+        });
+    }
+
     /**
      * @return array<int, array{detalle: AplicacionDetalle, factor: float, porciones: array<int, array{stock: InventoryStock, cantidad: float}>}>
      */
