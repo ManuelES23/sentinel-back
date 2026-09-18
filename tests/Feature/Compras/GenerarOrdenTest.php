@@ -87,4 +87,48 @@ class GenerarOrdenTest extends TestCase
         $this->assertSame('orden_generada', $this->req->fresh()->status);
         $this->assertSame(1, CosteoAgricola::where('fuente_id', $this->req->id)->count());
     }
+
+    /**
+     * Regresión: duplicar una OC generada desde una cotización NO debe
+     * arrastrar el vínculo requisicion_campo_id/cotizacion_id (ni el
+     * metadata que también lo trae) — si lo hiciera, la OC duplicada podría
+     * terminar completando la requisición original en lugar de la OC que
+     * de verdad la surtió (ver ConfirmadorRecepcion::confirmar()).
+     */
+    public function test_duplicate_no_copia_el_vinculo_a_requisicion_ni_cotizacion(): void
+    {
+        [$d1, $d2] = $this->req->detalles()->orderBy('id')->get()->all();
+        $servicio = app(CotizacionService::class);
+
+        $cot = $servicio->guardar($this->req, [
+            'supplier_id' => $this->proveedor->id, 'fecha' => now()->toDateString(), 'dias_entrega' => 4, 'condiciones_pago' => '15 días',
+            'detalles' => [
+                ['requisicion_detalle_id' => $d1->id, 'disponible' => true, 'cantidad' => 10, 'precio_unitario' => 95, 'tax_rate' => 16],
+                ['requisicion_detalle_id' => $d2->id, 'disponible' => false, 'cantidad' => 3, 'precio_unitario' => 0, 'tax_rate' => 16],
+            ],
+        ], $this->compras);
+        $servicio->marcarGanadora($cot);
+
+        $this->actingAs($this->compras)->postJson($this->url(), ['order_date' => now()->toDateString()], $this->headersEmpresa())->assertOk();
+
+        $oc = PurchaseOrder::with('details')->first();
+        $this->assertNotNull($oc->requisicion_campo_id);
+        $this->assertNotNull($oc->cotizacion_id);
+        $this->assertNotEmpty($oc->metadata);
+
+        $dupId = $this->actingAs($this->compras)
+            ->postJson("/api/splendidfarms/inventario/compras/ordenes/{$oc->id}/duplicate", [], $this->headersEmpresa())
+            ->assertStatus(201)
+            ->json('data.id');
+
+        $duplicado = PurchaseOrder::find($dupId);
+        $this->assertNull($duplicado->requisicion_campo_id);
+        $this->assertNull($duplicado->cotizacion_id);
+        $this->assertEmpty($duplicado->metadata);
+
+        // La original conserva su vínculo intacto.
+        $original = $oc->fresh();
+        $this->assertSame($oc->requisicion_campo_id, $original->requisicion_campo_id);
+        $this->assertSame($oc->cotizacion_id, $original->cotizacion_id);
+    }
 }

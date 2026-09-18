@@ -139,6 +139,29 @@ class RecepcionesCapturaTest extends TestCase
         $this->assertSame(1, SystemNotification::where('user_id', $this->encargado->id)->count());
     }
 
+    /**
+     * Regresión: una recepción `pending` es territorio de Compras (confirmar
+     * o regresar) — el encargado de almacén no debe poder cancelarla. El
+     * controller ya devolvía 422 (status !== draft), pero is_editable seguía
+     * reportando true para pending, lo cual es inconsistente y es lo que
+     * consume el frontend para mostrar/ocultar el botón Cancelar.
+     */
+    public function test_pending_no_es_editable_y_cancel_falla(): void
+    {
+        $id = $this->actingAs($this->encargado)->postJson(self::URL, $this->payload(), $this->headersEmpresa())->json('data.id');
+        $this->actingAs($this->encargado)->postJson(self::URL . "/$id/submit", [], $this->headersEmpresa())->assertOk();
+
+        $rec = PurchaseReceipt::find($id);
+        $this->assertSame('pending', $rec->status);
+        $this->assertFalse($rec->is_editable);
+        $this->assertFalse($rec->cancel($this->encargado->id, 'Ya no se necesita'));
+        $this->assertSame('pending', $rec->fresh()->status);
+
+        // El controller mantiene su propio 422 explícito para pending.
+        $this->actingAs($this->encargado)->postJson(self::URL . "/$id/cancel", ['reason' => 'Ya no se necesita'], $this->headersEmpresa())
+            ->assertStatus(422);
+    }
+
     public function test_ordenes_recibibles_y_desde_orden(): void
     {
         $this->crearOrden(['status' => 'approved', 'almacen_destino_id' => $this->almacenB->id]);

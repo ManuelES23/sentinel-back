@@ -61,18 +61,22 @@ class PurchaseOrderController extends Controller
             'almacenes' => Entity::whereIn('id', $this->almacenes->idsVisibles($user, $empresa))->orderBy('name')->get(['id', 'code', 'name']),
             'puede_confirmar' => $this->permisos->puedeConfirmar($user, $empresa),
             'puede_cotizar' => $this->permisos->puedeCotizar($user, $empresa),
+            'puede_gestionar' => $this->permisos->puedeGestionar($user, $empresa),
             'puede_ver_todos' => $this->almacenes->puedeVerTodos($user, $empresa),
+            'es_compras' => $this->esCompras($request, $empresa),
         ]]);
     }
 
     /**
      * El encargado de almacén ve sus OC en solo lectura: crear, editar,
      * mandar a autorizar, enviar, confirmar, cancelar y duplicar es de
-     * Compras (permiso `cotizar`) o de quien ve todos los almacenes.
+     * Compras (permiso `cotizar` en el flujo agrícola, o `gestionar` en
+     * empresas sin ese flujo) o de quien ve todos los almacenes.
      */
     private function esCompras(Request $request, Enterprise $empresa): bool
     {
         return $this->permisos->puedeCotizar($request->user(), $empresa)
+            || $this->permisos->puedeGestionar($request->user(), $empresa)
             || $this->almacenes->puedeVerTodos($request->user(), $empresa);
     }
 
@@ -635,6 +639,7 @@ class PurchaseOrderController extends Controller
                 'order_number', 'status', 'approved_by', 'approved_at',
                 'cancelled_by', 'cancelled_at', 'cancellation_reason',
                 'sent_by', 'sent_at', 'rejected_by', 'rejected_at', 'rejection_reason',
+                'requisicion_campo_id', 'cotizacion_id', 'metadata',
             ]);
             $newOrder->order_number = PurchaseOrder::generateOrderNumber();
             $newOrder->status = PurchaseOrder::STATUS_DRAFT;
@@ -643,7 +648,10 @@ class PurchaseOrderController extends Controller
             $newOrder->save();
 
             foreach ($order->details as $detail) {
-                $newDetail = $detail->replicate(['quantity_received']);
+                // quantity_pending es columna generada (storedAs) en BD: replicate()
+                // copia el valor crudo cargado y el INSERT falla porque no se puede
+                // escribir explícitamente en una columna generada.
+                $newDetail = $detail->replicate(['quantity_received', 'quantity_pending']);
                 $newDetail->purchase_order_id = $newOrder->id;
                 $newDetail->quantity_received = 0;
                 $newDetail->save();

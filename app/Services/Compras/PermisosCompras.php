@@ -15,6 +15,7 @@ class PermisosCompras
 {
     public const COTIZAR = ['operacion-agricola', 'agricola', 'requisiciones', 'cotizar'];
     public const CONFIRMAR = ['inventario', 'compras', 'recepciones', 'confirmar'];
+    public const GESTIONAR = ['inventario', 'compras', 'ordenes-compra', 'gestionar'];
 
     public function puedeCotizar(User $user, Enterprise $empresa): bool
     {
@@ -24,6 +25,11 @@ class PermisosCompras
     public function puedeConfirmar(User $user, Enterprise $empresa): bool
     {
         return $this->tiene($user, $empresa, self::CONFIRMAR);
+    }
+
+    public function puedeGestionar(User $user, Enterprise $empresa): bool
+    {
+        return $this->tiene($user, $empresa, self::GESTIONAR);
     }
 
     /** @return Collection<int, User> */

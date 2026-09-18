@@ -8,6 +8,7 @@ use App\Models\ApprovalProcess;
 use App\Models\Cultivo;
 use App\Models\Department;
 use App\Models\Employee;
+use App\Models\Enterprise;
 use App\Models\Entity;
 use App\Models\Module;
 use App\Models\Position;
@@ -81,19 +82,50 @@ trait CreatesComprasFixtures
         $this->otorgarPermiso($user, 'inventario', 'compras', 'recepciones', 'confirmar');
     }
 
-    /** Usuario con empleado en un puesto aprobador del proceso purchase_orders. */
-    protected function crearAprobador(string $alcance = 'enterprise'): User
+    /**
+     * Equivalente de otorgarCotizar/otorgarConfirmar pero parametrizado por
+     * empresa: usado para probar el permiso `gestionar` (no agrícola) en una
+     * segunda empresa distinta de la de setUpComprasFixtures().
+     */
+    protected function otorgarGestionar(User $user, Enterprise $empresa): void
     {
-        $user = User::factory()->create(['role' => 'user']);
-        UserEnterpriseAccess::create(['user_id' => $user->id, 'enterprise_id' => $this->empresa->id, 'is_active' => true]);
+        $aplicacion = Application::firstOrCreate(
+            ['enterprise_id' => $empresa->id, 'slug' => 'inventario'],
+            ['name' => 'Inventario', 'path' => '/inventario', 'description' => 'inventario'],
+        );
+        $mod = Module::firstOrCreate(['application_id' => $aplicacion->id, 'slug' => 'compras'], ['name' => 'Compras']);
+        $submodulo = Submodule::firstOrCreate(['module_id' => $mod->id, 'slug' => 'ordenes-compra'], ['name' => 'Órdenes de Compra']);
+        $tipo = SubmodulePermissionType::firstOrCreate(
+            ['submodule_id' => $submodulo->id, 'slug' => 'gestionar'],
+            ['name' => 'Gestionar órdenes de compra', 'is_active' => true],
+        );
 
-        $depto = Department::firstOrCreate(['enterprise_id' => $this->empresa->id, 'code' => 'DIR'], ['name' => 'Dirección']);
+        UserSubmodulePermission::create([
+            'user_id' => $user->id,
+            'submodule_id' => $submodulo->id,
+            'permission_type_id' => $tipo->id,
+            'is_granted' => true,
+        ]);
+    }
+
+    /**
+     * Usuario con empleado en un puesto aprobador del proceso purchase_orders.
+     * $empresa es opcional (por defecto $this->empresa) para poder armar un
+     * flujo de aprobación en una segunda empresa de prueba.
+     */
+    protected function crearAprobador(string $alcance = 'enterprise', ?Enterprise $empresa = null): User
+    {
+        $empresa = $empresa ?? $this->empresa;
+        $user = User::factory()->create(['role' => 'user']);
+        UserEnterpriseAccess::create(['user_id' => $user->id, 'enterprise_id' => $empresa->id, 'is_active' => true]);
+
+        $depto = Department::firstOrCreate(['enterprise_id' => $empresa->id, 'code' => 'DIR'], ['name' => 'Dirección']);
         $puesto = Position::create([
-            'enterprise_id' => $this->empresa->id, 'code' => 'GER-' . $user->id, 'name' => 'Gerente',
+            'enterprise_id' => $empresa->id, 'code' => 'GER-' . $user->id, 'name' => 'Gerente',
             'hierarchy_level' => 2, 'can_approve' => true, 'approval_scope' => $alcance,
         ]);
         Employee::create([
-            'enterprise_id' => $this->empresa->id, 'employee_number' => 'E' . $user->id,
+            'enterprise_id' => $empresa->id, 'employee_number' => 'E' . $user->id,
             'first_name' => 'Gerente', 'last_name' => 'Campo', 'hire_date' => '2026-01-01',
             'qr_code' => Str::random(32), 'department_id' => $depto->id, 'position_id' => $puesto->id,
             'status' => 'active', 'user_id' => $user->id,
@@ -101,7 +133,7 @@ trait CreatesComprasFixtures
 
         $proceso = ApprovalProcess::findByCode('purchase_orders');
         ApprovalFlowStep::create([
-            'approval_process_id' => $proceso->id, 'enterprise_id' => $this->empresa->id, 'step_order' => 1,
+            'approval_process_id' => $proceso->id, 'enterprise_id' => $empresa->id, 'step_order' => 1,
             'approver_type' => 'position', 'position_id' => $puesto->id, 'approval_scope' => $alcance,
             'can_approve' => true, 'can_reject' => true, 'is_active' => true,
         ]);

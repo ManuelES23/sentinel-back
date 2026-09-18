@@ -89,7 +89,7 @@ class PurchaseReceipt extends Model
 
     public function getIsEditableAttribute(): bool
     {
-        return in_array($this->status, [self::STATUS_DRAFT, self::STATUS_PENDING]);
+        return $this->status === self::STATUS_DRAFT;
     }
 
     // ==================== RELATIONSHIPS ====================
