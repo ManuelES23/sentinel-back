@@ -14,7 +14,7 @@ class LiquidacionConsignacionUpdated extends ModelBroadcastEvent
     public function broadcastOn(): array
     {
         return [
-            new PrivateChannel("module.{$this->enterprise}.{$this->application}.compras-agricolas"),
+            new PrivateChannel("module.{$this->enterprise}.{$this->application}.abastecimiento"),
         ];
     }
 }

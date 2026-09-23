@@ -19,8 +19,9 @@ class FlujoComprasCompletoTest extends TestCase
         $this->setUpComprasFixtures();
         $h = $this->headersEmpresa();
         $req = '/api/splendidfarms/operacion-agricola/agricola/requisiciones';
-        $oc = '/api/splendidfarms/inventario/compras/ordenes';
-        $rec = '/api/splendidfarms/inventario/compras/recepciones';
+        $reqCompras = '/api/splendidfarms/administration/compras/requisiciones';
+        $oc = '/api/splendidfarms/administration/compras/ordenes';
+        $rec = '/api/splendidfarms/administration/compras/recepciones';
 
         $ingeniero = $this->crearUsuarioDeCampo([$this->almacenA]);
         $compras = $this->crearUsuarioDeCampo();
@@ -39,16 +40,16 @@ class FlujoComprasCompletoTest extends TestCase
         $detalleId = RequisicionCampo::find($reqId)->detalles()->value('id');
 
         // 2. Compras cotiza con dos proveedores y elige la más barata
-        $cotizar = fn ($prov, $precio) => $this->actingAs($compras)->postJson("$req/$reqId/cotizaciones", [
+        $cotizar = fn ($prov, $precio) => $this->actingAs($compras)->postJson("$reqCompras/$reqId/cotizaciones", [
             'supplier_id' => $prov, 'fecha' => now()->toDateString(), 'dias_entrega' => 3,
             'detalles' => [['requisicion_detalle_id' => $detalleId, 'disponible' => true, 'cantidad' => 10, 'precio_unitario' => $precio, 'tax_rate' => 16]],
         ], $h)->assertCreated()->json('data.id');
         $cotizar($this->proveedor->id, 120);
         $barata = $cotizar($this->proveedor2->id, 100);
-        $this->actingAs($compras)->postJson("$req/$reqId/cotizaciones/$barata/ganadora", [], $h)->assertOk();
+        $this->actingAs($compras)->postJson("$reqCompras/$reqId/cotizaciones/$barata/ganadora", [], $h)->assertOk();
 
         // 3. Genera la OC y la manda a autorizar; el gerente aprueba
-        $ocId = $this->actingAs($compras)->postJson("$req/$reqId/generar-orden", ['order_date' => now()->toDateString()], $h)
+        $ocId = $this->actingAs($compras)->postJson("$reqCompras/$reqId/generar-orden", ['order_date' => now()->toDateString()], $h)
             ->assertOk()->json('data.purchase_order.id');
         $this->actingAs($compras)->postJson("$oc/$ocId/submit", [], $h)->assertOk();
         $this->actingAs($gerente)->postJson("$oc/$ocId/approve", [], $h)->assertOk();

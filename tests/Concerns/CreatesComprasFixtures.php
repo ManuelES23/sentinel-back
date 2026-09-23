@@ -74,12 +74,12 @@ trait CreatesComprasFixtures
 
     protected function otorgarCotizar(User $user): void
     {
-        $this->otorgarPermiso($user, 'operacion-agricola', 'agricola', 'requisiciones', 'cotizar');
+        $this->otorgarPermiso($user, 'administration', 'compras', 'requisiciones', 'cotizar');
     }
 
     protected function otorgarConfirmar(User $user): void
     {
-        $this->otorgarPermiso($user, 'inventario', 'compras', 'recepciones', 'confirmar');
+        $this->otorgarPermiso($user, 'administration', 'compras', 'recepciones', 'confirmar');
     }
 
     /**

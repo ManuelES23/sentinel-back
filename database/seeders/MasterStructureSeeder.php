@@ -295,10 +295,10 @@ class MasterStructureSeeder extends Seeder
         }
         $this->command->info("    → Agrícola: Cultivos, Ciclos, Temporadas, Variedades, Productores, Zonas, Lotes, Calibres");
 
-        // Módulo: Compras Agrícolas
+        // Módulo: Abastecimiento (antes "Compras Agrícolas")
         $comprasAgricolas = Module::firstOrCreate(
-            ['slug' => 'compras-agricolas', 'application_id' => $administration->id],
-            ['name' => 'Compras Agrícolas', 'icon' => 'HandCoins', 'order' => 4, 'is_active' => true]
+            ['slug' => 'abastecimiento', 'application_id' => $administration->id],
+            ['name' => 'Abastecimiento', 'icon' => 'HandCoins', 'order' => 4, 'is_active' => true]
         );
 
         $comprasAgricolasSubmodules = [
@@ -314,7 +314,37 @@ class MasterStructureSeeder extends Seeder
                 ['name' => $sub['name'], 'icon' => $sub['icon'], 'order' => $sub['order'], 'is_active' => true]
             );
         }
-        $this->command->info("    → Compras Agrícolas: Convenios, Liquidaciones, Tablero Productores, Abonos");
+        $this->command->info("    → Abastecimiento: Convenios, Liquidaciones, Tablero Productores, Abonos");
+
+        // Módulo: Compras (requisiciones recibidas → cotización → OC → recepción)
+        $comprasAdmin = Module::firstOrCreate(
+            ['slug' => 'compras', 'application_id' => $administration->id],
+            ['name' => 'Compras', 'icon' => 'ShoppingCart', 'order' => 5, 'is_active' => true]
+        );
+
+        $comprasAdminSubmodules = [
+            ['slug' => 'requisiciones', 'name' => 'Requisiciones', 'icon' => 'ClipboardList', 'order' => 1],
+            ['slug' => 'ordenes-compra', 'name' => 'Órdenes de Compra', 'icon' => 'FileText', 'order' => 2],
+            ['slug' => 'recepciones', 'name' => 'Recepciones', 'icon' => 'PackageCheck', 'order' => 3],
+        ];
+
+        foreach ($comprasAdminSubmodules as $sub) {
+            Submodule::firstOrCreate(
+                ['slug' => $sub['slug'], 'module_id' => $comprasAdmin->id],
+                ['name' => $sub['name'], 'icon' => $sub['icon'], 'order' => $sub['order'], 'is_active' => true]
+            );
+        }
+        $this->command->info("    → Compras: Requisiciones, Órdenes de Compra, Recepciones");
+
+        $this->ensureSubmodulePermissionTypes($comprasAdmin, 'requisiciones', [
+            ['slug' => 'cotizar', 'name' => 'Cotizar', 'description' => 'Recibe requisiciones, registra cotizaciones y genera la orden de compra'],
+        ]);
+        $this->ensureSubmodulePermissionTypes($comprasAdmin, 'recepciones', [
+            ['slug' => 'confirmar', 'name' => 'Confirmar entradas', 'description' => 'Confirma recepciones capturadas en almacén; al confirmar suma stock'],
+        ]);
+        $this->ensureSubmodulePermissionTypes($comprasAdmin, 'ordenes-compra', [
+            ['slug' => 'gestionar', 'name' => 'Gestionar órdenes de compra', 'description' => 'Crea, edita y gestiona órdenes de compra fuera del flujo de cotización agrícola'],
+        ]);
 
         // Módulo: Organización
         $organizacion = Module::firstOrCreate(
@@ -476,28 +506,11 @@ class MasterStructureSeeder extends Seeder
         }
         $this->command->info("    → Reportes: Existencias, Movimientos, Valorizado");
 
-        // Módulo: Compras
+        // Módulo: Compras (movido a Administración; queda desactivado aquí)
         $compras = Module::firstOrCreate(
             ['slug' => 'compras', 'application_id' => $inventario->id],
-            ['name' => 'Compras', 'icon' => 'ShoppingCart', 'order' => 4, 'is_active' => true]
+            ['name' => 'Compras', 'icon' => 'ShoppingCart', 'order' => 4, 'is_active' => false]
         );
-
-        Submodule::firstOrCreate(
-            ['slug' => 'ordenes-compra', 'module_id' => $compras->id],
-            ['name' => 'Órdenes de Compra', 'icon' => 'FileText', 'order' => 1, 'is_active' => true]
-        );
-        Submodule::firstOrCreate(
-            ['slug' => 'recepciones', 'module_id' => $compras->id],
-            ['name' => 'Recepciones', 'icon' => 'PackageCheck', 'order' => 2, 'is_active' => true]
-        );
-        $this->command->info("    → Compras: Órdenes de Compra, Recepciones");
-
-        $this->ensureSubmodulePermissionTypes($compras, 'recepciones', [
-            ['slug' => 'confirmar', 'name' => 'Confirmar entradas', 'description' => 'Confirma recepciones capturadas en almacén; al confirmar suma stock'],
-        ]);
-        $this->ensureSubmodulePermissionTypes($compras, 'ordenes-compra', [
-            ['slug' => 'gestionar', 'name' => 'Gestionar órdenes de compra', 'description' => 'Crea, edita y gestiona órdenes de compra fuera del flujo de cotización agrícola'],
-        ]);
 
         // ========================================
         // APLICACIÓN: CONTABILIDAD
@@ -566,10 +579,6 @@ class MasterStructureSeeder extends Seeder
             );
         }
         $this->command->info("    → Agrícola: Productores, Zonas, Lotes, Etapas, Plan Siembra, Visitas, Aplicaciones, Requisiciones, Costeo");
-
-        $this->ensureSubmodulePermissionTypes($oaAgricola, 'requisiciones', [
-            ['slug' => 'cotizar', 'name' => 'Cotizar', 'description' => 'Recibe requisiciones, registra cotizaciones y genera la orden de compra'],
-        ]);
 
         // Módulo: Cosecha
         $oaCosecha = Module::firstOrCreate(
