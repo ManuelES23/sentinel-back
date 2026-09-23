@@ -119,7 +119,7 @@ class PermisosAlcanceComprasTest extends TestCase
         $this->otorgarVerTodos($compras);
         $ordenAgricola = $this->crearOrden(['created_by' => $compras->id]);
         $this->actingAs($compras)
-            ->putJson("/api/splendidfarms/inventario/compras/ordenes/{$ordenAgricola->id}", ['notes' => 'Ajuste'], $this->headersEmpresa())
+            ->putJson("/api/splendidfarms/administration/compras/ordenes/{$ordenAgricola->id}", ['notes' => 'Ajuste'], $this->headersEmpresa())
             ->assertOk();
     }
 }

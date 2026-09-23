@@ -448,4 +448,23 @@ class RequisicionCampoController extends Controller
 
         return response()->json(['success' => true, 'data' => $suppliers]);
     }
+
+    public function crearProveedor(Request $request): JsonResponse
+    {
+        $empresa = $this->almacenes->resolverEmpresa($request);
+        abort_unless($this->permisos->puedeCotizar($request->user(), $empresa), 403, 'No tienes permiso para cotizar');
+
+        $datos = $request->validate([
+            'business_name' => 'required|string|max:255',
+            'trade_name' => 'nullable|string|max:255',
+            'tax_id' => 'nullable|string|max:50|unique:suppliers,tax_id',
+            'supplier_type' => 'required|in:national,international',
+            'phone' => 'nullable|string|max:50',
+            'email' => 'nullable|email|max:255',
+        ]);
+
+        $proveedor = Supplier::create($datos + ['code' => Supplier::generateCode(), 'is_active' => true]);
+
+        return response()->json(['success' => true, 'message' => 'Proveedor registrado', 'data' => $proveedor]);
+    }
 }

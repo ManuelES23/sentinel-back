@@ -15,7 +15,7 @@ class ConfirmarRecepcionTest extends TestCase
 {
     use RefreshDatabase, CreatesComprasFixtures;
 
-    private const URL = '/api/splendidfarms/inventario/compras/recepciones';
+    private const URL = '/api/splendidfarms/administration/compras/recepciones';
 
     private $encargado;
     private $compras;

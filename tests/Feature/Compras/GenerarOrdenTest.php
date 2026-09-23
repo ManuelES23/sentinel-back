@@ -31,7 +31,7 @@ class GenerarOrdenTest extends TestCase
 
     private function url(): string
     {
-        return "/api/splendidfarms/operacion-agricola/agricola/requisiciones/{$this->req->id}/generar-orden";
+        return "/api/splendidfarms/administration/compras/requisiciones/{$this->req->id}/generar-orden";
     }
 
     public function test_sin_ganadora_responde_422(): void
@@ -117,7 +117,7 @@ class GenerarOrdenTest extends TestCase
         $this->assertNotEmpty($oc->metadata);
 
         $dupId = $this->actingAs($this->compras)
-            ->postJson("/api/splendidfarms/inventario/compras/ordenes/{$oc->id}/duplicate", [], $this->headersEmpresa())
+            ->postJson("/api/splendidfarms/administration/compras/ordenes/{$oc->id}/duplicate", [], $this->headersEmpresa())
             ->assertStatus(201)
             ->json('data.id');
 

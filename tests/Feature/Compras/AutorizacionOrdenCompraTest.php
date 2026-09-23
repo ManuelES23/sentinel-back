@@ -11,7 +11,7 @@ class AutorizacionOrdenCompraTest extends TestCase
 {
     use RefreshDatabase, CreatesComprasFixtures;
 
-    private const URL = '/api/splendidfarms/inventario/compras/ordenes';
+    private const URL = '/api/splendidfarms/administration/compras/ordenes';
 
     private $compras;
 

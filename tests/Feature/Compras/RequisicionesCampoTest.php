@@ -14,6 +14,7 @@ class RequisicionesCampoTest extends TestCase
     use RefreshDatabase, CreatesComprasFixtures;
 
     private const URL = '/api/splendidfarms/operacion-agricola/agricola/requisiciones';
+    private const COMPRAS_URL = '/api/splendidfarms/administration/compras/requisiciones';
 
     protected function setUp(): void
     {
@@ -100,12 +101,12 @@ class RequisicionesCampoTest extends TestCase
         $ing = $this->crearUsuarioDeCampo([$this->almacenA]);
         $req = $this->crearRequisicion($ing, $this->almacenA, 'enviada');
 
-        $this->actingAs($ing)->postJson(self::URL . "/{$req->id}/rechazar", ['notas_rechazo' => 'x'], $this->headersEmpresa())->assertForbidden();
+        $this->actingAs($ing)->postJson(self::COMPRAS_URL . "/{$req->id}/rechazar", ['notas_rechazo' => 'x'], $this->headersEmpresa())->assertForbidden();
 
         $compras = $this->crearUsuarioDeCampo();
         $this->otorgarCotizar($compras);
         $this->otorgarVerTodos($compras);
-        $this->actingAs($compras)->postJson(self::URL . "/{$req->id}/rechazar", ['notas_rechazo' => 'Falta dosis'], $this->headersEmpresa())->assertOk();
+        $this->actingAs($compras)->postJson(self::COMPRAS_URL . "/{$req->id}/rechazar", ['notas_rechazo' => 'Falta dosis'], $this->headersEmpresa())->assertOk();
         $this->assertSame('rechazada', $req->fresh()->status);
 
         $this->actingAs($ing)->putJson(self::URL . "/{$req->id}", $this->payload($this->almacenA->id), $this->headersEmpresa())->assertOk();
@@ -126,7 +127,7 @@ class RequisicionesCampoTest extends TestCase
         $this->assertEquals(7, $stock->assertOk()->json("data.{$this->insumo->id}"));
         $this->actingAs($ing)->getJson(self::URL . "/stock?almacen_id={$this->almacenB->id}&product_ids[]={$this->insumo->id}", $this->headersEmpresa())->assertForbidden();
 
-        $this->actingAs($ing)->getJson(self::URL . '/proveedores', $this->headersEmpresa())->assertOk()->assertJsonFragment(['business_name' => 'Agroquímicos del Norte']);
+        $this->actingAs($ing)->getJson(self::COMPRAS_URL . '/proveedores', $this->headersEmpresa())->assertOk()->assertJsonFragment(['business_name' => 'Agroquímicos del Norte']);
         $this->actingAs($ing)->getJson(self::URL . '/productos?search=cloro', $this->headersEmpresa())->assertOk()->assertJsonFragment(['id' => $this->insumo->id]);
 
         $tipos = collect($this->actingAs($ing)->getJson(self::URL . "/{$req->id}/seguimiento", $this->headersEmpresa())->assertOk()->json('data.eventos'))->pluck('tipo')->all();
