@@ -23,6 +23,8 @@ class PurchaseReceipt extends Model
         'receipt_number',
         'purchase_order_id',
         'supplier_id',
+        'enterprise_id',
+        'almacen_id',
         'receipt_date',
         'supplier_document',
         'supplier_document_date',
@@ -36,6 +38,11 @@ class PurchaseReceipt extends Model
         'notes',
         'quality_notes',
         'received_by',
+        'capturada_por',
+        'enviada_at',
+        'confirmada_por',
+        'confirmada_at',
+        'motivo_rechazo',
         'validated_by',
         'validated_at',
         'cancelled_by',
@@ -51,6 +58,8 @@ class PurchaseReceipt extends Model
         'tax_amount' => 'decimal:4',
         'total_amount' => 'decimal:4',
         'validated_at' => 'datetime',
+        'enviada_at' => 'datetime',
+        'confirmada_at' => 'datetime',
         'cancelled_at' => 'datetime',
         'metadata' => 'array',
     ];
@@ -66,7 +75,7 @@ class PurchaseReceipt extends Model
 
     const STATUS_LABELS = [
         'draft' => 'Borrador',
-        'pending' => 'Pendiente Validación',
+        'pending' => 'Por confirmar',
         'completed' => 'Completada',
         'cancelled' => 'Cancelada',
     ];
@@ -80,7 +89,7 @@ class PurchaseReceipt extends Model
 
     public function getIsEditableAttribute(): bool
     {
-        return in_array($this->status, [self::STATUS_DRAFT, self::STATUS_PENDING]);
+        return $this->status === self::STATUS_DRAFT;
     }
 
     // ==================== RELATIONSHIPS ====================
@@ -93,6 +102,26 @@ class PurchaseReceipt extends Model
     public function supplier(): BelongsTo
     {
         return $this->belongsTo(Supplier::class);
+    }
+
+    public function almacen(): BelongsTo
+    {
+        return $this->belongsTo(Entity::class, 'almacen_id');
+    }
+
+    public function empresa(): BelongsTo
+    {
+        return $this->belongsTo(Enterprise::class, 'enterprise_id');
+    }
+
+    public function capturadaPor(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'capturada_por');
+    }
+
+    public function confirmadaPor(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'confirmada_por');
     }
 
     public function details(): HasMany
@@ -159,131 +188,13 @@ class PurchaseReceipt extends Model
      */
     public function recalculateTotals(): void
     {
-        $subtotal = $this->details()->sum('line_total');
         $taxAmount = $this->details()->sum('tax_amount');
-        
-        $this->subtotal = $subtotal;
+        $lineTotal = $this->details()->sum('line_total');
+
+        $this->subtotal = $lineTotal - $taxAmount;
         $this->tax_amount = $taxAmount;
-        $this->total_amount = $subtotal + $taxAmount;
+        $this->total_amount = $lineTotal;
         $this->save();
-    }
-
-    /**
-     * Completar recepción (genera inventario y cuenta por pagar)
-     */
-    public function complete(int $userId): bool
-    {
-        if ($this->status !== self::STATUS_PENDING) {
-            return false;
-        }
-
-        \DB::transaction(function () use ($userId) {
-            // 1. Generar movimiento de inventario (entrada)
-            $movement = $this->createInventoryMovement($userId);
-            $this->inventory_movement_id = $movement->id;
-            
-            // 2. Generar cuenta por pagar
-            $this->createAccountPayable($userId);
-            
-            // 3. Actualizar cantidades recibidas en la orden de compra
-            $this->updatePurchaseOrderQuantities();
-            
-            // 4. Marcar como completada
-            $this->status = self::STATUS_COMPLETED;
-            $this->validated_by = $userId;
-            $this->validated_at = now();
-            $this->save();
-        });
-
-        return true;
-    }
-
-    /**
-     * Crear movimiento de inventario
-     */
-    protected function createInventoryMovement(int $userId): InventoryMovement
-    {
-        // Buscar el tipo de movimiento "Entrada por Compra"
-        $movementType = MovementType::where('code', 'ENTRADA_COMPRA')
-            ->orWhere('name', 'like', '%compra%')
-            ->first();
-
-        $movement = InventoryMovement::create([
-            'reference_number' => 'MOV-' . $this->receipt_number,
-            'movement_type_id' => $movementType?->id,
-            'movement_date' => $this->receipt_date,
-            'description' => "Recepción de mercancía #{$this->receipt_number}",
-            'source_type' => 'purchase_receipt',
-            'source_id' => $this->id,
-            'status' => 'completed',
-            'created_by' => $userId,
-        ]);
-
-        // Crear detalles del movimiento
-        foreach ($this->details as $detail) {
-            $movement->details()->create([
-                'product_id' => $detail->product_id,
-                'quantity' => $detail->quantity_accepted,
-                'unit_cost' => $detail->unit_cost,
-                'total_cost' => $detail->quantity_accepted * $detail->unit_cost,
-                'lot_number' => $detail->lot_number,
-                'expiry_date' => $detail->expiry_date,
-            ]);
-        }
-
-        return $movement;
-    }
-
-    /**
-     * Crear cuenta por pagar
-     */
-    protected function createAccountPayable(int $userId): AccountPayable
-    {
-        $dueDate = now()->addDays($this->supplier->payment_terms_days ?? 30);
-
-        return AccountPayable::create([
-            'document_number' => AccountPayable::generateDocumentNumber(),
-            'document_type' => 'invoice',
-            'supplier_id' => $this->supplier_id,
-            'supplier_invoice' => $this->supplier_document,
-            'supplier_invoice_date' => $this->supplier_document_date,
-            'purchase_receipt_id' => $this->id,
-            'purchase_order_id' => $this->purchase_order_id,
-            'document_date' => $this->receipt_date,
-            'due_date' => $dueDate,
-            'payment_terms_days' => $this->supplier->payment_terms_days ?? 30,
-            'currency_code' => $this->purchaseOrder?->currency_code ?? 'MXN',
-            'exchange_rate' => $this->purchaseOrder?->exchange_rate ?? 1,
-            'subtotal' => $this->subtotal,
-            'tax_amount' => $this->tax_amount,
-            'total_amount' => $this->total_amount,
-            'balance' => $this->total_amount,
-            'status' => 'pending',
-            'created_by' => $userId,
-        ]);
-    }
-
-    /**
-     * Actualizar cantidades recibidas en la orden de compra
-     */
-    protected function updatePurchaseOrderQuantities(): void
-    {
-        if (!$this->purchase_order_id) {
-            return;
-        }
-
-        foreach ($this->details as $detail) {
-            if ($detail->purchase_order_detail_id) {
-                $orderDetail = PurchaseOrderDetail::find($detail->purchase_order_detail_id);
-                if ($orderDetail) {
-                    $orderDetail->quantity_received += $detail->quantity_accepted;
-                    $orderDetail->save();
-                }
-            }
-        }
-
-        // Actualizar estado de la orden
-        $this->purchaseOrder->updateStatusFromReceipts();
     }
 
     /**

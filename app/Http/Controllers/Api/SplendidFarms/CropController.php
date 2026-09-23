@@ -16,17 +16,9 @@ class CropController extends Controller
      */
     public function index(): JsonResponse
     {
+        // imagen_url lo agrega el accesor del modelo Cultivo.
         $cultivos = Cultivo::orderBy('created_at', 'desc')->get();
-        
-        // Agregar URL completa de la imagen
-        $cultivos->each(function ($cultivo) {
-            if ($cultivo->imagen) {
-                $cultivo->imagen_url = asset('storage/' . $cultivo->imagen);
-            } else {
-                $cultivo->imagen_url = null;
-            }
-        });
-        
+
         return response()->json([
             'success' => true,
             'data' => $cultivos
@@ -55,11 +47,6 @@ class CropController extends Controller
 
         $cultivo = Cultivo::create($data);
 
-        // Agregar URL completa
-        if ($cultivo->imagen) {
-            $cultivo->imagen_url = asset('storage/' . $cultivo->imagen);
-        }
-
         // Broadcast evento en tiempo real (sin toOthers para que todos reciban el evento)
         broadcast(new CultivoUpdated('created', $cultivo->toArray()));
 
@@ -75,10 +62,6 @@ class CropController extends Controller
      */
     public function show(Cultivo $cultivo): JsonResponse
     {
-        if ($cultivo->imagen) {
-            $cultivo->imagen_url = asset('storage/' . $cultivo->imagen);
-        }
-        
         return response()->json([
             'success' => true,
             'data' => $cultivo
@@ -113,11 +96,6 @@ class CropController extends Controller
         }
 
         $cultivo->update($data);
-
-        // Agregar URL completa
-        if ($cultivo->imagen) {
-            $cultivo->imagen_url = asset('storage/' . $cultivo->imagen);
-        }
 
         // Broadcast evento en tiempo real
         broadcast(new CultivoUpdated('updated', $cultivo->toArray()));

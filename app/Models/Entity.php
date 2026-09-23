@@ -123,6 +123,15 @@ class Entity extends Model
             ->withTimestamps();
     }
 
+    /**
+     * Zonas de cultivo que surte un almacén de campo.
+     */
+    public function zonasCultivo()
+    {
+        return $this->belongsToMany(ZonaCultivo::class, 'entity_zona_cultivo')
+            ->withTimestamps();
+    }
+
     public function accessibleByEnterprises()
     {
         return $this->belongsToMany(Enterprise::class, 'enterprise_entity')

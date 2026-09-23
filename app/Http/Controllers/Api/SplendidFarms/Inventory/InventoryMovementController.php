@@ -12,6 +12,9 @@ use App\Models\InventoryStock;
 use App\Models\InventoryKardex;
 use App\Models\MovementType;
 use App\Models\Product;
+use App\Services\Inventory\AlmacenAccessService;
+use App\Services\Inventory\AplicadorStock;
+use App\Services\Inventory\LoteCaducidadValidator;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -21,6 +24,13 @@ use Symfony\Component\HttpFoundation\Response;
 
 class InventoryMovementController extends Controller
 {
+    public function __construct(
+        private AlmacenAccessService $almacenes,
+        private LoteCaducidadValidator $lotes,
+        private AplicadorStock $stock,
+    ) {
+    }
+
     /**
      * Obtiene el enterprise actual a partir del header X-Enterprise-Slug.
      */
@@ -32,35 +42,78 @@ class InventoryMovementController extends Controller
     }
 
     /**
-     * IDs de entidades accesibles por la empresa actual.
+     * IDs de entidades que el usuario puede ver en la empresa actual
+     * (asignadas en user_entity_access, o todas con ver_todos_almacenes).
+     * Lanza 422/403 si la empresa del header no es válida para el usuario.
      */
     private function getAccessibleEntityIds(Request $request): array
     {
-        $enterprise = $this->getEnterprise($request);
-        if (!$enterprise) return [];
+        $empresa = $this->almacenes->resolverEmpresa($request);
 
-        // Entidades propias (vinculadas a sucursales de esta empresa)
-        $ownIds = Entity::whereHas('branch', function ($q) use ($enterprise) {
-            $q->where('enterprise_id', $enterprise->id);
-        })->pluck('id')->toArray();
-
-        // Entidades compartidas (pivot enterprise_entity de otras empresas)
-        $linkedIds = $enterprise->accessibleEntities()->pluck('entities.id')->toArray();
-
-        return array_unique(array_merge($ownIds, $linkedIds));
+        return $this->almacenes->idsVisibles($request->user(), $empresa);
     }
 
     /**
-     * IDs de entidades propias (la sucursal pertenece a la empresa actual).
+     * IDs de entidades propias (la sucursal pertenece a la empresa actual)
+     * que además son visibles para el usuario.
      */
     private function getOwnEntityIds(Request $request): array
     {
-        $enterprise = $this->getEnterprise($request);
-        if (!$enterprise) return [];
+        $enterprise = $this->almacenes->resolverEmpresa($request);
 
-        return Entity::whereHas('branch', function ($q) use ($enterprise) {
+        $own = Entity::whereHas('branch', function ($q) use ($enterprise) {
             $q->where('enterprise_id', $enterprise->id);
-        })->pluck('id')->toArray();
+        })->pluck('id')->map(fn ($id) => (int) $id)->all();
+
+        return array_values(array_intersect($own, $this->getAccessibleEntityIds($request)));
+    }
+
+    private function movimientoVisible(Request $request, InventoryMovement $movement): bool
+    {
+        $ids = $this->getAccessibleEntityIds($request);
+
+        return in_array((int) $movement->source_entity_id, $ids, true)
+            || in_array((int) $movement->destination_entity_id, $ids, true);
+    }
+
+    /**
+     * Entidad cuyo stock afecta la acción: destino en entradas, ajustes
+     * positivos y transferencias (el receptor aprueba); origen en salidas
+     * y ajustes negativos.
+     */
+    /**
+     * Si la dirección/efecto del tipo de movimiento opera sobre el destino
+     * (entradas, transferencias y ajustes positivos) o sobre el origen
+     * (salidas y ajustes negativos). La usan tanto entidadOperada() (con un
+     * InventoryMovement ya persistido) como las restricciones de ownership
+     * en store()/update() (con datos de la request, antes de crear el modelo).
+     */
+    private function usaDestino(MovementType $type): bool
+    {
+        return $type->direction === 'in'
+            || $type->direction === 'transfer'
+            || ($type->direction === 'adjustment' && $type->effect === 'increase');
+    }
+
+    private function entidadOperada(MovementType $type, InventoryMovement $movement): ?int
+    {
+        $id = $this->usaDestino($type) ? $movement->destination_entity_id : $movement->source_entity_id;
+
+        return $id ? (int) $id : null;
+    }
+
+    private function noVisible(string $mensaje = 'Movimiento no encontrado', int $status = 404): JsonResponse
+    {
+        return response()->json(['status' => 'error', 'message' => $mensaje], $status);
+    }
+
+    private function erroresDeLote(array $errores): JsonResponse
+    {
+        return response()->json([
+            'status' => 'error',
+            'message' => reset($errores),
+            'errors' => $errores,
+        ], 422);
     }
 
     private function getEntityOwnerEnterprise(?int $entityId): ?Enterprise
@@ -121,15 +174,14 @@ class InventoryMovementController extends Controller
      */
     public function accessibleEntities(Request $request): JsonResponse
     {
-        $enterprise = $this->getEnterprise($request);
-        if (!$enterprise) {
-            return response()->json(['success' => true, 'data' => []]);
-        }
+        $enterprise = $this->almacenes->resolverEmpresa($request);
+        $visibles = $this->almacenes->idsVisibles($request->user(), $enterprise);
 
         // 1. Entidades propias
         $ownEntities = Entity::with(['branch:id,name,enterprise_id', 'branch.enterprise:id,name,slug', 'entityType:id,name,icon,color'])
             ->active()
             ->whereHas('branch', fn ($q) => $q->where('enterprise_id', $enterprise->id))
+            ->whereIn('id', $visibles)
             ->get()
             ->map(fn ($entity) => [
                 'id'             => $entity->id,
@@ -153,7 +205,7 @@ class InventoryMovementController extends Controller
         if ($linkedIds->isNotEmpty()) {
             $linkedEntities = Entity::with(['branch:id,name,enterprise_id', 'branch.enterprise:id,name,slug', 'entityType:id,name,icon,color'])
                 ->active()
-                ->whereIn('id', $linkedIds)
+                ->whereIn('id', $linkedIds->intersect($visibles)->values())
                 ->whereHas('branch', fn ($q) => $q->where('enterprise_id', '!=', $enterprise->id))
                 ->get()
                 ->map(fn ($entity) => [
@@ -206,6 +258,46 @@ class InventoryMovementController extends Controller
             'data' => $stock,
         ]);
     }
+
+    /**
+     * Lotes con existencia de un artículo en un almacén, primero los que
+     * caducan antes (FEFO). Lo usa el selector de lotes de salidas.
+     */
+    public function lotesDisponibles(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'product_id' => 'required|integer|exists:products,id',
+            'entity_id' => 'required|integer',
+        ]);
+
+        if (! in_array((int) $validated['entity_id'], $this->getAccessibleEntityIds($request), true)) {
+            return $this->noVisible('No tienes acceso a este almacén', 403);
+        }
+
+        $product = Product::findOrFail($validated['product_id']);
+        $hoy = now()->startOfDay();
+        $limite = $hoy->copy()->addDays((int) ($product->dias_alerta_caducidad ?? 30));
+
+        $lotes = InventoryStock::where('product_id', $product->id)
+            ->where('entity_id', $validated['entity_id'])
+            ->where('quantity', '>', 0)
+            ->orderByRaw('expiry_date IS NULL')
+            ->orderBy('expiry_date')
+            ->orderBy('id')
+            ->get(['id', 'lot_number', 'expiry_date', 'quantity', 'unit_cost'])
+            ->map(fn ($s) => [
+                'lot_number' => $s->lot_number,
+                'expiry_date' => $s->expiry_date?->toDateString(),
+                'quantity' => (float) $s->quantity,
+                'unit_cost' => (float) $s->unit_cost,
+                'vencido' => (bool) ($s->expiry_date && $s->expiry_date->lt($hoy)),
+                'por_caducar' => (bool) ($s->expiry_date && ! $s->expiry_date->lt($hoy) && $s->expiry_date->lte($limite)),
+            ])
+            ->values();
+
+        return response()->json(['success' => true, 'data' => $lotes]);
+    }
+
     /**
      * Retorna el siguiente número de folio para una dirección dada.
      * GET ?direction=transfer|in|out|adjustment
@@ -243,14 +335,12 @@ class InventoryMovementController extends Controller
 
         $query = InventoryMovement::with($with)->withCount('details');
 
-        // Filtrar por entidades accesibles de la empresa actual
+        // Filtrar por entidades visibles para el usuario (vacío = no ve nada)
         $entityIds = $this->getAccessibleEntityIds($request);
-        if (!empty($entityIds)) {
-            $query->where(function ($q) use ($entityIds) {
-                $q->whereIn('source_entity_id', $entityIds)
-                  ->orWhereIn('destination_entity_id', $entityIds);
-            });
-        }
+        $query->where(function ($q) use ($entityIds) {
+            $q->whereIn('source_entity_id', $entityIds)
+              ->orWhereIn('destination_entity_id', $entityIds);
+        });
 
         // Filtrar por estado
         if ($request->filled('status')) {
@@ -363,19 +453,17 @@ class InventoryMovementController extends Controller
 
         // Validar que las entidades sean accesibles por la empresa actual
         $entityIds = $this->getAccessibleEntityIds($request);
-        if (!empty($entityIds)) {
-            if (!empty($validated['source_entity_id']) && !in_array($validated['source_entity_id'], $entityIds)) {
-                return response()->json([
-                    'status' => 'error',
-                    'message' => 'No tienes acceso a la entidad origen seleccionada'
-                ], 403);
-            }
-            if (!empty($validated['destination_entity_id']) && !in_array($validated['destination_entity_id'], $entityIds)) {
-                return response()->json([
-                    'status' => 'error',
-                    'message' => 'No tienes acceso a la entidad destino seleccionada'
-                ], 403);
-            }
+        if (!empty($validated['source_entity_id']) && !in_array((int) $validated['source_entity_id'], $entityIds, true)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No tienes acceso a la entidad origen seleccionada'
+            ], 403);
+        }
+        if (!empty($validated['destination_entity_id']) && !in_array((int) $validated['destination_entity_id'], $entityIds, true)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No tienes acceso a la entidad destino seleccionada'
+            ], 403);
         }
 
         // ── Restricciones de ownership por dirección ─────────────────────────
@@ -384,7 +472,7 @@ class InventoryMovementController extends Controller
         $ownIds = $this->getOwnEntityIds($request);
 
         if (in_array($movementType->direction, ['in', 'out', 'adjustment'])) {
-            $operatedEntityId = $movementType->direction === 'in'
+            $operatedEntityId = $this->usaDestino($movementType)
                 ? ($validated['destination_entity_id'] ?? null)
                 : ($validated['source_entity_id'] ?? null);
 
@@ -404,6 +492,20 @@ class InventoryMovementController extends Controller
                     'message' => 'El origen de una transferencia debe ser una entidad propia.',
                 ], 422);
             }
+        }
+
+        // Lotes y caducidad: las salidas heredan la caducidad del stock de origen.
+        if (LoteCaducidadValidator::esSalida($movementType)) {
+            $validated['details'] = $this->lotes->completarCaducidad($validated['source_entity_id'] ?? null, $validated['details']);
+        }
+        $erroresLote = $this->lotes->validar(
+            $movementType,
+            $validated['source_entity_id'] ?? null,
+            $validated['destination_entity_id'] ?? null,
+            $validated['details'],
+        );
+        if ($erroresLote) {
+            return $this->erroresDeLote($erroresLote);
         }
 
         // Validar stock desde la creación para salidas/transferencias/ajustes negativos.
@@ -476,7 +578,7 @@ class InventoryMovementController extends Controller
             if ($movementType->direction === 'transfer') {
                 $movement->load('details.product:id,name');
                 foreach ($movement->details as $detail) {
-                    $this->decreaseStock(
+                    $this->stock->disminuir(
                         $detail,
                         $movement->source_entity_id,
                         $movement->source_entity_type,
@@ -523,8 +625,12 @@ class InventoryMovementController extends Controller
     /**
      * Display the specified resource.
      */
-    public function show(InventoryMovement $movement): JsonResponse
+    public function show(Request $request, InventoryMovement $movement): JsonResponse
     {
+        if (! $this->movimientoVisible($request, $movement)) {
+            return $this->noVisible();
+        }
+
         $movement->load([
             'movementType',
             'sourceEntity',
@@ -580,23 +686,21 @@ class InventoryMovementController extends Controller
 
         // Validar que las entidades finales sean accesibles por la empresa actual
         $entityIds = $this->getAccessibleEntityIds($request);
-        if (!empty($entityIds)) {
-            $sourceId = $validated['source_entity_id'] ?? $movement->source_entity_id;
-            $destinationId = $validated['destination_entity_id'] ?? $movement->destination_entity_id;
+        $sourceId = $validated['source_entity_id'] ?? $movement->source_entity_id;
+        $destinationId = $validated['destination_entity_id'] ?? $movement->destination_entity_id;
 
-            if (!empty($sourceId) && !in_array((int) $sourceId, array_map('intval', $entityIds))) {
-                return response()->json([
-                    'status' => 'error',
-                    'message' => 'No tienes acceso a la entidad origen seleccionada',
-                ], 403);
-            }
+        if (!empty($sourceId) && !in_array((int) $sourceId, array_map('intval', $entityIds))) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No tienes acceso a la entidad origen seleccionada',
+            ], 403);
+        }
 
-            if (!empty($destinationId) && !in_array((int) $destinationId, array_map('intval', $entityIds))) {
-                return response()->json([
-                    'status' => 'error',
-                    'message' => 'No tienes acceso a la entidad destino seleccionada',
-                ], 403);
-            }
+        if (!empty($destinationId) && !in_array((int) $destinationId, array_map('intval', $entityIds))) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No tienes acceso a la entidad destino seleccionada',
+            ], 403);
         }
 
         // ── Restricciones de ownership en update ─────────────────────────────
@@ -604,7 +708,7 @@ class InventoryMovementController extends Controller
         $movementType = $movement->movementType;
 
         if ($movementType && in_array($movementType->direction, ['in', 'out', 'adjustment'])) {
-            $operatedEntityId = $movementType->direction === 'in'
+            $operatedEntityId = $this->usaDestino($movementType)
                 ? ($validated['destination_entity_id'] ?? $movement->destination_entity_id)
                 : ($validated['source_entity_id'] ?? $movement->source_entity_id);
 
@@ -623,6 +727,22 @@ class InventoryMovementController extends Controller
                     'status' => 'error',
                     'message' => 'El origen de una transferencia debe ser una entidad propia.',
                 ], 422);
+            }
+        }
+
+        if ($movementType && isset($validated['details'])) {
+            $origenFinal = $validated['source_entity_id'] ?? $movement->source_entity_id;
+            if (LoteCaducidadValidator::esSalida($movementType)) {
+                $validated['details'] = $this->lotes->completarCaducidad($origenFinal, $validated['details']);
+            }
+            $erroresLote = $this->lotes->validar(
+                $movementType,
+                $origenFinal,
+                $validated['destination_entity_id'] ?? $movement->destination_entity_id,
+                $validated['details'],
+            );
+            if ($erroresLote) {
+                return $this->erroresDeLote($erroresLote);
             }
         }
 
@@ -749,8 +869,12 @@ class InventoryMovementController extends Controller
     /**
      * Remove the specified resource from storage.
      */
-    public function destroy(InventoryMovement $movement): JsonResponse
+    public function destroy(Request $request, InventoryMovement $movement): JsonResponse
     {
+        if (! $this->movimientoVisible($request, $movement)) {
+            return $this->noVisible();
+        }
+
         // Solo se pueden eliminar movimientos pendientes o cancelados
         if (!in_array($movement->status, ['pending', 'cancelled'])) {
             return response()->json([
@@ -770,12 +894,12 @@ class InventoryMovementController extends Controller
                     data_get($movement->metadata, 'stock_deducted_at_creation', false)
                 ) {
                     foreach ($movement->details as $detail) {
-                        $this->increaseStock(
+                        $this->stock->aumentar(
                             $detail,
                             $movement->source_entity_id,
                             $movement->source_entity_type,
                             $movement,
-                            true // isReversal
+                            true // esReversa
                         );
                     }
                 }
@@ -815,6 +939,29 @@ class InventoryMovementController extends Controller
                 'status' => 'error',
                 'message' => 'Solo se pueden aprobar movimientos pendientes'
             ], 422);
+        }
+
+        $tipoOperado = $movement->movementType;
+        $entidad = $tipoOperado ? $this->entidadOperada($tipoOperado, $movement) : null;
+        if (! in_array((int) $entidad, $this->getAccessibleEntityIds($request), true)) {
+            return $this->noVisible('No tienes acceso al almacén de este movimiento', 403);
+        }
+
+        $movement->loadMissing('details');
+        $yaDescontado = (bool) data_get($movement->metadata, 'stock_deducted_at_creation', false);
+        $erroresLote = $this->lotes->validar(
+            $tipoOperado,
+            $movement->source_entity_id,
+            $movement->destination_entity_id,
+            $movement->details->map(fn ($d) => [
+                'product_id' => $d->product_id,
+                'lot_number' => $d->lot_number,
+                'expiry_date' => $d->expiry_date?->toDateString(),
+            ])->all(),
+            ! $yaDescontado,
+        );
+        if ($erroresLote) {
+            return $this->erroresDeLote($erroresLote);
         }
 
         $userEnterpriseId = $this->resolveUserEnterpriseId($request);
@@ -954,19 +1101,19 @@ class InventoryMovementController extends Controller
 
             foreach ($movement->details as $detail) {
                 // Procesar según dirección y efecto
-                if ($movementType->direction === 'in' || 
+                if ($movementType->direction === 'in' ||
                     ($movementType->direction === 'adjustment' && $movementType->effect === 'increase')) {
                     // Entrada: incrementar stock en destino
-                    $this->increaseStock(
+                    $this->stock->aumentar(
                         $detail,
                         $movement->destination_entity_id,
                         $movement->destination_entity_type,
                         $movement
                     );
-                } elseif ($movementType->direction === 'out' || 
+                } elseif ($movementType->direction === 'out' ||
                           ($movementType->direction === 'adjustment' && $movementType->effect === 'decrease')) {
                     // Salida: decrementar stock en origen
-                    $this->decreaseStock(
+                    $this->stock->disminuir(
                         $detail,
                         $movement->source_entity_id,
                         $movement->source_entity_type,
@@ -977,14 +1124,14 @@ class InventoryMovementController extends Controller
                     // Para transferencias antiguas (sin la marca) seguir descontando origen.
                     $stockAlreadyDeducted = (bool) data_get($movement->metadata, 'stock_deducted_at_creation', false);
                     if (!$stockAlreadyDeducted) {
-                        $this->decreaseStock(
+                        $this->stock->disminuir(
                             $detail,
                             $movement->source_entity_id,
                             $movement->source_entity_type,
                             $movement
                         );
                     }
-                    $this->increaseStock(
+                    $this->stock->aumentar(
                         $detail,
                         $movement->destination_entity_id,
                         $movement->destination_entity_type,
@@ -1037,16 +1184,7 @@ class InventoryMovementController extends Controller
      */
     public function pdf(Request $request, InventoryMovement $movement): Response
     {
-        $entityIds = $this->getAccessibleEntityIds($request);
-        if (!empty($entityIds)) {
-            $sourceId = (int) ($movement->source_entity_id ?? 0);
-            $destinationId = (int) ($movement->destination_entity_id ?? 0);
-            $hasAccess = in_array($sourceId, $entityIds, true) || in_array($destinationId, $entityIds, true);
-
-            if (!$hasAccess) {
-                abort(403, 'No tienes acceso a este movimiento');
-            }
-        }
+        abort_unless($this->movimientoVisible($request, $movement), 404);
 
         $movement->load([
             'movementType:id,code,name,direction,effect',
@@ -1191,6 +1329,19 @@ class InventoryMovementController extends Controller
      */
     public function cancel(InventoryMovement $movement, Request $request): JsonResponse
     {
+        $tipoParaCancelar = $movement->movementType;
+
+        if ($tipoParaCancelar?->direction === 'transfer') {
+            if (! $this->movimientoVisible($request, $movement)) {
+                return $this->noVisible('No tienes acceso al almacén de este movimiento', 403);
+            }
+        } else {
+            $entidad = $tipoParaCancelar ? $this->entidadOperada($tipoParaCancelar, $movement) : null;
+            if (! in_array((int) $entidad, $this->getAccessibleEntityIds($request), true)) {
+                return $this->noVisible('No tienes acceso al almacén de este movimiento', 403);
+            }
+        }
+
         if (!in_array($movement->status, ['pending', 'approved'])) {
             return response()->json([
                 'status' => 'error',
@@ -1214,12 +1365,12 @@ class InventoryMovementController extends Controller
                 ) {
                     $movement->loadMissing('details.product:id,name');
                     foreach ($movement->details as $detail) {
-                        $this->increaseStock(
+                        $this->stock->aumentar(
                             $detail,
                             $movement->source_entity_id,
                             $movement->source_entity_type,
                             $movement,
-                            true // isReversal
+                            true // esReversa
                         );
                     }
                 }
@@ -1231,18 +1382,18 @@ class InventoryMovementController extends Controller
 
                 foreach ($movement->details as $detail) {
                     // Revertir según dirección (inverso de approve)
-                    if ($movementType->direction === 'in' || 
+                    if ($movementType->direction === 'in' ||
                         ($movementType->direction === 'adjustment' && $movementType->effect === 'increase')) {
-                        $this->decreaseStock(
+                        $this->stock->disminuir(
                             $detail,
                             $movement->destination_entity_id,
                             $movement->destination_entity_type,
                             $movement,
-                            true // isReversal
+                            true // esReversa
                         );
-                    } elseif ($movementType->direction === 'out' || 
+                    } elseif ($movementType->direction === 'out' ||
                               ($movementType->direction === 'adjustment' && $movementType->effect === 'decrease')) {
-                        $this->increaseStock(
+                        $this->stock->aumentar(
                             $detail,
                             $movement->source_entity_id,
                             $movement->source_entity_type,
@@ -1250,14 +1401,14 @@ class InventoryMovementController extends Controller
                             true
                         );
                     } elseif ($movementType->direction === 'transfer') {
-                        $this->increaseStock(
+                        $this->stock->aumentar(
                             $detail,
                             $movement->source_entity_id,
                             $movement->source_entity_type,
                             $movement,
                             true
                         );
-                        $this->decreaseStock(
+                        $this->stock->disminuir(
                             $detail,
                             $movement->destination_entity_id,
                             $movement->destination_entity_type,
@@ -1296,99 +1447,4 @@ class InventoryMovementController extends Controller
         }
     }
 
-    /**
-     * Increase stock for a product.
-     */
-    private function increaseStock($detail, $entityId, $entityType, $movement, $isReversal = false): void
-    {
-        $quantity = $detail->base_quantity ?? $detail->quantity;
-
-        // Actualizar o crear stock
-        InventoryStock::updateStock(
-            $detail->product_id,
-            $entityId,
-            null, // area_id (no manejado en este contexto)
-            $quantity,
-            $detail->unit_cost ?? 0,
-            $detail->lot_number,
-            $detail->expiry_date,
-            $movement->id
-        );
-
-        $productorId = $this->resolveProductorIdFromDetail($detail);
-
-        // Registrar en kardex
-        InventoryKardex::recordEntry(
-            $detail->product_id,
-            $entityId,
-            $entityType,
-            $movement->id,
-            $isReversal ? 'decrease' : 'increase',
-            $quantity,
-            $detail->unit_cost ?? 0,
-            $detail->lot_number,
-            $detail->serial_number,
-            null, // area_id
-            $productorId
-        );
-    }
-
-    /**
-     * Decrease stock for a product.
-     */
-    private function decreaseStock($detail, $entityId, $entityType, $movement, $isReversal = false): void
-    {
-        $quantity = $detail->base_quantity ?? $detail->quantity;
-
-        // Actualizar stock (cantidad negativa para decrementar)
-        InventoryStock::updateStock(
-            $detail->product_id,
-            $entityId,
-            null, // area_id (no manejado en este contexto)
-            -$quantity,
-            $detail->unit_cost ?? 0,
-            $detail->lot_number,
-            $detail->expiry_date,
-            $movement->id
-        );
-
-        $productorId = $this->resolveProductorIdFromDetail($detail);
-
-        // Registrar en kardex
-        InventoryKardex::recordEntry(
-            $detail->product_id,
-            $entityId,
-            $entityType,
-            $movement->id,
-            $isReversal ? 'increase' : 'decrease',
-            $quantity,
-            $detail->unit_cost ?? 0,
-            $detail->lot_number,
-            $detail->serial_number,
-            null, // area_id
-            $productorId
-        );
-    }
-
-    /**
-     * Intenta resolver productor_id para persistirlo en kardex.
-     */
-    private function resolveProductorIdFromDetail($detail): ?int
-    {
-        if (!empty($detail->productor_id)) {
-            return (int) $detail->productor_id;
-        }
-
-        if (!empty($detail->lote_id)) {
-            $lote = \App\Models\Lote::find($detail->lote_id);
-            return $lote?->productor_id ? (int) $lote->productor_id : null;
-        }
-
-        if (!empty($detail->lot_number) && is_numeric($detail->lot_number)) {
-            $lote = \App\Models\Lote::where('numero_lote', (int) $detail->lot_number)->first();
-            return $lote?->productor_id ? (int) $lote->productor_id : null;
-        }
-
-        return null;
-    }
 }

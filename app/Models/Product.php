@@ -23,6 +23,7 @@ class Product extends Model
         'brand_id',
         'slug',
         'description',
+        'ingrediente_activo',
         'category_id',
         'unit_id',
         'product_type',
@@ -40,6 +41,8 @@ class Product extends Model
         'is_for_sale',
         'image',
         'is_active',
+        'requiere_revision',
+        'dias_alerta_caducidad',
         'metadata',
     ];
 
@@ -56,6 +59,8 @@ class Product extends Model
         'cost_price' => 'decimal:4',
         'sale_price' => 'decimal:4',
         'is_for_sale' => 'boolean',
+        'requiere_revision' => 'boolean',
+        'dias_alerta_caducidad' => 'integer',
         'metadata' => 'array',
     ];
 

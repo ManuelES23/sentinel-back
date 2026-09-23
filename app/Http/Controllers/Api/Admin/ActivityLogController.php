@@ -15,66 +15,33 @@ class ActivityLogController extends Controller
     public function index(Request $request)
     {
         try {
-            Log::info('=== ACTIVITY LOG CONTROLLER EJECUTADO ===');
-            Log::info('Usuario autenticado:', ['user_id' => auth()->id(), 'user' => auth()->user()?->email]);
-
-            // Primero verificar si hay logs en la DB
-            $totalEnDB = ActivityLog::count();
-            Log::info("Total logs en base de datos: {$totalEnDB}");
-
-            if ($totalEnDB > 0) {
-                Log::info('Primeros 3 logs:', ActivityLog::take(3)->get()->toArray());
-            }
-
             $query = ActivityLog::with('user:id,name,email');
 
-            Log::info('Request params:', $request->all());
-
-            // Filtro por usuario (solo si tiene valor no vacío)
             if ($request->filled('user_id')) {
-                Log::info('Aplicando filtro user_id: '.$request->user_id);
                 $query->byUser($request->user_id);
             }
 
-            // Filtro por acción (solo si tiene valor no vacío)
             if ($request->filled('action')) {
-                Log::info('Aplicando filtro action: '.$request->action);
                 $query->byAction($request->action);
             }
 
-            // Filtro por modelo (solo si tiene valor no vacío)
             if ($request->filled('model')) {
-                Log::info('Aplicando filtro model: '.$request->model);
                 $query->byModel($request->model);
             }
 
             // Filtros de jerarquía
-            if ($request->filled('enterprise')) {
-                $query->where('enterprise', $request->enterprise);
+            foreach (['enterprise', 'application', 'module', 'submodule'] as $campo) {
+                if ($request->filled($campo)) {
+                    $query->where($campo, $request->input($campo));
+                }
             }
 
-            if ($request->filled('application')) {
-                $query->where('application', $request->application);
-            }
-
-            if ($request->filled('module')) {
-                $query->where('module', $request->module);
-            }
-
-            if ($request->filled('submodule')) {
-                $query->where('submodule', $request->submodule);
-            }
-
-            // Filtro por rango de fechas
             if ($request->filled('start_date') && $request->filled('end_date')) {
-                Log::info('Aplicando filtro fechas: '.$request->start_date.' a '.$request->end_date);
                 $query->dateRange($request->start_date, $request->end_date);
             }
 
-            // Búsqueda general (solo si tiene valor no vacío)
             if ($request->filled('search')) {
                 $search = $request->search;
-                Log::info('Aplicando búsqueda: '.$search);
                 $query->where(function ($q) use ($search) {
                     $q->where('action', 'like', "%{$search}%")
                         ->orWhere('model', 'like', "%{$search}%")
@@ -85,38 +52,37 @@ class ActivityLogController extends Controller
                 });
             }
 
-            // Ordenar por más reciente
-            $query->orderBy('created_at', 'desc');
-
-            // Contar después de filtros
-            $queryCount = $query->count();
-            Log::info("Después de filtros: {$queryCount} logs");
-
-            // Paginación
-            $perPage = $request->get('per_page', 20);
-            $logs = $query->paginate($perPage);
-
-            Log::info('Logs paginados:', [
-                'count' => $logs->count(),
-                'total' => $logs->total(),
-                'current_page' => $logs->currentPage(),
-                'per_page' => $logs->perPage(),
-            ]);
+            $logs = $query->orderBy('created_at', 'desc')
+                ->paginate($request->get('per_page', 20));
 
             return response()->json([
                 'success' => true,
                 'data' => $logs,
             ]);
-
         } catch (\Exception $e) {
-            Log::error('ERROR en Activity Log Controller: '.$e->getMessage());
-            Log::error('Stack trace: '.$e->getTraceAsString());
+            Log::error('Error al listar logs de actividad: '.$e->getMessage());
 
             return response()->json([
                 'success' => false,
                 'message' => 'Error al cargar los logs: '.$e->getMessage(),
             ], 500);
         }
+    }
+
+    /**
+     * Valores distintos de `model` registrados, para el filtro "Entidad".
+     */
+    public function models()
+    {
+        $modelos = ActivityLog::whereNotNull('model')
+            ->distinct()
+            ->orderBy('model')
+            ->pluck('model');
+
+        return response()->json([
+            'success' => true,
+            'data' => $modelos,
+        ]);
     }
 
     /**

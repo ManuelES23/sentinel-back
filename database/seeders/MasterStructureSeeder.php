@@ -492,6 +492,13 @@ class MasterStructureSeeder extends Seeder
         );
         $this->command->info("    → Compras: Órdenes de Compra, Recepciones");
 
+        $this->ensureSubmodulePermissionTypes($compras, 'recepciones', [
+            ['slug' => 'confirmar', 'name' => 'Confirmar entradas', 'description' => 'Confirma recepciones capturadas en almacén; al confirmar suma stock'],
+        ]);
+        $this->ensureSubmodulePermissionTypes($compras, 'ordenes-compra', [
+            ['slug' => 'gestionar', 'name' => 'Gestionar órdenes de compra', 'description' => 'Crea, edita y gestiona órdenes de compra fuera del flujo de cotización agrícola'],
+        ]);
+
         // ========================================
         // APLICACIÓN: CONTABILIDAD
         // ========================================
@@ -559,6 +566,10 @@ class MasterStructureSeeder extends Seeder
             );
         }
         $this->command->info("    → Agrícola: Productores, Zonas, Lotes, Etapas, Plan Siembra, Visitas, Aplicaciones, Requisiciones, Costeo");
+
+        $this->ensureSubmodulePermissionTypes($oaAgricola, 'requisiciones', [
+            ['slug' => 'cotizar', 'name' => 'Cotizar', 'description' => 'Recibe requisiciones, registra cotizaciones y genera la orden de compra'],
+        ]);
 
         // Módulo: Cosecha
         $oaCosecha = Module::firstOrCreate(
@@ -813,6 +824,13 @@ class MasterStructureSeeder extends Seeder
             ['name' => 'Recepciones', 'icon' => 'PackageCheck', 'order' => 2, 'is_active' => true]
         );
         $this->command->info("    → Compras: Órdenes de Compra, Recepciones");
+
+        $this->ensureSubmodulePermissionTypes($compras, 'recepciones', [
+            ['slug' => 'confirmar', 'name' => 'Confirmar entradas', 'description' => 'Confirma recepciones capturadas en almacén; al confirmar suma stock'],
+        ]);
+        $this->ensureSubmodulePermissionTypes($compras, 'ordenes-compra', [
+            ['slug' => 'gestionar', 'name' => 'Gestionar órdenes de compra', 'description' => 'Crea, edita y gestiona órdenes de compra fuera del flujo de cotización agrícola'],
+        ]);
 
         // ========================================
         // APLICACIÓN: VENTAS

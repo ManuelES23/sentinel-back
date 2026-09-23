@@ -40,6 +40,36 @@ class Cultivo extends Model
     ];
 
     /**
+     * The accessors to append to the model's array form.
+     *
+     * @var array<int, string>
+     */
+    protected $appends = [
+        'imagen_url',
+    ];
+
+    /**
+     * URL pública de la imagen del cultivo.
+     *
+     * Vive en el modelo y no en cada controlador: el front pinta la miniatura
+     * del cultivo en variedades, tipos de variedad, ciclos y temporadas, y ahí
+     * nadie armaba la URL, así que la imagen nunca aparecía.
+     */
+    public function getImagenUrlAttribute(): ?string
+    {
+        // Se lee de los atributos cargados y no con $this->imagen: muchas
+        // consultas traen el cultivo con select parcial (cultivo:id,nombre) y
+        // con el modo estricto de Eloquent eso lanzaría MissingAttribute.
+        $imagen = $this->attributes['imagen'] ?? null;
+
+        if (! $imagen) {
+            return null;
+        }
+
+        return asset('storage/'.$imagen);
+    }
+
+    /**
      * Productores que manejan este cultivo
      */
     public function productores()

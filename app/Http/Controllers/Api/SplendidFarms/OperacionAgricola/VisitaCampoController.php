@@ -122,10 +122,13 @@ class VisitaCampoController extends Controller
 
                 // Sincronizar fecha_siembra_real → etapa
                 if (!empty($detalleData['fecha_siembra_real'])) {
-                    Etapa::where('id', $detalleData['etapa_id'])->update([
-                        'fecha_siembra_real' => $detalleData['fecha_siembra_real'],
-                        'fecha_cosecha_proyectada' => $detalleData['fecha_cosecha_proyectada'] ?? null,
-                    ]);
+                    $sync = ['fecha_siembra_real' => $detalleData['fecha_siembra_real']];
+                    // Solo si la visita trae fecha de cosecha: antes la ponía
+                    // en null y borraba la que ya tenía la etapa.
+                    if (!empty($detalleData['fecha_cosecha_proyectada'])) {
+                        $sync['fecha_cosecha_proyectada'] = $detalleData['fecha_cosecha_proyectada'];
+                    }
+                    Etapa::where('id', $detalleData['etapa_id'])->update($sync);
                 }
 
                 // Plagas
@@ -270,10 +273,11 @@ class VisitaCampoController extends Controller
                     ]);
 
                     if (!empty($detalleData['fecha_siembra_real'])) {
-                        Etapa::where('id', $detalleData['etapa_id'])->update([
-                            'fecha_siembra_real' => $detalleData['fecha_siembra_real'],
-                            'fecha_cosecha_proyectada' => $detalleData['fecha_cosecha_proyectada'] ?? null,
-                        ]);
+                        $sync = ['fecha_siembra_real' => $detalleData['fecha_siembra_real']];
+                        if (!empty($detalleData['fecha_cosecha_proyectada'])) {
+                            $sync['fecha_cosecha_proyectada'] = $detalleData['fecha_cosecha_proyectada'];
+                        }
+                        Etapa::where('id', $detalleData['etapa_id'])->update($sync);
                     }
 
                     if (!empty($detalleData['plagas'])) {

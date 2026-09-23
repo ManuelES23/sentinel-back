@@ -3,9 +3,16 @@
 namespace App\Http\Controllers\Api\SplendidFarms\Inventory;
 
 use App\Http\Controllers\Controller;
+use App\Models\Entity;
+use App\Models\Enterprise;
 use App\Models\PurchaseOrder;
 use App\Models\PurchaseOrderDetail;
 use App\Models\Supplier;
+use App\Services\Compras\AlcanceCompras;
+use App\Services\Compras\AprobadorOrdenCompra;
+use App\Services\Compras\AvisosCompras;
+use App\Services\Compras\PermisosCompras;
+use App\Services\Inventory\AlmacenAccessService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -16,12 +23,87 @@ use Illuminate\Support\Facades\DB;
  */
 class PurchaseOrderController extends Controller
 {
+    private const ORDENABLES = ['created_at', 'order_date', 'order_number', 'total_amount', 'status', 'expected_date'];
+
+    public function __construct(
+        private AlmacenAccessService $almacenes,
+        private AlcanceCompras $alcance,
+        private AprobadorOrdenCompra $aprobador,
+        private AvisosCompras $avisos,
+        private PermisosCompras $permisos,
+    ) {
+    }
+
+    /**
+     * Empresa resuelta; 403 si la OC no es visible para el usuario.
+     *
+     * Visible si el usuario ve el almacén destino (alcance por almacén) o si
+     * es aprobador de esta OC (el flujo de aprobación es por departamento/
+     * empresa, no por almacén, así que un aprobador debe poder ver la OC
+     * aunque no tenga acceso a ese almacén).
+     */
+    private function acceso(Request $request, PurchaseOrder $order): Enterprise
+    {
+        $empresa = $this->almacenes->resolverEmpresa($request);
+        $puedeVer = $this->alcance->puedeVer($request->user(), $empresa, $order, 'almacen_destino_id')
+            || $this->aprobador->puedeAprobar($request->user(), $order);
+        abort_unless($puedeVer, 403, 'No tienes acceso a esta orden de compra');
+
+        return $empresa;
+    }
+
+    public function contexto(Request $request): JsonResponse
+    {
+        $empresa = $this->almacenes->resolverEmpresa($request);
+        $user = $request->user();
+
+        return response()->json(['success' => true, 'data' => [
+            'almacenes' => Entity::whereIn('id', $this->almacenes->idsVisibles($user, $empresa))->orderBy('name')->get(['id', 'code', 'name']),
+            'puede_confirmar' => $this->permisos->puedeConfirmar($user, $empresa),
+            'puede_cotizar' => $this->permisos->puedeCotizar($user, $empresa),
+            'puede_gestionar' => $this->permisos->puedeGestionar($user, $empresa),
+            'puede_ver_todos' => $this->almacenes->puedeVerTodos($user, $empresa),
+            'es_compras' => $this->esCompras($request, $empresa),
+        ]]);
+    }
+
+    /**
+     * El encargado de almacén ve sus OC en solo lectura: crear, editar,
+     * mandar a autorizar, enviar, confirmar, cancelar y duplicar es de
+     * Compras (permiso `cotizar` en el flujo agrícola, o `gestionar` en
+     * empresas sin ese flujo) o de quien ve todos los almacenes.
+     */
+    private function esCompras(Request $request, Enterprise $empresa): bool
+    {
+        return $this->permisos->puedeCotizar($request->user(), $empresa)
+            || $this->permisos->puedeGestionar($request->user(), $empresa)
+            || $this->almacenes->puedeVerTodos($request->user(), $empresa);
+    }
+
+    private function exigirCompras(Request $request, Enterprise $empresa): void
+    {
+        abort_unless($this->esCompras($request, $empresa), 403, 'Solo Compras modifica órdenes de compra');
+    }
+
+    public function capacidades(Request $request, PurchaseOrder $order): JsonResponse
+    {
+        $empresa = $this->acceso($request, $order);
+
+        return response()->json(['success' => true, 'data' => [
+            'puede_aprobar' => $order->status === PurchaseOrder::STATUS_PENDING && $this->aprobador->puedeAprobar($request->user(), $order),
+            'puede_editar' => $order->is_editable && $this->esCompras($request, $empresa),
+            'es_compras' => $this->esCompras($request, $empresa),
+        ]]);
+    }
+
     /**
      * Listar órdenes de compra
      */
     public function index(Request $request): JsonResponse
     {
-        $query = PurchaseOrder::with(['supplier', 'details.product', 'createdByUser', 'approvedByUser']);
+        $empresa = $this->almacenes->resolverEmpresa($request);
+        $query = $this->alcance->aplicar(PurchaseOrder::query(), 'almacen_destino_id', $request->user(), $empresa)
+            ->with(['supplier', 'details.product', 'createdByUser', 'approvedByUser', 'rejectedByUser:id,name', 'almacenDestino:id,code,name', 'requisicion:id,numero_requisicion,status,prioridad']);
 
         // Filtros
         if ($request->has('search')) {
@@ -43,6 +125,10 @@ class PurchaseOrderController extends Controller
             $query->where('supplier_id', $request->supplier_id);
         }
 
+        if ($request->filled('almacen_id')) {
+            $query->where('almacen_destino_id', $request->almacen_id);
+        }
+
         if ($request->has('from_date')) {
             $query->where('order_date', '>=', $request->from_date);
         }
@@ -51,9 +137,9 @@ class PurchaseOrderController extends Controller
             $query->where('order_date', '<=', $request->to_date);
         }
 
-        // Ordenamiento
-        $sortBy = $request->get('sort_by', 'created_at');
-        $sortDir = $request->get('sort_dir', 'desc');
+        // Ordenamiento (lista blanca de columnas)
+        $sortBy = in_array($request->get('sort_by'), self::ORDENABLES, true) ? $request->get('sort_by') : 'created_at';
+        $sortDir = $request->get('sort_dir') === 'asc' ? 'asc' : 'desc';
         $query->orderBy($sortBy, $sortDir);
 
         // Paginación
@@ -71,6 +157,9 @@ class PurchaseOrderController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
+        $empresa = $this->almacenes->resolverEmpresa($request);
+        $this->exigirCompras($request, $empresa);
+
         $validated = $request->validate([
             'supplier_id' => 'required|exists:suppliers,id',
             'order_date' => 'required|date',
@@ -89,6 +178,8 @@ class PurchaseOrderController extends Controller
             'requested_by' => 'nullable|string|max:255',
             'department_head' => 'nullable|string|max:255',
             'authorized_by_name' => 'nullable|string|max:255',
+            // Almacén destino
+            'almacen_destino_id' => 'nullable|integer|exists:entities,id',
             // Detalles
             'details' => 'required|array|min:1',
             'details.*.product_id' => 'required|exists:products,id',
@@ -100,6 +191,11 @@ class PurchaseOrderController extends Controller
             'details.*.expected_date' => 'nullable|date',
             'details.*.notes' => 'nullable|string',
         ]);
+
+        if (! empty($validated['almacen_destino_id'])) {
+            abort_unless($this->almacenes->puedeVer($request->user(), $empresa, (int) $validated['almacen_destino_id']), 403, 'No tienes acceso a ese almacén');
+        }
+        $validated['enterprise_id'] = $empresa->id;
 
         // Obtener datos del proveedor
         $supplier = Supplier::find($validated['supplier_id']);
@@ -148,8 +244,10 @@ class PurchaseOrderController extends Controller
     /**
      * Mostrar orden de compra
      */
-    public function show(PurchaseOrder $order): JsonResponse
+    public function show(Request $request, PurchaseOrder $order): JsonResponse
     {
+        $this->acceso($request, $order);
+
         $order->load([
             'supplier',
             'details.product',
@@ -157,6 +255,10 @@ class PurchaseOrderController extends Controller
             'receipts',
             'createdByUser',
             'approvedByUser',
+            'almacenDestino:id,code,name',
+            'requisicion:id,numero_requisicion,solicitante_user_id,status,prioridad',
+            'cotizacion:id,folio_proveedor,total,archivo_path',
+            'rejectedByUser:id,name',
         ]);
 
         return response()->json([
@@ -170,6 +272,9 @@ class PurchaseOrderController extends Controller
      */
     public function update(Request $request, PurchaseOrder $order): JsonResponse
     {
+        $empresa = $this->acceso($request, $order);
+        $this->exigirCompras($request, $empresa);
+
         if (! $order->is_editable) {
             return response()->json([
                 'success' => false,
@@ -195,12 +300,22 @@ class PurchaseOrderController extends Controller
             'requested_by' => 'nullable|string|max:255',
             'department_head' => 'nullable|string|max:255',
             'authorized_by_name' => 'nullable|string|max:255',
+            // Almacén destino
+            'almacen_destino_id' => 'nullable|integer|exists:entities,id',
         ]);
+
+        if (array_key_exists('almacen_destino_id', $validated) && $validated['almacen_destino_id'] !== null) {
+            abort_unless($this->almacenes->puedeVer($request->user(), $empresa, (int) $validated['almacen_destino_id']), 403, 'No tienes acceso a ese almacén');
+        }
 
         // Si cambió el proveedor, actualizar payment_terms
         if (isset($validated['supplier_id']) && $validated['supplier_id'] != $order->supplier_id) {
             $supplier = Supplier::find($validated['supplier_id']);
             $validated['payment_terms'] = $supplier->has_credit ? ($supplier->payment_terms ?? 0) : 0;
+        }
+
+        if ($order->status === PurchaseOrder::STATUS_REJECTED) {
+            $validated['status'] = PurchaseOrder::STATUS_DRAFT;
         }
 
         $order->update($validated);
@@ -215,8 +330,11 @@ class PurchaseOrderController extends Controller
     /**
      * Eliminar orden de compra
      */
-    public function destroy(PurchaseOrder $order): JsonResponse
+    public function destroy(Request $request, PurchaseOrder $order): JsonResponse
     {
+        $empresa = $this->acceso($request, $order);
+        $this->exigirCompras($request, $empresa);
+
         if ($order->status !== PurchaseOrder::STATUS_DRAFT) {
             return response()->json([
                 'success' => false,
@@ -240,6 +358,9 @@ class PurchaseOrderController extends Controller
      */
     public function addDetail(Request $request, PurchaseOrder $order): JsonResponse
     {
+        $empresa = $this->acceso($request, $order);
+        $this->exigirCompras($request, $empresa);
+
         if (! $order->is_editable) {
             return response()->json([
                 'success' => false,
@@ -276,6 +397,9 @@ class PurchaseOrderController extends Controller
      */
     public function updateDetail(Request $request, PurchaseOrder $order, PurchaseOrderDetail $detail): JsonResponse
     {
+        $empresa = $this->acceso($request, $order);
+        $this->exigirCompras($request, $empresa);
+
         if (! $order->is_editable) {
             return response()->json([
                 'success' => false,
@@ -313,8 +437,11 @@ class PurchaseOrderController extends Controller
     /**
      * Eliminar detalle
      */
-    public function deleteDetail(PurchaseOrder $order, PurchaseOrderDetail $detail): JsonResponse
+    public function deleteDetail(Request $request, PurchaseOrder $order, PurchaseOrderDetail $detail): JsonResponse
     {
+        $empresa = $this->acceso($request, $order);
+        $this->exigirCompras($request, $empresa);
+
         if (! $order->is_editable) {
             return response()->json([
                 'success' => false,
@@ -342,43 +469,52 @@ class PurchaseOrderController extends Controller
     /**
      * Enviar a aprobación
      */
-    public function submit(PurchaseOrder $order): JsonResponse
+    public function submit(Request $request, PurchaseOrder $order): JsonResponse
     {
+        $empresa = $this->acceso($request, $order);
+        $this->exigirCompras($request, $empresa);
+
         if ($order->status !== PurchaseOrder::STATUS_DRAFT) {
             return response()->json([
                 'success' => false,
                 'message' => 'Solo se pueden enviar órdenes en estado borrador',
             ], 422);
         }
-
         if ($order->details()->count() === 0) {
             return response()->json([
                 'success' => false,
                 'message' => 'La orden debe tener al menos un producto',
             ], 422);
         }
+        $empresaId = $order->enterprise_id ?? $empresa->id;
+        if (! $this->aprobador->hayAprobadores($empresaId)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Configura el flujo de aprobación de órdenes de compra',
+            ], 422);
+        }
 
-        $order->status = PurchaseOrder::STATUS_PENDING;
-        $order->save();
+        $order->update(['status' => PurchaseOrder::STATUS_PENDING, 'enterprise_id' => $empresaId]);
+        $this->avisos->ordenPorAutorizar($order);
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Orden enviada a aprobación',
-            'data' => $order,
-        ]);
+        return response()->json(['success' => true, 'message' => 'Orden enviada a autorización', 'data' => $order]);
     }
 
     /**
      * Aprobar orden
      */
-    public function approve(PurchaseOrder $order): JsonResponse
+    public function approve(Request $request, PurchaseOrder $order): JsonResponse
     {
-        if (! $order->approve(auth('sanctum')->id())) {
+        $this->acceso($request, $order);
+        abort_unless($this->aprobador->puedeAprobar($request->user(), $order), 403, 'No eres aprobador de esta orden de compra');
+
+        if (! $order->approve($request->user()->id)) {
             return response()->json([
                 'success' => false,
                 'message' => 'La orden no puede ser aprobada en su estado actual',
             ], 422);
         }
+        $this->avisos->ordenResuelta($order, true);
 
         return response()->json([
             'success' => true,
@@ -392,21 +528,20 @@ class PurchaseOrderController extends Controller
      */
     public function reject(Request $request, PurchaseOrder $order): JsonResponse
     {
+        $this->acceso($request, $order);
+        abort_unless($this->aprobador->puedeAprobar($request->user(), $order), 403, 'No eres aprobador de esta orden de compra');
+
         $validated = $request->validate([
             'reason' => 'required|string|max:500',
         ]);
 
-        if ($order->status !== PurchaseOrder::STATUS_PENDING) {
+        if (! $order->reject($request->user()->id, $validated['reason'])) {
             return response()->json([
                 'success' => false,
                 'message' => 'Solo se pueden rechazar órdenes pendientes de aprobación',
             ], 422);
         }
-
-        $order->status = PurchaseOrder::STATUS_DRAFT;
-        $order->internal_notes = ($order->internal_notes ? $order->internal_notes."\n\n" : '')
-            .'RECHAZADA: '.$validated['reason'].' (Por: '.auth('sanctum')->user()->name.' - '.now().')';
-        $order->save();
+        $this->avisos->ordenResuelta($order, false);
 
         return response()->json([
             'success' => true,
@@ -418,8 +553,11 @@ class PurchaseOrderController extends Controller
     /**
      * Marcar como enviada al proveedor
      */
-    public function send(PurchaseOrder $order): JsonResponse
+    public function send(Request $request, PurchaseOrder $order): JsonResponse
     {
+        $empresa = $this->acceso($request, $order);
+        $this->exigirCompras($request, $empresa);
+
         if (! $order->markAsSent(auth('sanctum')->id())) {
             return response()->json([
                 'success' => false,
@@ -437,8 +575,11 @@ class PurchaseOrderController extends Controller
     /**
      * Confirmar orden (proveedor confirmó)
      */
-    public function confirm(PurchaseOrder $order): JsonResponse
+    public function confirm(Request $request, PurchaseOrder $order): JsonResponse
     {
+        $empresa = $this->acceso($request, $order);
+        $this->exigirCompras($request, $empresa);
+
         if ($order->status !== PurchaseOrder::STATUS_SENT) {
             return response()->json([
                 'success' => false,
@@ -461,6 +602,9 @@ class PurchaseOrderController extends Controller
      */
     public function cancel(Request $request, PurchaseOrder $order): JsonResponse
     {
+        $empresa = $this->acceso($request, $order);
+        $this->exigirCompras($request, $empresa);
+
         $validated = $request->validate([
             'reason' => 'required|string|max:500',
         ]);
@@ -484,13 +628,18 @@ class PurchaseOrderController extends Controller
     /**
      * Duplicar orden
      */
-    public function duplicate(PurchaseOrder $order): JsonResponse
+    public function duplicate(Request $request, PurchaseOrder $order): JsonResponse
     {
+        $empresa = $this->acceso($request, $order);
+        $this->exigirCompras($request, $empresa);
+
         DB::beginTransaction();
         try {
             $newOrder = $order->replicate([
                 'order_number', 'status', 'approved_by', 'approved_at',
                 'cancelled_by', 'cancelled_at', 'cancellation_reason',
+                'sent_by', 'sent_at', 'rejected_by', 'rejected_at', 'rejection_reason',
+                'requisicion_campo_id', 'cotizacion_id', 'metadata',
             ]);
             $newOrder->order_number = PurchaseOrder::generateOrderNumber();
             $newOrder->status = PurchaseOrder::STATUS_DRAFT;
@@ -499,7 +648,10 @@ class PurchaseOrderController extends Controller
             $newOrder->save();
 
             foreach ($order->details as $detail) {
-                $newDetail = $detail->replicate(['quantity_received']);
+                // quantity_pending es columna generada (storedAs) en BD: replicate()
+                // copia el valor crudo cargado y el INSERT falla porque no se puede
+                // escribir explícitamente en una columna generada.
+                $newDetail = $detail->replicate(['quantity_received', 'quantity_pending']);
                 $newDetail->purchase_order_id = $newOrder->id;
                 $newDetail->quantity_received = 0;
                 $newDetail->save();
@@ -528,11 +680,13 @@ class PurchaseOrderController extends Controller
     /**
      * Obtener productos pendientes de recepción
      */
-    public function pendingItems(PurchaseOrder $order): JsonResponse
+    public function pendingItems(Request $request, PurchaseOrder $order): JsonResponse
     {
+        $this->acceso($request, $order);
+
         $pendingItems = $order->details()
             ->with(['product', 'unit'])
-            ->whereRaw('quantity > quantity_received')
+            ->whereColumn('quantity_ordered', '>', 'quantity_received')
             ->get()
             ->map(function ($detail) {
                 return [
@@ -540,7 +694,7 @@ class PurchaseOrderController extends Controller
                     'product_id' => $detail->product_id,
                     'product' => $detail->product,
                     'unit' => $detail->unit,
-                    'quantity_ordered' => $detail->quantity,
+                    'quantity_ordered' => $detail->quantity_ordered,
                     'quantity_received' => $detail->quantity_received,
                     'quantity_pending' => $detail->quantity_pending,
                     'unit_price' => $detail->unit_price,

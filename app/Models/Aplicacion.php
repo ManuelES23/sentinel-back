@@ -17,6 +17,9 @@ class Aplicacion extends Model
 
     protected $fillable = [
         'temporada_id',
+        'enterprise_id',
+        'almacen_id',
+        'inventory_movement_id',
         'folio',
         'fecha',
         'tipo_aplicacion',
@@ -80,6 +83,21 @@ class Aplicacion extends Model
         return $this->belongsTo(User::class, 'created_by');
     }
 
+    public function empresa(): BelongsTo
+    {
+        return $this->belongsTo(Enterprise::class, 'enterprise_id');
+    }
+
+    public function almacen(): BelongsTo
+    {
+        return $this->belongsTo(Entity::class, 'almacen_id');
+    }
+
+    public function inventoryMovement(): BelongsTo
+    {
+        return $this->belongsTo(InventoryMovement::class, 'inventory_movement_id');
+    }
+
     public function detalles(): HasMany
     {
         return $this->hasMany(AplicacionDetalle::class, 'aplicacion_id');
@@ -96,10 +114,13 @@ class Aplicacion extends Model
         $anio = now()->year;
         $prefix = "APL-{$anio}-";
 
+        // lockForUpdate: sin el bloqueo, dos altas simultáneas leían el mismo
+        // último folio y guardaban folios duplicados.
         $ultimo = self::withTrashed()
             ->where('temporada_id', $temporadaId)
             ->where('folio', 'like', "{$prefix}%")
             ->orderByDesc('folio')
+            ->lockForUpdate()
             ->value('folio');
 
         $siguiente = $ultimo

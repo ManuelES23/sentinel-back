@@ -32,14 +32,10 @@ class TipoVariedadController extends Controller
                 });
             }
 
+            // La imagen del cultivo la agrega el accesor imagen_url del modelo:
+            // aquí solo se leía la propiedad sin asignarla, así que la
+            // miniatura nunca llegaba al front.
             $tiposVariedad = $query->orderBy('created_at', 'desc')->get();
-
-            // Agregar imagen del cultivo a través de la variedad
-            $tiposVariedad->each(function ($tipo) {
-                if ($tipo->variedad && $tipo->variedad->cultivo) {
-                    $tipo->variedad->cultivo->imagen_url;
-                }
-            });
 
             return response()->json([
                 'success' => true,

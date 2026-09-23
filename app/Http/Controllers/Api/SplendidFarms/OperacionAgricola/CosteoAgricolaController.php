@@ -150,6 +150,8 @@ class CosteoAgricolaController extends Controller
     {
         $request->validate([
             'temporada_id' => 'required|exists:temporadas,id',
+            'page' => 'nullable|integer|min:1',
+            'per_page' => 'nullable|integer|min:1|max:200',
         ]);
 
         $query = CosteoAgricola::byTemporada($request->temporada_id)
@@ -161,36 +163,54 @@ class CosteoAgricolaController extends Controller
                 'user:id,name',
             ]);
 
-        if ($request->has('lote_id')) {
+        // filled() y no has(): un filtro vacío (?lote_id=) filtraba por ''
+        // y devolvía la lista en blanco.
+        if ($request->filled('lote_id')) {
             $query->byLote($request->lote_id);
         }
 
-        if ($request->has('etapa_id')) {
+        if ($request->filled('etapa_id')) {
             $query->byEtapa($request->etapa_id);
         }
 
-        if ($request->has('categoria')) {
+        if ($request->filled('categoria')) {
             $query->byCategoria($request->categoria);
         }
 
-        if ($request->has('tipo_fuente')) {
+        if ($request->filled('tipo_fuente')) {
             $query->where('tipo_fuente', $request->tipo_fuente);
         }
 
-        if ($request->has('fecha_desde') && $request->has('fecha_hasta')) {
-            $query->entreFechas($request->fecha_desde, $request->fecha_hasta);
+        // Cada extremo del rango se aplica por separado
+        if ($request->filled('fecha_desde')) {
+            $query->whereDate('fecha', '>=', $request->fecha_desde);
         }
 
-        $costeos = $query->orderByDesc('fecha')->get();
+        if ($request->filled('fecha_hasta')) {
+            $query->whereDate('fecha', '<=', $request->fecha_hasta);
+        }
 
-        $total = $costeos->sum('costo_total');
+        // La suma se calcula sobre todo el filtro, no sobre la página, para que
+        // "Total filtrado" siga siendo el total real al paginar.
+        $total = (clone $query)->sum('costo_total');
+
+        // id como segundo criterio: con solo la fecha, dos registros del mismo
+        // día podían cambiar de orden entre páginas y repetirse o perderse.
+        $costeos = $query->orderByDesc('fecha')
+            ->orderByDesc('id')
+            // integer() ?: 50 y no input('per_page', 50): con ?per_page= vacío
+            // la clave existe como null y el default no se aplicaba.
+            ->paginate($request->integer('per_page') ?: 50);
 
         return response()->json([
             'success' => true,
-            'data' => $costeos,
+            'data' => $costeos->items(),
             'meta' => [
                 'total' => (float) $total,
-                'registros' => $costeos->count(),
+                'registros' => $costeos->total(),
+                'current_page' => $costeos->currentPage(),
+                'last_page' => $costeos->lastPage(),
+                'per_page' => $costeos->perPage(),
             ],
         ]);
     }

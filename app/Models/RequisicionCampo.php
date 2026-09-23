@@ -17,16 +17,21 @@ class RequisicionCampo extends Model
 
     protected $fillable = [
         'numero_requisicion',
+        'enterprise_id',
+        'almacen_id',
         'temporada_id',
         'visita_campo_id',
         'solicitante_user_id',
         'fecha_solicitud',
+        'enviada_at',
         'status',
         'prioridad',
         'justificacion',
         'notas_rechazo',
         'aprobado_por_user_id',
         'fecha_aprobacion',
+        'rechazada_por_user_id',
+        'rechazada_at',
         'purchase_order_id',
         'observaciones',
     ];
@@ -34,6 +39,8 @@ class RequisicionCampo extends Model
     protected $casts = [
         'fecha_solicitud' => 'date',
         'fecha_aprobacion' => 'datetime',
+        'enviada_at' => 'datetime',
+        'rechazada_at' => 'datetime',
     ];
 
     protected $appends = ['status_label', 'prioridad_label', 'is_editable', 'total_estimado'];
@@ -41,19 +48,24 @@ class RequisicionCampo extends Model
     // ═══════ CONSTANTES ═══════
 
     const STATUS_BORRADOR = 'borrador';
-    const STATUS_PENDIENTE = 'pendiente';
-    const STATUS_APROBADA = 'aprobada';
+    const STATUS_ENVIADA = 'enviada';
+    const STATUS_EN_COTIZACION = 'en_cotizacion';
+    const STATUS_COTIZADA = 'cotizada';
     const STATUS_RECHAZADA = 'rechazada';
     const STATUS_ORDEN_GENERADA = 'orden_generada';
     const STATUS_COMPLETADA = 'completada';
     const STATUS_CANCELADA = 'cancelada';
 
+    /** Estados en los que Compras trabaja la requisición. */
+    const STATUS_EN_COMPRAS = ['enviada', 'en_cotizacion', 'cotizada'];
+
     const STATUS_LABELS = [
         'borrador' => 'Borrador',
-        'pendiente' => 'Pendiente Aprobación',
-        'aprobada' => 'Aprobada',
-        'rechazada' => 'Rechazada',
-        'orden_generada' => 'Orden Generada',
+        'enviada' => 'Enviada a Compras',
+        'en_cotizacion' => 'En cotización',
+        'cotizada' => 'Cotizada',
+        'rechazada' => 'Regresada por Compras',
+        'orden_generada' => 'Orden generada',
         'completada' => 'Completada',
         'cancelada' => 'Cancelada',
     ];
@@ -114,6 +126,31 @@ class RequisicionCampo extends Model
         return $this->belongsTo(PurchaseOrder::class);
     }
 
+    public function empresa(): BelongsTo
+    {
+        return $this->belongsTo(Enterprise::class, 'enterprise_id');
+    }
+
+    public function almacen(): BelongsTo
+    {
+        return $this->belongsTo(Entity::class, 'almacen_id');
+    }
+
+    public function rechazadaPor(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'rechazada_por_user_id');
+    }
+
+    public function cotizaciones(): HasMany
+    {
+        return $this->hasMany(RequisicionCotizacion::class, 'requisicion_campo_id');
+    }
+
+    public function cotizacionGanadora(): \Illuminate\Database\Eloquent\Relations\HasOne
+    {
+        return $this->hasOne(RequisicionCotizacion::class, 'requisicion_campo_id')->where('es_ganadora', true);
+    }
+
     public function detalles(): HasMany
     {
         return $this->hasMany(RequisicionCampoDetalle::class);
@@ -139,12 +176,12 @@ class RequisicionCampo extends Model
 
     public function scopePendientes($query)
     {
-        return $query->where('status', self::STATUS_PENDIENTE);
+        return $query->where('status', self::STATUS_ENVIADA);
     }
 
     public function scopeAprobadas($query)
     {
-        return $query->where('status', self::STATUS_APROBADA);
+        return $query->where('status', self::STATUS_ENVIADA);
     }
 
     // ═══════ GENERADOR DE NÚMERO ═══════
@@ -152,9 +189,12 @@ class RequisicionCampo extends Model
     public static function generateNumero(): string
     {
         $year = date('Y');
+        // lockForUpdate: sin el bloqueo, dos altas simultáneas leían el mismo
+        // último número y la segunda tronaba por el índice único.
         $last = self::withTrashed()
             ->where('numero_requisicion', 'like', "RC-{$year}-%")
             ->orderByRaw('CAST(SUBSTRING(numero_requisicion, -5) AS UNSIGNED) DESC')
+            ->lockForUpdate()
             ->first();
 
         $nextNum = 1;

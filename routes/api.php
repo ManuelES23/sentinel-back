@@ -2,7 +2,6 @@
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Broadcast;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -16,22 +15,15 @@ use Illuminate\Support\Facades\Route;
 |
 */
 
-// Ruta de autenticación para broadcasting (WebSockets)
-// Logging para debug de autenticación de broadcasting
+// Ruta de autenticación para broadcasting (WebSockets). No registrar las
+// cabeceras: incluyen el token Bearer del usuario.
 Route::post('broadcasting/auth', function (Request $request) {
-    Log::info('Broadcasting Auth Request', [
-        'user' => $request->user() ? $request->user()->id : 'No user',
-        'channel' => $request->input('channel_name'),
-        'socket_id' => $request->input('socket_id'),
-        'headers' => $request->headers->all(),
-    ]);
-
     return Broadcast::auth($request);
 })->middleware('auth:sanctum');
 
 // Rutas de autenticación
 Route::prefix('auth')->group(function () {
-    Route::post('login', [App\Http\Controllers\Api\AuthController::class, 'login']);
+    Route::post('login', [App\Http\Controllers\Api\AuthController::class, 'login'])->middleware('throttle:login');
     Route::post('register', [App\Http\Controllers\Api\AuthController::class, 'register']);
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('logout', [App\Http\Controllers\Api\AuthController::class, 'logout']);
@@ -41,6 +33,9 @@ Route::prefix('auth')->group(function () {
 
 // Rutas protegidas
 Route::middleware('auth:sanctum')->group(function () {
+
+    // Requisitos de contraseña vigentes (también en la pantalla de cambio obligatorio)
+    Route::get('password-policy', [App\Http\Controllers\Api\PasswordPolicyController::class, 'show']);
 
     // Rutas de perfil del usuario autenticado
     Route::prefix('profile')->group(function () {
@@ -78,13 +73,19 @@ Route::middleware('auth:sanctum')->group(function () {
     // role=admin y saltarse el resto de los guards de administración.
     Route::middleware('admin')->group(function () {
         Route::apiResource('users', App\Http\Controllers\Api\UserController::class);
-        Route::post('users/{user}/enterprises', [App\Http\Controllers\Api\UserController::class, 'assignEnterprises']);
-        Route::post('users/{user}/enterprises/{enterprise}/applications', [App\Http\Controllers\Api\UserController::class, 'assignApplications']);
+        Route::post('users/{user}/reset-password', [App\Http\Controllers\Api\UserController::class, 'resetPassword']);
         Route::get('users-employees-available', [App\Http\Controllers\Api\UserController::class, 'employeesWithoutUser']);
+        Route::get('users/{user}/almacenes', [App\Http\Controllers\Api\Admin\UserAlmacenController::class, 'index']);
     });
+    Route::put('users/{user}/almacenes', [App\Http\Controllers\Api\Admin\UserAlmacenController::class, 'update'])
+        ->middleware('admin:gestiona');
 
-    // Rutas de empresas
-    Route::apiResource('enterprises', App\Http\Controllers\Api\EnterpriseController::class);
+    // Rutas de empresas: lectura para cualquier usuario (el selector de empresa
+    // la usa), escritura solo administradores.
+    Route::apiResource('enterprises', App\Http\Controllers\Api\EnterpriseController::class)->only(['index', 'show']);
+    Route::middleware('admin')->group(function () {
+        Route::apiResource('enterprises', App\Http\Controllers\Api\EnterpriseController::class)->only(['store', 'update', 'destroy']);
+    });
     Route::get('enterprises/{enterprise}/logo-data', [App\Http\Controllers\Api\EnterpriseController::class, 'logoData']);
     Route::get('enterprises/{enterprise}/applications', [App\Http\Controllers\Api\EnterpriseController::class, 'applications']);
     Route::get('enterprises/{enterprise}/profile', [App\Http\Controllers\Api\EnterpriseController::class, 'profile']);
@@ -127,11 +128,12 @@ Route::middleware('auth:sanctum')->group(function () {
     });
 
     // Rutas de permisos de usuario (legacy): consultar los propios o, si es
-    // administrador, los de cualquiera; asignar/revocar solo administradores.
+    // administrador, los de cualquiera; asignar/revocar solo administradores
+    // que puedan gestionar a ese usuario (UserPolicy).
     Route::prefix('users/{user}/permissions')->group(function () {
         Route::get('/', [App\Http\Controllers\Api\UserPermissionController::class, 'index'])->middleware('admin:self');
-        Route::middleware('admin')->group(function () {
-            Route::get('/available', [App\Http\Controllers\Api\UserPermissionController::class, 'getAvailablePermissions']);
+        Route::get('/available', [App\Http\Controllers\Api\UserPermissionController::class, 'getAvailablePermissions'])->middleware('admin');
+        Route::middleware('admin:gestiona')->group(function () {
             Route::post('/bulk', [App\Http\Controllers\Api\UserPermissionController::class, 'assignBulkPermissions']);
             Route::post('/module', [App\Http\Controllers\Api\UserPermissionController::class, 'assignModulePermission']);
             Route::post('/submodule', [App\Http\Controllers\Api\UserPermissionController::class, 'assignSubmodulePermission']);
@@ -166,9 +168,10 @@ Route::middleware('auth:sanctum')->group(function () {
         // (WorkspaceContext arma el sidebar con esto) o un administrador.
         Route::get('/', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'getUserPermissions'])->middleware('admin:self');
 
-        // Asignar/revocar: solo administradores. Sin este guard cualquier
-        // usuario autenticado podía otorgarse a sí mismo cualquier permiso.
-        Route::middleware('admin')->group(function () {
+        // Asignar/revocar: solo administradores que puedan gestionar a ese
+        // usuario (UserPolicy: un admin no toca a un superadmin). Sin este guard
+        // cualquier usuario autenticado podía otorgarse cualquier permiso.
+        Route::middleware('admin:gestiona')->group(function () {
             // Asignación masiva de permisos
             Route::post('/bulk', [App\Http\Controllers\Api\HierarchicalPermissionController::class, 'bulkAssignPermissions']);
 
@@ -278,7 +281,6 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::apiResource('zonas-cultivo', App\Http\Controllers\Api\SplendidFarms\ZonaCultivoController::class);
                 // Lotes
                 Route::apiResource('lotes', App\Http\Controllers\Api\SplendidFarms\LoteController::class);
-                Route::get('lotes/siguiente-numero', [App\Http\Controllers\Api\SplendidFarms\LoteController::class, 'siguienteNumero']);
                 // Calibres
                 Route::get('calibres/list', [App\Http\Controllers\Api\SplendidFarms\CalibreController::class, 'list']);
                 Route::apiResource('calibres', App\Http\Controllers\Api\SplendidFarms\CalibreController::class);
@@ -446,6 +448,7 @@ Route::middleware('auth:sanctum')->group(function () {
                 // Entidades accesibles para selects
                 Route::get('entidades-accesibles', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'accessibleEntities']);
                 Route::get('entidades/{entity}/stock', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'entityStock']);
+                Route::get('stock/lotes', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'lotesDisponibles']);
 
                 // Movimientos generales
                 Route::get('movimientos/next-folio', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'nextFolio']);
@@ -458,6 +461,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
             // Módulo Compras
             Route::prefix('compras')->group(function () {
+                // Contexto y capacidades
+                Route::get('contexto', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'contexto']);
+                Route::get('ordenes/{order}/capacidades', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'capacidades']);
                 // Órdenes de Compra
                 Route::post('ordenes/{order}/submit', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'submit']);
                 Route::post('ordenes/{order}/approve', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'approve']);
@@ -475,14 +481,13 @@ Route::middleware('auth:sanctum')->group(function () {
                     ->parameters(['ordenes' => 'order']);
 
                 // Recepciones de Mercancía
+                Route::get('recepciones/ordenes-recibibles', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'ordenesRecibibles']);
                 Route::post('recepciones/from-order/{order}', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'fromPurchaseOrder']);
                 Route::post('recepciones/{receipt}/submit', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'submit']);
-                Route::post('recepciones/{receipt}/complete', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'complete']);
+                Route::post('recepciones/{receipt}/regresar', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'regresar']);
                 Route::post('recepciones/{receipt}/cancel', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'cancel']);
-                // Detalles de recepción
-                Route::post('recepciones/{receipt}/details', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'addDetail']);
-                Route::put('recepciones/{receipt}/details/{detail}', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'updateDetail']);
-                Route::delete('recepciones/{receipt}/details/{detail}', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'deleteDetail']);
+                Route::post('recepciones/{receipt}/confirmar', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'confirmar']);
+                Route::post('recepciones/{receipt}/complete', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'confirmar']);
                 Route::apiResource('recepciones', App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class)
                     ->parameters(['recepciones' => 'receipt']);
             });
@@ -580,13 +585,23 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::get('diagnostico-ia/historial', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\DiagnosticoIAController::class, 'historial']);
                 Route::get('diagnostico-ia/{diagnostico}', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\DiagnosticoIAController::class, 'show']);
 
-                // Requisiciones de campo (Fase 2)
+                // Requisiciones de campo → Compras
+                Route::get('requisiciones/contexto', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCampoController::class, 'contexto']);
+                Route::get('requisiciones/productos', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCampoController::class, 'productos']);
+                Route::get('requisiciones/stock', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCampoController::class, 'stock']);
+                Route::get('requisiciones/proveedores', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCampoController::class, 'suppliers']);
                 Route::post('requisiciones/{requisicion}/enviar', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCampoController::class, 'submit']);
                 Route::post('requisiciones/{requisicion}/aprobar', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCampoController::class, 'approve']);
                 Route::post('requisiciones/{requisicion}/rechazar', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCampoController::class, 'reject']);
                 Route::post('requisiciones/{requisicion}/cancelar', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCampoController::class, 'cancel']);
                 Route::post('requisiciones/{requisicion}/generar-orden', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCampoController::class, 'generarOrden']);
-                Route::get('requisiciones/proveedores', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCampoController::class, 'suppliers']);
+                Route::get('requisiciones/{requisicion}/seguimiento', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCampoController::class, 'seguimiento']);
+                Route::get('requisiciones/{requisicion}/cotizaciones', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCotizacionController::class, 'index']);
+                Route::post('requisiciones/{requisicion}/cotizaciones', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCotizacionController::class, 'store']);
+                Route::put('requisiciones/{requisicion}/cotizaciones/{cotizacion}', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCotizacionController::class, 'update']);
+                Route::delete('requisiciones/{requisicion}/cotizaciones/{cotizacion}', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCotizacionController::class, 'destroy']);
+                Route::post('requisiciones/{requisicion}/cotizaciones/{cotizacion}/archivo', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCotizacionController::class, 'archivo']);
+                Route::post('requisiciones/{requisicion}/cotizaciones/{cotizacion}/ganadora', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCotizacionController::class, 'ganadora']);
                 Route::apiResource('requisiciones', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\RequisicionCampoController::class)
                     ->parameters(['requisiciones' => 'requisicion']);
 
@@ -597,7 +612,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
                 // Catálogo de productos de aplicación
                 Route::apiResource('productos-aplicacion', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\ProductoAplicacionController::class)
-                    ->parameters(['productos-aplicacion' => 'productoAplicacion'])
+                    ->parameters(['productos-aplicacion' => 'producto'])
                     ->only(['index', 'store', 'update']);
 
                 // Costeo agrícola (Fase 2)
@@ -747,10 +762,19 @@ Route::middleware('auth:sanctum')->group(function () {
     // RUTAS DE ADMINISTRACIÓN GLOBAL
     // Accesibles solo para usuarios administradores
     // =====================================================
-    Route::prefix('admin')->group(function () {
+    Route::middleware('admin')->prefix('admin')->group(function () {
+        // Resumen del panel (Dashboard)
+        Route::get('dashboard', [App\Http\Controllers\Api\Admin\DashboardController::class, 'index']);
+
+        // Ajustes del sistema
+        Route::get('settings', [App\Http\Controllers\Api\Admin\SystemSettingsController::class, 'show']);
+        Route::put('settings', [App\Http\Controllers\Api\Admin\SystemSettingsController::class, 'update']);
+        Route::post('settings/mail/test', [App\Http\Controllers\Api\Admin\SystemSettingsController::class, 'sendTestMail']);
+
         // Logs de actividad
         Route::get('logs', [App\Http\Controllers\Api\Admin\ActivityLogController::class, 'index']);
         Route::get('logs/stats', [App\Http\Controllers\Api\Admin\ActivityLogController::class, 'stats']);
+        Route::get('logs/models', [App\Http\Controllers\Api\Admin\ActivityLogController::class, 'models']);
         Route::get('logs/{id}', [App\Http\Controllers\Api\Admin\ActivityLogController::class, 'show']);
 
         // Horarios de trabajo globales
@@ -888,6 +912,7 @@ Route::middleware('auth:sanctum')->group(function () {
                 // Entidades accesibles para selects
                 Route::get('entidades-accesibles', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'accessibleEntities']);
                 Route::get('entidades/{entity}/stock', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'entityStock']);
+                Route::get('stock/lotes', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'lotesDisponibles']);
 
                 // Movimientos generales
                 Route::get('movimientos/next-folio', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'nextFolio']);
@@ -899,6 +924,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
             // Módulo Compras
             Route::prefix('compras')->group(function () {
+                Route::get('contexto', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'contexto']);
+                Route::get('ordenes/{order}/capacidades', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'capacidades']);
                 Route::post('ordenes/{order}/submit', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'submit']);
                 Route::post('ordenes/{order}/approve', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'approve']);
                 Route::post('ordenes/{order}/reject', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class, 'reject']);
@@ -913,13 +940,13 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::apiResource('ordenes', App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseOrderController::class)
                     ->parameters(['ordenes' => 'order']);
 
+                Route::get('recepciones/ordenes-recibibles', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'ordenesRecibibles']);
                 Route::post('recepciones/from-order/{order}', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'fromPurchaseOrder']);
                 Route::post('recepciones/{receipt}/submit', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'submit']);
-                Route::post('recepciones/{receipt}/complete', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'complete']);
+                Route::post('recepciones/{receipt}/regresar', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'regresar']);
                 Route::post('recepciones/{receipt}/cancel', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'cancel']);
-                Route::post('recepciones/{receipt}/details', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'addDetail']);
-                Route::put('recepciones/{receipt}/details/{detail}', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'updateDetail']);
-                Route::delete('recepciones/{receipt}/details/{detail}', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'deleteDetail']);
+                Route::post('recepciones/{receipt}/confirmar', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'confirmar']);
+                Route::post('recepciones/{receipt}/complete', [App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class, 'confirmar']);
                 Route::apiResource('recepciones', App\Http\Controllers\Api\SplendidFarms\Inventory\PurchaseReceiptController::class)
                     ->parameters(['recepciones' => 'receipt']);
             });

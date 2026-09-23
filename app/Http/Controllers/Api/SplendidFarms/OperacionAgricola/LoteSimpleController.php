@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\SplendidFarms\OperacionAgricola;
 
 use App\Http\Controllers\Controller;
+use App\Models\Etapa;
 use App\Models\Lote;
 use App\Models\Temporada;
 use Illuminate\Http\JsonResponse;
@@ -134,8 +135,35 @@ class LoteSimpleController extends Controller
             }
         }
 
+        // No dejar el lote por debajo de lo ya asignado a sus etapas. Se compara
+        // la superficie EFECTIVA resultante (la calculada del mapa manda sobre
+        // la manual, igual que Etapa::superficieDisponible).
+        if (array_key_exists('superficie', $validated)
+            || array_key_exists('superficie_calculada', $validated)) {
+            $asignada = (float) Etapa::where('lote_id', $lote->id)->sum('superficie');
+
+            $superficie = array_key_exists('superficie', $validated)
+                ? $validated['superficie']
+                : $lote->superficie;
+            $calculada = array_key_exists('superficie_calculada', $validated)
+                ? $validated['superficie_calculada']
+                : $lote->superficie_calculada;
+            $efectiva = ($calculada !== null && (float) $calculada > 0)
+                ? (float) $calculada
+                : (float) ($superficie ?? 0);
+
+            if ($asignada > 0 && $efectiva < $asignada) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => "La superficie ({$efectiva} ha) es menor a la ya asignada a las etapas del lote ({$asignada} ha)",
+                ], 422);
+            }
+        }
+
         $lote->update($validated);
-        $lote->load([
+        // refresh() antes de load(): fresh() devolvía el modelo sin relaciones
+        // y la card del front perdía productor, zona y etapas al editar.
+        $lote->refresh()->load([
             'productor:id,nombre,apellido,tipo',
             'zonaCultivo:id,nombre',
             'etapas:id,lote_id,nombre,codigo,superficie,orden,is_active',
@@ -144,7 +172,7 @@ class LoteSimpleController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Lote actualizado',
-            'data' => $lote->fresh(),
+            'data' => $lote,
         ]);
     }
 

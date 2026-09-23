@@ -103,7 +103,7 @@ class ApprovalNotificationService
     /**
      * Determinar el scope de un aprobador según los steps del proceso
      */
-    private static function getApproverScope(Employee $approver, $steps): string
+    public static function getApproverScope(Employee $approver, $steps): string
     {
         $position = $approver->position;
 
@@ -166,7 +166,7 @@ class ApprovalNotificationService
     /**
      * Obtener IDs de departamento y sus hijos recursivamente
      */
-    private static function getDepartmentAndChildIds(int $departmentId): array
+    public static function getDepartmentAndChildIds(int $departmentId): array
     {
         $ids = [$departmentId];
 

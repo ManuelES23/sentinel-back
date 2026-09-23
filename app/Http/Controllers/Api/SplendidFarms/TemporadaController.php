@@ -50,13 +50,6 @@ class TemporadaController extends Controller
 
             $temporadas = $query->orderBy('created_at', 'desc')->get();
 
-            // Agregar imagen_url de cultivo
-            $temporadas->each(function ($temporada) {
-                if ($temporada->cultivo && $temporada->cultivo->imagen) {
-                    $temporada->cultivo->imagen_url = asset('storage/' . $temporada->cultivo->imagen);
-                }
-            });
-
             return response()->json($temporadas);
         } catch (\Exception $e) {
             Log::error('Error al listar temporadas: ' . $e->getMessage());
@@ -129,11 +122,6 @@ class TemporadaController extends Controller
             // Cargar relaciones
             $temporada->load(['cultivo', 'usuario']);
 
-            // Agregar imagen_url
-            if ($temporada->cultivo && $temporada->cultivo->imagen) {
-                $temporada->cultivo->imagen_url = asset('storage/' . $temporada->cultivo->imagen);
-            }
-
             return response()->json([
                 'message' => 'Temporada creada exitosamente',
                 'temporada' => $temporada
@@ -154,11 +142,6 @@ class TemporadaController extends Controller
     {
         try {
             $temporada = Temporada::with(['cultivo', 'usuario'])->findOrFail($id);
-
-            // Agregar imagen_url
-            if ($temporada->cultivo && $temporada->cultivo->imagen) {
-                $temporada->cultivo->imagen_url = asset('storage/' . $temporada->cultivo->imagen);
-            }
 
             return response()->json($temporada);
         } catch (\Exception $e) {
@@ -235,11 +218,6 @@ class TemporadaController extends Controller
             // Cargar relaciones
             $temporada->load(['cultivo', 'usuario']);
 
-            // Agregar imagen_url
-            if ($temporada->cultivo && $temporada->cultivo->imagen) {
-                $temporada->cultivo->imagen_url = asset('storage/' . $temporada->cultivo->imagen);
-            }
-
             return response()->json([
                 'message' => 'Temporada actualizada exitosamente',
                 'temporada' => $temporada
@@ -299,11 +277,6 @@ class TemporadaController extends Controller
             // Cargar relaciones
             $temporada->load(['cultivo', 'usuario']);
 
-            // Agregar imagen_url
-            if ($temporada->cultivo && $temporada->cultivo->imagen) {
-                $temporada->cultivo->imagen_url = asset('storage/' . $temporada->cultivo->imagen);
-            }
-
             return response()->json([
                 'message' => 'Temporada cerrada exitosamente',
                 'temporada' => $temporada
@@ -346,15 +319,19 @@ class TemporadaController extends Controller
     public function getProductores($id)
     {
         try {
-            $temporada = Temporada::with(['productoresActivos.lotesActivos.zonaCultivo'])->findOrFail($id);
-            
+            // Se precarga la misma relación que se recorre abajo (antes se
+            // precargaba productoresActivos y se iteraba productores, así que
+            // nada quedaba precargado: ~2 consultas por productor).
+            $temporada = Temporada::with(['productores.lotesActivos.zonaCultivo'])->findOrFail($id);
+
             $productores = $temporada->productores->map(function ($productor) {
                 return [
                     'id' => $productor->id,
                     'nombre' => $productor->nombre,
                     'apellido' => $productor->apellido ?? '',
                     'tipo' => $productor->tipo,
-                    'ubicacion' => $productor->ubicacion,
+                    // La columna es direccion; ubicacion no existe y salía null
+                    'ubicacion' => $productor->direccion,
                     'telefono' => $productor->telefono,
                     'email' => $productor->email,
                     'notas' => $productor->pivot->notas,
@@ -498,17 +475,16 @@ class TemporadaController extends Controller
     public function getZonasCultivo($id)
     {
         try {
-            $temporada = Temporada::with(['zonasCultivo.productor'])->findOrFail($id);
-            
+            // ZonaCultivo ya no tiene relación productor (columna eliminada en
+            // la migración 2026_01_18): con 'zonasCultivo.productor' el eager
+            // load lanzaba RelationNotFoundException y la pestaña daba 500.
+            $temporada = Temporada::with(['zonasCultivo'])->findOrFail($id);
+
             $zonas = $temporada->zonasCultivo->map(function ($zona) {
                 return [
                     'id' => $zona->id,
                     'nombre' => $zona->nombre,
-                    'superficie_total' => $zona->superficie_total,
-                    'productor' => $zona->productor ? [
-                        'id' => $zona->productor->id,
-                        'nombre' => $zona->productor->nombre,
-                    ] : null,
+                    'ubicacion' => $zona->ubicacion,
                     'superficie_asignada' => $zona->pivot->superficie_asignada,
                     'notas' => $zona->pivot->notas,
                     'is_active' => $zona->pivot->is_active,
@@ -554,13 +530,11 @@ class TemporadaController extends Controller
                 ], 400);
             }
 
-            // Verificar que la superficie asignada no exceda la total
-            $zona = ZonaCultivo::findOrFail($request->zona_cultivo_id);
-            if ($request->superficie_asignada > $zona->superficie_total) {
-                return response()->json([
-                    'message' => 'La superficie asignada no puede ser mayor a la superficie total de la zona'
-                ], 400);
-            }
+            // Antes se comparaba contra $zona->superficie_total, columna que la
+            // migración 2026_01_18 eliminó: la comparación "10 > null" era
+            // siempre verdadera y ninguna zona podía asignarse. La superficie
+            // real del terreno vive ahora en los lotes de la zona.
+            ZonaCultivo::findOrFail($request->zona_cultivo_id);
 
             $temporada->asignarZonaCultivo(
                 $request->zona_cultivo_id,
