@@ -28,7 +28,7 @@ class CotizacionesTest extends TestCase
 
     private function url(string $sufijo = ''): string
     {
-        return "/api/splendidfarms/operacion-agricola/agricola/requisiciones/{$this->req->id}/cotizaciones{$sufijo}";
+        return "/api/splendidfarms/administration/compras/requisiciones/{$this->req->id}/cotizaciones{$sufijo}";
     }
 
     private function cotizar(int $supplierId, float $precio, bool $disponible = true): \Illuminate\Testing\TestResponse

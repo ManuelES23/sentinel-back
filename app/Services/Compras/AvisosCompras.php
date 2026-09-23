@@ -16,6 +16,7 @@ class AvisosCompras
     public function __construct(
         private PermisosCompras $permisos,
         private AprobadorOrdenCompra $aprobador,
+        private RutasCompras $rutas,
     ) {
     }
 
@@ -29,7 +30,7 @@ class AvisosCompras
         foreach ($this->permisos->usuariosQueCotizan($req->empresa) as $user) {
             $this->enviar($user, 'Nueva requisición por cotizar',
                 "{$req->numero_requisicion} de {$req->solicitante?->name} para {$req->almacen?->name}",
-                $this->url($req->empresa->slug, 'operacion-agricola/agricola/requisiciones'));
+                $this->rutas->url($req->empresa->slug, 'requisiciones'));
         }
     }
 
@@ -50,7 +51,7 @@ class AvisosCompras
         foreach ($this->aprobador->aprobadoresDe($oc) as $user) {
             $this->enviar($user, 'Orden de compra por autorizar',
                 "{$oc->order_number} · {$this->proveedor($oc)} · {$monto}",
-                $this->url($oc->empresa?->slug, 'inventario/compras/ordenes-compra'), 'amber');
+                $this->rutas->url($oc->empresa?->slug, 'ordenes-compra'), 'amber');
         }
     }
 
@@ -65,7 +66,7 @@ class AvisosCompras
 
         foreach ($destinatarios as $user) {
             $this->enviar($user, $titulo, $mensaje,
-                $this->url($oc->empresa?->slug, 'inventario/compras/ordenes-compra'), $aprobada ? 'green' : 'red');
+                $this->rutas->url($oc->empresa?->slug, 'ordenes-compra'), $aprobada ? 'green' : 'red');
         }
     }
 
@@ -79,7 +80,7 @@ class AvisosCompras
         foreach ($this->permisos->usuariosQueConfirman($rec->empresa) as $user) {
             $this->enviar($user, 'Entrada por confirmar',
                 "{$rec->receipt_number} en {$rec->almacen?->name}",
-                $this->url($rec->empresa->slug, 'inventario/compras/recepciones'), 'amber');
+                $this->rutas->url($rec->empresa->slug, 'recepciones'), 'amber');
         }
     }
 
@@ -89,7 +90,7 @@ class AvisosCompras
         if ($rec->capturadaPor) {
             $this->enviar($rec->capturadaPor, 'Compras regresó una recepción',
                 "{$rec->receipt_number}: {$rec->motivo_rechazo}",
-                $this->url($rec->empresa?->slug, 'inventario/compras/recepciones'), 'red');
+                $this->rutas->url($rec->empresa?->slug, 'recepciones'), 'red');
         }
     }
 
