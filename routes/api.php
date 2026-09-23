@@ -286,8 +286,8 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::apiResource('calibres', App\Http\Controllers\Api\SplendidFarms\CalibreController::class);
             });
 
-            // ─── Módulo: Compras Agrícolas ───────────────────────
-            Route::prefix('compras-agricolas')->group(function () {
+            // ─── Módulo: Abastecimiento ───────────────────────
+            Route::prefix('abastecimiento')->group(function () {
                 // Convenios de Compra
                 Route::get('convenios-compra/list', [App\Http\Controllers\Api\SplendidFarms\Administration\ConvenioCompraController::class, 'list']);
                 Route::get('convenios-compra/{convenio}/precio-vigente', [App\Http\Controllers\Api\SplendidFarms\Administration\ConvenioCompraController::class, 'precioVigente']);
@@ -412,7 +412,7 @@ Route::middleware('auth:sanctum')->group(function () {
             });
 
             // Módulo Reportes (operativo — para reportes financieros ver
-            // TableroProductoresController en compras-agricolas)
+            // TableroProductoresController en abastecimiento)
             Route::prefix('reportes')->group(function () {
                 Route::get('productores', [App\Http\Controllers\Api\SplendidFarms\Administration\ReporteProductoresController::class, 'index']);
                 Route::prefix('empaque')->group(function () {
