@@ -2,11 +2,14 @@
 
 namespace App\Http\Controllers\Api\CRM;
 
+use App\Events\CRM\AgendaUpdated;
 use App\Events\CRM\ProspectoUpdated;
 use App\Events\CRM\VendedorAsignado;
 use App\Models\CRM\CrmActividad;
 use App\Models\CRM\CrmCliente;
 use App\Models\CRM\CrmProspecto;
+use App\Services\CRM\SeguimientoService;
+use App\Services\CRM\VendedorActualService;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
@@ -25,6 +28,11 @@ class ProspectoController extends CrmBaseController
         'zona:id,nombre',
         'bodega:id,nombre',
     ];
+
+    public function __construct(
+        private readonly SeguimientoService $seguimientos,
+        private readonly VendedorActualService $vendedores,
+    ) {}
 
     /**
      * GET /crm/prospectos
@@ -114,6 +122,71 @@ class ProspectoController extends CrmBaseController
         broadcast(new ProspectoUpdated('created', $prospecto->toArray()));
 
         return $this->jsonSuccess($prospecto, 'Prospecto creado exitosamente', 201);
+    }
+
+    /**
+     * POST /crm/prospectos/rapido
+     * Captura rápida (CRM fase 2): solo el nombre es obligatorio, se asigna
+     * al vendedor del usuario y opcionalmente programa el primer contacto.
+     */
+    public function storeRapido(Request $request): JsonResponse
+    {
+        $empresaId = $this->getEmpresaId();
+        abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
+        $this->exigirPermisoSubmodulo($empresaId, 'prospectos', 'prospectos', 'crear', 'No tienes permiso para crear prospectos.');
+
+        $validated = $request->validate(array_merge([
+            'nombre' => 'required|string|max:255',
+            'telefono' => 'nullable|string|max:50',
+            'email' => [
+                'nullable', 'email', 'max:255',
+                Rule::unique('crm_prospectos', 'email')
+                    ->where(fn ($q) => $q->where('empresa_id', $empresaId))
+                    ->whereNull('deleted_at'),
+            ],
+            'notas' => 'nullable|string|max:2000',
+            'vendedor_id' => 'nullable|integer',
+        ], $this->seguimientos->reglasSiguiente('primer_contacto')), array_merge(
+            ['email.unique' => 'Ya existe un prospecto con este correo.'],
+            $this->seguimientos->mensajesSiguiente('primer_contacto'),
+        ));
+
+        $primerContacto = $validated['primer_contacto'] ?? null;
+        if (! empty($primerContacto)) {
+            $this->exigirPermisoSubmodulo($empresaId, 'agenda', 'agenda', 'crear', 'No tienes permiso para programar eventos de agenda.');
+        }
+
+        $vendedor = $this->vendedores->resolver(
+            $empresaId,
+            $request->user(),
+            isset($validated['vendedor_id']) ? (int) $validated['vendedor_id'] : null,
+        );
+
+        [$prospecto, $evento] = DB::transaction(function () use ($empresaId, $validated, $vendedor, $primerContacto) {
+            $prospecto = CrmProspecto::create([
+                'empresa_id' => $empresaId,
+                'nombre' => $validated['nombre'],
+                'telefono' => $validated['telefono'] ?? null,
+                'email' => $validated['email'] ?? null,
+                'notas' => $validated['notas'] ?? null,
+                'estatus' => 'nuevo',
+                'vendedor_id' => $vendedor->id,
+            ]);
+
+            $evento = empty($primerContacto)
+                ? null
+                : $this->seguimientos->programar($empresaId, $vendedor->id, $prospecto, $primerContacto);
+
+            return [$prospecto, $evento];
+        });
+
+        $prospecto->load(self::RELACIONES);
+        $this->difundir(new ProspectoUpdated('created', $prospecto->toArray(), null, 'crm', 'prospectos'));
+        if ($evento) {
+            $this->difundir(new AgendaUpdated('created', $evento->load('vendedor:id,nombre')->toArray(), null, 'crm', 'agenda'));
+        }
+
+        return $this->jsonSuccess(['prospecto' => $prospecto, 'evento' => $evento], 'Prospecto creado exitosamente', 201);
     }
 
     /**

@@ -68,6 +68,9 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::patch('prospectos/{prospecto}/asignar-vendedor', [
         App\Http\Controllers\Api\CRM\ProspectoController::class, 'asignarVendedor'
     ]);
+    Route::post('prospectos/rapido', [
+        App\Http\Controllers\Api\CRM\ProspectoController::class, 'storeRapido'
+    ]);
     Route::apiResource('prospectos', App\Http\Controllers\Api\CRM\ProspectoController::class)
         ->parameters(['prospectos' => 'prospecto']);
 
@@ -166,6 +169,19 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     ]);
     Route::put('presupuestos/{presupuesto}', [
         App\Http\Controllers\Api\CRM\PresupuestoController::class, 'update'
+    ]);
+
+    // -------------------------------------------------
+    // MI DÍA (fase 2)
+    // Pantalla de inicio del vendedor: vencidos, hoy, tratos detenidos y
+    // cotizaciones por vencer.
+    // -------------------------------------------------
+    Route::get('mi-dia', [
+        App\Http\Controllers\Api\CRM\MiDiaController::class, 'index'
+    ]);
+
+    Route::post('seguimientos', [
+        App\Http\Controllers\Api\CRM\SeguimientoController::class, 'store'
     ]);
 
     // -------------------------------------------------

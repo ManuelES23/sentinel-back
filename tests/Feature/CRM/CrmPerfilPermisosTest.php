@@ -165,6 +165,22 @@ class CrmPerfilPermisosTest extends TestCase
             ->assertOk();
     }
 
+    public function test_mi_dia_vendedor_ve_su_dia_y_gerencia_tambien_el_del_equipo(): void
+    {
+        $this->aplicar('vendedor')->assertOk();
+        $this->assertTrue($this->tieneModulo('mi-dia'));
+        $this->assertTrue($this->tienePermiso('mi-dia', 'mi-dia', 'ver'));
+        $this->assertFalse($this->tienePermiso('mi-dia', 'mi-dia', 'equipo'));
+
+        $this->aplicar('gerencia')->assertOk();
+        $this->assertTrue($this->tienePermiso('mi-dia', 'mi-dia', 'ver'));
+        $this->assertTrue($this->tienePermiso('mi-dia', 'mi-dia', 'equipo'));
+
+        $this->aplicar('administracion')->assertOk();
+        $this->assertFalse($this->tieneModulo('mi-dia'));
+        $this->assertFalse($this->tienePermiso('mi-dia', 'mi-dia', 'ver'));
+    }
+
     public function test_solo_un_administrador_puede_aplicar_perfiles(): void
     {
         $this->actingUser->forceFill(['role' => 'user'])->save();

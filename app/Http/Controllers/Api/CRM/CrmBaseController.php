@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\CRM;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Log;
 
 abstract class CrmBaseController extends Controller
 {
@@ -46,5 +47,26 @@ abstract class CrmBaseController extends Controller
             'status'  => 'error',
             'message' => $message,
         ], $status);
+    }
+
+    /**
+     * Emite un evento en tiempo real sin que una falla del servidor de
+     * websockets (Reverb apagado o mal configurado en local) convierta la
+     * respuesta en 500: el registro ya quedó guardado y la pantalla que hizo
+     * el cambio recarga por su cuenta.
+     */
+    protected function difundir(object $evento): void
+    {
+        try {
+            $pendiente = broadcast($evento);
+            // PendingBroadcast emite al destruirse; forzarlo aquí mantiene
+            // cualquier excepción dentro del try.
+            unset($pendiente);
+        } catch (\Throwable $e) {
+            Log::warning('CRM: no se pudo emitir el evento en tiempo real', [
+                'evento' => $evento::class,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 }
