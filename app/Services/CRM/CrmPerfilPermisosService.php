@@ -31,6 +31,7 @@ use InvalidArgumentException;
 class CrmPerfilPermisosService
 {
     private const BASE_VENDEDOR = [
+        'mi-dia' => ['mi-dia' => ['ver']],
         'agenda' => ['agenda' => ['ver', 'crear', 'editar']],
         'oportunidades' => ['oportunidades' => ['ver', 'crear', 'editar']],
         'clientes' => ['clientes' => ['ver', 'crear', 'editar']],
@@ -44,6 +45,7 @@ class CrmPerfilPermisosService
     ];
 
     private const EXTRA_GERENCIA = [
+        'mi-dia' => ['mi-dia' => ['equipo']],
         'agenda' => ['agenda' => ['eliminar']],
         'oportunidades' => ['oportunidades' => ['eliminar', 'cerrar']],
         'clientes' => ['clientes' => ['eliminar', 'asignar_vendedor']],

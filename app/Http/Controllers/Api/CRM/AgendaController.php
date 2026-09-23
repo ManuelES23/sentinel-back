@@ -10,11 +10,13 @@ use App\Models\CRM\CrmEmpresaExterna;
 use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmProspecto;
 use App\Models\CRM\CrmVendedor;
+use App\Services\CRM\SeguimientoService;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
 /**
@@ -49,6 +51,8 @@ class AgendaController extends CrmBaseController
         'correo' => 'correo',
         'tarea' => 'nota',
     ];
+
+    public function __construct(private readonly SeguimientoService $seguimientos) {}
 
     /** GET /crm/agenda?desde=&hasta=&vendedor_id=&tipo=&completado=&vencidos= */
     public function index(Request $request): JsonResponse
@@ -263,7 +267,11 @@ class AgendaController extends CrmBaseController
         return $this->jsonSuccess($agenda, 'Evento de agenda actualizado correctamente');
     }
 
-    /** PATCH /crm/agenda/{agenda}/completar */
+    /**
+     * PATCH /crm/agenda/{agenda}/completar
+     * Body opcional (fase 2): resultado, actividad_tipo y siguiente paso.
+     * Sin body se comporta igual que antes.
+     */
     public function completar(Request $request, CrmAgenda $agenda): JsonResponse
     {
         $this->verificarEmpresa($agenda);
@@ -274,29 +282,61 @@ class AgendaController extends CrmBaseController
             'No tienes permiso para editar eventos de agenda.',
         );
 
+        $validated = $request->validate(array_merge([
+            'resultado' => 'nullable|string|max:2000',
+            'actividad_tipo' => ['nullable', Rule::in(SeguimientoService::TIPOS_ACTIVIDAD)],
+        ], $this->seguimientos->reglasSiguiente('siguiente')), $this->seguimientos->mensajesSiguiente('siguiente'));
+
+        $siguiente = $validated['siguiente'] ?? null;
+
+        if (! empty($siguiente)) {
+            abort_unless(
+                $this->tienePermisoSubmodulo($empresaId, 'agenda', 'agenda', 'crear'),
+                403,
+                'No tienes permiso para programar eventos de agenda.',
+            );
+        }
+
         if ($agenda->completado) {
             return $this->jsonError('Este evento ya fue marcado como completado.', 422);
         }
 
-        $agenda->update(['completado' => true]);
+        $siguienteEvento = DB::transaction(function () use ($agenda, $validated, $siguiente) {
+            $agenda->update(['completado' => true]);
 
-        if ($agenda->entidad_type && $agenda->entidad_id) {
-            CrmActividad::create([
-                'empresa_id' => $agenda->empresa_id,
-                'entidad_type' => $agenda->entidad_type,
-                'entidad_id' => $agenda->entidad_id,
-                'tipo' => self::TIPO_ACTIVIDAD_PARA[$agenda->tipo],
-                'descripcion' => $agenda->titulo.($agenda->descripcion ? " — {$agenda->descripcion}" : ''),
-                'fecha_actividad' => now(),
-                'vendedor_id' => $agenda->vendedor_id,
-                'fuente' => 'agenda',
-            ]);
-        }
+            if ($agenda->entidad_type && $agenda->entidad_id) {
+                CrmActividad::create([
+                    'empresa_id' => $agenda->empresa_id,
+                    'entidad_type' => $agenda->entidad_type,
+                    'entidad_id' => $agenda->entidad_id,
+                    'tipo' => $validated['actividad_tipo'] ?? self::TIPO_ACTIVIDAD_PARA[$agenda->tipo],
+                    'descripcion' => $agenda->titulo.($agenda->descripcion ? " — {$agenda->descripcion}" : ''),
+                    'resultado' => $validated['resultado'] ?? null,
+                    'fecha_actividad' => now(),
+                    'vendedor_id' => $agenda->vendedor_id,
+                    'fuente' => 'agenda',
+                ]);
+            }
+
+            return empty($siguiente)
+                ? null
+                : $this->seguimientos->programar($agenda->empresa_id, $agenda->vendedor_id, $agenda->entidad, $siguiente);
+        });
 
         $agenda->load('vendedor:id,nombre');
-        broadcast(new AgendaUpdated('completed', $agenda->toArray()));
+        // Canal explícito de Agenda: la petición puede venir desde Mi día
+        // (X-Module-Slug: mi-dia) y la vista de Agenda debe enterarse igual.
+        $this->difundir(new AgendaUpdated('completed', $agenda->toArray(), null, 'crm', 'agenda'));
 
-        return $this->jsonSuccess($agenda, 'Evento marcado como completado');
+        if ($siguienteEvento) {
+            $siguienteEvento->load('vendedor:id,nombre');
+            $this->difundir(new AgendaUpdated('created', $siguienteEvento->toArray(), null, 'crm', 'agenda'));
+        }
+
+        return $this->jsonSuccess(
+            $agenda->toArray() + ['siguiente_evento' => $siguienteEvento?->toArray()],
+            'Evento marcado como completado',
+        );
     }
 
     /** DELETE /crm/agenda/{agenda} */

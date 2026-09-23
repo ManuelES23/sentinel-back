@@ -19,7 +19,7 @@ class CrmOrdenModulosTest extends TestCase
     use RefreshDatabase;
 
     private const ORDEN_ESPERADO = [
-        'agenda', 'oportunidades', 'clientes', 'prospectos', 'cotizaciones',
+        'mi-dia', 'agenda', 'oportunidades', 'clientes', 'prospectos', 'cotizaciones',
         'actividades', 'empresas-externas', 'dashboard', 'presupuestos',
         'catalogos', 'integraciones',
     ];
@@ -71,7 +71,7 @@ class CrmOrdenModulosTest extends TestCase
         $this->assertSame(self::ORDEN_ESPERADO, $this->slugsEnOrden($app));
 
         $migracion->down();
-        $this->assertSame($ordenAnterior, $this->slugsEnOrden($app));
+        $this->assertSame(array_merge(['mi-dia'], $ordenAnterior), $this->slugsEnOrden($app));
     }
 
     public function test_la_migracion_no_toca_modulos_de_otras_aplicaciones(): void

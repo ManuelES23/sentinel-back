@@ -113,6 +113,14 @@ class CrmPermisosSeeder extends Seeder
             ]],
         ]);
 
+        // Fase 2: pantalla de inicio del vendedor. Primero en el menú.
+        $this->crearModulo($app, 'mi-dia', 'Mi día', 'Sun', 0, [
+            ['slug' => 'mi-dia', 'name' => 'Mi día', 'icon' => 'Sun', 'order' => 1, 'permisos' => [
+                ['slug' => 'ver',    'name' => 'Ver Mi día',                     'order' => 1],
+                ['slug' => 'equipo', 'name' => 'Ver el día de otros vendedores', 'order' => 2],
+            ]],
+        ]);
+
         $this->crearModulo($app, 'agenda', 'Agenda', 'CalendarDays', 1, [
             ['slug' => 'agenda', 'name' => 'Agenda', 'icon' => 'CalendarDays', 'order' => 1, 'permisos' => $this->permisosBase()],
         ]);
