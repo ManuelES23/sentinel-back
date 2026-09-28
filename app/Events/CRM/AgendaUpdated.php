@@ -2,24 +2,17 @@
 
 namespace App\Events\CRM;
 
-use App\Events\ModelBroadcastEvent;
-use Illuminate\Broadcasting\PrivateChannel;
-
 /**
- * Evento de broadcast para eventos de Agenda del CRM.
- * Emite en el canal module.{enterprise}.crm.agenda con nombre 'agenda.updated'.
+ * Evento de broadcast para Agenda del CRM.
+ * Emite en el canal module.{empresa}.crm.agenda con nombre 'agenda.updated'.
+ * El payload viaja en action + data (created | updated | deleted).
  */
-class AgendaUpdated extends ModelBroadcastEvent
+class AgendaUpdated extends CrmModelBroadcastEvent
 {
+    protected const MODULO = 'agenda';
+
     public function broadcastAs(): string
     {
         return 'agenda.updated';
-    }
-
-    public function broadcastOn(): array
-    {
-        return [
-            new PrivateChannel("module.{$this->enterprise}.{$this->application}.{$this->module}"),
-        ];
     }
 }

@@ -2,25 +2,17 @@
 
 namespace App\Events\CRM;
 
-use App\Events\ModelBroadcastEvent;
-use Illuminate\Broadcasting\PrivateChannel;
-
 /**
- * Evento de broadcast para Contactos polimórficos del CRM.
- * Emite en el canal module.{enterprise}.crm.contactos
- * con nombre 'contacto.updated'.
+ * Evento de broadcast para Contactos del CRM.
+ * Emite en el canal module.{empresa}.crm.contactos con nombre 'contacto.updated'.
+ * El payload viaja en action + data (created | updated | deleted).
  */
-class ContactoUpdated extends ModelBroadcastEvent
+class ContactoUpdated extends CrmModelBroadcastEvent
 {
+    protected const MODULO = 'contactos';
+
     public function broadcastAs(): string
     {
         return 'contacto.updated';
-    }
-
-    public function broadcastOn(): array
-    {
-        return [
-            new PrivateChannel("module.{$this->enterprise}.{$this->application}.{$this->module}"),
-        ];
     }
 }

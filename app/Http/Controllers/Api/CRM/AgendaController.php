@@ -326,11 +326,11 @@ class AgendaController extends CrmBaseController
         $agenda->load('vendedor:id,nombre');
         // Canal explícito de Agenda: la petición puede venir desde Mi día
         // (X-Module-Slug: mi-dia) y la vista de Agenda debe enterarse igual.
-        $this->difundir(new AgendaUpdated('completed', $agenda->toArray(), null, 'crm', 'agenda'));
+        $this->difundir(new AgendaUpdated('completed', $agenda->toArray()));
 
         if ($siguienteEvento) {
             $siguienteEvento->load('vendedor:id,nombre');
-            $this->difundir(new AgendaUpdated('created', $siguienteEvento->toArray(), null, 'crm', 'agenda'));
+            $this->difundir(new AgendaUpdated('created', $siguienteEvento->toArray()));
         }
 
         return $this->jsonSuccess(

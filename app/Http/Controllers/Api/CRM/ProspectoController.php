@@ -181,9 +181,9 @@ class ProspectoController extends CrmBaseController
         });
 
         $prospecto->load(self::RELACIONES);
-        $this->difundir(new ProspectoUpdated('created', $prospecto->toArray(), null, 'crm', 'prospectos'));
+        $this->difundir(new ProspectoUpdated('created', $prospecto->toArray()));
         if ($evento) {
-            $this->difundir(new AgendaUpdated('created', $evento->load('vendedor:id,nombre')->toArray(), null, 'crm', 'agenda'));
+            $this->difundir(new AgendaUpdated('created', $evento->load('vendedor:id,nombre')->toArray()));
         }
 
         return $this->jsonSuccess(['prospecto' => $prospecto, 'evento' => $evento], 'Prospecto creado exitosamente', 201);
