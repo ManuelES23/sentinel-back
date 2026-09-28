@@ -141,7 +141,7 @@ class ClienteController extends CrmBaseController
         $cliente = CrmCliente::create($validated);
         $cliente->load(self::RELACIONES);
 
-        broadcast(new ClienteUpdated('created', $cliente->toArray()));
+        $this->difundir(new ClienteUpdated('created', $cliente->toArray()));
 
         return $this->jsonSuccess($cliente, 'Cliente creado', 201);
     }
@@ -176,7 +176,7 @@ class ClienteController extends CrmBaseController
         $cliente->update($validated);
         $cliente->load(self::RELACIONES);
 
-        broadcast(new ClienteUpdated('updated', $cliente->toArray()));
+        $this->difundir(new ClienteUpdated('updated', $cliente->toArray()));
 
         return $this->jsonSuccess($cliente, 'Cliente actualizado');
     }
@@ -192,7 +192,7 @@ class ClienteController extends CrmBaseController
         $id = $cliente->id;
         $cliente->delete();
 
-        broadcast(new ClienteUpdated('deleted', ['id' => $id]));
+        $this->difundir(new ClienteUpdated('deleted', ['id' => $id]));
 
         return $this->jsonSuccess(['id' => $id], 'Cliente eliminado');
     }
@@ -227,9 +227,9 @@ class ClienteController extends CrmBaseController
             'fuente'          => 'sistema',
         ]);
 
-        broadcast(new ClienteUpdated('updated', $cliente->toArray()));
+        $this->difundir(new ClienteUpdated('updated', $cliente->toArray()));
 
-        broadcast(new VendedorAsignado(
+        $this->difundir(new VendedorAsignado(
             (int) $cliente->empresa_id,
             'cliente',
             (int) $cliente->id,
