@@ -1,5 +1,7 @@
 <?php
 
+use App\Broadcasting\CrmEmpresaChannel;
+use App\Broadcasting\ModuleChannel;
 use Illuminate\Support\Facades\Broadcast;
 use Illuminate\Support\Facades\Log;
 
@@ -62,11 +64,10 @@ if (config('broadcasting.default') !== 'null' && config('broadcasting.default') 
             return false;
         });
 
-        // Canal para módulos específicos (ej: cultivos en tiempo real)
-        Broadcast::channel('module.{enterpriseSlug}.{applicationSlug}.{moduleSlug}', function ($user, $enterpriseSlug, $applicationSlug, $moduleSlug) {
-            Log::info("Canal autorizado: usuario {$user->id} en module.{$enterpriseSlug}.{$applicationSlug}.{$moduleSlug}");
-            return true;
-        });
+        // Canal para módulos específicos (ej: cultivos en tiempo real).
+        // Autoriza con los accesos jerárquicos empresa → aplicación → módulo:
+        // por aquí viaja el payload completo de cada cambio.
+        Broadcast::channel('module.{enterpriseSlug}.{applicationSlug}.{moduleSlug}', ModuleChannel::class);
 
         // Canal para vacaciones del empleado
         Broadcast::channel('employee.{employeeId}.vacations', function ($user, $employeeId) {
@@ -75,13 +76,9 @@ if (config('broadcasting.default') !== 'null' && config('broadcasting.default') 
         });
 
         // Canal CRM por empresa (eventos transversales: asignación de vendedor, etc.)
-        Broadcast::channel('crm.{empresaId}', function ($user, $empresaId) {
-            return $user->activeEnterprises()
-                ->where('enterprises.id', $empresaId)
-                ->exists();
-        });
+        Broadcast::channel('crm.{empresaId}', CrmEmpresaChannel::class);
 
     } catch (\Exception $e) {
-        Log::warning('Broadcasting channels could not be registered: ' . $e->getMessage());
+        Log::warning('Broadcasting channels could not be registered: '.$e->getMessage());
     }
 }

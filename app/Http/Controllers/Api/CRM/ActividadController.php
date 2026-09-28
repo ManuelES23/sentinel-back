@@ -195,7 +195,7 @@ class ActividadController extends CrmBaseController
         $actividad->load(self::RELACIONES);
         $actividad->entidad_tipo = $validated['entidad_tipo'];
 
-        broadcast(new ActividadUpdated('created', $actividad->toArray()));
+        $this->difundir(new ActividadUpdated('created', $actividad->toArray()));
 
         return $this->jsonSuccess($actividad, 'Actividad registrada correctamente', 201);
     }
@@ -221,7 +221,7 @@ class ActividadController extends CrmBaseController
         $actividad->load(self::RELACIONES);
         $actividad->entidad_tipo = $this->aliasEntidadTipo($actividad->entidad_type);
 
-        broadcast(new ActividadUpdated('updated', $actividad->toArray()));
+        $this->difundir(new ActividadUpdated('updated', $actividad->toArray()));
 
         return $this->jsonSuccess($actividad, 'Actividad actualizada correctamente');
     }
@@ -237,7 +237,7 @@ class ActividadController extends CrmBaseController
         $data = $actividad->toArray();
         $actividad->delete();
 
-        broadcast(new ActividadUpdated('deleted', $data));
+        $this->difundir(new ActividadUpdated('deleted', $data));
 
         return $this->jsonSuccess(null, 'Actividad eliminada correctamente');
     }

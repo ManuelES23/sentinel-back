@@ -119,7 +119,7 @@ class ProspectoController extends CrmBaseController
         $prospecto = CrmProspecto::create($validated);
         $prospecto->load(self::RELACIONES);
 
-        broadcast(new ProspectoUpdated('created', $prospecto->toArray()));
+        $this->difundir(new ProspectoUpdated('created', $prospecto->toArray()));
 
         return $this->jsonSuccess($prospecto, 'Prospecto creado exitosamente', 201);
     }
@@ -219,7 +219,7 @@ class ProspectoController extends CrmBaseController
         $prospecto->update($validated);
         $prospecto->load(self::RELACIONES);
 
-        broadcast(new ProspectoUpdated('updated', $prospecto->toArray()));
+        $this->difundir(new ProspectoUpdated('updated', $prospecto->toArray()));
 
         return $this->jsonSuccess($prospecto, 'Prospecto actualizado exitosamente');
     }
@@ -237,7 +237,7 @@ class ProspectoController extends CrmBaseController
         $data = $prospecto->toArray();
         $prospecto->delete();
 
-        broadcast(new ProspectoUpdated('deleted', $data));
+        $this->difundir(new ProspectoUpdated('deleted', $data));
 
         return $this->jsonSuccess(null, 'Prospecto eliminado exitosamente');
     }
@@ -283,7 +283,7 @@ class ProspectoController extends CrmBaseController
 
             $cliente->load(['vendedor:id,nombre', 'region:id,nombre', 'prospecto:id,nombre']);
 
-            broadcast(new ProspectoUpdated('updated', $prospecto->fresh()->toArray()));
+            $this->difundir(new ProspectoUpdated('updated', $prospecto->fresh()->toArray()));
 
             return $this->jsonSuccess($cliente, 'Prospecto convertido a cliente exitosamente', 201);
         });
@@ -319,9 +319,9 @@ class ProspectoController extends CrmBaseController
             'fuente'          => 'sistema',
         ]);
 
-        broadcast(new ProspectoUpdated('updated', $prospecto->toArray()));
+        $this->difundir(new ProspectoUpdated('updated', $prospecto->toArray()));
 
-        broadcast(new VendedorAsignado(
+        $this->difundir(new VendedorAsignado(
             (int) $prospecto->empresa_id,
             'prospecto',
             (int) $prospecto->id,

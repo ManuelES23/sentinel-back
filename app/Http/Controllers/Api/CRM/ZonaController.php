@@ -86,7 +86,7 @@ class ZonaController extends CrmBaseController
 
         $zona->load('region:id,nombre');
 
-        broadcast(new ZonaUpdated('created', $zona->toArray()));
+        $this->difundir(new ZonaUpdated('created', $zona->toArray()));
 
         return $this->jsonSuccess($zona, 'Zona creada correctamente', 201);
     }
@@ -114,7 +114,7 @@ class ZonaController extends CrmBaseController
         $zona->update($validated);
         $zona->load('region:id,nombre');
 
-        broadcast(new ZonaUpdated('updated', $zona->toArray()));
+        $this->difundir(new ZonaUpdated('updated', $zona->toArray()));
 
         return $this->jsonSuccess($zona, 'Zona actualizada correctamente');
     }
@@ -134,7 +134,7 @@ class ZonaController extends CrmBaseController
         $data = $zona->toArray();
         $zona->delete();
 
-        broadcast(new ZonaUpdated('deleted', $data));
+        $this->difundir(new ZonaUpdated('deleted', $data));
 
         return $this->jsonSuccess(null, 'Zona eliminada correctamente');
     }

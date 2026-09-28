@@ -132,7 +132,7 @@ class VendedorController extends CrmBaseController
 
         $vendedor->load('user:id,name,email');
 
-        broadcast(new VendedorUpdated('created', $vendedor->toArray()));
+        $this->difundir(new VendedorUpdated('created', $vendedor->toArray()));
 
         return $this->jsonSuccess($vendedor, 'Vendedor creado correctamente', 201);
     }
@@ -166,7 +166,7 @@ class VendedorController extends CrmBaseController
         $vendedor->update($validated);
         $vendedor->load('user:id,name,email');
 
-        broadcast(new VendedorUpdated('updated', $vendedor->toArray()));
+        $this->difundir(new VendedorUpdated('updated', $vendedor->toArray()));
 
         return $this->jsonSuccess($vendedor, 'Vendedor actualizado correctamente');
     }
@@ -182,7 +182,7 @@ class VendedorController extends CrmBaseController
         $vendedor->update(['activo' => ! $vendedor->activo]);
         $vendedor->load('user:id,name,email');
 
-        broadcast(new VendedorUpdated('updated', $vendedor->toArray()));
+        $this->difundir(new VendedorUpdated('updated', $vendedor->toArray()));
 
         return $this->jsonSuccess($vendedor, 'Estado del vendedor actualizado correctamente');
     }
@@ -202,7 +202,7 @@ class VendedorController extends CrmBaseController
         $data = $vendedor->toArray();
         $vendedor->delete();
 
-        broadcast(new VendedorUpdated('deleted', $data));
+        $this->difundir(new VendedorUpdated('deleted', $data));
 
         return $this->jsonSuccess(null, 'Vendedor eliminado correctamente');
     }

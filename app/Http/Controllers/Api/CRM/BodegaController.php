@@ -92,7 +92,7 @@ class BodegaController extends CrmBaseController
 
         $bodega->load('zona:id,region_id,nombre');
 
-        broadcast(new BodegaUpdated('created', $bodega->toArray()));
+        $this->difundir(new BodegaUpdated('created', $bodega->toArray()));
 
         return $this->jsonSuccess($bodega, 'Bodega creada correctamente', 201);
     }
@@ -121,7 +121,7 @@ class BodegaController extends CrmBaseController
         $bodega->update($validated);
         $bodega->load('zona:id,region_id,nombre');
 
-        broadcast(new BodegaUpdated('updated', $bodega->toArray()));
+        $this->difundir(new BodegaUpdated('updated', $bodega->toArray()));
 
         return $this->jsonSuccess($bodega, 'Bodega actualizada correctamente');
     }
@@ -137,7 +137,7 @@ class BodegaController extends CrmBaseController
         $data = $bodega->toArray();
         $bodega->delete();
 
-        broadcast(new BodegaUpdated('deleted', $data));
+        $this->difundir(new BodegaUpdated('deleted', $data));
 
         return $this->jsonSuccess(null, 'Bodega eliminada correctamente');
     }

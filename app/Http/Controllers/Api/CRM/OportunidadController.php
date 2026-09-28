@@ -76,7 +76,7 @@ class OportunidadController extends CrmBaseController
         $oportunidad = CrmOportunidad::create($validated);
         $oportunidad->load(self::RELACIONES);
 
-        broadcast(new OportunidadUpdated('created', $oportunidad->toArray()));
+        $this->difundir(new OportunidadUpdated('created', $oportunidad->toArray()));
 
         return $this->jsonSuccess($oportunidad, 'Oportunidad creada correctamente', 201);
     }
@@ -113,7 +113,7 @@ class OportunidadController extends CrmBaseController
         $oportunidad->update($validated);
         $oportunidad->load(self::RELACIONES);
 
-        broadcast(new OportunidadUpdated('updated', $oportunidad->toArray()));
+        $this->difundir(new OportunidadUpdated('updated', $oportunidad->toArray()));
 
         return $this->jsonSuccess($oportunidad, 'Oportunidad actualizada correctamente');
     }
@@ -127,7 +127,7 @@ class OportunidadController extends CrmBaseController
         $data = $oportunidad->toArray();
         $oportunidad->delete();
 
-        broadcast(new OportunidadUpdated('deleted', $data));
+        $this->difundir(new OportunidadUpdated('deleted', $data));
 
         return $this->jsonSuccess(null, 'Oportunidad eliminada correctamente');
     }
@@ -211,7 +211,7 @@ class OportunidadController extends CrmBaseController
         $oportunidad->save();
         $oportunidad->load(self::RELACIONES);
 
-        broadcast(new OportunidadUpdated('updated', $oportunidad->toArray()));
+        $this->difundir(new OportunidadUpdated('updated', $oportunidad->toArray()));
 
         return $this->jsonSuccess($oportunidad, 'Etapa actualizada correctamente');
     }
