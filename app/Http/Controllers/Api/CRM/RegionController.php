@@ -69,7 +69,7 @@ class RegionController extends CrmBaseController
             'nombre'     => $validated['nombre'],
         ]);
 
-        broadcast(new RegionUpdated('created', $region->toArray()));
+        $this->difundir(new RegionUpdated('created', $region->toArray()));
 
         return $this->jsonSuccess($region, 'Región creada correctamente', 201);
     }
@@ -88,7 +88,7 @@ class RegionController extends CrmBaseController
 
         $region->update($validated);
 
-        broadcast(new RegionUpdated('updated', $region->toArray()));
+        $this->difundir(new RegionUpdated('updated', $region->toArray()));
 
         return $this->jsonSuccess($region, 'Región actualizada correctamente');
     }
@@ -108,7 +108,7 @@ class RegionController extends CrmBaseController
         $data = $region->toArray();
         $region->delete();
 
-        broadcast(new RegionUpdated('deleted', $data));
+        $this->difundir(new RegionUpdated('deleted', $data));
 
         return $this->jsonSuccess(null, 'Región eliminada correctamente');
     }

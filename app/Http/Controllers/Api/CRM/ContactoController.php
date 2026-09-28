@@ -158,7 +158,7 @@ class ContactoController extends CrmBaseController
 
         $contacto->entidad_tipo = $validated['entidad_tipo'];
 
-        broadcast(new ContactoUpdated('created', $contacto->toArray()));
+        $this->difundir(new ContactoUpdated('created', $contacto->toArray()));
 
         return $this->jsonSuccess($contacto, 'Contacto creado correctamente', 201);
     }
@@ -194,7 +194,7 @@ class ContactoController extends CrmBaseController
         $contacto->refresh();
         $contacto->entidad_tipo = array_search($contacto->entidad_type, self::TIPOS, true) ?: null;
 
-        broadcast(new ContactoUpdated('updated', $contacto->toArray()));
+        $this->difundir(new ContactoUpdated('updated', $contacto->toArray()));
 
         return $this->jsonSuccess($contacto, 'Contacto actualizado correctamente');
     }
@@ -210,7 +210,7 @@ class ContactoController extends CrmBaseController
         $data = $contacto->toArray();
         $contacto->delete();
 
-        broadcast(new ContactoUpdated('deleted', $data));
+        $this->difundir(new ContactoUpdated('deleted', $data));
 
         return $this->jsonSuccess(null, 'Contacto eliminado correctamente');
     }

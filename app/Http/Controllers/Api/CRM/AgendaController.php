@@ -163,7 +163,7 @@ class AgendaController extends CrmBaseController
         // real que reciben las demás pestañas llegaría sin
         // vendedor.nombre hasta el siguiente refetch completo.
         $evento->load('vendedor:id,nombre');
-        broadcast(new AgendaUpdated('created', $evento->toArray()));
+        $this->difundir(new AgendaUpdated('created', $evento->toArray()));
 
         return $this->jsonSuccess($evento, 'Evento de agenda creado correctamente', 201);
     }
@@ -262,7 +262,7 @@ class AgendaController extends CrmBaseController
         $agenda->update($validated);
 
         $agenda->load('vendedor:id,nombre');
-        broadcast(new AgendaUpdated('updated', $agenda->toArray()));
+        $this->difundir(new AgendaUpdated('updated', $agenda->toArray()));
 
         return $this->jsonSuccess($agenda, 'Evento de agenda actualizado correctamente');
     }
@@ -353,7 +353,7 @@ class AgendaController extends CrmBaseController
         $data = $agenda->toArray();
         $agenda->delete();
 
-        broadcast(new AgendaUpdated('deleted', $data));
+        $this->difundir(new AgendaUpdated('deleted', $data));
 
         return $this->jsonSuccess(null, 'Evento de agenda eliminado correctamente');
     }

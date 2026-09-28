@@ -280,7 +280,7 @@ class CotizacionController extends CrmBaseController
 
         // El tablero Kanban se alimenta de este canal: sin este broadcast la
         // tarjeta no se movería a "cerrado ganado" hasta un refresh manual.
-        broadcast(new OportunidadUpdated('updated', $oportunidad->load(CrmOportunidad::RELACIONES_API)->toArray()));
+        $this->difundir(new OportunidadUpdated('updated', $oportunidad->load(CrmOportunidad::RELACIONES_API)->toArray()));
 
         return $this->jsonSuccess($cotizacion->fresh(), 'Cotización aprobada — la oportunidad se cerró como ganada');
     }

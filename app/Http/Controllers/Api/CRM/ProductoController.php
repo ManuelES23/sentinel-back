@@ -113,7 +113,7 @@ class ProductoController extends CrmBaseController
             'activo'        => $validated['activo'] ?? true,
         ]);
 
-        broadcast(new ProductoUpdated('created', $producto->toArray()));
+        $this->difundir(new ProductoUpdated('created', $producto->toArray()));
 
         return $this->jsonSuccess($producto, 'Producto creado correctamente', 201);
     }
@@ -136,7 +136,7 @@ class ProductoController extends CrmBaseController
 
         $producto->update($validated);
 
-        broadcast(new ProductoUpdated('updated', $producto->toArray()));
+        $this->difundir(new ProductoUpdated('updated', $producto->toArray()));
 
         return $this->jsonSuccess($producto, 'Producto actualizado correctamente');
     }
@@ -151,7 +151,7 @@ class ProductoController extends CrmBaseController
 
         $producto->update(['activo' => ! $producto->activo]);
 
-        broadcast(new ProductoUpdated('updated', $producto->toArray()));
+        $this->difundir(new ProductoUpdated('updated', $producto->toArray()));
 
         return $this->jsonSuccess($producto, 'Estado del producto actualizado correctamente');
     }
@@ -171,7 +171,7 @@ class ProductoController extends CrmBaseController
         $data = $producto->toArray();
         $producto->delete();
 
-        broadcast(new ProductoUpdated('deleted', $data));
+        $this->difundir(new ProductoUpdated('deleted', $data));
 
         return $this->jsonSuccess(null, 'Producto eliminado correctamente');
     }

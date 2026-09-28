@@ -75,7 +75,7 @@ class EmpresaExternaController extends CrmBaseController
         $empresaExterna = CrmEmpresaExterna::create($validated);
         $empresaExterna->load(self::RELACIONES);
 
-        broadcast(new EmpresaExternaUpdated('created', $empresaExterna->toArray()));
+        $this->difundir(new EmpresaExternaUpdated('created', $empresaExterna->toArray()));
 
         return $this->jsonSuccess($empresaExterna, 'Empresa externa creada correctamente', 201);
     }
@@ -98,7 +98,7 @@ class EmpresaExternaController extends CrmBaseController
         $empresaExterna->update($validated);
         $empresaExterna->load(self::RELACIONES);
 
-        broadcast(new EmpresaExternaUpdated('updated', $empresaExterna->toArray()));
+        $this->difundir(new EmpresaExternaUpdated('updated', $empresaExterna->toArray()));
 
         return $this->jsonSuccess($empresaExterna, 'Empresa externa actualizada correctamente');
     }
@@ -115,7 +115,7 @@ class EmpresaExternaController extends CrmBaseController
         $empresaExterna->contactos()->delete();
         $empresaExterna->delete();
 
-        broadcast(new EmpresaExternaUpdated('deleted', $data));
+        $this->difundir(new EmpresaExternaUpdated('deleted', $data));
 
         return $this->jsonSuccess(null, 'Empresa externa eliminada correctamente');
     }
