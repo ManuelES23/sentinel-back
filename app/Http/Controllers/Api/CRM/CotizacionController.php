@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\CRM;
 
+use App\Events\CRM\CotizacionUpdated;
 use App\Events\CRM\OportunidadUpdated;
 use App\Models\CRM\CrmConfiguracionComercial;
 use App\Models\CRM\CrmCotizacion;
@@ -133,6 +134,8 @@ class CotizacionController extends CrmBaseController
             return $this->calculo->recalcular($cotizacion);
         });
 
+        $this->difundir(new CotizacionUpdated('created', $cotizacion->toArray()));
+
         return $this->jsonSuccess($cotizacion, 'Cotización creada correctamente', 201);
     }
 
@@ -194,6 +197,8 @@ class CotizacionController extends CrmBaseController
             return $this->calculo->recalcular($cotizacion);
         });
 
+        $this->difundir(new CotizacionUpdated('updated', $cotizacion->toArray()));
+
         return $this->jsonSuccess($cotizacion, 'Cotización actualizada correctamente');
     }
 
@@ -207,6 +212,8 @@ class CotizacionController extends CrmBaseController
         }
         $cotizacion->update(['estado' => 'enviado']);
 
+        $this->difundir(new CotizacionUpdated('updated', $cotizacion->toArray()));
+
         return $this->jsonSuccess($cotizacion, 'Cotización marcada como enviada');
     }
 
@@ -219,6 +226,8 @@ class CotizacionController extends CrmBaseController
             return $this->jsonError('Solo una cotización enviada se puede rechazar.', 422);
         }
         $cotizacion->update(['estado' => 'rechazado']);
+
+        $this->difundir(new CotizacionUpdated('updated', $cotizacion->toArray()));
 
         return $this->jsonSuccess($cotizacion, 'Cotización rechazada');
     }
@@ -281,6 +290,8 @@ class CotizacionController extends CrmBaseController
         // El tablero Kanban se alimenta de este canal: sin este broadcast la
         // tarjeta no se movería a "cerrado ganado" hasta un refresh manual.
         $this->difundir(new OportunidadUpdated('updated', $oportunidad->load(CrmOportunidad::RELACIONES_API)->toArray()));
+
+        $this->difundir(new CotizacionUpdated('updated', $cotizacion->fresh()->toArray()));
 
         return $this->jsonSuccess($cotizacion->fresh(), 'Cotización aprobada — la oportunidad se cerró como ganada');
     }

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\CRM;
 
+use App\Events\CRM\PresupuestoUpdated;
 use App\Models\CRM\CrmPresupuesto;
 use App\Models\CRM\CrmVendedor;
 use App\Services\CRM\PresupuestoResumenService;
@@ -98,6 +99,8 @@ class PresupuestoController extends CrmBaseController
             throw $e;
         }
 
+        $this->difundir(new PresupuestoUpdated('created', $presupuesto->toArray()));
+
         return $this->jsonSuccess($this->serializarPresupuesto($presupuesto), 'Presupuesto creado exitosamente', 201);
     }
 
@@ -121,6 +124,8 @@ class PresupuestoController extends CrmBaseController
         $validated = $this->normalizarMetasNulas($validated);
 
         $presupuesto->update($validated);
+
+        $this->difundir(new PresupuestoUpdated('updated', $presupuesto->toArray()));
 
         return $this->jsonSuccess($this->serializarPresupuesto($presupuesto));
     }
