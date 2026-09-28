@@ -2,30 +2,17 @@
 
 namespace App\Events\CRM;
 
-use Illuminate\Broadcasting\Channel;
-use Illuminate\Broadcasting\InteractsWithSockets;
-use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
-use Illuminate\Foundation\Events\Dispatchable;
-use Illuminate\Queue\SerializesModels;
-
-class OportunidadUpdated implements ShouldBroadcast
+/**
+ * Evento de broadcast para Oportunidades del CRM.
+ * Emite en el canal module.{empresa}.crm.oportunidades con nombre 'oportunidad.updated'.
+ * El payload viaja en action + data (created | updated | deleted).
+ */
+class OportunidadUpdated extends CrmModelBroadcastEvent
 {
-    use Dispatchable, InteractsWithSockets, SerializesModels;
-
-    public function __construct(public string $action, public array $data) {}
-
-    public function broadcastOn(): array
-    {
-        return [new Channel("module.{$this->data['empresa_id']}.crm.oportunidades")];
-    }
+    protected const MODULO = 'oportunidades';
 
     public function broadcastAs(): string
     {
         return 'oportunidad.updated';
-    }
-
-    public function broadcastWith(): array
-    {
-        return ['action' => $this->action, 'data' => $this->data];
     }
 }
