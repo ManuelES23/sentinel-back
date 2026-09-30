@@ -5,6 +5,7 @@ namespace Tests\Feature\SplendidFarms\Inventory;
 use App\Models\InventoryMovement;
 use App\Models\InventoryStock;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Laravel\Sanctum\Sanctum;
 use Tests\Concerns\CreatesAlmacenFixtures;
 use Tests\TestCase;
@@ -152,5 +153,32 @@ class LoteCaducidadMovimientosTest extends TestCase
         $this->darStock($this->almacenA, $this->insumo, 5, 'HOY', now()->toDateString());
 
         $this->mover($this->tipoSalida->id, ['lot_number' => 'HOY'], $this->almacenA->id)->assertCreated();
+    }
+
+    public function test_editar_un_ajuste_acepta_la_caducidad_tal_como_la_devuelve_la_api(): void
+    {
+        $fecha = now()->addMonths(6)->toDateString();
+        $id = $this->mover($this->tipoAjusteMas->id, ['lot_number' => 'L1', 'expiry_date' => $fecha], null, $this->almacenA->id)
+            ->assertCreated()->json('data.id');
+
+        // El front reenvía el renglón exactamente como lo recibió de la API.
+        $detalle = $this->getJson(self::URL . "/{$id}", $this->headersEmpresa())->assertOk()->json('data.details.0');
+        $this->assertStringContainsString('T', $detalle['expiry_date'], 'la API serializa la fecha como ISO con hora');
+
+        $this->putJson(self::URL . "/{$id}", [
+            'details' => [[
+                'id' => $detalle['id'],
+                'product_id' => $detalle['product_id'],
+                'quantity' => 2,
+                'unit_cost' => 0,
+                'lot_number' => 'L1',
+                'expiry_date' => $detalle['expiry_date'],
+            ]],
+        ], $this->headersEmpresa())->assertOk();
+
+        // En MySQL el texto ISO reventaba con "Incorrect date value" (1292): se guarda una fecha normal.
+        $guardado = DB::table('inventory_movement_details')->where('id', $detalle['id'])->value('expiry_date');
+        $this->assertStringStartsWith($fecha, $guardado);
+        $this->assertStringNotContainsString('T', $guardado);
     }
 }
