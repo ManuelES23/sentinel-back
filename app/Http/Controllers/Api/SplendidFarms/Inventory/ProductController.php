@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Product;
 use App\Models\Enterprise;
 use App\Models\InventoryStock;
+use App\Services\Inventory\AlmacenAccessService;
 use App\Services\Inventory\LoteCaducidadValidator;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -14,6 +15,10 @@ use Illuminate\Support\Facades\Storage;
 
 class ProductController extends Controller
 {
+    public function __construct(private AlmacenAccessService $almacenes)
+    {
+    }
+
     /**
      * Display a listing of the resource.
      */
@@ -227,8 +232,7 @@ class ProductController extends Controller
             : $lotesAntes;
 
         if ($lotesAntes && ! $lotesDespues) {
-            $lotesConExistencia = $product->stock()->where('quantity', '>', 0)->distinct()->count('lot_number');
-            if ($lotesConExistencia > 1) {
+            if ($this->lotesConExistencia($product) > 1) {
                 return response()->json([
                     'status' => 'error',
                     'message' => 'No se puede desactivar el control por lotes: el artículo tiene existencias en varios lotes.',
@@ -272,6 +276,72 @@ class ProductController extends Controller
      * Al activar lotes, las existencias previas sin lote pasan a SIN-LOTE
      * (fusionándose si ya existe esa fila en el mismo almacén/área).
      */
+    /**
+     * Cambia en bloque el control de lotes/caducidad de varios artículos.
+     * Aplica artículo por artículo: los que no se pueden cambiar se omiten y se reportan.
+     */
+    public function actualizarControlLotes(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'product_ids' => 'required|array|min:1|max:500',
+            'product_ids.*' => 'integer|distinct',
+            'control' => 'required|in:ninguno,lotes,lotes_caducidad',
+        ]);
+
+        $empresa = $this->almacenes->resolverEmpresa($request);
+        $lotes = $validated['control'] !== 'ninguno';
+        $caducidad = $validated['control'] === 'lotes_caducidad';
+
+        $productos = Product::forEnterprise($empresa->id)
+            ->whereIn('id', $validated['product_ids'])
+            ->get()
+            ->keyBy('id');
+
+        $actualizados = [];
+        $omitidos = [];
+
+        foreach ($validated['product_ids'] as $id) {
+            $producto = $productos->get($id);
+
+            if (! $producto) {
+                $omitidos[] = ['id' => $id, 'code' => null, 'name' => null, 'motivo' => 'El artículo no existe en esta empresa.'];
+                continue;
+            }
+
+            if ($producto->track_lots && ! $lotes && $this->lotesConExistencia($producto) > 1) {
+                $omitidos[] = [
+                    'id' => $producto->id,
+                    'code' => $producto->code,
+                    'name' => $producto->name,
+                    'motivo' => 'Tiene existencias en varios lotes; no se puede quitar el control por lotes.',
+                ];
+                continue;
+            }
+
+            DB::transaction(function () use ($producto, $lotes, $caducidad) {
+                $marcarSinLote = ! $producto->track_lots && $lotes;
+                $producto->update(['track_lots' => $lotes, 'track_expiry' => $caducidad]);
+
+                if ($marcarSinLote) {
+                    $this->marcarExistenciasSinLote($producto);
+                }
+            });
+
+            $actualizados[] = $producto->id;
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => count($actualizados) . ' artículo(s) actualizados, ' . count($omitidos) . ' omitidos',
+            'data' => ['actualizados' => $actualizados, 'omitidos' => $omitidos],
+        ]);
+    }
+
+    private function lotesConExistencia(Product $product): int
+    {
+        return $product->stock()->where('quantity', '>', 0)->distinct()->count('lot_number');
+    }
+
     private function marcarExistenciasSinLote(Product $product): void
     {
         $sinLote = InventoryStock::where('product_id', $product->id)->whereNull('lot_number')->get();
