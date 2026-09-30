@@ -128,7 +128,6 @@ class CatalogoAgricolaService
     public function crearProducto(Enterprise $empresa, array $datos): Product
     {
         $tipo = $datos['tipo'];
-        $esAgroquimico = $tipo === 'agroquimico';
 
         $producto = Product::create([
             'code' => self::siguienteCodigo(Product::class, 'PROD', 5),
@@ -139,8 +138,9 @@ class CatalogoAgricolaService
             'unit_id' => $this->unidad($empresa, $tipo)->id,
             'product_type' => 'consumable',
             'track_inventory' => true,
-            'track_lots' => $esAgroquimico,
-            'track_expiry' => $esAgroquimico,
+            // No todos los agroquímicos manejan lote y caducidad: se activan al revisar el artículo.
+            'track_lots' => false,
+            'track_expiry' => false,
             'is_for_sale' => false,
             'is_active' => (bool) ($datos['activo'] ?? true),
             'requiere_revision' => true,

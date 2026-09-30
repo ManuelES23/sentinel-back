@@ -806,8 +806,9 @@ class InventoryMovementController extends Controller
 
                 foreach ($validated['details'] as $detail) {
                     if (isset($detail['id'])) {
-                        // Actualizar existente
-                        InventoryMovementDetail::where('id', $detail['id'])->update([
+                        // Actualizar existente. Por modelo (no por query builder) para que
+                        // el cast de expiry_date normalice la fecha ISO que devuelve la API.
+                        $movement->details()->findOrFail($detail['id'])->update([
                             'product_id' => $detail['product_id'],
                             'quantity' => $detail['quantity'],
                             'unit_id' => $detail['unit_id'] ?? null,

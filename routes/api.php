@@ -441,6 +441,7 @@ Route::middleware('auth:sanctum')->group(function () {
                 // Artículos/Productos
                 Route::get('articulos/available-import', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'availableForImport']);
                 Route::post('articulos/import', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'importProducts']);
+                Route::post('articulos/control-lotes', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'actualizarControlLotes']);
                 Route::delete('articulos/{product}/unlink', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'unlinkProduct']);
                 Route::get('articulos/{product}/stock', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'stock']);
                 Route::get('articulos/{product}/usado-en-recetas', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'usadoEnRecetas']);
@@ -867,6 +868,7 @@ Route::middleware('auth:sanctum')->group(function () {
                 // Artículos con soporte de importación entre empresas
                 Route::get('articulos/available-import', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'availableForImport']);
                 Route::post('articulos/import', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'importProducts']);
+                Route::post('articulos/control-lotes', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'actualizarControlLotes']);
                 Route::delete('articulos/{product}/unlink', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'unlinkProduct']);
                 Route::get('articulos/{product}/stock', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'stock']);
                 Route::get('articulos/{product}/usado-en-recetas', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'usadoEnRecetas']);

@@ -55,8 +55,10 @@ class MigrarProductosAplicacionTest extends TestCase
         $this->assertSame('LT', $cloro->unit->code);
         $this->assertSame('Syngenta', $cloro->brand->name);
         $this->assertSame('Clorotalonil', $cloro->ingrediente_activo);
-        $this->assertTrue($cloro->track_lots);
-        $this->assertTrue($cloro->track_expiry);
+        // Nacen sin control de lote/caducidad: no todos los agroquímicos lo manejan y
+        // se activa artículo por artículo (o en bloque) al revisarlos.
+        $this->assertFalse($cloro->track_lots);
+        $this->assertFalse($cloro->track_expiry);
         $this->assertTrue($cloro->requiere_revision);
         $this->assertSame('consumable', $cloro->product_type);
         $this->assertTrue($cloro->enterprises()->where('enterprises.id', $this->empresa->id)->exists());
