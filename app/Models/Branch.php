@@ -46,15 +46,40 @@ class Branch extends Model
 
         static::creating(function ($branch) {
             if (empty($branch->slug)) {
-                $branch->slug = Str::slug($branch->name);
+                $branch->slug = static::generateUniqueSlug($branch->name);
             }
         });
 
         static::updating(function ($branch) {
-            if ($branch->isDirty('name') && empty($branch->slug)) {
-                $branch->slug = Str::slug($branch->name);
+            if (empty($branch->slug)) {
+                $branch->slug = static::generateUniqueSlug($branch->name, $branch->id);
             }
         });
+    }
+
+    /**
+     * El índice único de `slug` incluye las sucursales borradas (borrado lógico),
+     * así que las colisiones se buscan también entre ellas.
+     */
+    private static function generateUniqueSlug(?string $name, ?int $ignoreId = null): string
+    {
+        $base = Str::slug((string) $name);
+        if ($base === '') {
+            $base = 'sucursal';
+        }
+
+        $slug = $base;
+        $counter = 2;
+
+        while (static::withTrashed()
+            ->where('slug', $slug)
+            ->when($ignoreId, fn ($q) => $q->whereKeyNot($ignoreId))
+            ->exists()) {
+            $slug = $base . '-' . $counter;
+            $counter++;
+        }
+
+        return $slug;
     }
 
     // Relaciones
