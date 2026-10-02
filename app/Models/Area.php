@@ -35,15 +35,40 @@ class Area extends Model
 
         static::creating(function ($area) {
             if (empty($area->slug)) {
-                $area->slug = Str::slug($area->name);
+                $area->slug = static::generateUniqueSlug($area->name);
             }
         });
 
         static::updating(function ($area) {
-            if ($area->isDirty('name') && empty($area->slug)) {
-                $area->slug = Str::slug($area->name);
+            if (empty($area->slug)) {
+                $area->slug = static::generateUniqueSlug($area->name, $area->id);
             }
         });
+    }
+
+    /**
+     * El índice único de `slug` incluye las áreas borradas (borrado lógico),
+     * así que las colisiones se buscan también entre ellas.
+     */
+    private static function generateUniqueSlug(?string $name, ?int $ignoreId = null): string
+    {
+        $base = Str::slug((string) $name);
+        if ($base === '') {
+            $base = 'area';
+        }
+
+        $slug = $base;
+        $counter = 2;
+
+        while (static::withTrashed()
+            ->where('slug', $slug)
+            ->when($ignoreId, fn ($q) => $q->whereKeyNot($ignoreId))
+            ->exists()) {
+            $slug = $base . '-' . $counter;
+            $counter++;
+        }
+
+        return $slug;
     }
 
     // Relaciones - Muchas entidades pueden tener esta área
