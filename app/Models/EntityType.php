@@ -37,15 +37,40 @@ class EntityType extends Model
 
         static::creating(function ($type) {
             if (empty($type->slug)) {
-                $type->slug = Str::slug($type->name);
+                $type->slug = static::generateUniqueSlug($type->name);
             }
         });
 
         static::updating(function ($type) {
-            if ($type->isDirty('name') && empty($type->slug)) {
-                $type->slug = Str::slug($type->name);
+            if (empty($type->slug)) {
+                $type->slug = static::generateUniqueSlug($type->name, $type->id);
             }
         });
+    }
+
+    /**
+     * El índice único de `slug` incluye los tipos borrados (borrado lógico),
+     * así que las colisiones se buscan también entre ellos.
+     */
+    private static function generateUniqueSlug(?string $name, ?int $ignoreId = null): string
+    {
+        $base = Str::slug((string) $name);
+        if ($base === '') {
+            $base = 'tipo';
+        }
+
+        $slug = $base;
+        $counter = 2;
+
+        while (static::withTrashed()
+            ->where('slug', $slug)
+            ->when($ignoreId, fn ($q) => $q->whereKeyNot($ignoreId))
+            ->exists()) {
+            $slug = $base . '-' . $counter;
+            $counter++;
+        }
+
+        return $slug;
     }
 
     // Relaciones
