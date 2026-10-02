@@ -57,13 +57,13 @@ class Entity extends Model
 
         static::creating(function ($entity) {
             if (empty($entity->slug)) {
-                $entity->slug = Str::slug($entity->name);
+                $entity->slug = static::generateUniqueSlug($entity->name);
             }
         });
 
         static::updating(function ($entity) {
-            if ($entity->isDirty('name') && empty($entity->slug)) {
-                $entity->slug = Str::slug($entity->name);
+            if (empty($entity->slug)) {
+                $entity->slug = static::generateUniqueSlug($entity->name, $entity->id);
             }
         });
 
@@ -76,6 +76,31 @@ class Entity extends Model
                 $entity->syncOwnerEnterpriseAccess();
             }
         });
+    }
+
+    /**
+     * El índice único de `slug` incluye las entidades borradas (borrado lógico),
+     * así que las colisiones se buscan también entre ellas.
+     */
+    private static function generateUniqueSlug(?string $name, ?int $ignoreId = null): string
+    {
+        $base = Str::slug((string) $name);
+        if ($base === '') {
+            $base = 'entidad';
+        }
+
+        $slug = $base;
+        $counter = 2;
+
+        while (static::withTrashed()
+            ->where('slug', $slug)
+            ->when($ignoreId, fn ($q) => $q->whereKeyNot($ignoreId))
+            ->exists()) {
+            $slug = $base . '-' . $counter;
+            $counter++;
+        }
+
+        return $slug;
     }
 
     private function syncOwnerEnterpriseAccess(): void
