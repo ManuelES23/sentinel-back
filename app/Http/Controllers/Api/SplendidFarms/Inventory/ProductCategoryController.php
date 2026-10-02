@@ -108,7 +108,7 @@ class ProductCategoryController extends Controller
         if (empty($validated['code'])) {
             $prefix = 'CAT';
             
-            $lastCategory = ProductCategory::where('code', 'like', $prefix . '-%')
+            $lastCategory = ProductCategory::withTrashed()->where('code', 'like', $prefix . '-%')
                 ->orderByRaw('CAST(SUBSTRING(code, ' . (strlen($prefix) + 2) . ') AS UNSIGNED) DESC')
                 ->first();
             

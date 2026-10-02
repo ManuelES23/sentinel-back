@@ -53,7 +53,7 @@ class AreaController extends Controller
         if (empty($validated['code'])) {
             $prefix = 'AREA';
             
-            $lastArea = Area::where('code', 'like', $prefix . '-%')
+            $lastArea = Area::withTrashed()->where('code', 'like', $prefix . '-%')
                 ->orderByRaw('CAST(SUBSTRING(code, ' . (strlen($prefix) + 2) . ') AS UNSIGNED) DESC')
                 ->first();
             

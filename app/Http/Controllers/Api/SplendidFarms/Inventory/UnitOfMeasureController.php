@@ -88,7 +88,7 @@ class UnitOfMeasureController extends Controller
         if (empty($validated['code'])) {
             $prefix = strtoupper(substr($validated['type'], 0, 3));
             
-            $lastUnit = UnitOfMeasure::where('code', 'like', $prefix . '-%')
+            $lastUnit = UnitOfMeasure::withTrashed()->where('code', 'like', $prefix . '-%')
                 ->orderByRaw('CAST(SUBSTRING(code, ' . (strlen($prefix) + 2) . ') AS UNSIGNED) DESC')
                 ->first();
             

@@ -848,6 +848,12 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::put('areas/{area}/assignment/{entity}', [App\Http\Controllers\Api\SplendidFarms\Administration\AreaController::class, 'updateAssignment']);
                 Route::get('entidades/{entity}/areas', [App\Http\Controllers\Api\SplendidFarms\Administration\AreaController::class, 'getByEntity']);
             });
+
+            // Proveedores (catálogo global): lo que usa la pantalla de órdenes de compra
+            Route::prefix('catalogos')->group(function () {
+                Route::get('proveedores/list', [App\Http\Controllers\Api\SplendidFarms\Administration\SupplierController::class, 'list']);
+                Route::post('proveedores', [App\Http\Controllers\Api\SplendidFarms\Administration\SupplierController::class, 'store']);
+            });
         });
 
         // =====================================================
@@ -928,6 +934,7 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::get('movimientos/next-folio', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'nextFolio']);
                 Route::apiResource('movimientos', App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class)
                     ->parameters(['movimientos' => 'movement']);
+                Route::get('movimientos/{movement}/pdf', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'pdf']);
                 Route::post('movimientos/{movement}/approve', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'approve']);
                 Route::post('movimientos/{movement}/cancel', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController::class, 'cancel']);
             });
@@ -964,6 +971,7 @@ Route::middleware('auth:sanctum')->group(function () {
             // Módulo Reportes
             Route::prefix('reportes')->group(function () {
                 Route::get('stock', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryReportController::class, 'stock']);
+                Route::get('gasto-produccion', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryReportController::class, 'productionConsumption']);
                 Route::get('movimientos', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryReportController::class, 'movements']);
                 Route::get('valorizado', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryReportController::class, 'valued']);
                 Route::get('alertas', [App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryReportController::class, 'alerts']);

@@ -96,7 +96,7 @@ class MovementTypeController extends Controller
             ];
             $prefix = $prefixes[$validated['direction']] ?? 'MOV';
             
-            $lastType = MovementType::where('code', 'like', $prefix . '-%')
+            $lastType = MovementType::withTrashed()->where('code', 'like', $prefix . '-%')
                 ->orderByRaw('CAST(SUBSTRING(code, ' . (strlen($prefix) + 2) . ') AS UNSIGNED) DESC')
                 ->first();
             
