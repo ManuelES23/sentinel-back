@@ -4,9 +4,12 @@ namespace App\Console\Commands;
 
 use App\Models\AssetCategory;
 use App\Models\Brand;
+use App\Models\Enterprise;
 use App\Models\Entity;
 use App\Models\FixedAsset;
+use App\Services\ActivosFijos\GeneradorCodigoActivo;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\DB;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 
 /**
@@ -18,17 +21,23 @@ use PhpOffice\PhpSpreadsheet\IOFactory;
  *   F: Tipo Activo | G: Subtipo Activo | H: Marca | I: Estado
  *   J: Fecha Compra (texto relativo, ej. "hace 3 años") | K: Observaciones
  *
+ * Todo se importa dentro de UNA empresa (--empresa=slug): los activos quedan con
+ * su enterprise_id, las entidades se buscan solo entre las sucursales de esa
+ * empresa y las marcas nuevas se asocian a ella. Las filas sin código reciben
+ * el siguiente consecutivo de la empresa (con su prefijo).
+ *
  * Idempotente: usa el "Código" original como `code` en fixed_assets, así
  * que volver a correr el comando actualiza en vez de duplicar.
  *
  * Uso:
- *   php artisan assets:import-legacy "C:\ruta\Activos.xlsx"
- *   php artisan assets:import-legacy "C:\ruta\Activos.xlsx" --dry-run
+ *   php artisan assets:import-legacy "C:\ruta\Activos.xlsx" --empresa=splendidfarms
+ *   php artisan assets:import-legacy "C:\ruta\Activos.xlsx" --empresa=splendidfarms --dry-run
  */
 class ImportLegacyFixedAssets extends Command
 {
     protected $signature = 'assets:import-legacy
         {path : Ruta al archivo .xlsx exportado de Sentinel 2.0}
+        {--empresa= : Slug de la empresa dueña de los activos (splendidfarms, splendidbyporvenir, grupoesplendido)}
         {--dry-run : Solo mostrar qué se haría, sin escribir en la base de datos}';
 
     protected $description = 'Importa activos fijos desde el Excel de Sentinel 2.0';
@@ -62,8 +71,22 @@ class ImportLegacyFixedAssets extends Command
 
     private array $warnings = [];
 
+    private ?Enterprise $empresa = null;
+
     public function handle(): int
     {
+        $slug = $this->option('empresa');
+        if (! $slug) {
+            $this->error('Indica la empresa dueña de los activos con --empresa=slug.');
+            return self::FAILURE;
+        }
+
+        $this->empresa = Enterprise::where('slug', $slug)->first();
+        if (! $this->empresa) {
+            $this->error("La empresa '{$slug}' no existe.");
+            return self::FAILURE;
+        }
+
         $path = $this->argument('path');
         $dryRun = (bool) $this->option('dry-run');
 
@@ -146,7 +169,11 @@ class ImportLegacyFixedAssets extends Command
         // Resolver entidad (obligatoria)
         $entityKey = mb_strtolower($r['entidad']);
         $entityRealName = self::ENTITY_MAP[$entityKey] ?? null;
-        $entity = $entityRealName ? Entity::where('name', $entityRealName)->first() : null;
+        $entity = $entityRealName
+            ? Entity::where('name', $entityRealName)
+                ->whereHas('branch', fn ($q) => $q->where('enterprise_id', $this->empresa->id))
+                ->first()
+            : null;
 
         if (!$entity) {
             $this->warnings[] = "Fila {$idx} ({$r['codigo']}): entidad '{$r['entidad']}' no reconocida, fila omitida.";
@@ -177,6 +204,7 @@ class ImportLegacyFixedAssets extends Command
         }
 
         $payload = [
+            'enterprise_id' => $this->empresa->id,
             'name' => $r['nombre'],
             'serial_number' => $r['serie'] ?: null,
             'entity_id' => $entity->id,
@@ -193,7 +221,7 @@ class ImportLegacyFixedAssets extends Command
         if ($dryRun) {
             $this->line(sprintf(
                 '[%s] %s -> %s | %s / %s | %s | %s | %s | compra: %s',
-                $r['codigo'],
+                $r['codigo'] !== '' ? $r['codigo'] : '(código automático)',
                 $entity->name,
                 $r['nombre'],
                 $category->name ?? '-',
@@ -206,13 +234,24 @@ class ImportLegacyFixedAssets extends Command
             return;
         }
 
-        $existing = FixedAsset::withTrashed()->where('code', $r['codigo'])->first();
+        $existing = $r['codigo'] !== ''
+            ? FixedAsset::withTrashed()->where('code', $r['codigo'])->first()
+            : null;
         if ($existing) {
             $existing->update($payload);
             $this->stats['updated']++;
         } else {
-            $payload['code'] = $r['codigo'];
-            FixedAsset::create($payload);
+            if ($r['codigo'] !== '') {
+                $payload['code'] = $r['codigo'];
+                FixedAsset::create($payload);
+            } else {
+                // Sin código en el Excel: consecutivo de la empresa, reservado
+                // y usado dentro de la misma transacción.
+                DB::transaction(function () use ($payload) {
+                    $payload['code'] = app(GeneradorCodigoActivo::class)->siguiente($this->empresa);
+                    FixedAsset::create($payload);
+                });
+            }
             $this->stats['created']++;
         }
     }
@@ -235,17 +274,10 @@ class ImportLegacyFixedAssets extends Command
             return $fake;
         }
 
-        $prefix = 'TAC';
-        $last = AssetCategory::withTrashed()
-            ->where('code', 'like', $prefix.'-%')
-            ->orderByRaw('CAST(SUBSTRING(code, '.(strlen($prefix) + 2).') AS UNSIGNED) DESC')
-            ->first();
-        $next = $last ? ((int) substr($last->code, strlen($prefix) + 1)) + 1 : 1;
-
         $parentIcon = $parentId ? AssetCategory::find($parentId)?->icon : null;
 
         $category = AssetCategory::create([
-            'code' => $prefix.'-'.str_pad($next, 3, '0', STR_PAD_LEFT),
+            'code' => DB::transaction(fn () => app(GeneradorCodigoActivo::class)->siguienteTipo()),
             'name' => $name,
             'parent_id' => $parentId,
             'icon' => $parentIcon ?: 'Package',
@@ -264,7 +296,7 @@ class ImportLegacyFixedAssets extends Command
             return null;
         }
 
-        $existing = Brand::whereRaw('LOWER(name) = ?', [mb_strtolower($name)])->first();
+        $existing = Brand::forEnterprise($this->empresa->id)->whereRaw('LOWER(brands.name) = ?', [mb_strtolower($name)])->first();
         if ($existing) {
             return $existing;
         }
@@ -287,6 +319,8 @@ class ImportLegacyFixedAssets extends Command
             'name' => $name,
             'is_active' => true,
         ]);
+
+        $brand->enterprises()->syncWithoutDetaching([$this->empresa->id]);
 
         $this->stats['brands_created']++;
 
