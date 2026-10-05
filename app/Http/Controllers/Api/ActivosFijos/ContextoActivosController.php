@@ -55,6 +55,7 @@ class ContextoActivosController extends Controller
                 ->with([
                     'entityType:id,code,name',
                     'areas' => fn ($a) => $a->where('areas.is_active', true)->wherePivot('is_active', true)
+                        ->orderBy('areas.name')
                         ->select('areas.id', 'areas.name', 'areas.code'),
                 ])])
             ->get(['id', 'name', 'code'])

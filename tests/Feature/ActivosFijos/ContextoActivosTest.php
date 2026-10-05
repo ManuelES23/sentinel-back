@@ -47,6 +47,39 @@ class ContextoActivosTest extends TestCase
             ->assertJsonPath('data.marcas.0.id', $this->brand->id);
     }
 
+    public function test_catalogos_de_sf_no_mezcla_ubicaciones_ni_marcas_de_otras_empresas(): void
+    {
+        $otra = $this->crearEmpresaActivos('canes-agro', 'Canes Agro', 'CA');
+        [$sucursalAjena, $entidadAjena] = $this->crearUbicacion($otra, 'CA');
+
+        $marcaAjena = \App\Models\Brand::create(['code' => 'MRC-900', 'name' => 'HP', 'is_active' => true]);
+        $marcaAjena->enterprises()->attach($otra->id);
+        $marcaHuerfana = \App\Models\Brand::create(['code' => 'MRC-901', 'name' => 'Lenovo', 'is_active' => true]);
+
+        $respuesta = $this->getJson('/api/splendidfarms/administration/activos-fijos/catalogos')
+            ->assertOk()
+            ->assertJsonCount(1, 'data.sucursales')
+            ->assertJsonCount(1, 'data.marcas')
+            ->assertJsonPath('data.sucursales.0.id', $this->branch->id)
+            ->assertJsonPath('data.sucursales.0.entidades.0.id', $this->entity->id)
+            ->assertJsonPath('data.marcas.0.id', $this->brand->id);
+
+        $ids = fn (string $ruta) => collect($respuesta->json($ruta))->pluck('id')->all();
+        $this->assertNotContains($sucursalAjena->id, $ids('data.sucursales'));
+        $this->assertNotContains($entidadAjena->id, collect($respuesta->json('data.sucursales.0.entidades'))->pluck('id')->all());
+        $this->assertNotContains($marcaAjena->id, $ids('data.marcas'));
+        $this->assertNotContains($marcaHuerfana->id, $ids('data.marcas'));
+    }
+
+    public function test_catalogos_sin_permiso_de_ver_activos_responde_403(): void
+    {
+        $sinPermiso = \App\Models\User::factory()->create(['role' => 'user']);
+        \App\Models\UserEnterpriseAccess::create(['user_id' => $sinPermiso->id, 'enterprise_id' => $this->enterprise->id, 'is_active' => true, 'granted_at' => now()]);
+        Sanctum::actingAs($sinPermiso);
+
+        $this->getJson('/api/splendidfarms/administration/activos-fijos/catalogos')->assertForbidden();
+    }
+
     public function test_catalogos_en_ge_puede_pedir_otra_empresa_visible(): void
     {
         $this->getJson('/api/grupoesplendido/administration/activos-fijos/catalogos?enterprise_id='.$this->enterprise->id)
