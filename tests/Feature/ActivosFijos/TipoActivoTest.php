@@ -1,6 +1,6 @@
 <?php
 
-namespace Tests\Feature\SplendidFarms\Inventory;
+namespace Tests\Feature\ActivosFijos;
 
 use App\Models\AssetCategory;
 use App\Models\AssetCharacteristicDefinition;
@@ -10,13 +10,13 @@ use Laravel\Sanctum\Sanctum;
 use Tests\Concerns\CreatesAssetFixtures;
 use Tests\TestCase;
 
-class AssetCategoryControllerTest extends TestCase
+class TipoActivoTest extends TestCase
 {
     use RefreshDatabase;
     use CreatesAssetFixtures;
 
-    private const BASE_URL = '/api/splendidfarms/inventario/activos-fijos/tipos-activo';
-    private const MODULE_URL = '/api/splendidfarms/inventario/activos-fijos';
+    private const BASE_URL = '/api/grupoesplendido/administration/activos-fijos/tipos-activo';
+    private const MODULE_URL = '/api/grupoesplendido/administration/activos-fijos';
 
     protected function setUp(): void
     {

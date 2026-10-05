@@ -199,6 +199,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // APLICACIÓN ADMINISTRACIÓN - Rutas específicas
         // =====================================================
         Route::prefix('administration')->group(function () {
+            Route::group([], base_path('routes/activos-fijos.php'));
 
             // Módulo Organización
             Route::prefix('organizacion')->group(function () {
@@ -474,24 +475,6 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::post('recetas/{recipe}/reject', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'reject']);
                 Route::apiResource('recetas', App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class)
                     ->parameters(['recetas' => 'recipe']);
-            });
-
-            // Módulo Activos Fijos (vehículos, maquinaria, equipo de oficina, etc.)
-            Route::prefix('activos-fijos')->group(function () {
-                // Submódulo Tipos de Activos Fijos (tipo/subtipo)
-                Route::get('tipos-activo/tree', [App\Http\Controllers\Api\SplendidFarms\Inventory\AssetCategoryController::class, 'tree']);
-                Route::apiResource('tipos-activo', App\Http\Controllers\Api\SplendidFarms\Inventory\AssetCategoryController::class)
-                    ->parameters(['tipos-activo' => 'tipoActivo']);
-
-                // Catálogo de características sugeridas por Tipo/Subtipo
-                Route::get('tipos-activo/{tipoActivo}/caracteristicas', [App\Http\Controllers\Api\SplendidFarms\Inventory\AssetCategoryController::class, 'characteristics']);
-                Route::post('tipos-activo/{tipoActivo}/caracteristicas', [App\Http\Controllers\Api\SplendidFarms\Inventory\AssetCategoryController::class, 'storeCharacteristic']);
-                Route::delete('caracteristicas/{characteristic}', [App\Http\Controllers\Api\SplendidFarms\Inventory\AssetCategoryController::class, 'destroyCharacteristic']);
-
-                // Submódulo Activos Fijos (registro)
-                Route::get('activos/next-code', [App\Http\Controllers\Api\SplendidFarms\Inventory\FixedAssetController::class, 'nextCodeEndpoint']);
-                Route::apiResource('activos', App\Http\Controllers\Api\SplendidFarms\Inventory\FixedAssetController::class)
-                    ->parameters(['activos' => 'asset']);
             });
 
             // Módulo Operaciones (Movimientos)
@@ -830,6 +813,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // APLICACIÓN ADMINISTRACIÓN (mismos controllers que SF)
         // =====================================================
         Route::prefix('administration')->group(function () {
+            Route::group([], base_path('routes/activos-fijos.php'));
             Route::prefix('organizacion')->group(function () {
                 Route::apiResource('sucursales', App\Http\Controllers\Api\SplendidFarms\Administration\BranchController::class)
                     ->parameters(['sucursales' => 'branch']);
@@ -903,24 +887,6 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::post('recetas/{recipe}/reject', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'reject']);
                 Route::apiResource('recetas', App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class)
                     ->parameters(['recetas' => 'recipe']);
-            });
-
-            // Módulo Activos Fijos
-            Route::prefix('activos-fijos')->group(function () {
-                // Submódulo Tipos de Activos Fijos (tipo/subtipo)
-                Route::get('tipos-activo/tree', [App\Http\Controllers\Api\SplendidFarms\Inventory\AssetCategoryController::class, 'tree']);
-                Route::apiResource('tipos-activo', App\Http\Controllers\Api\SplendidFarms\Inventory\AssetCategoryController::class)
-                    ->parameters(['tipos-activo' => 'tipoActivo']);
-
-                // Catálogo de características sugeridas por Tipo/Subtipo
-                Route::get('tipos-activo/{tipoActivo}/caracteristicas', [App\Http\Controllers\Api\SplendidFarms\Inventory\AssetCategoryController::class, 'characteristics']);
-                Route::post('tipos-activo/{tipoActivo}/caracteristicas', [App\Http\Controllers\Api\SplendidFarms\Inventory\AssetCategoryController::class, 'storeCharacteristic']);
-                Route::delete('caracteristicas/{characteristic}', [App\Http\Controllers\Api\SplendidFarms\Inventory\AssetCategoryController::class, 'destroyCharacteristic']);
-
-                // Submódulo Activos Fijos (registro)
-                Route::get('activos/next-code', [App\Http\Controllers\Api\SplendidFarms\Inventory\FixedAssetController::class, 'nextCodeEndpoint']);
-                Route::apiResource('activos', App\Http\Controllers\Api\SplendidFarms\Inventory\FixedAssetController::class)
-                    ->parameters(['activos' => 'asset']);
             });
 
             // Módulo Operaciones
@@ -1159,29 +1125,10 @@ Route::middleware('auth:sanctum')->group(function () {
         });
 
         // =====================================================
-        // APLICACIÓN INVENTARIO (Catálogo de Activos Fijos)
-        // Reutiliza los mismos controllers que Splendid Farms.
-        // Requiere que Administración > Organización (sucursales/
-        // entidades/áreas) esté configurada para esta empresa.
+        // APLICACIÓN ADMINISTRACIÓN (solo Activos Fijos: vista
+        // corporativa de todas las empresas y catálogo de tipos)
         // =====================================================
-        Route::prefix('inventario')->group(function () {
-            Route::prefix('activos-fijos')->group(function () {
-                // Submódulo Tipos de Activos Fijos (tipo/subtipo)
-                Route::get('tipos-activo/tree', [App\Http\Controllers\Api\SplendidFarms\Inventory\AssetCategoryController::class, 'tree']);
-                Route::apiResource('tipos-activo', App\Http\Controllers\Api\SplendidFarms\Inventory\AssetCategoryController::class)
-                    ->parameters(['tipos-activo' => 'tipoActivo']);
-
-                // Catálogo de características sugeridas por Tipo/Subtipo
-                Route::get('tipos-activo/{tipoActivo}/caracteristicas', [App\Http\Controllers\Api\SplendidFarms\Inventory\AssetCategoryController::class, 'characteristics']);
-                Route::post('tipos-activo/{tipoActivo}/caracteristicas', [App\Http\Controllers\Api\SplendidFarms\Inventory\AssetCategoryController::class, 'storeCharacteristic']);
-                Route::delete('caracteristicas/{characteristic}', [App\Http\Controllers\Api\SplendidFarms\Inventory\AssetCategoryController::class, 'destroyCharacteristic']);
-
-                // Submódulo Activos Fijos (registro)
-                Route::get('activos/next-code', [App\Http\Controllers\Api\SplendidFarms\Inventory\FixedAssetController::class, 'nextCodeEndpoint']);
-                Route::apiResource('activos', App\Http\Controllers\Api\SplendidFarms\Inventory\FixedAssetController::class)
-                    ->parameters(['activos' => 'asset']);
-            });
-        });
+        Route::prefix('administration')->group(base_path('routes/activos-fijos.php'));
     });
 });
 
