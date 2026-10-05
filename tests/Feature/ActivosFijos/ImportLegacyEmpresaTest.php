@@ -4,6 +4,7 @@ namespace Tests\Feature\ActivosFijos;
 
 use App\Models\AssetCategory;
 use App\Models\Brand;
+use App\Models\Enterprise;
 use App\Models\Entity;
 use App\Models\FixedAsset;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -86,6 +87,68 @@ class ImportLegacyEmpresaTest extends TestCase
         $this->assertSame('TAC-003', AssetCategory::find($legacy->category_id)->code);
         $this->assertSame(0, FixedAsset::where('enterprise_id', $sp->id)->count());
         $this->assertSame(1, Entity::where('name', 'Oficina Mochis')->where('branch_id', $this->branch->id)->count());
+    }
+
+    public function test_rechaza_una_empresa_sin_prefijo_de_codigo(): void
+    {
+        Enterprise::create(['name' => 'Sin Prefijo', 'slug' => 'sinprefijo', 'description' => 'Sin Prefijo', 'is_active' => true]);
+
+        $this->artisan('assets:import-legacy', ['path' => 'no-importa.xlsx', '--empresa' => 'sinprefijo'])
+            ->expectsOutputToContain('prefijo')
+            ->assertExitCode(1);
+    }
+
+    public function test_no_mueve_un_activo_cuyo_codigo_pertenece_a_otra_empresa(): void
+    {
+        $this->setUpAssetFixtures();
+        $this->entity->update(['name' => 'Oficina Mochis']);
+
+        $sp = $this->crearEmpresaActivos('splendidbyporvenir', 'Splendid by Porvenir', 'SP');
+        [$sucursalSp, $entidadSp] = $this->crearUbicacion($sp, 'SP');
+        $ajeno = FixedAsset::create($this->validFixedAssetPayload([
+            'enterprise_id' => $sp->id, 'code' => 'LEG-001', 'name' => 'Activo de SP',
+            'branch_id' => $sucursalSp->id, 'entity_id' => $entidadSp->id, 'brand_id' => null,
+        ]));
+
+        $this->xlsx = $this->crearExcel([
+            ['LEG-001', 'Intento de pisarlo', 'SN-1', 'Los Mochis', 'Equipos de cómputo', 'Laptops', 'MarcaNuevaX', 'En uso', '', ''],
+        ]);
+
+        $this->artisan('assets:import-legacy', ['path' => $this->xlsx, '--empresa' => 'splendidfarms'])
+            ->expectsOutputToContain("pertenece a la empresa 'splendidbyporvenir'")
+            ->assertExitCode(0);
+
+        $ajeno->refresh();
+        $this->assertSame($sp->id, $ajeno->enterprise_id);
+        $this->assertSame($entidadSp->id, $ajeno->entity_id);
+        $this->assertSame($sucursalSp->id, $ajeno->branch_id);
+        $this->assertSame('Activo de SP', $ajeno->name);
+        $this->assertSame(1, FixedAsset::withTrashed()->count());
+        // La fila omitida no crea marcas ni tipos como efecto colateral.
+        $this->assertSame(0, Brand::where('name', 'MarcaNuevaX')->count());
+    }
+
+    public function test_reimportar_para_la_misma_empresa_actualiza_sin_duplicar(): void
+    {
+        $this->setUpAssetFixtures();
+        $this->entity->update(['name' => 'Oficina Mochis']);
+
+        $this->xlsx = $this->crearExcel([
+            ['LEG-001', 'Laptop legacy', 'SN-1', 'Los Mochis', 'Equipos de cómputo', 'Laptops', 'Dell', 'Disponible', '', ''],
+        ]);
+        $this->artisan('assets:import-legacy', ['path' => $this->xlsx, '--empresa' => 'splendidfarms'])->assertExitCode(0);
+        $this->assertSame(1, FixedAsset::withTrashed()->count());
+
+        unlink($this->xlsx);
+        $this->xlsx = $this->crearExcel([
+            ['LEG-001', 'Laptop legacy renombrada', 'SN-1', 'Los Mochis', 'Equipos de cómputo', 'Laptops', 'Dell', 'En uso', '', ''],
+        ]);
+        $this->artisan('assets:import-legacy', ['path' => $this->xlsx, '--empresa' => 'splendidfarms'])->assertExitCode(0);
+
+        $this->assertSame(1, FixedAsset::withTrashed()->count());
+        $activo = FixedAsset::where('code', 'LEG-001')->firstOrFail();
+        $this->assertSame('Laptop legacy renombrada', $activo->name);
+        $this->assertSame($this->enterprise->id, $activo->enterprise_id);
     }
 
     private function crearExcel(array $filas): string

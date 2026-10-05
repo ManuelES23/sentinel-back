@@ -87,6 +87,11 @@ class ImportLegacyFixedAssets extends Command
             return self::FAILURE;
         }
 
+        if (! $this->empresa->asset_code_prefix) {
+            $this->error("La empresa '{$slug}' no tiene configurado el prefijo de código de activo (asset_code_prefix); configúralo antes de importar.");
+            return self::FAILURE;
+        }
+
         $path = $this->argument('path');
         $dryRun = (bool) $this->option('dry-run');
 
@@ -166,6 +171,18 @@ class ImportLegacyFixedAssets extends Command
 
     private function importRow(int $idx, array $r, bool $dryRun): void
     {
+        // El código es único en toda la tabla: si ya pertenece a otra empresa,
+        // no se toca (actualizarlo lo movería de empresa en silencio).
+        $existing = $r['codigo'] !== ''
+            ? FixedAsset::withTrashed()->where('code', $r['codigo'])->first()
+            : null;
+        if ($existing && (int) $existing->enterprise_id !== $this->empresa->id) {
+            $duena = Enterprise::find($existing->enterprise_id)?->slug ?? "id {$existing->enterprise_id}";
+            $this->warnings[] = "Fila {$idx} ({$r['codigo']}): el código ya pertenece a la empresa '{$duena}', fila omitida sin modificarlo.";
+            $this->stats['skipped']++;
+            return;
+        }
+
         // Resolver entidad (obligatoria)
         $entityKey = mb_strtolower($r['entidad']);
         $entityRealName = self::ENTITY_MAP[$entityKey] ?? null;
@@ -234,9 +251,6 @@ class ImportLegacyFixedAssets extends Command
             return;
         }
 
-        $existing = $r['codigo'] !== ''
-            ? FixedAsset::withTrashed()->where('code', $r['codigo'])->first()
-            : null;
         if ($existing) {
             $existing->update($payload);
             $this->stats['updated']++;
