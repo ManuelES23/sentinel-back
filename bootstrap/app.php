@@ -3,6 +3,15 @@
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Support\Env;
+
+// PHP corre como módulo de Apache multihilo (ZTS) y el adaptador putenv escribe en
+// el entorno del PROCESO, compartido por todas las peticiones simultáneas. Al terminar
+// una petición, PHP restaura (borra) esas variables mientras otra aún está cargando su
+// configuración: esa petición se queda sin DB_CONNECTION/APP_KEY, cae en la base sqlite
+// por defecto y responde 401 "Unauthenticated" con un token válido (~5 % con carga
+// concurrente). Sin putenv, el .env se lee a $_ENV/$_SERVER, que son por petición.
+Env::disablePutenv();
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
