@@ -102,6 +102,7 @@ class MasterStructureSeeder extends Seeder
                 'name' => 'Grupo Espléndido',
                 'description' => 'Corporativo - Gestión centralizada de todas las empresas',
                 'color' => '#6366F1',
+                'asset_code_prefix' => 'GE',
                 'is_active' => true,
             ]
         );
@@ -113,6 +114,7 @@ class MasterStructureSeeder extends Seeder
                 'name' => 'Splendid Farms',
                 'description' => 'Empresa agrícola especializada en cultivos',
                 'color' => '#10B981',
+                'asset_code_prefix' => 'SF',
                 'is_active' => true,
             ]
         );
@@ -124,6 +126,7 @@ class MasterStructureSeeder extends Seeder
                 'name' => 'Splendid by Porvenir',
                 'description' => 'Empresa de exportación y ventas de fruta',
                 'color' => '#3B82F6',
+                'asset_code_prefix' => 'SP',
                 'is_active' => true,
             ]
         );
