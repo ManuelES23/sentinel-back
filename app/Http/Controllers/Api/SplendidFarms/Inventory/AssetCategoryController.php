@@ -109,7 +109,7 @@ class AssetCategoryController extends Controller
 
         $category->load('parent:id,name,code');
         $category->loadCount($this->conteos($request));
-        broadcast(new AssetCategoryUpdated('created', ['id' => $category->id]));
+        $this->emitir('created', ['id' => $category->id]);
 
         return response()->json([
             'success' => true,
@@ -154,7 +154,7 @@ class AssetCategoryController extends Controller
 
         $tipoActivo = $tipoActivo->fresh(['parent:id,name,code', 'children:id,parent_id,name,code']);
         $tipoActivo->loadCount($this->conteos($request));
-        broadcast(new AssetCategoryUpdated('updated', ['id' => $tipoActivo->id]));
+        $this->emitir('updated', ['id' => $tipoActivo->id]);
 
         return response()->json([
             'success' => true,
@@ -177,7 +177,7 @@ class AssetCategoryController extends Controller
         }
 
         $tipoActivo->delete();
-        broadcast(new AssetCategoryUpdated('deleted', ['id' => $tipoActivo->id]));
+        $this->emitir('deleted', ['id' => $tipoActivo->id]);
 
         return response()->json([
             'success' => true,
@@ -278,5 +278,15 @@ class AssetCategoryController extends Controller
         $filtro = fn ($q) => $q->whereIn('enterprise_id', $ids);
 
         return ['assetsAsCategory' => $filtro, 'assetsAsSubcategory' => $filtro];
+    }
+
+    private function emitir(string $accion, array $data): void
+    {
+        // Un Reverb caído no debe convertir un guardado exitoso en un 500.
+        try {
+            broadcast(new AssetCategoryUpdated($accion, $data));
+        } catch (\Throwable $e) {
+            report($e);
+        }
     }
 }

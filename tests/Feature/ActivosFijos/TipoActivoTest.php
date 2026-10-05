@@ -85,9 +85,13 @@ class TipoActivoTest extends TestCase
 
     public function test_desde_sf_se_pueden_leer_los_tipos_pero_no_escribirlos(): void
     {
+        // El usuario tiene CRUD completo de tipos-activo también en SF: el 403 lo da la regla
+        // "solo Grupo Espléndido escribe", no la falta de permiso.
+        $this->otorgarActivos($this->actingUser, $this->enterprise, 'tipos-activo', self::PERMISOS_CRUD);
+
         $sf = '/api/splendidfarms/administration/activos-fijos/tipos-activo';
 
-        $this->getJson($sf)->assertOk();
+        $this->getJson($sf)->assertOk()->assertJson(['success' => true]);
         $this->getJson($sf.'/tree')->assertOk();
         $this->postJson($sf, ['name' => 'Otro'])->assertForbidden();
         $this->putJson($sf."/{$this->assetCategory->id}", ['name' => 'X'])->assertForbidden();
@@ -151,6 +155,28 @@ class TipoActivoTest extends TestCase
         $this->assertSame(1, $raiz['assets_as_category_count']);
     }
 
+    public function test_un_fallo_del_broadcast_no_convierte_el_guardado_en_500(): void
+    {
+        // El evento es ShouldBroadcastNow: un driver que lanza excepción simula Reverb caído.
+        $estado = new \stdClass();
+        $estado->alcanzado = false;
+        config(['broadcasting.default' => 'caido', 'broadcasting.connections.caido' => ['driver' => 'caido']]);
+        app(\Illuminate\Broadcasting\BroadcastManager::class)->extend('caido', fn () => new class($estado) extends \Illuminate\Broadcasting\Broadcasters\Broadcaster {
+            public function __construct(private \stdClass $estado) {}
+            public function auth($request) {}
+            public function validAuthenticationResponse($request, $result) {}
+            public function broadcast(array $channels, $event, array $payload = []): void
+            {
+                $this->estado->alcanzado = true;
+                throw new \RuntimeException('reverb caído');
+            }
+        });
+
+        $this->postJson(self::BASE_URL, ['name' => 'Maquinaria'])->assertCreated();
+
+        $this->assertTrue($estado->alcanzado, 'El broadcaster que falla debía ser invocado.');
+        $this->assertDatabaseHas('asset_categories', ['name' => 'Maquinaria']);
+    }
     public function test_no_permite_eliminar_un_tipo_que_tiene_subtipos(): void
     {
         $response = $this->deleteJson(self::BASE_URL."/{$this->assetCategory->id}");
