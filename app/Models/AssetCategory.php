@@ -97,14 +97,16 @@ class AssetCategory extends Model
     }
 
     /**
-     * Obtener ruta completa de la categoría
+     * Ruta "Tipo > Subtipo". El catálogo tiene dos niveles; el tope de saltos
+     * evita un ciclo infinito si llegara a existir un dato corrupto.
      */
     public function getFullPathAttribute(): string
     {
         $path = [$this->name];
         $parent = $this->parent;
+        $saltos = 0;
 
-        while ($parent) {
+        while ($parent && $saltos++ < 2) {
             array_unshift($path, $parent->name);
             $parent = $parent->parent;
         }

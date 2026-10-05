@@ -2,22 +2,38 @@
 
 namespace App\Http\Controllers\Api\SplendidFarms\Inventory;
 
+use App\Events\AssetCategoryUpdated;
 use App\Http\Controllers\Controller;
 use App\Models\AssetCategory;
 use App\Models\AssetCharacteristicDefinition;
-use Illuminate\Http\Request;
+use App\Services\ActivosFijos\AlcanceActivos;
+use App\Services\ActivosFijos\GeneradorCodigoActivo;
+use App\Services\ActivosFijos\PermisosActivos;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
+/**
+ * Catálogo central de tipos/subtipos de activo (dos niveles). Lo leen todas
+ * las empresas con Activos Fijos; solo Grupo Espléndido lo modifica.
+ */
 class AssetCategoryController extends Controller
 {
-    /**
-     * Display a listing of the resource.
-     */
+    public function __construct(
+        private AlcanceActivos $alcance,
+        private PermisosActivos $permisos,
+        private GeneradorCodigoActivo $codigos,
+    ) {
+    }
+
     public function index(Request $request): JsonResponse
     {
+        $this->permisos->autorizarVerTipos($request);
+
         $query = AssetCategory::with(['parent:id,name,code', 'children:id,parent_id,name,code,icon,is_active'])
-            ->withCount(['assetsAsCategory', 'assetsAsSubcategory']);
+            ->withCount($this->conteos($request));
 
         if ($request->boolean('active_only')) {
             $query->active();
@@ -29,45 +45,46 @@ class AssetCategoryController extends Controller
 
         if ($request->has('parent_id')) {
             $parentId = $request->input('parent_id');
-            if ($parentId === 'null' || $parentId === '') {
+            if ($parentId === 'null' || $parentId === '' || $parentId === null) {
                 $query->whereNull('parent_id');
             } else {
                 $query->where('parent_id', $parentId);
             }
         }
 
-        $categories = $query->orderBy('order')->orderBy('name')->get();
-
         return response()->json([
             'success' => true,
-            'data' => $categories,
+            'data' => $query->orderBy('order')->orderBy('name')->get(),
         ]);
     }
 
-    /**
-     * Get categories in tree structure.
-     */
-    public function tree(): JsonResponse
+    /** Árbol completo, inactivos incluidos (se muestran con su badge para poder reactivarlos). */
+    public function tree(Request $request): JsonResponse
     {
-        $categories = AssetCategory::with('allChildren')
-            ->withCount(['assetsAsCategory', 'assetsAsSubcategory'])
+        $this->permisos->autorizarVerTipos($request);
+        $conteos = $this->conteos($request);
+
+        $categories = AssetCategory::query()
+            ->with(['children' => fn ($q) => $q->withCount($conteos)->orderBy('order')->orderBy('name')])
+            ->withCount($conteos)
             ->whereNull('parent_id')
-            ->active()
             ->orderBy('order')
             ->orderBy('name')
             ->get();
 
+        // El front lee allChildren: se conserva el nombre del arreglo.
+        $categories->each(fn ($c) => $c->setRelation('allChildren', $c->children)->unsetRelation('children'));
+
         return response()->json([
             'success' => true,
             'data' => $categories,
         ]);
     }
 
-    /**
-     * Store a newly created resource in storage.
-     */
     public function store(Request $request): JsonResponse
     {
+        $this->permisos->autorizarEscrituraTipos($request, 'create');
+
         $validated = $request->validate([
             'code' => 'nullable|string|max:50|unique:asset_categories,code',
             'name' => 'required|string|max:255',
@@ -80,25 +97,19 @@ class AssetCategoryController extends Controller
             'metadata' => 'nullable|array',
         ]);
 
-        // Generar código automático si no se proporciona
-        if (empty($validated['code'])) {
-            $prefix = 'TAC';
+        $this->validarPadre($validated['parent_id'] ?? null, null);
 
-            $lastCategory = AssetCategory::withTrashed()
-                ->where('code', 'like', $prefix.'-%')
-                ->orderByRaw('CAST(SUBSTRING(code, '.(strlen($prefix) + 2).') AS UNSIGNED) DESC')
-                ->first();
+        $category = DB::transaction(function () use ($validated) {
+            if (empty($validated['code'])) {
+                $validated['code'] = $this->codigos->siguienteTipo();
+            }
 
-            $nextNumber = $lastCategory
-                ? ((int) substr($lastCategory->code, strlen($prefix) + 1)) + 1
-                : 1;
+            return AssetCategory::create($validated);
+        });
 
-            $validated['code'] = $prefix.'-'.str_pad($nextNumber, 3, '0', STR_PAD_LEFT);
-        }
-
-        $category = AssetCategory::create($validated);
         $category->load('parent:id,name,code');
-        $category->loadCount(['assetsAsCategory', 'assetsAsSubcategory']);
+        $category->loadCount($this->conteos($request));
+        broadcast(new AssetCategoryUpdated('created', ['id' => $category->id]));
 
         return response()->json([
             'success' => true,
@@ -107,13 +118,12 @@ class AssetCategoryController extends Controller
         ], 201);
     }
 
-    /**
-     * Display the specified resource.
-     */
-    public function show(AssetCategory $tipoActivo): JsonResponse
+    public function show(Request $request, AssetCategory $tipoActivo): JsonResponse
     {
+        $this->permisos->autorizarVerTipos($request);
+
         $tipoActivo->load(['parent', 'children']);
-        $tipoActivo->loadCount(['assetsAsCategory', 'assetsAsSubcategory']);
+        $tipoActivo->loadCount($this->conteos($request));
 
         return response()->json([
             'success' => true,
@@ -121,11 +131,10 @@ class AssetCategoryController extends Controller
         ]);
     }
 
-    /**
-     * Update the specified resource in storage.
-     */
     public function update(Request $request, AssetCategory $tipoActivo): JsonResponse
     {
+        $this->permisos->autorizarEscrituraTipos($request, 'edit');
+
         $validated = $request->validate([
             'name' => 'sometimes|string|max:255',
             'slug' => 'nullable|string|max:255|unique:asset_categories,slug,'.$tipoActivo->id,
@@ -137,17 +146,15 @@ class AssetCategoryController extends Controller
             'metadata' => 'nullable|array',
         ]);
 
-        if (isset($validated['parent_id']) && $validated['parent_id'] == $tipoActivo->id) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'Un tipo de activo no puede ser su propio padre',
-            ], 422);
+        if (array_key_exists('parent_id', $validated)) {
+            $this->validarPadre($validated['parent_id'], $tipoActivo);
         }
 
         $tipoActivo->update($validated);
 
         $tipoActivo = $tipoActivo->fresh(['parent:id,name,code', 'children:id,parent_id,name,code']);
-        $tipoActivo->loadCount(['assetsAsCategory', 'assetsAsSubcategory']);
+        $tipoActivo->loadCount($this->conteos($request));
+        broadcast(new AssetCategoryUpdated('updated', ['id' => $tipoActivo->id]));
 
         return response()->json([
             'success' => true,
@@ -156,26 +163,21 @@ class AssetCategoryController extends Controller
         ]);
     }
 
-    /**
-     * Remove the specified resource from storage.
-     */
-    public function destroy(AssetCategory $tipoActivo): JsonResponse
+    public function destroy(Request $request, AssetCategory $tipoActivo): JsonResponse
     {
-        if ($tipoActivo->children()->count() > 0) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'No se puede eliminar el tipo de activo porque tiene subtipos',
-            ], 422);
+        $this->permisos->autorizarEscrituraTipos($request, 'delete');
+
+        if ($tipoActivo->children()->exists()) {
+            throw ValidationException::withMessages(['id' => 'No se puede eliminar el tipo de activo porque tiene subtipos']);
         }
 
-        if ($tipoActivo->assetsAsCategory()->count() > 0 || $tipoActivo->assetsAsSubcategory()->count() > 0) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'No se puede eliminar el tipo de activo porque tiene activos fijos asociados',
-            ], 422);
+        // Aquí se cuentan los activos de TODAS las empresas: el catálogo es compartido.
+        if ($tipoActivo->assetsAsCategory()->exists() || $tipoActivo->assetsAsSubcategory()->exists()) {
+            throw ValidationException::withMessages(['id' => 'No se puede eliminar el tipo de activo porque tiene activos fijos asociados']);
         }
 
         $tipoActivo->delete();
+        broadcast(new AssetCategoryUpdated('deleted', ['id' => $tipoActivo->id]));
 
         return response()->json([
             'success' => true,
@@ -183,39 +185,32 @@ class AssetCategoryController extends Controller
         ]);
     }
 
-    /**
-     * Catálogo de características sugeridas para un Tipo/Subtipo de Activo.
-     */
-    public function characteristics(AssetCategory $tipoActivo): JsonResponse
+    public function characteristics(Request $request, AssetCategory $tipoActivo): JsonResponse
     {
+        $this->permisos->autorizarVerTipos($request);
+
         return response()->json([
             'success' => true,
             'data' => $tipoActivo->characteristicDefinitions()->get(),
         ]);
     }
 
-    /**
-     * Registrar una nueva característica sugerida para un Tipo/Subtipo.
-     */
     public function storeCharacteristic(Request $request, AssetCategory $tipoActivo): JsonResponse
     {
+        $this->permisos->autorizarEscrituraTipos($request, 'edit');
+
         $validated = $request->validate([
             'name' => [
                 'required',
                 'string',
                 'max:150',
-                // Solo valida contra definiciones activas: si el nombre
-                // pertenece a una que se borró (soft delete), se permite
-                // reciclarla en vez de bloquear por duplicado.
+                // Solo contra definiciones vivas: una borrada se recicla.
                 Rule::unique('asset_characteristic_definitions', 'name')
                     ->where('category_id', $tipoActivo->id)
                     ->whereNull('deleted_at'),
             ],
         ]);
 
-        // withTrashed(): si el nombre ya existía pero se había borrado del
-        // catálogo, se recicla (restore) en vez de intentar crear un
-        // duplicado y chocar con la restricción única category_id+name.
         $definition = AssetCharacteristicDefinition::withTrashed()
             ->where('category_id', $tipoActivo->id)
             ->where('name', $validated['name'])
@@ -240,17 +235,48 @@ class AssetCategoryController extends Controller
         ], 201);
     }
 
-    /**
-     * Quitar una característica del catálogo de sugerencias. No borra los
-     * valores ya capturados en activos (quedan como campo libre).
-     */
-    public function destroyCharacteristic(AssetCharacteristicDefinition $characteristic): JsonResponse
+    /** No borra los valores ya capturados en activos (quedan como campo libre). */
+    public function destroyCharacteristic(Request $request, AssetCharacteristicDefinition $characteristic): JsonResponse
     {
+        $this->permisos->autorizarEscrituraTipos($request, 'edit');
+
         $characteristic->delete();
 
         return response()->json([
             'success' => true,
             'message' => 'Característica eliminada del catálogo',
         ]);
+    }
+
+    /**
+     * Dos niveles: el padre debe ser raíz, no puede ser el propio tipo, y un
+     * tipo que ya tiene subtipos no puede pasar a ser subtipo.
+     */
+    private function validarPadre(?int $parentId, ?AssetCategory $tipo): void
+    {
+        if ($parentId === null) {
+            return;
+        }
+
+        if ($tipo && $parentId === $tipo->id) {
+            throw ValidationException::withMessages(['parent_id' => 'Un tipo de activo no puede ser su propio padre']);
+        }
+
+        if (AssetCategory::whereKey($parentId)->whereNotNull('parent_id')->exists()) {
+            throw ValidationException::withMessages(['parent_id' => 'Solo hay dos niveles: el padre debe ser un tipo principal']);
+        }
+
+        if ($tipo && $tipo->children()->exists()) {
+            throw ValidationException::withMessages(['parent_id' => 'Un tipo con subtipos no puede convertirse en subtipo']);
+        }
+    }
+
+    /** Conteos de activos limitados a las empresas que ve la petición. */
+    private function conteos(Request $request): array
+    {
+        $ids = $this->alcance->idsVisibles($request);
+        $filtro = fn ($q) => $q->whereIn('enterprise_id', $ids);
+
+        return ['assetsAsCategory' => $filtro, 'assetsAsSubcategory' => $filtro];
     }
 }
