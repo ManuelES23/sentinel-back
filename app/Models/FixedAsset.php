@@ -24,6 +24,7 @@ class FixedAsset extends Model
     ];
 
     protected $fillable = [
+        'enterprise_id',
         'code',
         'image',
         'name',
@@ -98,6 +99,11 @@ class FixedAsset extends Model
     public function characteristics(): HasMany
     {
         return $this->hasMany(FixedAssetCharacteristic::class)->orderBy('order');
+    }
+
+    public function enterprise(): BelongsTo
+    {
+        return $this->belongsTo(Enterprise::class);
     }
 
     public function branch(): BelongsTo

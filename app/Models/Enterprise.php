@@ -14,6 +14,7 @@ class Enterprise extends Model
 
     protected $fillable = [
         'slug',
+        'asset_code_prefix',
         'name',
         'razon_social',
         'rfc',
