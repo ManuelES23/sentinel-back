@@ -15,17 +15,17 @@ use App\Models\UserSubmodulePermission;
 use Illuminate\Database\Seeder;
 
 /**
- * Seeder para el módulo "Activos Fijos" dentro de la app Inventario.
+ * Seeder para el módulo "Activos Fijos" dentro de la app Administración.
  *
- * Estructura final (módulo propio, no submódulo de Catálogos):
- *   Inventario
+ * Estructura final (por empresa):
+ *   Administración
  *     └── Activos Fijos (módulo)
  *           ├── Activos Fijos      (slug: activos)       -> registro de activos
  *           └── Tipos de Activos Fijos (slug: tipos-activo) -> catálogo tipo/subtipo
+ *                 (solo activo en Grupo Espléndido; en el resto queda oculto)
  *
- * Es seguro volver a correr este seeder: si detecta el submódulo antiguo
- * 'activos-fijos' colgando del módulo 'catalogos' (estructura previa), lo
- * migra al nuevo módulo en vez de duplicarlo.
+ * Es seguro volver a correr este seeder (todo es firstOrCreate). El traslado
+ * desde Inventario lo hace la migración mover_activos_fijos_a_administracion.
  *
  * Ejecutar: php artisan db:seed --class=FixedAssetsModuleSeeder
  */
@@ -105,16 +105,16 @@ class FixedAssetsModuleSeeder extends Seeder
             return null;
         }
 
-        $appIsNew = !Application::where('slug', 'inventario')
+        $appIsNew = !Application::where('slug', 'administration')
             ->where('enterprise_id', $enterprise->id)->exists();
 
         $app = Application::firstOrCreate(
-            ['slug' => 'inventario', 'enterprise_id' => $enterprise->id],
+            ['slug' => 'administration', 'enterprise_id' => $enterprise->id],
             [
-                'name' => 'Inventario',
-                'description' => 'Catálogo de activos fijos e inventario general',
-                'icon' => 'Package',
-                'path' => "/{$enterpriseSlug}/inventario",
+                'name' => 'Administración',
+                'description' => 'Administración',
+                'icon' => 'Building2',
+                'path' => "/{$enterpriseSlug}/administration",
                 'is_active' => true,
             ]
         );
@@ -123,53 +123,22 @@ class FixedAssetsModuleSeeder extends Seeder
         $order = (int) (Module::where('application_id', $app->id)->max('order') ?? 0) + 1;
         $module = Module::firstOrCreate(
             ['slug' => 'activos-fijos', 'application_id' => $app->id],
-            ['name' => 'Activos Fijos', 'icon' => 'Truck', 'order' => $order, 'is_active' => true]
+            ['name' => 'Activos Fijos', 'path' => '/activos-fijos', 'icon' => 'Truck', 'order' => $order, 'is_active' => true]
         );
 
-        // Migrar el submódulo antiguo (estructura previa: dentro de Catálogos)
-        $oldCatalogos = Module::where('slug', 'catalogos')
-            ->where('application_id', $app->id)
-            ->first();
-
-        $activosSubmodule = null;
-        if ($oldCatalogos) {
-            $activosSubmodule = Submodule::where('module_id', $oldCatalogos->id)
-                ->where('slug', 'activos-fijos')
-                ->first();
-        }
-
-        if ($activosSubmodule) {
-            $activosSubmodule->update([
-                'module_id' => $module->id,
-                'slug' => 'activos',
-                'name' => 'Activos Fijos',
-                'icon' => 'Truck',
-                'order' => 1,
-            ]);
-            $this->command->info("  ↪ {$enterpriseSlug}: submódulo Activos Fijos migrado a su propio módulo");
-        } else {
-            $activosSubmodule = Submodule::firstOrCreate(
-                ['slug' => 'activos', 'module_id' => $module->id],
-                ['name' => 'Activos Fijos', 'icon' => 'Truck', 'order' => 1, 'is_active' => true]
-            );
-        }
+        $activosSubmodule = Submodule::firstOrCreate(
+            ['slug' => 'activos', 'module_id' => $module->id],
+            ['name' => 'Activos Fijos', 'icon' => 'Truck', 'order' => 1, 'is_active' => true]
+        );
         $this->ensurePermissionTypes($activosSubmodule);
 
-        // Submódulo "Tipos de Activos Fijos"
+        // Submódulo "Tipos de Activos Fijos": el catálogo solo se administra desde Grupo Espléndido
         $tiposSubmodule = Submodule::firstOrCreate(
             ['slug' => 'tipos-activo', 'module_id' => $module->id],
-            ['name' => 'Tipos de Activos Fijos', 'icon' => 'Layers', 'order' => 2, 'is_active' => true]
+            ['name' => 'Tipos de Activos Fijos', 'icon' => 'Layers', 'order' => 2, 'is_active' => $enterpriseSlug === 'grupoesplendido']
         );
         $this->ensurePermissionTypes($tiposSubmodule);
-
-        // Limpiar el módulo Catálogos si quedó vacío (caso Grupo Espléndido,
-        // donde se creó solo para alojar temporalmente este submódulo)
-        if ($oldCatalogos && $oldCatalogos->submodules()->count() === 0) {
-            $oldCatalogos->delete();
-            $this->command->info("  🧹 {$enterpriseSlug}: módulo Catálogos vacío eliminado");
-        }
-
-        $this->command->info("  ✓ {$enterpriseSlug}/inventario/activos-fijos/{activos,tipos-activo}");
+        $this->command->info("  ✓ {$enterpriseSlug}/administration/activos-fijos/{activos,tipos-activo}");
 
         if ($appIsNew) {
             $this->command->warn('    → Falta configurar Sucursales/Entidades/Áreas para esta empresa (Administración > Organización).');
