@@ -155,6 +155,9 @@ class FixedAssetController extends Controller
         $imagenVieja = $asset->image;
         $imagenNueva = $request->hasFile('image') ? $request->file('image')->store('fixed-assets', 'public') : null;
         $quitarImagen = $imagenNueva || $request->boolean('remove_image');
+        if (! $quitarImagen) {
+            unset($validated['image']); // image null/vacío sin remove_image no debe borrar la imagen actual
+        }
 
         try {
             DB::transaction(function () use ($request, $asset, $validated, $imagenNueva, $quitarImagen) {
@@ -384,6 +387,11 @@ class FixedAssetController extends Controller
     {
         $empresa = $asset->relationLoaded('enterprise') ? $asset->enterprise : $asset->enterprise()->first();
 
-        broadcast(new FixedAssetUpdated($accion, ['id' => $asset->id], $empresa->slug));
+        // Un Reverb caído no debe convertir un guardado exitoso en un 500.
+        try {
+            broadcast(new FixedAssetUpdated($accion, ['id' => $asset->id], $empresa->slug));
+        } catch (\Throwable $e) {
+            report($e);
+        }
     }
 }
