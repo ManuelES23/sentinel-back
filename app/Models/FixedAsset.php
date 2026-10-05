@@ -51,6 +51,7 @@ class FixedAsset extends Model
     ];
 
     protected $casts = [
+        'enterprise_id' => 'integer',
         'year' => 'integer',
         'useful_life_years' => 'integer',
         'purchase_date' => 'date',

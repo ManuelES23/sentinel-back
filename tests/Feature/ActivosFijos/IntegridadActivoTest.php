@@ -164,4 +164,13 @@ class IntegridadActivoTest extends TestCase
         $this->postJson(self::URL, $this->validFixedAssetPayload())->assertCreated();
         $this->assertDatabaseCount('fixed_assets', 1);
     }
+
+    public function test_un_tipo_borrado_logicamente_no_se_acepta_como_category_id(): void
+    {
+        $this->assetCategory->delete();
+
+        $this->postJson(self::URL, $this->validFixedAssetPayload())
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['category_id']);
+    }
 }

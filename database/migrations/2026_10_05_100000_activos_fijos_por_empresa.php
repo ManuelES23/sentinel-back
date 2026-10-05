@@ -72,8 +72,10 @@ return new class extends Migration
         Schema::dropIfExists('fixed_asset_sequences');
 
         Schema::table('fixed_assets', function (Blueprint $table) {
+            // En MySQL el índice compuesto sirve a la llave foránea: primero se suelta la FK.
+            $table->dropForeign(['enterprise_id']);
             $table->dropIndex(['enterprise_id', 'status']);
-            $table->dropConstrainedForeignId('enterprise_id');
+            $table->dropColumn('enterprise_id');
         });
 
         Schema::table('enterprises', function (Blueprint $table) {

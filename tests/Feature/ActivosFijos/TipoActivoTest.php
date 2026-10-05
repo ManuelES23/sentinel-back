@@ -287,4 +287,13 @@ class TipoActivoTest extends TestCase
             'definition_id' => $definition->id,
         ]);
     }
+
+    public function test_un_tipo_raiz_borrado_logicamente_no_se_acepta_como_parent_id(): void
+    {
+        $this->assetCategory->delete();
+
+        $this->postJson(self::BASE_URL, ['name' => 'Huérfano', 'parent_id' => $this->assetCategory->id])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['parent_id']);
+    }
 }

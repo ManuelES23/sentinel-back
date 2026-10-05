@@ -240,8 +240,8 @@ class FixedAssetController extends Controller
             'year' => 'nullable|integer|min:1900|max:'.(date('Y') + 1),
             'brand_id' => 'nullable|exists:brands,id',
 
-            'category_id' => [$esAlta ? 'required' : 'sometimes', 'exists:asset_categories,id'],
-            'subcategory_id' => 'nullable|exists:asset_categories,id',
+            'category_id' => [$esAlta ? 'required' : 'sometimes', Rule::exists('asset_categories', 'id')->whereNull('deleted_at')],
+            'subcategory_id' => ['nullable', Rule::exists('asset_categories', 'id')->whereNull('deleted_at')],
 
             'branch_id' => [$esAlta ? 'required' : 'sometimes', 'exists:branches,id'],
             'entity_id' => [$esAlta ? 'required' : 'sometimes', 'exists:entities,id'],
