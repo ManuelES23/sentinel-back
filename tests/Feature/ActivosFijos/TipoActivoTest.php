@@ -1,6 +1,6 @@
 <?php
 
-namespace Tests\Feature\SplendidFarms\Inventory;
+namespace Tests\Feature\ActivosFijos;
 
 use App\Models\AssetCategory;
 use App\Models\AssetCharacteristicDefinition;
@@ -10,13 +10,13 @@ use Laravel\Sanctum\Sanctum;
 use Tests\Concerns\CreatesAssetFixtures;
 use Tests\TestCase;
 
-class AssetCategoryControllerTest extends TestCase
+class TipoActivoTest extends TestCase
 {
     use RefreshDatabase;
     use CreatesAssetFixtures;
 
-    private const BASE_URL = '/api/splendidfarms/inventario/activos-fijos/tipos-activo';
-    private const MODULE_URL = '/api/splendidfarms/inventario/activos-fijos';
+    private const BASE_URL = '/api/grupoesplendido/administration/activos-fijos/tipos-activo';
+    private const MODULE_URL = '/api/grupoesplendido/administration/activos-fijos';
 
     protected function setUp(): void
     {
@@ -79,9 +79,104 @@ class AssetCategoryControllerTest extends TestCase
         );
 
         $response->assertStatus(422)
+            ->assertJsonValidationErrors(['parent_id'])
             ->assertJsonPath('message', 'Un tipo de activo no puede ser su propio padre');
     }
 
+    public function test_desde_sf_se_pueden_leer_los_tipos_pero_no_escribirlos(): void
+    {
+        // El usuario tiene CRUD completo de tipos-activo también en SF: el 403 lo da la regla
+        // "solo Grupo Espléndido escribe", no la falta de permiso.
+        $this->otorgarActivos($this->actingUser, $this->enterprise, 'tipos-activo', self::PERMISOS_CRUD);
+
+        $sf = '/api/splendidfarms/administration/activos-fijos/tipos-activo';
+
+        $this->getJson($sf)->assertOk()->assertJson(['success' => true]);
+        $this->getJson($sf.'/tree')->assertOk();
+        $this->postJson($sf, ['name' => 'Otro'])->assertForbidden();
+        $this->putJson($sf."/{$this->assetCategory->id}", ['name' => 'X'])->assertForbidden();
+        $this->deleteJson($sf."/{$this->assetSubcategory->id}")->assertForbidden();
+        $this->postJson($sf."/{$this->assetSubcategory->id}/caracteristicas", ['name' => 'RAM'])->assertForbidden();
+    }
+
+    public function test_en_ge_sin_permiso_create_de_tipos_responde_403(): void
+    {
+        $user = \App\Models\User::factory()->create(['role' => 'user']);
+        $this->otorgarActivos($user, $this->corporativo, 'tipos-activo', ['view']);
+        \Laravel\Sanctum\Sanctum::actingAs($user);
+
+        $this->postJson(self::BASE_URL, ['name' => 'Otro'])->assertForbidden();
+    }
+
+    public function test_no_permite_un_tercer_nivel(): void
+    {
+        $this->postJson(self::BASE_URL, ['name' => 'Nieto', 'parent_id' => $this->assetSubcategory->id])
+            ->assertStatus(422)->assertJsonValidationErrors(['parent_id']);
+    }
+
+    public function test_no_permite_ciclos_al_editar(): void
+    {
+        $this->putJson(self::BASE_URL."/{$this->assetCategory->id}", ['parent_id' => $this->assetSubcategory->id])
+            ->assertStatus(422)->assertJsonValidationErrors(['parent_id']);
+    }
+
+    public function test_un_tipo_con_subtipos_no_puede_volverse_subtipo(): void
+    {
+        $otro = AssetCategory::create(['code' => 'TAC-050', 'name' => 'Vehículos', 'is_active' => true]);
+
+        $this->putJson(self::BASE_URL."/{$this->assetCategory->id}", ['parent_id' => $otro->id])
+            ->assertStatus(422)->assertJsonValidationErrors(['parent_id']);
+    }
+
+    public function test_el_arbol_incluye_tipos_raiz_inactivos(): void
+    {
+        $this->assetCategory->update(['is_active' => false]);
+
+        $ids = collect($this->getJson(self::BASE_URL.'/tree')->assertOk()->json('data'))->pluck('id');
+
+        $this->assertContains($this->assetCategory->id, $ids);
+    }
+
+    public function test_el_codigo_automatico_salta_los_existentes(): void
+    {
+        $this->postJson(self::BASE_URL, ['name' => 'Maquinaria'])->assertCreated()->assertJsonPath('data.code', 'TAC-003');
+    }
+
+    public function test_los_conteos_del_arbol_en_sf_solo_cuentan_activos_de_sf(): void
+    {
+        $sp = $this->crearEmpresaActivos('splendidbyporvenir', 'Splendid by Porvenir', 'SP');
+        [$sucursalSp, $entidadSp] = $this->crearUbicacion($sp, 'SP');
+        FixedAsset::create($this->validFixedAssetPayload(['enterprise_id' => $sp->id, 'code' => 'SP-1', 'branch_id' => $sucursalSp->id, 'entity_id' => $entidadSp->id, 'brand_id' => null]));
+        FixedAsset::create($this->validFixedAssetPayload(['code' => 'SF-1']));
+
+        $raiz = collect($this->getJson('/api/splendidfarms/administration/activos-fijos/tipos-activo/tree')->json('data'))
+            ->firstWhere('id', $this->assetCategory->id);
+
+        $this->assertSame(1, $raiz['assets_as_category_count']);
+    }
+
+    public function test_un_fallo_del_broadcast_no_convierte_el_guardado_en_500(): void
+    {
+        // El evento es ShouldBroadcastNow: un driver que lanza excepción simula Reverb caído.
+        $estado = new \stdClass();
+        $estado->alcanzado = false;
+        config(['broadcasting.default' => 'caido', 'broadcasting.connections.caido' => ['driver' => 'caido']]);
+        app(\Illuminate\Broadcasting\BroadcastManager::class)->extend('caido', fn () => new class($estado) extends \Illuminate\Broadcasting\Broadcasters\Broadcaster {
+            public function __construct(private \stdClass $estado) {}
+            public function auth($request) {}
+            public function validAuthenticationResponse($request, $result) {}
+            public function broadcast(array $channels, $event, array $payload = []): void
+            {
+                $this->estado->alcanzado = true;
+                throw new \RuntimeException('reverb caído');
+            }
+        });
+
+        $this->postJson(self::BASE_URL, ['name' => 'Maquinaria'])->assertCreated();
+
+        $this->assertTrue($estado->alcanzado, 'El broadcaster que falla debía ser invocado.');
+        $this->assertDatabaseHas('asset_categories', ['name' => 'Maquinaria']);
+    }
     public function test_no_permite_eliminar_un_tipo_que_tiene_subtipos(): void
     {
         $response = $this->deleteJson(self::BASE_URL."/{$this->assetCategory->id}");
@@ -191,5 +286,14 @@ class AssetCategoryControllerTest extends TestCase
             'name' => 'Procesador',
             'definition_id' => $definition->id,
         ]);
+    }
+
+    public function test_un_tipo_raiz_borrado_logicamente_no_se_acepta_como_parent_id(): void
+    {
+        $this->assetCategory->delete();
+
+        $this->postJson(self::BASE_URL, ['name' => 'Huérfano', 'parent_id' => $this->assetCategory->id])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['parent_id']);
     }
 }

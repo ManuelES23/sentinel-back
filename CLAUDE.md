@@ -62,7 +62,8 @@ app/Http/Controllers/Api/
     ├── Inventory/            # Brand, ProductCategory, UnitOfMeasure, Product, MovementType,
     │                         # InventoryMovement, PurchaseOrder, PurchaseReceipt,
     │                         # InventoryReport, Recipe, TipoCarga
-    │                         # AssetCategory, FixedAsset (Activos Fijos)
+    │                         # AssetCategory, FixedAsset (Activos Fijos: carpeta heredada;
+    │                         #   las rutas viven en Administración → Activos Fijos)
     ├── Accounting/           # AccountPayable (+ pagos + aplicaciones)
     └── OperacionAgricola/    # Temporada, Catalogo, CosteoAgricola, DiagnosticoIA, Etapa,
         ├── Cosecha/          # SalidaCampo, Cierre, Venta, Calidad
@@ -89,7 +90,7 @@ Agrupadas bajo `Route::prefix('{empresa}')->group(...)`, luego por app (`inventa
 ### 2. Headers de contexto (para auditoría, no autorización)
 ```php
 $request->header('X-Enterprise-Slug');  // 'splendidfarms'
-$request->header('X-Application-Slug'); // 'inventario'
+$request->header('X-Application-Slug'); // 'administration'
 $request->header('X-Module-Slug');      // 'activos-fijos'
 $request->header('X-Submodule-Slug');   // 'activos'
 ```
@@ -171,8 +172,8 @@ php artisan reverb:start          # WebSocket server
 
 ## ⚠️ Huecos conocidos del proyecto (pendientes de mejora)
 
-- **Testing real: en progreso.** Cobertura completa (83 tests) en dos módulos como referencia de patrón:
-  - `tests/Feature/SplendidFarms/Inventory/` — Activos Fijos (`FixedAssetControllerTest`, `AssetCategoryControllerTest`, 31 tests), usa `tests/Concerns/CreatesAssetFixtures.php`.
+- **Testing real: en progreso.** Cobertura completa (145 tests) en dos módulos como referencia de patrón:
+  - `tests/Feature/ActivosFijos/` — Activos Fijos (93 tests en 12 archivos: ActivoCrud, AislamientoActivos, AlcanceYPermisos, ContextoActivos, GeneradorCodigoActivo, ImportLegacyEmpresa, IntegridadActivo, MigracionActivosPorEmpresa, MigracionMenuActivos, SembradoPrefijosActivos, TiempoRealActivos, TipoActivo). Resuelven la empresa desde la URL (`/api/{empresa}/administration/activos-fijos/...`), cubren SF y GE (y SBP en las pruebas de aislamiento) y usan `tests/Concerns/CreatesAssetFixtures.php` (SF + GE con Administración → Activos Fijos y helpers de permisos `activos.view/create/edit/delete`).
   - `tests/Feature/CRM/` — CRM Comercial (8 archivos, 52 tests: Cliente, Prospecto, Vendedor, Región/Zona/Bodega, Producto, Contacto, EmpresaExterna, Actividad), usa `tests/Concerns/CreatesCrmFixtures.php`. A diferencia de Activos Fijos, el CRM resuelve la empresa por el header `X-Enterprise-Id` (no por la URL) — los tests lo mandan explícitamente vía `$this->crmHeaders()`.
   - El resto de módulos (RH, Agrícola, Empaque) todavía no tiene cobertura.
   - Escribir estos tests **encontró y corrigió 2 bugs reales** que llevaban tiempo sin detectarse por falta de cobertura: `ClienteController::index()` llamaba a un método de scope inexistente (`->empresa()` en vez de `->where('empresa_id', ...)`) y tronaba 500 en cada request; y `crm_vendedores.user_id` era `NOT NULL` en la BD aunque la validación del controller lo declara opcional, causando un 500 al crear un vendedor sin cuenta ligada (migración `2026_08_11_190000_make_user_id_nullable_on_crm_vendedores_table.php`).

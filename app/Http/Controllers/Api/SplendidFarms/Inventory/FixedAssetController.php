@@ -2,20 +2,32 @@
 
 namespace App\Http\Controllers\Api\SplendidFarms\Inventory;
 
+use App\Events\FixedAssetUpdated;
 use App\Http\Controllers\Controller;
+use App\Models\AssetCategory;
 use App\Models\AssetCharacteristicDefinition;
+use App\Models\Branch;
+use App\Models\Brand;
+use App\Models\Enterprise;
+use App\Models\Entity;
 use App\Models\FixedAsset;
+use App\Services\ActivosFijos\AlcanceActivos;
+use App\Services\ActivosFijos\GeneradorCodigoActivo;
+use App\Services\ActivosFijos\PermisosActivos;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 class FixedAssetController extends Controller
 {
     private const RELATIONS = [
+        'enterprise:id,name,slug',
         'brand:id,name,code',
-        'category:id,name,code,parent_id',
-        'subcategory:id,name,code,parent_id',
+        'category:id,name,code,parent_id,icon',
+        'subcategory:id,name,code,parent_id,icon',
         'branch:id,name,code',
         'entity:id,name,code,entity_type_id',
         'entity.entityType:id,code,name,icon,color',
@@ -24,97 +36,91 @@ class FixedAssetController extends Controller
         'characteristics',
     ];
 
-    /**
-     * Display a listing of the resource.
-     */
+    private const POR_PAGINA = 25;
+    private const POR_PAGINA_MAX = 100;
+
+    public function __construct(
+        private AlcanceActivos $alcance,
+        private PermisosActivos $permisos,
+        private GeneradorCodigoActivo $codigos,
+    ) {
+    }
+
     public function index(Request $request): JsonResponse
     {
-        $query = FixedAsset::with(self::RELATIONS);
+        $this->permisos->autorizar($request, 'activos', 'view');
+
+        $query = $this->alcance->aplicar(FixedAsset::with(self::RELATIONS), $request);
 
         if ($request->boolean('active_only')) {
             $query->active();
         }
 
-        if ($request->has('branch_id') && $request->branch_id !== '') {
-            $query->where('branch_id', $request->branch_id);
-        }
-
-        if ($request->has('entity_id') && $request->entity_id !== '') {
-            $query->where('entity_id', $request->entity_id);
-        }
-
-        if ($request->has('area_id') && $request->area_id !== '') {
-            $query->where('area_id', $request->area_id);
-        }
-
-        // Filtro por ubicación (radio button Campo/Empaque/Oficina) vía tipo de entidad
-        if ($request->filled('entity_type')) {
-            $entityTypes = array_filter(explode(',', $request->input('entity_type')));
-            if (!empty($entityTypes)) {
-                $query->whereHas('entity.entityType', function ($q) use ($entityTypes) {
-                    $q->whereIn('code', $entityTypes);
-                });
+        foreach (['enterprise_id', 'branch_id', 'entity_id', 'area_id', 'category_id', 'subcategory_id', 'status'] as $filtro) {
+            if ($request->filled($filtro)) {
+                $query->where($filtro, $request->input($filtro));
             }
         }
 
-        if ($request->has('category_id') && $request->category_id !== '') {
-            $query->where('category_id', $request->category_id);
-        }
-
-        if ($request->has('subcategory_id') && $request->subcategory_id !== '') {
-            $query->where('subcategory_id', $request->subcategory_id);
-        }
-
-        if ($request->filled('status')) {
-            $query->where('status', $request->input('status'));
+        // Filtro por ubicación (Campo/Empaque/Oficina) vía tipo de entidad
+        if ($request->filled('entity_type')) {
+            $entityTypes = array_filter(explode(',', $request->input('entity_type')));
+            if (! empty($entityTypes)) {
+                $query->whereHas('entity.entityType', fn ($q) => $q->whereIn('code', $entityTypes));
+            }
         }
 
         if ($request->filled('search')) {
-            $search = $request->input('search');
-            $query->where(function ($q) use ($search) {
-                $q->where('name', 'like', "%{$search}%")
-                    ->orWhere('code', 'like', "%{$search}%")
-                    ->orWhere('serial_number', 'like', "%{$search}%")
-                    ->orWhere('model', 'like', "%{$search}%");
+            // '!' como carácter de escape: funciona igual en MySQL y SQLite.
+            $term = '%'.str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $request->input('search')).'%';
+            $query->where(function ($q) use ($term) {
+                foreach (['name', 'code', 'serial_number', 'model'] as $columna) {
+                    $q->orWhereRaw("{$columna} LIKE ? ESCAPE '!'", [$term]);
+                }
             });
         }
 
-        $query->orderBy('name');
-
-        // Paginación opcional (igual que Artículos): solo si se pide per_page
-        $assets = $request->has('per_page')
-            ? $query->paginate((int) $request->input('per_page'))
-            : $query->get();
+        $porPagina = min(max((int) $request->input('per_page', self::POR_PAGINA), 1), self::POR_PAGINA_MAX);
 
         return response()->json([
             'success' => true,
-            'data' => $assets,
+            'data' => $query->orderBy('name')->orderBy('id')->paginate($porPagina),
         ]);
     }
 
-    /**
-     * Store a newly created resource in storage.
-     */
     public function store(Request $request): JsonResponse
     {
-        $validated = $this->validateData($request);
+        $this->permisos->autorizar($request, 'activos', 'create');
 
-        // Generar código automático si no se proporciona
-        if (empty($validated['code'])) {
-            $validated['code'] = $this->nextCode();
+        $empresa = $this->alcance->empresaParaAlta($request);
+        $validated = $this->validateData($request, $empresa);
+        $imagenNueva = $request->hasFile('image') ? $request->file('image')->store('fixed-assets', 'public') : null;
+
+        try {
+            $asset = DB::transaction(function () use ($request, $validated, $empresa, $imagenNueva) {
+                $validated['enterprise_id'] = $empresa->id;
+                $validated['code'] = ($validated['code'] ?? null) ?: $this->codigos->siguiente($empresa);
+                if ($imagenNueva) {
+                    $validated['image'] = $imagenNueva;
+                }
+
+                $asset = FixedAsset::create($validated);
+
+                if ($this->debeSincronizar($request)) {
+                    $this->syncCharacteristics($asset, (array) $request->input('characteristics', []));
+                }
+
+                return $asset;
+            });
+        } catch (\Throwable $e) {
+            if ($imagenNueva) {
+                Storage::disk('public')->delete($imagenNueva);
+            }
+            throw $e;
         }
-
-        if ($request->hasFile('image')) {
-            $validated['image'] = $request->file('image')->store('fixed-assets', 'public');
-        }
-
-        $asset = FixedAsset::create($validated);
-
-        // Siempre sincroniza (aunque venga vacío): el formulario maneja la
-        // lista completa, así que un envío sin filas significa "quítalas todas".
-        $this->syncCharacteristics($asset, (array) $request->input('characteristics', []));
 
         $asset->load(self::RELATIONS);
+        $this->emitir('created', $asset);
 
         return response()->json([
             'success' => true,
@@ -123,40 +129,62 @@ class FixedAssetController extends Controller
         ], 201);
     }
 
-    /**
-     * Display the specified resource.
-     */
-    public function show(FixedAsset $asset): JsonResponse
+    public function show(Request $request, FixedAsset $asset): JsonResponse
     {
-        $asset->load(self::RELATIONS);
+        $this->permisos->autorizar($request, 'activos', 'view');
+        $this->alcance->autorizarActivo($asset, $request);
 
         return response()->json([
             'success' => true,
-            'data' => $asset,
+            'data' => $asset->load(self::RELATIONS),
         ]);
     }
 
-    /**
-     * Update the specified resource in storage.
-     */
     public function update(Request $request, FixedAsset $asset): JsonResponse
     {
-        $validated = $this->validateData($request, $asset->id);
+        $this->alcance->autorizarActivo($asset, $request);
+        $this->permisos->autorizar($request, 'activos', 'edit');
 
-        if ($request->hasFile('image')) {
-            if ($asset->image) {
-                Storage::disk('public')->delete($asset->image);
-            }
-            $validated['image'] = $request->file('image')->store('fixed-assets', 'public');
+        $empresa = $asset->enterprise; // la empresa dueña no cambia al editar
+        $validated = $this->validateData($request, $empresa, $asset);
+        unset($validated['enterprise_id']);
+        if (empty($validated['code'])) {
+            unset($validated['code']); // vacío = conservar el código actual
         }
 
-        $asset->update($validated);
+        $imagenVieja = $asset->image;
+        $imagenNueva = $request->hasFile('image') ? $request->file('image')->store('fixed-assets', 'public') : null;
+        $quitarImagen = $imagenNueva || $request->boolean('remove_image');
+        if (! $quitarImagen) {
+            unset($validated['image']); // image null/vacío sin remove_image no debe borrar la imagen actual
+        }
 
-        // Siempre sincroniza (aunque venga vacío): el formulario maneja la
-        // lista completa, así que un envío sin filas significa "quítalas todas".
-        $this->syncCharacteristics($asset, (array) $request->input('characteristics', []));
+        try {
+            DB::transaction(function () use ($request, $asset, $validated, $imagenNueva, $quitarImagen) {
+                if ($quitarImagen) {
+                    $validated['image'] = $imagenNueva; // null si solo se quitó
+                }
+
+                $asset->update($validated);
+
+                if ($this->debeSincronizar($request)) {
+                    $this->syncCharacteristics($asset, (array) $request->input('characteristics', []));
+                }
+            });
+        } catch (\Throwable $e) {
+            if ($imagenNueva) {
+                Storage::disk('public')->delete($imagenNueva);
+            }
+            throw $e;
+        }
+
+        // Se borra el archivo viejo solo cuando el cambio ya quedó guardado.
+        if ($quitarImagen && $imagenVieja) {
+            Storage::disk('public')->delete($imagenVieja);
+        }
 
         $asset = $asset->fresh(self::RELATIONS);
+        $this->emitir('updated', $asset);
 
         return response()->json([
             'success' => true,
@@ -165,16 +193,14 @@ class FixedAssetController extends Controller
         ]);
     }
 
-    /**
-     * Remove the specified resource from storage.
-     */
-    public function destroy(FixedAsset $asset): JsonResponse
+    /** Borrado lógico: la imagen se conserva para poder restaurar el activo. */
+    public function destroy(Request $request, FixedAsset $asset): JsonResponse
     {
-        if ($asset->image) {
-            Storage::disk('public')->delete($asset->image);
-        }
+        $this->alcance->autorizarActivo($asset, $request);
+        $this->permisos->autorizar($request, 'activos', 'delete');
 
         $asset->delete();
+        $this->emitir('deleted', $asset);
 
         return response()->json([
             'success' => true,
@@ -183,54 +209,45 @@ class FixedAssetController extends Controller
     }
 
     /**
-     * Siguiente código disponible (para mostrarlo en el formulario antes de guardar).
+     * Vista previa del siguiente código (no lo reserva: se asigna al guardar).
+     * En GE se calcula para la empresa elegida (?enterprise_id=).
      */
-    public function nextCode(): string
+    public function nextCodeEndpoint(Request $request): JsonResponse
     {
-        $prefix = 'AF';
+        $this->permisos->autorizar($request, 'activos', 'view');
 
-        $last = FixedAsset::withTrashed()
-            ->where('code', 'like', $prefix.'-%')
-            ->orderByRaw('CAST(SUBSTRING(code, '.(strlen($prefix) + 2).') AS UNSIGNED) DESC')
-            ->first();
+        $empresa = $this->alcance->esCorporativo($request) && $request->filled('enterprise_id')
+            ? $this->alcance->empresasVisibles($request)->firstWhere('id', (int) $request->input('enterprise_id'))
+            : $this->alcance->empresaActual($request);
 
-        $nextNumber = $last
-            ? ((int) substr($last->code, strlen($prefix) + 1)) + 1
-            : 1;
-
-        return $prefix.'-'.str_pad($nextNumber, 6, '0', STR_PAD_LEFT);
-    }
-
-    /**
-     * Endpoint auxiliar: próximo código disponible.
-     */
-    public function nextCodeEndpoint(): JsonResponse
-    {
         return response()->json([
             'success' => true,
-            'data' => ['code' => $this->nextCode()],
+            'data' => ['code' => $empresa ? $this->codigos->vistaPrevia($empresa) : null],
         ]);
     }
 
-    private function validateData(Request $request, ?int $assetId = null): array
+    private function validateData(Request $request, Enterprise $empresa, ?FixedAsset $asset = null): array
     {
+        $esAlta = $asset === null;
+
         $validated = $request->validate([
-            'code' => ['nullable', 'string', 'max:50', Rule::unique('fixed_assets', 'code')->ignore($assetId)],
-            'name' => 'required|string|max:255',
+            'code' => ['nullable', 'string', 'max:50', Rule::unique('fixed_assets', 'code')->ignore($asset?->id)],
+            'name' => [$esAlta ? 'required' : 'sometimes', 'string', 'max:255'],
             'image' => 'nullable|image|mimes:jpeg,jpg,png,gif,webp|max:2048',
+            'remove_image' => 'sometimes|boolean',
             'serial_number' => 'nullable|string|max:150',
             'model' => 'nullable|string|max:150',
             'year' => 'nullable|integer|min:1900|max:'.(date('Y') + 1),
             'brand_id' => 'nullable|exists:brands,id',
 
-            'category_id' => 'required|exists:asset_categories,id',
-            'subcategory_id' => 'nullable|exists:asset_categories,id',
+            'category_id' => [$esAlta ? 'required' : 'sometimes', Rule::exists('asset_categories', 'id')->whereNull('deleted_at')],
+            'subcategory_id' => ['nullable', Rule::exists('asset_categories', 'id')->whereNull('deleted_at')],
 
-            'branch_id' => 'required|exists:branches,id',
-            'entity_id' => 'required|exists:entities,id',
+            'branch_id' => [$esAlta ? 'required' : 'sometimes', 'exists:branches,id'],
+            'entity_id' => [$esAlta ? 'required' : 'sometimes', 'exists:entities,id'],
             'area_id' => 'nullable|exists:areas,id',
 
-            'status' => ['nullable', Rule::in(array_keys(\App\Models\FixedAsset::STATUSES))],
+            'status' => ['sometimes', 'required', Rule::in(array_keys(FixedAsset::STATUSES))],
             'useful_life_years' => 'nullable|integer|min:0|max:100',
             'performance_unit_id' => 'nullable|exists:units_of_measure,id',
             'description' => 'nullable|string',
@@ -249,46 +266,73 @@ class FixedAssetController extends Controller
             'characteristics.*.definition_id' => 'nullable|integer|exists:asset_characteristic_definitions,id',
         ]);
 
-        unset($validated['characteristics']);
+        unset($validated['characteristics'], $validated['remove_image']);
 
-        // La entidad debe pertenecer a la sucursal seleccionada
-        if (!empty($validated['entity_id']) && !empty($validated['branch_id'])) {
-            $belongs = \App\Models\Entity::where('id', $validated['entity_id'])
-                ->where('branch_id', $validated['branch_id'])
-                ->exists();
+        // Valores efectivos (los del request o, al editar, los que ya tiene el activo)
+        $efectivo = fn (string $campo) => array_key_exists($campo, $validated) ? $validated[$campo] : $asset?->{$campo};
+        $errores = [];
 
-            if (!$belongs) {
-                abort(response()->json([
-                    'status' => 'error',
-                    'message' => 'La entidad seleccionada no pertenece a la sucursal indicada',
-                ], 422));
+        $branchId = $efectivo('branch_id');
+        if ($branchId && ! Branch::where('id', $branchId)->where('enterprise_id', $empresa->id)->exists()) {
+            $errores['branch_id'] = 'La sucursal seleccionada no pertenece a la empresa del activo';
+        }
+
+        $entityId = $efectivo('entity_id');
+        if ($entityId && $branchId && ! Entity::where('id', $entityId)->where('branch_id', $branchId)->exists()) {
+            $errores['entity_id'] = 'La entidad seleccionada no pertenece a la sucursal indicada';
+        }
+
+        $areaId = $efectivo('area_id');
+        if ($areaId && $entityId && ! DB::table('entity_area')->where('entity_id', $entityId)->where('area_id', $areaId)->exists()) {
+            $errores['area_id'] = 'El área seleccionada no pertenece a la entidad indicada';
+        }
+
+        $brandId = $validated['brand_id'] ?? null;
+        if ($brandId && ! Brand::whereKey($brandId)->forEnterprise($empresa->id)->exists()) {
+            $errores['brand_id'] = 'La marca seleccionada no está dada de alta en la empresa del activo';
+        }
+
+        $categoryId = $efectivo('category_id');
+        if ($categoryId && AssetCategory::whereKey($categoryId)->whereNotNull('parent_id')->exists()) {
+            $errores['category_id'] = 'El tipo de activo debe ser un tipo principal, no un subtipo';
+        }
+
+        $subcategoryId = $efectivo('subcategory_id');
+        if ($subcategoryId && ! AssetCategory::whereKey($subcategoryId)->where('parent_id', $categoryId)->exists()) {
+            $errores['subcategory_id'] = 'El subtipo seleccionado no pertenece al tipo de activo';
+        }
+
+        $categoriasValidas = array_filter([$categoryId, $subcategoryId]);
+        foreach ((array) $request->input('characteristics', []) as $i => $fila) {
+            $definitionId = $fila['definition_id'] ?? null;
+            if ($definitionId && ! AssetCharacteristicDefinition::whereKey($definitionId)->whereIn('category_id', $categoriasValidas)->exists()) {
+                $errores["characteristics.{$i}.definition_id"] = 'La característica no corresponde al tipo de activo';
             }
         }
 
-        // El área debe pertenecer a la entidad seleccionada
-        if (!empty($validated['area_id']) && !empty($validated['entity_id'])) {
-            $belongs = \Illuminate\Support\Facades\DB::table('entity_area')
-                ->where('entity_id', $validated['entity_id'])
-                ->where('area_id', $validated['area_id'])
-                ->exists();
-
-            if (!$belongs) {
-                abort(response()->json([
-                    'status' => 'error',
-                    'message' => 'El área seleccionada no pertenece a la entidad indicada',
-                ], 422));
-            }
+        if ($errores) {
+            throw ValidationException::withMessages($errores);
         }
 
         return $validated;
     }
 
     /**
+     * Las características solo se reemplazan si la petición las trae. El
+     * formulario manda sync_characteristics=1 (FormData no envía arreglos
+     * vacíos), así "sin filas" sí significa "quítalas todas"; una petición
+     * que no las menciona (p. ej. un cambio de estado) no las toca.
+     */
+    private function debeSincronizar(Request $request): bool
+    {
+        return $request->has('characteristics') || $request->boolean('sync_characteristics');
+    }
+
+    /**
      * Reemplaza las características capturadas de un activo. Las filas sin
-     * nombre o sin valor se ignoran (una característica sin valor no aporta
-     * nada, el usuario simplemente no la incluyó). Cuando una fila no viene
-     * ligada a una definición existente, se registra automáticamente en el
-     * catálogo de la categoría del activo para poder reutilizarla después.
+     * nombre o sin valor se ignoran. Cuando una fila no viene ligada a una
+     * definición existente, se registra en el catálogo de la categoría del
+     * activo para poder reutilizarla después.
      */
     private function syncCharacteristics(FixedAsset $asset, array $characteristics): void
     {
@@ -307,11 +351,9 @@ class FixedAssetController extends Controller
 
             $definitionId = $item['definition_id'] ?? null;
 
-            if (!$definitionId && $categoryId) {
-                // withTrashed(): si el nombre ya existía pero se había
-                // borrado del catálogo, se recicla (restore) en vez de
-                // intentar crear un duplicado y chocar con la restricción
-                // única category_id+name.
+            if (! $definitionId && $categoryId) {
+                // withTrashed(): si el nombre existía pero se borró del
+                // catálogo, se recicla en vez de chocar con el único category_id+name.
                 $definition = AssetCharacteristicDefinition::withTrashed()
                     ->where('category_id', $categoryId)
                     ->where('name', $name)
@@ -338,6 +380,18 @@ class FixedAssetController extends Controller
                 'value' => $value,
                 'order' => $order++,
             ]);
+        }
+    }
+
+    private function emitir(string $accion, FixedAsset $asset): void
+    {
+        $empresa = $asset->relationLoaded('enterprise') ? $asset->enterprise : $asset->enterprise()->first();
+
+        // Un Reverb caído no debe convertir un guardado exitoso en un 500.
+        try {
+            broadcast(new FixedAssetUpdated($accion, ['id' => $asset->id], $empresa->slug));
+        } catch (\Throwable $e) {
+            report($e);
         }
     }
 }
