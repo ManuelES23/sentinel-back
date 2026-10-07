@@ -341,4 +341,25 @@ class AsignacionApiTest extends TestCase
 
         $this->getJson(self::BASE.'/asignaciones')->assertStatus(403);
     }
+
+    public function test_sin_view_pero_con_acceso_a_la_empresa_la_lista_y_el_historial_responden_403(): void
+    {
+        $activo = $this->crearActivo();
+        // Acceso a la empresa y permisos de otro tipo: el 403 viene del permiso, no del alcance.
+        Sanctum::actingAs($this->usuarioCon(['create']));
+
+        $this->getJson(self::BASE.'/asignaciones')->assertForbidden();
+        $this->getJson(self::BASE."/activos/{$activo->id}/asignaciones")->assertForbidden();
+    }
+
+    public function test_los_filtros_de_la_lista_y_de_responsables_con_formato_invalido_responden_422(): void
+    {
+        $activo = $this->crearActivo();
+
+        $this->getJson(self::BASE.'/asignaciones?search[]=x')->assertStatus(422)->assertJsonValidationErrors(['search']);
+        $this->getJson(self::BASE.'/asignaciones?area_id[]=1')->assertStatus(422)->assertJsonValidationErrors(['area_id']);
+        $this->getJson(self::BASE.'/asignaciones?enterprise_id=abc')->assertStatus(422)->assertJsonValidationErrors(['enterprise_id']);
+        $this->getJson(self::BASE.'/asignaciones?per_page=0')->assertStatus(422)->assertJsonValidationErrors(['per_page']);
+        $this->getJson(self::BASE."/activos/{$activo->id}/responsables?q[]=x")->assertStatus(422)->assertJsonValidationErrors(['q']);
+    }
 }

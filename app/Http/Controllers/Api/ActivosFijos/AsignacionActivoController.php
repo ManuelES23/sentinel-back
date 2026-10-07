@@ -40,7 +40,13 @@ class AsignacionActivoController extends Controller
     public function index(Request $request): JsonResponse
     {
         $this->permisos->autorizar($request, self::SUBMODULO, 'view');
-        $request->validate(['estado' => ['nullable', Rule::in(['activas', 'devueltas', 'todas'])]]);
+        $request->validate([
+            'estado' => ['nullable', Rule::in(['activas', 'devueltas', 'todas'])],
+            'search' => ['nullable', 'string', 'max:100'],
+            'area_id' => ['nullable', 'integer'],
+            'enterprise_id' => ['nullable', 'integer'],
+            'per_page' => ['nullable', 'integer', 'min:1'],
+        ]);
 
         $query = $this->alcance->aplicar(FixedAssetAssignment::query(), $request)
             ->with(['asset:id,code,name,status,entity_id,enterprise_id', 'enterprise:id,name,slug', 'area:id,name,code']);
@@ -113,6 +119,7 @@ class AsignacionActivoController extends Controller
     {
         $this->permisos->autorizar($request, self::SUBMODULO, 'create');
         $this->alcance->autorizarActivo($asset, $request);
+        $request->validate(['q' => ['nullable', 'string', 'max:100']]);
 
         return response()->json([
             'success' => true,

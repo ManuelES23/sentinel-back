@@ -3,6 +3,7 @@
 
 namespace Tests\Feature\ActivosFijos;
 
+use App\Models\ActivityLog;
 use App\Models\FixedAssetAssignment;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -108,6 +109,23 @@ class AsignacionCartaTest extends TestCase
 
         Sanctum::actingAs(User::factory()->create(['role' => 'user']));
         $this->get($url)->assertForbidden();
+    }
+
+    public function test_la_ruta_privada_del_archivo_no_entra_a_la_bitacora(): void
+    {
+        $asignacion = $this->asignar();
+        $this->postJson(self::BASE."/asignaciones/{$asignacion->id}/carta-firmada", [
+            'file' => UploadedFile::fake()->create('carta.pdf', 50, 'application/pdf'),
+        ])->assertOk();
+        $this->assertNotEmpty($asignacion->fresh()->signed_document_path);
+
+        $registros = ActivityLog::where('model', 'FixedAssetAssignment')->get();
+        $this->assertNotEmpty($registros);
+        foreach ($registros as $registro) {
+            $this->assertStringNotContainsString('signed_document_path', json_encode([$registro->old_values, $registro->new_values]));
+        }
+        // La subida sí queda auditada: solo se omite la ruta privada, no el resto de los campos.
+        $this->assertTrue($registros->contains(fn ($r) => array_key_exists('signed_uploaded_by', (array) $r->new_values)));
     }
 
     // ---- datos de la carta ----

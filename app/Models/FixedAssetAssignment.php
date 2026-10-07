@@ -58,6 +58,9 @@ class FixedAssetAssignment extends Model
     /** La ruta del archivo no sale por la API: se descarga con un endpoint autenticado. */
     protected $hidden = ['signed_document_path'];
 
+    /** Tampoco entra a la bitácora (ActivityLog): es una ruta privada del disco. */
+    protected array $loggableExcept = ['signed_document_path'];
+
     protected $appends = ['tiene_carta_firmada', 'activa'];
 
     public function getTieneCartaFirmadaAttribute(): bool
