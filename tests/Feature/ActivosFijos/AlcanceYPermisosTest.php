@@ -87,6 +87,18 @@ class AlcanceYPermisosTest extends TestCase
             ->assertJsonPath('permisos.corporativo', false);
     }
 
+    public function test_el_resumen_incluye_los_permisos_de_asignaciones(): void
+    {
+        $usuario = User::factory()->create(['role' => 'user']);
+        $this->otorgarActivos($usuario, $this->enterprise, 'asignaciones', ['view', 'create']);
+        Sanctum::actingAs($usuario);
+
+        $this->getJson('/api/splendidfarms/administration/activos-fijos/_prueba')
+            ->assertOk()
+            ->assertJsonPath('permisos.asignaciones', ['view' => true, 'create' => true, 'edit' => false, 'delete' => false])
+            ->assertJsonPath('permisos.activos', ['view' => false, 'create' => false, 'edit' => false, 'delete' => false]);
+    }
+
     public function test_escribir_tipos_desde_una_empresa_no_corporativa_nunca_se_permite(): void
     {
         $this->otorgarActivos($this->actingUser, $this->enterprise, 'tipos-activo', self::PERMISOS_CRUD);
