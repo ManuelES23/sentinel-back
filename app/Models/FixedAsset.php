@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Str;
 
@@ -100,6 +101,18 @@ class FixedAsset extends Model
     public function characteristics(): HasMany
     {
         return $this->hasMany(FixedAssetCharacteristic::class)->orderBy('order');
+    }
+
+    /** Historial de entregas, de la más reciente a la más antigua. */
+    public function asignaciones(): HasMany
+    {
+        return $this->hasMany(FixedAssetAssignment::class)->orderByDesc('id');
+    }
+
+    /** Entrega vigente (sin devolución). Como máximo una, la garantiza AsignadorActivos. */
+    public function asignacionActiva(): HasOne
+    {
+        return $this->hasOne(FixedAssetAssignment::class)->whereNull('returned_at');
     }
 
     public function enterprise(): BelongsTo

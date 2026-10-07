@@ -21,8 +21,9 @@ use Illuminate\Database\Seeder;
  *   Administración
  *     └── Activos Fijos (módulo)
  *           ├── Activos Fijos      (slug: activos)       -> registro de activos
- *           └── Tipos de Activos Fijos (slug: tipos-activo) -> catálogo tipo/subtipo
- *                 (solo activo en Grupo Espléndido; en el resto queda oculto)
+ *           ├── Tipos de Activos Fijos (slug: tipos-activo) -> catálogo tipo/subtipo
+ *           │     (solo activo en Grupo Espléndido; en el resto queda oculto)
+ *           └── Asignaciones          (slug: asignaciones)  -> entregas y carta responsiva
  *
  * Es seguro volver a correr este seeder (todo es firstOrCreate). El traslado
  * desde Inventario lo hace la migración mover_activos_fijos_a_administracion.
@@ -74,7 +75,7 @@ class FixedAssetsModuleSeeder extends Seeder
                     ['is_active' => true, 'granted_at' => now()]
                 );
 
-                foreach ([$entry['activosSubmodule'], $entry['tiposSubmodule']] as $submodule) {
+                foreach ([$entry['activosSubmodule'], $entry['tiposSubmodule'], $entry['asignacionesSubmodule']] as $submodule) {
                     UserSubmoduleAccess::firstOrCreate(
                         ['user_id' => $user->id, 'submodule_id' => $submodule->id],
                         ['is_active' => true, 'granted_at' => now()]
@@ -138,7 +139,14 @@ class FixedAssetsModuleSeeder extends Seeder
             ['name' => 'Tipos de Activos Fijos', 'icon' => 'Layers', 'order' => 2, 'is_active' => $enterpriseSlug === 'grupoesplendido']
         );
         $this->ensurePermissionTypes($tiposSubmodule);
-        $this->command->info("  ✓ {$enterpriseSlug}/administration/activos-fijos/{activos,tipos-activo}");
+
+        // Submódulo "Asignaciones": a quién se le entregó cada activo (carta responsiva)
+        $asignacionesSubmodule = Submodule::firstOrCreate(
+            ['slug' => 'asignaciones', 'module_id' => $module->id],
+            ['name' => 'Asignaciones', 'icon' => 'UserCheck', 'order' => 3, 'is_active' => true]
+        );
+        $this->ensurePermissionTypes($asignacionesSubmodule);
+        $this->command->info("  ✓ {$enterpriseSlug}/administration/activos-fijos/{activos,tipos-activo,asignaciones}");
 
         if ($appIsNew) {
             $this->command->warn('    → Falta configurar Sucursales/Entidades/Áreas para esta empresa (Administración > Organización).');
@@ -150,6 +158,7 @@ class FixedAssetsModuleSeeder extends Seeder
             'module' => $module,
             'activosSubmodule' => $activosSubmodule,
             'tiposSubmodule' => $tiposSubmodule,
+            'asignacionesSubmodule' => $asignacionesSubmodule,
         ];
     }
 

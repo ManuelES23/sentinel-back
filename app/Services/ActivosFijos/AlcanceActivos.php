@@ -5,6 +5,7 @@ namespace App\Services\ActivosFijos;
 use App\Http\Middleware\EnsureUserIsAdmin;
 use App\Models\Enterprise;
 use App\Models\FixedAsset;
+use App\Models\FixedAssetAssignment;
 use App\Models\UserEnterpriseAccess;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
@@ -82,6 +83,12 @@ class AlcanceActivos
     public function autorizarActivo(FixedAsset $activo, Request $request): void
     {
         abort_unless(in_array($activo->enterprise_id, $this->idsVisibles($request), true), 404);
+    }
+
+    /** 404 y no 403, igual que con los activos: no se revela que la asignación existe. */
+    public function autorizarAsignacion(FixedAssetAssignment $asignacion, Request $request): void
+    {
+        abort_unless(in_array($asignacion->enterprise_id, $this->idsVisibles($request), true), 404);
     }
 
     /**

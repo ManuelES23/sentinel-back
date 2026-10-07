@@ -34,6 +34,7 @@ class FixedAssetController extends Controller
         'area:id,name,code',
         'performanceUnit:id,name,abbreviation',
         'characteristics',
+        'asignacionActiva:id,fixed_asset_id,assignee_type,assignee_name,assigned_at,returned_at,signed_document_path',
     ];
 
     private const POR_PAGINA = 25;
@@ -198,6 +199,12 @@ class FixedAssetController extends Controller
     {
         $this->alcance->autorizarActivo($asset, $request);
         $this->permisos->autorizar($request, 'activos', 'delete');
+
+        if ($asset->asignacionActiva()->exists()) {
+            throw ValidationException::withMessages([
+                'asset' => 'El activo está asignado a alguien. Regístrale la devolución antes de eliminarlo.',
+            ]);
+        }
 
         $asset->delete();
         $this->emitir('deleted', $asset);
