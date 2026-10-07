@@ -126,12 +126,18 @@ class AsignadorActivos
         return [$activo, $actual];
     }
 
+    /**
+     * Sin lockForUpdate a propósito: en InnoDB (REPEATABLE READ) un SELECT … FOR UPDATE que
+     * no encuentra filas bloquea el hueco del índice, y dos transacciones sobre activos
+     * distintos sin asignaciones toman bloqueos de hueco compatibles que luego chocan en
+     * el INSERT (deadlock, error 1213). La fila bloqueada del activo ya serializa a quienes
+     * escriben sobre el mismo activo.
+     */
     private function activaDe(FixedAsset $activo): ?FixedAssetAssignment
     {
         return FixedAssetAssignment::query()
             ->where('fixed_asset_id', $activo->id)
             ->whereNull('returned_at')
-            ->lockForUpdate()
             ->first();
     }
 
