@@ -41,21 +41,26 @@ class SembradoAsignacionesTest extends TestCase
         }
     }
 
-    public function test_es_idempotente_y_da_permisos_a_los_usuarios_base(): void
+    public function test_es_idempotente_y_crea_las_filas_de_permisos_de_los_usuarios_base_sin_concederlas(): void
     {
         foreach (['splendidfarms', 'splendidbyporvenir', 'grupoesplendido'] as $slug) {
             Enterprise::create(['name' => $slug, 'slug' => $slug, 'description' => $slug, 'is_active' => true]);
         }
         $admin = User::factory()->create(['email' => 'admin@sentinel.com', 'role' => 'admin']);
+        $demo = User::factory()->create(['email' => 'demo@sentinel.com', 'role' => 'user']);
 
         $this->sembrar();
         $this->sembrar();
 
         $this->assertSame(3, Submodule::where('slug', 'asignaciones')->count());
         $submodulo = Submodule::where('slug', 'asignaciones')->first();
-        $this->assertSame(
-            4,
-            UserSubmodulePermission::where('user_id', $admin->id)->where('submodule_id', $submodulo->id)->count(),
-        );
+
+        foreach ([$admin, $demo] as $usuario) {
+            $filas = UserSubmodulePermission::where('user_id', $usuario->id)->where('submodule_id', $submodulo->id)->get();
+            $this->assertCount(4, $filas);
+            // El seeder usa firstOrCreate sin is_granted: la columna toma su valor por defecto (false).
+            // Las filas existen para que el menú muestre la entrada, pero no conceden nada; admin@ opera por su rol.
+            $this->assertTrue($filas->every(fn ($fila) => $fila->is_granted === false));
+        }
     }
 }

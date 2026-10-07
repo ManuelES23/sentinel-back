@@ -202,6 +202,16 @@ class AsignacionCartaTest extends TestCase
         $this->getJson($url)->assertOk()->assertJsonPath('data.entrega.entregado_por', 'Marta Original');
     }
 
+    public function test_la_carta_requiere_el_permiso_view_aunque_se_tenga_acceso_a_la_empresa(): void
+    {
+        $asignacion = $this->asignar();
+        $otro = User::factory()->create(['role' => 'user']);
+        $this->otorgarActivos($otro, $this->enterprise, 'asignaciones', ['create', 'edit']);
+        Sanctum::actingAs($otro);
+
+        $this->getJson(self::BASE."/asignaciones/{$asignacion->id}/carta")->assertForbidden();
+    }
+
     public function test_la_carta_de_otra_empresa_responde_404(): void
     {
         $porvenir = $this->crearEmpresaActivos('splendidbyporvenir', 'Splendid by Porvenir', 'SP');

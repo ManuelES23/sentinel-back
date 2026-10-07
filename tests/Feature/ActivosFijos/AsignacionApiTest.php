@@ -152,6 +152,23 @@ class AsignacionApiTest extends TestCase
         $this->assertSame($this->enterprise->id, FixedAssetAssignment::first()->enterprise_id);
     }
 
+    public function test_un_usuario_con_permisos_solo_en_grupo_esplendido_asigna_desde_su_url_y_no_desde_la_de_la_empresa(): void
+    {
+        $activo = $this->crearActivo();
+        $empleado = $this->crearEmpleado($this->enterprise);
+        $soloGe = User::factory()->create(['role' => 'user']);
+        $this->otorgarActivos($soloGe, $this->corporativo, 'asignaciones', ['view', 'create']);
+        Sanctum::actingAs($soloGe);
+
+        $this->postJson(self::BASE."/activos/{$activo->id}/asignaciones", $this->datosAsignacion('employee', $empleado->id))
+            ->assertForbidden();
+        $this->assertSame(0, FixedAssetAssignment::count());
+
+        $this->postJson(self::BASE_GE."/activos/{$activo->id}/asignaciones", $this->datosAsignacion('employee', $empleado->id))
+            ->assertCreated();
+        $this->assertSame($this->enterprise->id, FixedAssetAssignment::first()->enterprise_id);
+    }
+
     public function test_emite_el_evento_en_tiempo_real_de_la_empresa_del_activo(): void
     {
         Event::fake([FixedAssetUpdated::class]);
@@ -212,6 +229,27 @@ class AsignacionApiTest extends TestCase
         Sanctum::actingAs($this->usuarioCon(['view', 'create']));
         $this->postJson(self::BASE."/asignaciones/{$asignacion->id}/devolver", ['condition_in' => 'bueno', 'return_reason' => 'otro'])
             ->assertForbidden();
+    }
+
+    public function test_reasignar_y_corregir_requieren_sus_permisos(): void
+    {
+        $activo = $this->crearActivo();
+        $asignacion = $this->asignar($activo);
+        $nuevo = $this->crearEmpleado($this->enterprise);
+
+        // reasignar pide create (aquí solo view/edit).
+        Sanctum::actingAs($this->usuarioCon(['view', 'edit']));
+        $this->postJson(self::BASE."/activos/{$activo->id}/reasignar", [
+            'devolucion' => ['condition_in' => 'bueno', 'return_reason' => 'otro'],
+            'asignacion' => $this->datosAsignacion('employee', $nuevo->id),
+        ])->assertForbidden();
+
+        // corregir pide edit (aquí solo view/create).
+        Sanctum::actingAs($this->usuarioCon(['view', 'create']));
+        $this->patchJson(self::BASE."/asignaciones/{$asignacion->id}", ['notes' => 'x'])->assertForbidden();
+
+        $this->assertTrue($asignacion->fresh()->activa);
+        $this->assertSame(1, FixedAssetAssignment::count());
     }
 
     public function test_reasigna_en_una_sola_llamada(): void
