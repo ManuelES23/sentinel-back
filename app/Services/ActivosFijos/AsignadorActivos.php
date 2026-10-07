@@ -56,8 +56,8 @@ class AsignadorActivos
     public function devolver(FixedAssetAssignment $asignacion, array $datos, User $por): FixedAssetAssignment
     {
         return DB::transaction(function () use ($asignacion, $datos, $por) {
-            $actual = FixedAssetAssignment::query()->whereKey($asignacion->getKey())->lockForUpdate()->firstOrFail();
-            $this->cerrar($actual, $datos, $por);
+            [$activo, $actual] = $this->bloquearActivoYAsignacion($asignacion);
+            $this->cerrar($actual, $activo, $datos, $por);
 
             return $actual->refresh();
         });
@@ -76,7 +76,7 @@ class AsignadorActivos
                 ]);
             }
 
-            $this->cerrar($actual, $devolucion, $por);
+            $this->cerrar($actual, $activo, $devolucion, $por);
 
             return $this->crear($activo->refresh(), $nueva, $por);
         });
@@ -86,7 +86,7 @@ class AsignadorActivos
     public function corregir(FixedAssetAssignment $asignacion, array $datos): FixedAssetAssignment
     {
         return DB::transaction(function () use ($asignacion, $datos) {
-            $actual = FixedAssetAssignment::query()->whereKey($asignacion->getKey())->lockForUpdate()->firstOrFail();
+            [$activo, $actual] = $this->bloquearActivoYAsignacion($asignacion);
 
             if ($actual->returned_at !== null) {
                 throw ValidationException::withMessages([
@@ -97,7 +97,8 @@ class AsignadorActivos
             $actual->update(Arr::only($datos, ['area_id', 'accessories', 'notes', 'condition_out']));
 
             if (! empty($datos['area_id'])) {
-                FixedAsset::withTrashed()->whereKey($actual->fixed_asset_id)->update(['area_id' => $datos['area_id']]);
+                // Con la instancia (no query builder) para que Loggable registre el cambio.
+                $activo->update(['area_id' => $datos['area_id']]);
             }
 
             return $actual->refresh();
@@ -107,6 +108,22 @@ class AsignadorActivos
     private function bloquearActivo(FixedAsset $asset): FixedAsset
     {
         return FixedAsset::query()->whereKey($asset->getKey())->lockForUpdate()->firstOrFail();
+    }
+
+    /**
+     * Mismo orden de bloqueo que asignar/reasignar (activo y luego asignación) para evitar
+     * deadlocks: se lee fixed_asset_id sin bloquear, se bloquea el activo y se relee la asignación.
+     *
+     * @return array{0: FixedAsset, 1: FixedAssetAssignment}
+     */
+    private function bloquearActivoYAsignacion(FixedAssetAssignment $asignacion): array
+    {
+        $activoId = FixedAssetAssignment::query()->whereKey($asignacion->getKey())->firstOrFail()->fixed_asset_id;
+
+        $activo = FixedAsset::withTrashed()->whereKey($activoId)->lockForUpdate()->firstOrFail();
+        $actual = FixedAssetAssignment::query()->whereKey($asignacion->getKey())->lockForUpdate()->firstOrFail();
+
+        return [$activo, $actual];
     }
 
     private function activaDe(FixedAsset $activo): ?FixedAssetAssignment
@@ -151,7 +168,7 @@ class AsignadorActivos
         return $asignacion;
     }
 
-    private function cerrar(FixedAssetAssignment $actual, array $datos, User $por): void
+    private function cerrar(FixedAssetAssignment $actual, FixedAsset $activo, array $datos, User $por): void
     {
         if ($actual->returned_at !== null) {
             throw ValidationException::withMessages(['asignacion' => 'La asignación ya fue devuelta.']);
@@ -173,8 +190,7 @@ class AsignadorActivos
         ]);
 
         // Un estado bloqueado (mantenimiento, fuera de servicio, baja) se respeta.
-        $activo = FixedAsset::withTrashed()->whereKey($actual->fixed_asset_id)->lockForUpdate()->first();
-        if ($activo && ! in_array($activo->status, self::ESTADOS_BLOQUEADOS, true)) {
+        if (! in_array($activo->status, self::ESTADOS_BLOQUEADOS, true)) {
             $activo->update(['status' => 'disponible']);
         }
     }

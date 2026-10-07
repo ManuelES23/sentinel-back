@@ -3,6 +3,7 @@
 
 namespace Tests\Feature\ActivosFijos;
 
+use App\Models\ActivityLog;
 use App\Models\Area;
 use App\Models\FixedAssetAssignment;
 use App\Services\ActivosFijos\AsignadorActivos;
@@ -229,5 +230,24 @@ class AsignadorActivosTest extends TestCase
 
         $this->asignador->devolver($asignacion, ['condition_in' => 'bueno', 'return_reason' => 'otro'], $this->actingUser);
         $this->assertRegla(fn () => $this->asignador->corregir($asignacion, ['notes' => 'tarde']), 'asignacion');
+    }
+
+    public function test_corregir_el_area_deja_registro_de_auditoria_del_activo(): void
+    {
+        $activo = $this->crearActivo();
+        $empleado = $this->crearEmpleado($this->enterprise);
+        $area = $this->areaDeLaEntidad();
+        $asignacion = $this->asignador->asignar($activo, $this->datosAsignacion('employee', $empleado->id), $this->actingUser);
+
+        $this->asignador->corregir($asignacion, ['area_id' => $area->id]);
+
+        $registro = ActivityLog::where('model', 'FixedAsset')
+            ->where('model_id', $activo->id)
+            ->where('action', 'update')
+            ->latest('id')
+            ->first();
+
+        $this->assertNotNull($registro, 'el cambio de área del activo debe quedar en la auditoría');
+        $this->assertSame($area->id, $registro->new_values['area_id']);
     }
 }
