@@ -160,6 +160,7 @@ class AsignadorActivos
             'area_id' => $datos['area_id'] ?? null,
             'assigned_at' => $datos['assigned_at'] ?? now()->toDateString(),
             'assigned_by' => $por->id,
+            'assigned_by_name' => $por->name,
             'condition_out' => $datos['condition_out'] ?? 'bueno',
             'accessories' => $datos['accessories'] ?? null,
             'notes' => $datos['notes'] ?? null,

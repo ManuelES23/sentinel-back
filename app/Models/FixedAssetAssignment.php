@@ -31,6 +31,7 @@ class FixedAssetAssignment extends Model
         'area_id',
         'assigned_at',
         'assigned_by',
+        'assigned_by_name',
         'condition_out',
         'accessories',
         'notes',

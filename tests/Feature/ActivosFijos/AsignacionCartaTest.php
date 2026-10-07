@@ -184,6 +184,24 @@ class AsignacionCartaTest extends TestCase
             ->assertJsonPath('data.folio', $activo->code.'-R02');
     }
 
+    public function test_la_carta_conserva_quien_entrego_aunque_se_renombre_o_borre_al_usuario(): void
+    {
+        $entregador = User::factory()->create(['role' => 'user', 'name' => 'Marta Original']);
+        $this->otorgarActivos($entregador, $this->enterprise, 'asignaciones', ['view', 'create']);
+        Sanctum::actingAs($entregador);
+        $asignacion = $this->asignar();
+        Sanctum::actingAs($this->actingUser);
+        $url = self::BASE."/asignaciones/{$asignacion->id}/carta";
+
+        $entregador->update(['name' => 'Marta Renombrada']);
+        $this->getJson($url)->assertOk()->assertJsonPath('data.entrega.entregado_por', 'Marta Original');
+
+        // Los usuarios se borran de verdad: assigned_by queda nulo pero la copia del nombre permanece.
+        $entregador->delete();
+        $this->assertNull($asignacion->fresh()->assigned_by);
+        $this->getJson($url)->assertOk()->assertJsonPath('data.entrega.entregado_por', 'Marta Original');
+    }
+
     public function test_la_carta_de_otra_empresa_responde_404(): void
     {
         $porvenir = $this->crearEmpresaActivos('splendidbyporvenir', 'Splendid by Porvenir', 'SP');

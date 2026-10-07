@@ -27,6 +27,8 @@ return new class extends Migration
             // Entrega
             $table->date('assigned_at');
             $table->foreignId('assigned_by')->nullable()->constrained('users')->nullOnDelete();
+            // Copia del nombre de quien entrega: los usuarios se borran y la carta debe reimprimirse igual.
+            $table->string('assigned_by_name')->nullable();
             $table->enum('condition_out', ['bueno', 'regular', 'malo'])->default('bueno');
             $table->text('accessories')->nullable();
             $table->text('notes')->nullable();

@@ -287,7 +287,7 @@ class AsignacionActivoController extends Controller
                     'condicion' => $asignacion->condition_out,
                     'accesorios' => $asignacion->accessories,
                     'notas' => $asignacion->notes,
-                    'entregado_por' => $asignacion->entregadoPor?->name,
+                    'entregado_por' => $asignacion->assigned_by_name ?? $asignacion->entregadoPor?->name,
                 ],
                 'devolucion' => $asignacion->returned_at ? [
                     'fecha' => $asignacion->returned_at->toDateString(),
