@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\ActivosFijos\AsignacionActivoController;
 use App\Http\Controllers\Api\ActivosFijos\ContextoActivosController;
 use App\Http\Controllers\Api\SplendidFarms\Inventory\AssetCategoryController;
 use App\Http\Controllers\Api\SplendidFarms\Inventory\FixedAssetController;
@@ -26,4 +27,16 @@ Route::prefix('activos-fijos')->group(function () {
     Route::get('activos/next-code', [FixedAssetController::class, 'nextCodeEndpoint']);
     Route::apiResource('activos', FixedAssetController::class)
         ->parameters(['activos' => 'asset']);
+
+    // Asignaciones (resguardo) y carta responsiva
+    Route::get('asignaciones', [AsignacionActivoController::class, 'index']);
+    Route::get('activos/{asset}/asignaciones', [AsignacionActivoController::class, 'historial']);
+    Route::get('activos/{asset}/responsables', [AsignacionActivoController::class, 'responsables']);
+    Route::post('activos/{asset}/asignaciones', [AsignacionActivoController::class, 'store']);
+    Route::post('activos/{asset}/reasignar', [AsignacionActivoController::class, 'reasignar']);
+    Route::post('asignaciones/{asignacion}/devolver', [AsignacionActivoController::class, 'devolver']);
+    Route::patch('asignaciones/{asignacion}', [AsignacionActivoController::class, 'update']);
+    Route::post('asignaciones/{asignacion}/carta-firmada', [AsignacionActivoController::class, 'subirCartaFirmada']);
+    Route::get('asignaciones/{asignacion}/carta-firmada', [AsignacionActivoController::class, 'descargarCartaFirmada']);
+    Route::get('asignaciones/{asignacion}/carta', [AsignacionActivoController::class, 'carta']);
 });
