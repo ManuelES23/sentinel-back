@@ -34,6 +34,7 @@ class FixedAssetController extends Controller
         'area:id,name,code',
         'performanceUnit:id,name,abbreviation',
         'characteristics',
+        'asignacionActiva:id,fixed_asset_id,assignee_type,assignee_name,assigned_at,returned_at,signed_document_path',
     ];
 
     private const POR_PAGINA = 25;

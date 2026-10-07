@@ -137,6 +137,17 @@ public function list() {
 'presence.enterprise.{id}'
 ```
 
+## Activos Fijos
+
+Módulo de Administración → Activos Fijos (SF y GE). La carpeta de controlador `Inventory/` es heredada; ver la estructura de controllers.
+
+### Asignaciones (fase 2)
+- Tabla `fixed_asset_assignments`: historial inmutable de entregas. `assignee_type` ∈ `employee` (`employees`), `sf_employee` (`sf_employees`), `user` (`users`) sin llave foránea; el nombre, puesto y departamento del responsable y una copia del activo (`asset_snapshot`) se guardan al entregar para reimprimir la carta idéntica.
+- Servicios en `App\Services\ActivosFijos`: `ResponsablesActivo` (búsqueda y validación de personas de la empresa del activo) y `AsignadorActivos` (asignar, devolver, reasignar y corregir, con `lockForUpdate`; una sola asignación activa por activo; asignar → `en_uso`, devolver → `disponible`; se bloquean `en_mantenimiento`, `fuera_de_servicio`, `baja` e inactivos).
+- Controlador `Api/ActivosFijos/AsignacionActivoController`; rutas en `routes/activos-fijos.php`. Permisos del submódulo `asignaciones` (`view` lee y descarga/imprime, `create` asigna y reasigna, `edit` devuelve, corrige y sube la carta firmada). Sin concesión automática: se otorgan a mano.
+- La carta firmada va al disco privado `local` (`fixed-asset-assignments/{id}/…`) y se sirve con `GET asignaciones/{a}/carta-firmada`; la ruta nunca sale en el JSON. La carta en PDF la dibuja el front con los datos de `GET asignaciones/{a}/carta`.
+- El listado de activos incluye `asignacion_activa` (eager load) para mostrar «Asignado a …».
+
 ## Acceso cruzado de entidades (cross-enterprise)
 Tabla pivot `enterprise_entity` (`enterprise_id`, `entity_id`, `access_level: read|write`) — permite que una empresa acceda a bodegas/plantas de otra. Ver `EntityAccessController` (Admin).
 
@@ -172,8 +183,8 @@ php artisan reverb:start          # WebSocket server
 
 ## ⚠️ Huecos conocidos del proyecto (pendientes de mejora)
 
-- **Testing real: en progreso.** Cobertura completa (145 tests) en dos módulos como referencia de patrón:
-  - `tests/Feature/ActivosFijos/` — Activos Fijos (93 tests en 12 archivos: ActivoCrud, AislamientoActivos, AlcanceYPermisos, ContextoActivos, GeneradorCodigoActivo, ImportLegacyEmpresa, IntegridadActivo, MigracionActivosPorEmpresa, MigracionMenuActivos, SembradoPrefijosActivos, TiempoRealActivos, TipoActivo). Resuelven la empresa desde la URL (`/api/{empresa}/administration/activos-fijos/...`), cubren SF y GE (y SBP en las pruebas de aislamiento) y usan `tests/Concerns/CreatesAssetFixtures.php` (SF + GE con Administración → Activos Fijos y helpers de permisos `activos.view/create/edit/delete`).
+- **Testing real: en progreso.** Cobertura completa (204 tests) en dos módulos como referencia de patrón:
+  - `tests/Feature/ActivosFijos/` — Activos Fijos (152 tests en 19 archivos: ActivoCrud, AislamientoActivos, AlcanceYPermisos, AsignacionActivaEnListado, AsignacionApi, AsignacionCarta, AsignacionModelo, AsignadorActivos, ContextoActivos, GeneradorCodigoActivo, ImportLegacyEmpresa, IntegridadActivo, MigracionActivosPorEmpresa, MigracionMenuActivos, ResponsablesActivo, SembradoAsignaciones, SembradoPrefijosActivos, TiempoRealActivos, TipoActivo). Resuelven la empresa desde la URL (`/api/{empresa}/administration/activos-fijos/...`), cubren SF y GE (y SBP en las pruebas de aislamiento) y usan `tests/Concerns/CreatesAssetFixtures.php` (SF + GE con Administración → Activos Fijos y helpers de permisos `activos.view/create/edit/delete`; las pruebas de asignaciones suman `tests/Concerns/CreatesAssignmentFixtures.php`).
   - `tests/Feature/CRM/` — CRM Comercial (8 archivos, 52 tests: Cliente, Prospecto, Vendedor, Región/Zona/Bodega, Producto, Contacto, EmpresaExterna, Actividad), usa `tests/Concerns/CreatesCrmFixtures.php`. A diferencia de Activos Fijos, el CRM resuelve la empresa por el header `X-Enterprise-Id` (no por la URL) — los tests lo mandan explícitamente vía `$this->crmHeaders()`.
   - El resto de módulos (RH, Agrícola, Empaque) todavía no tiene cobertura.
   - Escribir estos tests **encontró y corrigió 2 bugs reales** que llevaban tiempo sin detectarse por falta de cobertura: `ClienteController::index()` llamaba a un método de scope inexistente (`->empresa()` en vez de `->where('empresa_id', ...)`) y tronaba 500 en cada request; y `crm_vendedores.user_id` era `NOT NULL` en la BD aunque la validación del controller lo declara opcional, causando un 500 al crear un vendedor sin cuenta ligada (migración `2026_08_11_190000_make_user_id_nullable_on_crm_vendedores_table.php`).
