@@ -76,6 +76,14 @@ class AsignadorActivos
                 ]);
             }
 
+            $devueltaEl = Carbon::parse($devolucion['returned_at'] ?? now()->toDateString())->startOfDay();
+            $entregadaEl = Carbon::parse($nueva['assigned_at'] ?? now()->toDateString())->startOfDay();
+            if ($entregadaEl->lt($devueltaEl)) {
+                throw ValidationException::withMessages([
+                    'assigned_at' => 'La nueva entrega no puede ser anterior a la devolución.',
+                ]);
+            }
+
             $this->cerrar($actual, $activo, $devolucion, $por);
 
             return $this->crear($activo->refresh(), $nueva, $por);

@@ -199,6 +199,33 @@ class AsignadorActivosTest extends TestCase
         $this->assertSame(1, FixedAssetAssignment::count());
     }
 
+    public function test_reasignar_no_permite_una_entrega_nueva_anterior_a_la_devolucion(): void
+    {
+        $activo = $this->crearActivo();
+        $a = $this->crearEmpleado($this->enterprise);
+        $b = $this->crearEmpleado($this->enterprise);
+        $primera = $this->asignador->asignar($activo, $this->datosAsignacion('employee', $a->id, ['assigned_at' => '2026-10-01']), $this->actingUser);
+
+        $this->assertRegla(fn () => $this->asignador->reasignar(
+            $activo,
+            ['returned_at' => '2026-10-07', 'condition_in' => 'bueno', 'return_reason' => 'cambio_puesto'],
+            $this->datosAsignacion('employee', $b->id, ['assigned_at' => '2026-10-05']),
+            $this->actingUser,
+        ), 'assigned_at');
+
+        $this->assertTrue($primera->fresh()->activa, 'no cambia nada');
+        $this->assertSame(1, FixedAssetAssignment::count());
+
+        // Misma fecha sí es coherente.
+        $nueva = $this->asignador->reasignar(
+            $activo,
+            ['returned_at' => '2026-10-07', 'condition_in' => 'bueno', 'return_reason' => 'cambio_puesto'],
+            $this->datosAsignacion('employee', $b->id, ['assigned_at' => '2026-10-07']),
+            $this->actingUser,
+        );
+        $this->assertTrue($nueva->activa);
+    }
+
     public function test_reasignar_sin_asignacion_activa_falla(): void
     {
         $activo = $this->crearActivo();
