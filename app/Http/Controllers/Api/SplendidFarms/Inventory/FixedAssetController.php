@@ -200,6 +200,12 @@ class FixedAssetController extends Controller
         $this->alcance->autorizarActivo($asset, $request);
         $this->permisos->autorizar($request, 'activos', 'delete');
 
+        if ($asset->asignacionActiva()->exists()) {
+            throw ValidationException::withMessages([
+                'asset' => 'El activo está asignado a alguien. Regístrale la devolución antes de eliminarlo.',
+            ]);
+        }
+
         $asset->delete();
         $this->emitir('deleted', $asset);
 

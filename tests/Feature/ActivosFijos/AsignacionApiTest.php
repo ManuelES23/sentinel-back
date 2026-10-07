@@ -168,6 +168,20 @@ class AsignacionApiTest extends TestCase
             ]);
     }
 
+    public function test_no_se_puede_eliminar_un_activo_con_asignacion_activa(): void
+    {
+        $activo = $this->crearActivo();
+        $asignacion = $this->asignar($activo);
+
+        $this->deleteJson(self::BASE."/activos/{$activo->id}")
+            ->assertStatus(422)->assertJsonValidationErrors(['asset']);
+        $this->assertNotNull(FixedAsset::find($activo->id), 'el activo sigue existiendo');
+
+        $this->postJson(self::BASE."/asignaciones/{$asignacion->id}/devolver", ['condition_in' => 'bueno', 'return_reason' => 'otro'])->assertOk();
+        $this->deleteJson(self::BASE."/activos/{$activo->id}")->assertOk();
+        $this->assertNull(FixedAsset::find($activo->id));
+    }
+
     // ---- devolver, reasignar y corregir ----
 
     public function test_devuelve_y_deja_el_activo_disponible(): void
