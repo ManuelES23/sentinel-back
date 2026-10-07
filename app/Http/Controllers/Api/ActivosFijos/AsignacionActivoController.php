@@ -14,6 +14,8 @@ use App\Services\ActivosFijos\PermisosActivos;
 use App\Services\ActivosFijos\ResponsablesActivo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 
 /**
@@ -188,6 +190,106 @@ class AsignacionActivoController extends Controller
             'success' => true,
             'message' => 'Asignación actualizada exitosamente',
             'data' => $this->conRelaciones($corregida),
+        ]);
+    }
+
+    /** Sube o reemplaza la carta firmada. Disco privado: se sirve solo con descargarCartaFirmada. */
+    public function subirCartaFirmada(Request $request, FixedAssetAssignment $asignacion): JsonResponse
+    {
+        $this->permisos->autorizar($request, self::SUBMODULO, 'edit');
+        $this->alcance->autorizarAsignacion($asignacion, $request);
+        $request->validate(['file' => ['required', 'file', 'mimes:pdf,jpg,jpeg,png', 'max:10240']]);
+
+        $anterior = $asignacion->signed_document_path;
+        $nueva = $request->file('file')->store("fixed-asset-assignments/{$asignacion->id}", 'local');
+
+        try {
+            DB::transaction(fn () => $asignacion->update([
+                'signed_document_path' => $nueva,
+                'signed_uploaded_at' => now(),
+                'signed_uploaded_by' => $request->user()->id,
+            ]));
+        } catch (\Throwable $e) {
+            Storage::disk('local')->delete($nueva);
+            throw $e;
+        }
+
+        // El archivo viejo se borra solo cuando el cambio ya quedó guardado.
+        if ($anterior) {
+            Storage::disk('local')->delete($anterior);
+        }
+        $this->emitir($asignacion->enterprise, $asignacion->fixed_asset_id);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Carta firmada guardada exitosamente',
+            'data' => $this->conRelaciones($asignacion->refresh()),
+        ]);
+    }
+
+    public function descargarCartaFirmada(Request $request, FixedAssetAssignment $asignacion)
+    {
+        $this->permisos->autorizar($request, self::SUBMODULO, 'view');
+        $this->alcance->autorizarAsignacion($asignacion, $request);
+
+        $ruta = $asignacion->signed_document_path;
+        abort_unless($ruta && Storage::disk('local')->exists($ruta), 404, 'Esta asignación no tiene carta firmada.');
+
+        return Storage::disk('local')->response($ruta);
+    }
+
+    /** Datos para imprimir la carta responsiva (el front dibuja el PDF). El activo sale de la copia guardada. */
+    public function carta(Request $request, FixedAssetAssignment $asignacion): JsonResponse
+    {
+        $this->permisos->autorizar($request, self::SUBMODULO, 'view');
+        $this->alcance->autorizarAsignacion($asignacion, $request);
+
+        $asignacion->load(['enterprise', 'area:id,name', 'entregadoPor:id,name', 'devueltoPor:id,name']);
+        $empresa = $asignacion->enterprise;
+        $copia = $asignacion->asset_snapshot ?? [];
+
+        // Número de entrega del activo: cuántas asignaciones suyas hay hasta esta (inclusive).
+        $numero = FixedAssetAssignment::query()
+            ->where('fixed_asset_id', $asignacion->fixed_asset_id)
+            ->where('id', '<=', $asignacion->id)
+            ->count();
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'folio' => sprintf('%s-R%02d', $copia['code'] ?? 'SIN-CODIGO', $numero),
+                'empresa' => [
+                    'nombre' => $empresa->name,
+                    'razon_social' => $empresa->razon_social,
+                    'rfc' => $empresa->rfc,
+                    'direccion' => $empresa->direccion,
+                    'ciudad' => $empresa->ciudad,
+                    'telefono' => $empresa->telefono,
+                    'logo' => $empresa->logo,
+                ],
+                'activo' => $copia,
+                'responsable' => [
+                    'tipo' => $asignacion->assignee_type,
+                    'nombre' => $asignacion->assignee_name,
+                    'puesto' => $asignacion->assignee_position,
+                    'departamento' => $asignacion->assignee_department,
+                    'area' => $asignacion->area?->name,
+                ],
+                'entrega' => [
+                    'fecha' => $asignacion->assigned_at?->toDateString(),
+                    'condicion' => $asignacion->condition_out,
+                    'accesorios' => $asignacion->accessories,
+                    'notas' => $asignacion->notes,
+                    'entregado_por' => $asignacion->entregadoPor?->name,
+                ],
+                'devolucion' => $asignacion->returned_at ? [
+                    'fecha' => $asignacion->returned_at->toDateString(),
+                    'condicion' => $asignacion->condition_in,
+                    'motivo' => $asignacion->return_reason,
+                    'notas' => $asignacion->return_notes,
+                    'devuelto_por' => $asignacion->devueltoPor?->name,
+                ] : null,
+            ],
         ]);
     }
 

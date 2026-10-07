@@ -36,4 +36,7 @@ Route::prefix('activos-fijos')->group(function () {
     Route::post('activos/{asset}/reasignar', [AsignacionActivoController::class, 'reasignar']);
     Route::post('asignaciones/{asignacion}/devolver', [AsignacionActivoController::class, 'devolver']);
     Route::patch('asignaciones/{asignacion}', [AsignacionActivoController::class, 'update']);
+    Route::post('asignaciones/{asignacion}/carta-firmada', [AsignacionActivoController::class, 'subirCartaFirmada']);
+    Route::get('asignaciones/{asignacion}/carta-firmada', [AsignacionActivoController::class, 'descargarCartaFirmada']);
+    Route::get('asignaciones/{asignacion}/carta', [AsignacionActivoController::class, 'carta']);
 });
