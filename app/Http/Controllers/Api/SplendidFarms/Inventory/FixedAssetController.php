@@ -35,6 +35,8 @@ class FixedAssetController extends Controller
         'performanceUnit:id,name,abbreviation',
         'characteristics',
         'asignacionActiva:id,fixed_asset_id,assignee_type,assignee_name,assigned_at,returned_at,signed_document_path',
+        'supplier:id,business_name',
+        'purchaseReceipt:id,receipt_number,supplier_document,status', // status: el modelo agrega status_label e is_editable
     ];
 
     private const POR_PAGINA = 25;
@@ -203,6 +205,12 @@ class FixedAssetController extends Controller
         if ($asset->asignacionActiva()->exists()) {
             throw ValidationException::withMessages([
                 'asset' => 'El activo está asignado a alguien. Regístrale la devolución antes de eliminarlo.',
+            ]);
+        }
+
+        if ($asset->status !== 'baja' && $asset->unidadCompra()->where('status', 'registered')->exists()) {
+            throw ValidationException::withMessages([
+                'asset' => 'Este activo viene de una compra y respalda una entrada de inventario. Cambia su estado a «Baja» antes de eliminarlo.',
             ]);
         }
 

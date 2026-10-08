@@ -12,6 +12,7 @@ use App\Models\InventoryStock;
 use App\Models\InventoryKardex;
 use App\Models\MovementType;
 use App\Models\Product;
+use App\Services\ActivosFijos\UnidadesVigentes;
 use App\Services\Inventory\AlmacenAccessService;
 use App\Services\Inventory\AplicadorStock;
 use App\Services\Inventory\LoteCaducidadValidator;
@@ -1355,6 +1356,17 @@ class InventoryMovementController extends Controller
                 'status' => 'error',
                 'message' => 'Solo se pueden cancelar movimientos pendientes o aprobados'
             ], 422);
+        }
+
+        // La entrada de una compra no se anula mientras respalde activos fijos vigentes.
+        if (
+            $movement->reference_type === 'purchase_receipt'
+            && app(UnidadesVigentes::class)->hayVigentesEnRecepcion((int) $movement->reference_id)
+        ) {
+            throw ValidationException::withMessages([
+                'movement' => 'Esta entrada respalda activos fijos vigentes o por dar de alta, así que no se puede cancelar. '
+                    . 'Descarta las unidades pendientes o da de baja los activos primero.',
+            ]);
         }
 
         $validated = $request->validate([
