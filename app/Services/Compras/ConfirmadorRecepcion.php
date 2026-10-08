@@ -10,6 +10,7 @@ use App\Models\PurchaseOrderDetail;
 use App\Models\PurchaseReceipt;
 use App\Models\RequisicionCampo;
 use App\Models\User;
+use App\Services\ActivosFijos\GeneradorUnidadesCompra;
 use App\Services\Inventory\AplicadorStock;
 use App\Services\Inventory\LoteCaducidadValidator;
 use Illuminate\Support\Carbon;
@@ -26,6 +27,7 @@ class ConfirmadorRecepcion
     public function __construct(
         private AplicadorStock $stock,
         private LoteCaducidadValidator $lotes,
+        private GeneradorUnidadesCompra $unidades,
     ) {
     }
 
@@ -93,6 +95,9 @@ class ConfirmadorRecepcion
             }
 
             $this->cuentaPorPagar($rec, $oc, $user);
+
+            // Unidades de productos marcados como activo fijo: quedan por dar de alta.
+            $this->unidades->generar($rec);
 
             $rec->update([
                 'status' => PurchaseReceipt::STATUS_COMPLETED,
