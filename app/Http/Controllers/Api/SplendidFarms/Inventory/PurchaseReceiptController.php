@@ -2,8 +2,10 @@
 
 namespace App\Http\Controllers\Api\SplendidFarms\Inventory;
 
+use App\Events\FixedAssetUnitUpdated;
 use App\Http\Controllers\Controller;
 use App\Models\Enterprise;
+use App\Models\FixedAssetReceiptUnit;
 use App\Models\MovementType;
 use App\Models\PurchaseOrder;
 use App\Models\PurchaseReceipt;
@@ -359,6 +361,15 @@ class PurchaseReceiptController extends Controller
         abort_unless($this->permisos->puedeConfirmar($request->user(), $empresa), 403, 'No tienes permiso para confirmar entradas');
 
         $confirmada = $this->confirmador->confirmar($receipt, $request->user());
+
+        // Si la recepción trajo unidades de activo fijo, la bandeja «Por dar de alta» se refresca.
+        if (FixedAssetReceiptUnit::where('purchase_receipt_id', $confirmada->id)->exists()) {
+            try {
+                broadcast(new FixedAssetUnitUpdated('created', ['purchase_receipt_id' => $confirmada->id], $empresa->slug));
+            } catch (\Throwable $e) {
+                report($e);
+            }
+        }
 
         return response()->json([
             'success' => true,
