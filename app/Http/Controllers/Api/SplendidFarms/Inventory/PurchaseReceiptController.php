@@ -362,12 +362,19 @@ class PurchaseReceiptController extends Controller
 
         $confirmada = $this->confirmador->confirmar($receipt, $request->user());
 
-        // Si la recepción trajo unidades de activo fijo, la bandeja «Por dar de alta» se refresca.
+        // Si la recepción trajo unidades de activo fijo, la bandeja «Por dar de alta» se refresca
+        // por el canal de la empresa dueña de la recepción (no la del header). Sin empresa no hay canal.
         if (FixedAssetReceiptUnit::where('purchase_receipt_id', $confirmada->id)->exists()) {
-            try {
-                broadcast(new FixedAssetUnitUpdated('created', ['purchase_receipt_id' => $confirmada->id], $empresa->slug));
-            } catch (\Throwable $e) {
-                report($e);
+            $slugDueña = $confirmada->enterprise_id
+                ? Enterprise::whereKey($confirmada->enterprise_id)->value('slug')
+                : null;
+
+            if ($slugDueña) {
+                try {
+                    broadcast(new FixedAssetUnitUpdated('created', ['purchase_receipt_id' => $confirmada->id], $slugDueña));
+                } catch (\Throwable $e) {
+                    report($e);
+                }
             }
         }
 

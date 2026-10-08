@@ -148,7 +148,10 @@ class AltaPendienteController extends Controller
             $request->user(),
         );
 
-        $this->emitir($unidades->first()->enterprise_id, 'discarded', ['unit_ids' => $validated['unit_ids']]);
+        // Desde GE se pueden descartar unidades de varias empresas: un evento por empresa dueña.
+        foreach ($unidades->groupBy('enterprise_id') as $empresaId => $deLaEmpresa) {
+            $this->emitir((int) $empresaId, 'discarded', ['unit_ids' => $deLaEmpresa->pluck('id')->values()->all()]);
+        }
 
         return response()->json([
             'success' => true,

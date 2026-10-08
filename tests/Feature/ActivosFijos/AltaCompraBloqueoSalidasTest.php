@@ -129,16 +129,60 @@ class AltaCompraBloqueoSalidasTest extends TestCase
             'details' => [['product_id' => $this->insumo->id, 'quantity' => 2, 'lot_number' => 'L-100']],
         ], $this->headersEmpresa());
 
-        // Si la salida exige aprobación aparte, se crea pendiente y el rechazo ocurre al aprobar.
-        if ($respuesta->status() === 201) {
-            $id = $respuesta->json('data.id');
-            $this->postJson(self::URL_MOVIMIENTOS . "/$id/approve", [], $this->headersEmpresa())
-                ->assertStatus(422)->assertJsonValidationErrors('stock');
-            $this->assertNotSame('approved', InventoryMovement::find($id)->status);
-        } else {
-            $respuesta->assertStatus(422);
+        // La salida se crea pendiente (no toca stock) y el rechazo ocurre al aprobarla.
+        $respuesta->assertCreated();
+        $id = $respuesta->json('data.id');
+        $this->assertEquals(5, $this->stockDe('L-100'));
+
+        $this->postJson(self::URL_MOVIMIENTOS . "/$id/approve", [], $this->headersEmpresa())
+            ->assertStatus(422)->assertJsonValidationErrors('stock');
+
+        $this->assertSame('pending', InventoryMovement::find($id)->status);
+        $this->assertEquals(5, $this->stockDe('L-100'));
+    }
+
+    public function test_la_comparacion_no_falla_por_coma_flotante(): void
+    {
+        $this->recepcionConfirmada(6, 'L-100');
+        InventoryStock::updateStock($this->insumo->id, $this->almacenA->id, null, 4.2, 0, 'L-100'); // 10.2 en total
+
+        try {
+            InventoryStock::updateStock($this->insumo->id, $this->almacenA->id, null, -4.3, 0, 'L-100');
+            $this->fail('Sacar 4.3 deja 5.9 < 6 reservadas: debió rechazar.');
+        } catch (ValidationException $e) {
+            $this->assertArrayHasKey('stock', $e->errors());
+        }
+        $this->assertEquals(10.2, $this->stockDe('L-100'));
+
+        // 10.2 - 4.2 da 5.999999999999999 en coma flotante: debe contar como 6 y pasar.
+        InventoryStock::updateStock($this->insumo->id, $this->almacenA->id, null, -4.2, 0, 'L-100');
+        $this->assertEquals(6, $this->stockDe('L-100'));
+    }
+
+    public function test_la_cubeta_sin_lote_suma_las_filas_nula_vacia_y_sin_lote(): void
+    {
+        $this->recepcionConfirmada(3, 'SIN-LOTE'); // 3 en la fila SIN-LOTE y 3 unidades vigentes
+        $this->assertSame(3, FixedAssetReceiptUnit::where('lot_number', 'SIN-LOTE')->count());
+        InventoryStock::updateStock($this->insumo->id, $this->almacenA->id, null, 2, 0, null); // 2 en la fila NULL: cubeta = 5
+
+        // Sacar 3 de la fila NULL dejaría la cubeta en 2 < 3 reservadas.
+        try {
+            InventoryStock::updateStock($this->insumo->id, $this->almacenA->id, null, -3, 0, null);
+            $this->fail('Debió rechazar: la cubeta quedaría por debajo de las reservas.');
+        } catch (ValidationException $e) {
+            $this->assertArrayHasKey('stock', $e->errors());
         }
 
-        $this->assertEquals(5, $this->stockDe('L-100'));
+        // Sacar 2 de la fila NULL deja la cubeta en 3 = reservadas: se permite.
+        InventoryStock::updateStock($this->insumo->id, $this->almacenA->id, null, -2, 0, null);
+
+        $filaNula = InventoryStock::where('product_id', $this->insumo->id)->where('entity_id', $this->almacenA->id)
+            ->whereNull('lot_number')->value('quantity');
+        $this->assertEquals(0, (float) $filaNula);
+        $this->assertEquals(3, $this->stockDe('SIN-LOTE'));
+
+        // Ya no queda nada libre: ni siquiera 1 desde la fila SIN-LOTE.
+        $this->expectException(ValidationException::class);
+        InventoryStock::updateStock($this->insumo->id, $this->almacenA->id, null, -1, 0, 'SIN-LOTE');
     }
 }

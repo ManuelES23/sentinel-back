@@ -171,6 +171,71 @@ class AltaCompraApiTest extends TestCase
         Event::assertDispatched(FixedAssetUnitUpdated::class, fn ($e) => $e->action === 'created');
     }
 
+    public function test_confirmar_emite_el_evento_por_el_canal_de_la_empresa_dueña(): void
+    {
+        Event::fake([FixedAssetUnitUpdated::class]);
+
+        $rec = $this->recepcionConfirmada(2, 'L-400');
+
+        Event::assertDispatched(FixedAssetUnitUpdated::class, fn ($e) => $e->action === 'created'
+            && $e->empresaActivo === 'splendidfarms'
+            && $e->data === ['purchase_receipt_id' => $rec->id]);
+    }
+
+    public function test_confirmar_una_recepcion_sin_empresa_no_emite_y_no_rompe(): void
+    {
+        // El evento sale con el slug de la empresa dueña de la recepción, no con el del header:
+        // una recepción heredada sin empresa no tiene canal, así que no se emite nada.
+        $this->insumo->update(['is_fixed_asset' => false]);
+        $req = $this->crearRequisicion($this->encargadoCompra, $this->almacenA, 'orden_generada');
+        $oc = $this->crearOrden(['status' => 'approved', 'requisicion_campo_id' => $req->id], 10, 100);
+        $id = $this->actingAs($this->encargadoCompra)->postJson(self::URL_RECEPCIONES, [
+            'purchase_order_id' => $oc->id, 'receipt_date' => now()->toDateString(),
+            'details' => [[
+                'purchase_order_detail_id' => $oc->details->first()->id,
+                'quantity_received' => 2, 'lot_number' => 'L-400', 'expiry_date' => now()->addYear()->toDateString(),
+            ]],
+        ], $this->headersEmpresa())->assertCreated()->json('data.id');
+        $this->actingAs($this->encargadoCompra)->postJson(self::URL_RECEPCIONES . "/$id/submit", [], $this->headersEmpresa())->assertOk();
+
+        $recepcion = \App\Models\PurchaseReceipt::find($id);
+        $recepcion->forceFill(['enterprise_id' => null])->save();
+        FixedAssetReceiptUnit::create([
+            'enterprise_id' => $this->empresa->id, 'purchase_receipt_id' => $id,
+            'purchase_receipt_detail_id' => $recepcion->details()->first()->id,
+            'product_id' => $this->insumo->id, 'unit_number' => 1, 'unit_cost' => 1, 'status' => 'pending',
+        ]);
+        Event::fake([FixedAssetUnitUpdated::class]);
+
+        $this->actingAs($this->comprasUser)->postJson(self::URL_RECEPCIONES . "/$id/confirmar", [], $this->headersEmpresa())
+            ->assertOk();
+
+        Event::assertNotDispatched(FixedAssetUnitUpdated::class);
+    }
+
+    public function test_descartar_unidades_de_varias_empresas_emite_un_evento_por_empresa(): void
+    {
+        $ajena = FixedAssetReceiptUnit::create([
+            'enterprise_id' => $this->corporativo->id,
+            'purchase_receipt_id' => $this->rec->id,
+            'purchase_receipt_detail_id' => $this->rec->details()->first()->id,
+            'product_id' => $this->insumo->id, 'unit_number' => 99, 'unit_cost' => 1, 'status' => 'pending',
+        ]);
+        Event::fake([FixedAssetUnitUpdated::class]);
+        Sanctum::actingAs($this->usuarioActivos($this->corporativo));
+
+        $this->postJson(self::URL_GE . '/descartar', ['unit_ids' => [$this->ids[0], $ajena->id, $this->ids[1]], 'reason' => 'No son activos'])
+            ->assertOk()->assertJsonPath('data.descartadas', 3);
+
+        Event::assertDispatchedTimes(FixedAssetUnitUpdated::class, 2);
+        Event::assertDispatched(FixedAssetUnitUpdated::class, fn ($e) => $e->action === 'discarded'
+            && $e->empresaActivo === 'splendidfarms'
+            && collect($e->data['unit_ids'])->sort()->values()->all() === collect([$this->ids[0], $this->ids[1]])->sort()->values()->all());
+        Event::assertDispatched(FixedAssetUnitUpdated::class, fn ($e) => $e->action === 'discarded'
+            && $e->empresaActivo === 'grupoesplendido'
+            && $e->data['unit_ids'] === [$ajena->id]);
+    }
+
     public function test_confirmar_una_recepcion_sin_activos_no_emite_nada(): void
     {
         $this->insumo->update(['is_fixed_asset' => false]);

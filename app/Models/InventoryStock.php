@@ -134,15 +134,10 @@ class InventoryStock extends Model
 
         $newQuantity = ($stock->quantity ?? 0) + $quantityChange;
 
-        // Las unidades de activos fijos vigentes no se pueden sacar del almacén.
+        // Las unidades de activos fijos vigentes no se pueden sacar del almacén. La regla mide
+        // toda la cubeta del lote (todas las áreas; nulo, vacío y SIN-LOTE juntos), no solo esta fila.
         if ($quantityChange < 0) {
-            app(UnidadesVigentes::class)->exigirRespaldo(
-                $productId,
-                $entityId,
-                $lotNumber,
-                (float) ($stock->quantity ?? 0),
-                $quantityChange,
-            );
+            app(UnidadesVigentes::class)->exigirRespaldo($productId, $entityId, $lotNumber, $quantityChange);
         }
 
         // Si es entrada, recalcular costo promedio
