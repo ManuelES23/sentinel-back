@@ -15,6 +15,12 @@ class GeneradorUnidadesCompra
     /** @return int Unidades creadas en esta llamada. */
     public function generar(PurchaseReceipt $recepcion): int
     {
+        // Una recepción heredada sin empresa no tiene bandeja a la cual asignarse
+        // (AlcanceCompras ya la trata aparte): se confirma sin generar unidades.
+        if ($recepcion->enterprise_id === null) {
+            return 0;
+        }
+
         $creadas = 0;
 
         $renglones = $recepcion->details()->with('product:id,is_fixed_asset')->get();

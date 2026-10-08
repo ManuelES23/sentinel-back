@@ -108,6 +108,28 @@ class AltaCompraGeneracionTest extends TestCase
         $this->assertSame(0, FixedAssetReceiptUnit::count());
     }
 
+    public function test_una_recepcion_sin_empresa_confirma_y_no_genera_unidades(): void
+    {
+        $req = $this->crearRequisicion($this->encargadoCompra, $this->almacenA, 'orden_generada');
+        $oc = $this->crearOrden(['status' => 'approved', 'requisicion_campo_id' => $req->id], 10, 100);
+        $id = $this->actingAs($this->encargadoCompra)->postJson(self::URL_RECEPCIONES, [
+            'purchase_order_id' => $oc->id, 'receipt_date' => now()->toDateString(),
+            'details' => [[
+                'purchase_order_detail_id' => $oc->details->first()->id,
+                'quantity_received' => 3, 'lot_number' => 'L-HER', 'expiry_date' => now()->addYear()->toDateString(),
+            ]],
+        ], $this->headersEmpresa())->assertCreated()->json('data.id');
+        $this->actingAs($this->encargadoCompra)->postJson(self::URL_RECEPCIONES . "/$id/submit", [], $this->headersEmpresa())->assertOk();
+        // Recepción heredada: sin empresa (comprasUser ve todos los almacenes, así que puede confirmarla).
+        PurchaseReceipt::find($id)->forceFill(['enterprise_id' => null])->save();
+
+        $this->actingAs($this->comprasUser)->postJson(self::URL_RECEPCIONES . "/$id/confirmar", [], $this->headersEmpresa())->assertOk();
+
+        $this->assertSame(PurchaseReceipt::STATUS_COMPLETED, PurchaseReceipt::find($id)->status);
+        $this->assertSame(0, FixedAssetReceiptUnit::count());
+        $this->assertEquals(3, (float) InventoryStock::where('product_id', $this->insumo->id)->where('lot_number', 'L-HER')->value('quantity'));
+    }
+
     public function test_si_la_confirmacion_falla_despues_de_generar_se_revierte_todo(): void
     {
         // Generador que sí escribe las unidades y luego truena: la transacción debe revertirlo todo.
