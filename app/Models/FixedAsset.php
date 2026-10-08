@@ -47,6 +47,8 @@ class FixedAsset extends Model
         'purchase_date',
         'invoice_number',
         'purchase_value',
+        'supplier_id',
+        'purchase_receipt_id',
         'is_active',
         'metadata',
     ];
@@ -138,6 +140,22 @@ class FixedAsset extends Model
     public function performanceUnit(): BelongsTo
     {
         return $this->belongsTo(UnitOfMeasure::class, 'performance_unit_id');
+    }
+
+    public function supplier(): BelongsTo
+    {
+        return $this->belongsTo(Supplier::class);
+    }
+
+    public function purchaseReceipt(): BelongsTo
+    {
+        return $this->belongsTo(PurchaseReceipt::class, 'purchase_receipt_id');
+    }
+
+    /** Unidad de compra de la que nació este activo (si nació de una recepción). */
+    public function unidadCompra(): HasOne
+    {
+        return $this->hasOne(FixedAssetReceiptUnit::class, 'fixed_asset_id');
     }
 
     // Scopes
