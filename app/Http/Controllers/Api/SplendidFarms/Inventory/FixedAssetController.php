@@ -4,16 +4,14 @@ namespace App\Http\Controllers\Api\SplendidFarms\Inventory;
 
 use App\Events\FixedAssetUpdated;
 use App\Http\Controllers\Controller;
-use App\Models\AssetCategory;
 use App\Models\AssetCharacteristicDefinition;
-use App\Models\Branch;
-use App\Models\Brand;
 use App\Models\Enterprise;
-use App\Models\Entity;
 use App\Models\FixedAsset;
 use App\Services\ActivosFijos\AlcanceActivos;
+use App\Services\ActivosFijos\CreadorActivo;
 use App\Services\ActivosFijos\GeneradorCodigoActivo;
 use App\Services\ActivosFijos\PermisosActivos;
+use App\Services\ActivosFijos\ValidadorRelacionesActivo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -46,6 +44,8 @@ class FixedAssetController extends Controller
         private AlcanceActivos $alcance,
         private PermisosActivos $permisos,
         private GeneradorCodigoActivo $codigos,
+        private CreadorActivo $creador,
+        private ValidadorRelacionesActivo $relaciones,
     ) {
     }
 
@@ -101,19 +101,15 @@ class FixedAssetController extends Controller
 
         try {
             $asset = DB::transaction(function () use ($request, $validated, $empresa, $imagenNueva) {
-                $validated['enterprise_id'] = $empresa->id;
-                $validated['code'] = ($validated['code'] ?? null) ?: $this->codigos->siguiente($empresa);
                 if ($imagenNueva) {
                     $validated['image'] = $imagenNueva;
                 }
 
-                $asset = FixedAsset::create($validated);
-
-                if ($this->debeSincronizar($request)) {
-                    $this->syncCharacteristics($asset, (array) $request->input('characteristics', []));
-                }
-
-                return $asset;
+                return $this->creador->crear(
+                    $empresa,
+                    $validated,
+                    $this->debeSincronizar($request) ? (array) $request->input('characteristics', []) : null,
+                );
             });
         } catch (\Throwable $e) {
             if ($imagenNueva) {
@@ -171,7 +167,7 @@ class FixedAssetController extends Controller
                 $asset->update($validated);
 
                 if ($this->debeSincronizar($request)) {
-                    $this->syncCharacteristics($asset, (array) $request->input('characteristics', []));
+                    $this->creador->sincronizarCaracteristicas($asset, (array) $request->input('characteristics', []));
                 }
             });
         } catch (\Throwable $e) {
@@ -285,37 +281,17 @@ class FixedAssetController extends Controller
 
         // Valores efectivos (los del request o, al editar, los que ya tiene el activo)
         $efectivo = fn (string $campo) => array_key_exists($campo, $validated) ? $validated[$campo] : $asset?->{$campo};
-        $errores = [];
-
-        $branchId = $efectivo('branch_id');
-        if ($branchId && ! Branch::where('id', $branchId)->where('enterprise_id', $empresa->id)->exists()) {
-            $errores['branch_id'] = 'La sucursal seleccionada no pertenece a la empresa del activo';
-        }
-
-        $entityId = $efectivo('entity_id');
-        if ($entityId && $branchId && ! Entity::where('id', $entityId)->where('branch_id', $branchId)->exists()) {
-            $errores['entity_id'] = 'La entidad seleccionada no pertenece a la sucursal indicada';
-        }
-
-        $areaId = $efectivo('area_id');
-        if ($areaId && $entityId && ! DB::table('entity_area')->where('entity_id', $entityId)->where('area_id', $areaId)->exists()) {
-            $errores['area_id'] = 'El área seleccionada no pertenece a la entidad indicada';
-        }
-
-        $brandId = $validated['brand_id'] ?? null;
-        if ($brandId && ! Brand::whereKey($brandId)->forEnterprise($empresa->id)->exists()) {
-            $errores['brand_id'] = 'La marca seleccionada no está dada de alta en la empresa del activo';
-        }
 
         $categoryId = $efectivo('category_id');
-        if ($categoryId && AssetCategory::whereKey($categoryId)->whereNotNull('parent_id')->exists()) {
-            $errores['category_id'] = 'El tipo de activo debe ser un tipo principal, no un subtipo';
-        }
-
         $subcategoryId = $efectivo('subcategory_id');
-        if ($subcategoryId && ! AssetCategory::whereKey($subcategoryId)->where('parent_id', $categoryId)->exists()) {
-            $errores['subcategory_id'] = 'El subtipo seleccionado no pertenece al tipo de activo';
-        }
+        $errores = $this->relaciones->errores($empresa, [
+            'branch_id' => $efectivo('branch_id'),
+            'entity_id' => $efectivo('entity_id'),
+            'area_id' => $efectivo('area_id'),
+            'brand_id' => $validated['brand_id'] ?? null, // solo se revisa si el request la trae
+            'category_id' => $categoryId,
+            'subcategory_id' => $subcategoryId,
+        ]);
 
         $categoriasValidas = array_filter([$categoryId, $subcategoryId]);
         foreach ((array) $request->input('characteristics', []) as $i => $fila) {
@@ -341,61 +317,6 @@ class FixedAssetController extends Controller
     private function debeSincronizar(Request $request): bool
     {
         return $request->has('characteristics') || $request->boolean('sync_characteristics');
-    }
-
-    /**
-     * Reemplaza las características capturadas de un activo. Las filas sin
-     * nombre o sin valor se ignoran. Cuando una fila no viene ligada a una
-     * definición existente, se registra en el catálogo de la categoría del
-     * activo para poder reutilizarla después.
-     */
-    private function syncCharacteristics(FixedAsset $asset, array $characteristics): void
-    {
-        $asset->characteristics()->delete();
-
-        $categoryId = $asset->subcategory_id ?: $asset->category_id;
-        $order = 0;
-
-        foreach ($characteristics as $item) {
-            $name = trim((string) ($item['name'] ?? ''));
-            $value = trim((string) ($item['value'] ?? ''));
-
-            if ($name === '' || $value === '') {
-                continue;
-            }
-
-            $definitionId = $item['definition_id'] ?? null;
-
-            if (! $definitionId && $categoryId) {
-                // withTrashed(): si el nombre existía pero se borró del
-                // catálogo, se recicla en vez de chocar con el único category_id+name.
-                $definition = AssetCharacteristicDefinition::withTrashed()
-                    ->where('category_id', $categoryId)
-                    ->where('name', $name)
-                    ->first();
-
-                if ($definition) {
-                    if ($definition->trashed()) {
-                        $definition->restore();
-                    }
-                } else {
-                    $definition = AssetCharacteristicDefinition::create([
-                        'category_id' => $categoryId,
-                        'name' => $name,
-                        'order' => 0,
-                    ]);
-                }
-
-                $definitionId = $definition->id;
-            }
-
-            $asset->characteristics()->create([
-                'definition_id' => $definitionId,
-                'name' => $name,
-                'value' => $value,
-                'order' => $order++,
-            ]);
-        }
     }
 
     private function emitir(string $accion, FixedAsset $asset): void
