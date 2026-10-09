@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\CRM;
 use App\Exceptions\CRM\VendedorNoVinculadoException;
 use App\Models\CRM\CrmVendedor;
 use App\Services\CRM\MiDiaService;
+use App\Services\CRM\MiMesService;
 use App\Services\CRM\VendedorActualService;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
@@ -21,6 +22,7 @@ class MiDiaController extends CrmBaseController
     public function __construct(
         private readonly VendedorActualService $vendedores,
         private readonly MiDiaService $miDia,
+        private readonly MiMesService $miMes,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -45,7 +47,7 @@ class MiDiaController extends CrmBaseController
             }
 
             return $this->jsonSuccess(
-                ['vendedor' => null, 'puede_ver_equipo' => true, 'vendedores' => $lista] + $this->miDia->vacio(),
+                ['vendedor' => null, 'puede_ver_equipo' => true, 'vendedores' => $lista, 'mi_mes' => null] + $this->miDia->vacio(),
             );
         }
 
@@ -54,6 +56,7 @@ class MiDiaController extends CrmBaseController
                 'vendedor' => ['id' => $vendedor->id, 'nombre' => $vendedor->nombre],
                 'puede_ver_equipo' => $puedeVerEquipo,
                 'vendedores' => $lista,
+                'mi_mes' => $this->miMes->para($empresaId, $vendedor),
             ] + $this->miDia->resumen($empresaId, $vendedor, CarbonImmutable::now()),
         );
     }
