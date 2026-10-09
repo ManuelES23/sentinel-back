@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\ActivosFijos\UnidadesVigentes;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -132,7 +133,13 @@ class InventoryStock extends Model
         ]);
 
         $newQuantity = ($stock->quantity ?? 0) + $quantityChange;
-        
+
+        // Las unidades de activos fijos vigentes no se pueden sacar del almacén. La regla mide
+        // toda la cubeta del lote (todas las áreas; nulo, vacío y SIN-LOTE juntos), no solo esta fila.
+        if ($quantityChange < 0) {
+            app(UnidadesVigentes::class)->exigirRespaldo($productId, $entityId, $lotNumber, $quantityChange);
+        }
+
         // Si es entrada, recalcular costo promedio
         if ($quantityChange > 0 && $unitCost > 0) {
             $currentTotal = ($stock->quantity ?? 0) * ($stock->unit_cost ?? 0);

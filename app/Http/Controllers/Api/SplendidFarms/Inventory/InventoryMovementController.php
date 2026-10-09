@@ -12,6 +12,7 @@ use App\Models\InventoryStock;
 use App\Models\InventoryKardex;
 use App\Models\MovementType;
 use App\Models\Product;
+use App\Services\ActivosFijos\UnidadesVigentes;
 use App\Services\Inventory\AlmacenAccessService;
 use App\Services\Inventory\AplicadorStock;
 use App\Services\Inventory\LoteCaducidadValidator;
@@ -20,6 +21,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpFoundation\Response;
 
 class InventoryMovementController extends Controller
@@ -613,6 +615,9 @@ class InventoryMovementController extends Controller
                 'data' => $movement
             ], 201);
 
+        } catch (ValidationException $e) {
+            DB::rollBack();
+            throw $e;
         } catch (\Exception $e) {
             DB::rollBack();
             return response()->json([
@@ -1171,6 +1176,9 @@ class InventoryMovementController extends Controller
                 'data' => $freshMovement
             ]);
 
+        } catch (ValidationException $e) {
+            DB::rollBack();
+            throw $e;
         } catch (\Exception $e) {
             DB::rollBack();
             return response()->json([
@@ -1350,6 +1358,17 @@ class InventoryMovementController extends Controller
             ], 422);
         }
 
+        // La entrada de una compra no se anula mientras respalde activos fijos vigentes.
+        if (
+            $movement->reference_type === 'purchase_receipt'
+            && app(UnidadesVigentes::class)->hayVigentesEnRecepcion((int) $movement->reference_id)
+        ) {
+            throw ValidationException::withMessages([
+                'movement' => 'Esta entrada respalda activos fijos vigentes o por dar de alta, así que no se puede cancelar. '
+                    . 'Descarta las unidades pendientes o da de baja los activos primero.',
+            ]);
+        }
+
         $validated = $request->validate([
             'reason' => 'nullable|string|max:500',
         ]);
@@ -1439,6 +1458,9 @@ class InventoryMovementController extends Controller
                 'data' => $freshMovement
             ]);
 
+        } catch (ValidationException $e) {
+            DB::rollBack();
+            throw $e;
         } catch (\Exception $e) {
             DB::rollBack();
             return response()->json([
