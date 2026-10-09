@@ -162,7 +162,7 @@ class EmbudoService
             ->where('etapa_desde', $etapa));
     }
 
-    /** Llegó a $etapa: su etapa actual o alguna de su historial es $etapa o posterior (las ganadas, siempre). */
+    /** Llegó a $etapa: su etapa actual o alguna de su historial (destino u origen) es $etapa o posterior (las ganadas, siempre). */
     private function llegaronA(Builder $cohorte, ?string $etapa): Builder
     {
         $orden = array_search($etapa, self::ETAPAS_ABIERTAS, true);
@@ -174,7 +174,8 @@ class EmbudoService
 
         return $cohorte->where(fn ($q) => $q
             ->whereIn('etapa', [...$alcanzadas, 'cerrado_ganado'])
-            ->orWhereHas('historialEtapas', fn ($h) => $h->whereIn('etapa_hasta', $alcanzadas)));
+            ->orWhereHas('historialEtapas', fn ($h) => $h->whereIn('etapa_hasta', $alcanzadas))
+            ->orWhereHas('historialEtapas', fn ($h) => $h->whereIn('etapa_desde', $alcanzadas)));
     }
 
     /** Oportunidades creadas en el rango (las borradas no cuentan). */
@@ -193,6 +194,8 @@ class EmbudoService
         }
 
         $ordenes = $filas->pluck('etapa_hasta')
+            ->merge($filas->pluck('etapa_desde'))
+            ->filter()
             ->push($oportunidad->etapa)
             ->map(fn (string $etapa) => CrmOportunidad::ORDEN_ETAPAS[$etapa] ?? -1)
             ->filter(fn (int $orden) => $orden >= 0 && $orden <= 3);

@@ -159,6 +159,57 @@ class EmbudoServiceTest extends TestCase
         }
     }
 
+    /** Historial con una sola fila etapa_desde → cerrado_perdido: lo que deja el observer en una oportunidad previa al deploy. */
+    private function perdidaLegadaSoloConObserver(string $desde, string $nombre): CrmOportunidad
+    {
+        $op = $this->oportunidad('2026-10-01', [], ['nombre' => $nombre]);
+        CrmOportunidadEtapa::where('oportunidad_id', $op->id)->delete();
+        $op->forceFill(['etapa' => 'cerrado_perdido', 'fecha_cierre_real' => '2026-10-05', 'motivo_perdida' => 'Precio'])->saveQuietly();
+        CrmOportunidadEtapa::create([
+            'empresa_id' => $this->enterprise->id,
+            'oportunidad_id' => $op->id,
+            'etapa_desde' => $desde,
+            'etapa_hasta' => 'cerrado_perdido',
+            'cambiado_en' => '2026-10-05 10:00:00',
+            'inferido' => false,
+        ]);
+
+        return $op;
+    }
+
+    public function test_conversion_cuenta_la_etapa_desde_de_una_perdida_legada_con_historial_parcial(): void
+    {
+        $this->perdidaLegadaSoloConObserver('propuesta', 'Legada perdida en propuesta');
+        $this->oportunidad('2026-10-02', [], ['nombre' => 'Se queda en prospecto']);
+        $this->ahora('2026-10-20');
+
+        $r = $this->servicio->conversion($this->enterprise->id, null, $this->octubre());
+        $e = $this->porEtapa($r);
+
+        $this->assertSame(2, $r['total']);
+        $this->assertSame([2, 1, 1, 0], [$e['prospecto']['llegaron'], $e['calificado']['llegaron'], $e['propuesta']['llegaron'], $e['negociacion']['llegaron']]);
+        $this->assertSame([1, 0, 0, 0], [$e['prospecto']['siguenAbiertas'], $e['calificado']['siguenAbiertas'], $e['propuesta']['siguenAbiertas'], $e['negociacion']['siguenAbiertas']]);
+        $this->assertSame([0, 0, 1, 0], [$e['prospecto']['perdidas'], $e['calificado']['perdidas'], $e['propuesta']['perdidas'], $e['negociacion']['perdidas']]);
+
+        foreach ($r['etapas'] as $i => $etapa) {
+            $siguiente = $i < 3 ? $r['etapas'][$i + 1]['llegaron'] : $r['ganadas'];
+            $extra = $i === 0 ? $r['perdidasSinRegistro'] : 0;
+            $this->assertSame($etapa['llegaron'], $etapa['siguenAbiertas'] + $etapa['perdidas'] + $siguiente + $extra, $etapa['etapa']);
+        }
+    }
+
+    public function test_detalle_incluye_la_perdida_legada_en_llegaron_y_en_perdidas_de_su_etapa(): void
+    {
+        $this->perdidaLegadaSoloConObserver('propuesta', 'Legada perdida en propuesta');
+        $this->oportunidad('2026-10-02', [], ['nombre' => 'Se queda en prospecto']);
+        $this->ahora('2026-10-20');
+
+        $this->assertSame(['Legada perdida en propuesta'], array_column($this->detalle('llegaron', 'propuesta')['items'], 'nombre'));
+        $this->assertSame(['Legada perdida en propuesta'], array_column($this->detalle('perdidas', 'propuesta')['items'], 'nombre'));
+        $this->assertSame(1, $this->detalle('llegaron', 'calificado')['total']);
+        $this->assertSame(0, $this->detalle('llegaron', 'negociacion')['total']);
+    }
+
     public function test_las_filas_inferidas_no_cuentan_para_los_dias_y_las_perdidas_sin_registro_se_separan(): void
     {
         $perdida = $this->oportunidad('2026-10-01', ['2026-10-04' => 'calificado', '2026-10-06' => 'cerrado_perdido']);
