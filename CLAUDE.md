@@ -151,6 +151,25 @@ Módulo de Administración → Activos Fijos (SF y GE). La carpeta de controlado
 - La carta firmada va al disco privado `local` (`fixed-asset-assignments/{id}/…`) y se sirve con `GET asignaciones/{a}/carta-firmada`; la ruta nunca sale en el JSON. La carta en PDF la dibuja el front con los datos de `GET asignaciones/{a}/carta`.
 - El listado de activos incluye `asignacion_activa` (eager load) para mostrar «Asignado a …».
 
+## CRM · Dashboards y embudo de oportunidades
+
+- **Historial de etapas** en `crm_oportunidad_etapas` (`CrmOportunidadEtapa`), llenado por `CrmOportunidadObserver` (`#[ObservedBy]` en `CrmOportunidad`): una fila al crear y otra por cada cambio de `etapa`, venga de `cambiarEtapa` o de aprobar una cotización.
+  - Las filas `inferido = true` las crea una sola vez `php artisan crm:reconstruir-historial-etapas`, que es idempotente.
+  - En esas filas inferidas, las perdidas no saben en qué etapa se cayeron (`etapa_desde = null`, «sin registro»).
+  - Los días por etapa solo usan filas no inferidas.
+- **`App\Support\CRM\RangoDashboard`**: periodo (`mes_actual`, `mes_anterior`, `trimestre`, `anio`, `personalizado` con `desde`/`hasta`, máximo 366 días) y rango anterior. Los periodos en curso se comparan recortados a los mismos días transcurridos.
+- **`EmbudoService`**:
+  - `pipeline`: abiertas hoy por etapa, con ponderado.
+  - `conversion`: cohorte = creadas en el rango; «llegó» = etapa máxima alcanzada; la mayor fuga solo se marca con 5 o más llegadas.
+  - `detalle`: máximo 50 filas, con el total real.
+  - Lo usan el Dashboard, `GET crm/oportunidades/resumen` y el bloque `mi_mes` de `GET crm/mi-dia` (`MiMesService`).
+- **`GET crm/dashboard/{kpis|embudo|embudo-conversion|tendencia|cumplimiento-metas|cotizaciones|actividad|ranking-vendedores|detalle}`**:
+  - Exigen `dashboard.ver`; el ranking exige `ejecutivo`.
+  - `vendedor_id` solo se respeta con `ejecutivo`; sin él se fuerza el vendedor propio.
+  - `comparar=1` agrega el periodo anterior.
+- **Presupuestos:** `montoEsperado` ya es lo ganado (Σ `monto_esperado` de `cerrado_ganado` por `fecha_cierre_real`), aunque su nombre diga «esperado».
+- **Despliegue:** `php artisan migrate` y, una sola vez, `php artisan crm:reconstruir-historial-etapas`. El back va antes que el front.
+
 ## Acceso cruzado de entidades (cross-enterprise)
 Tabla pivot `enterprise_entity` (`enterprise_id`, `entity_id`, `access_level: read|write`) — permite que una empresa acceda a bodegas/plantas de otra. Ver `EntityAccessController` (Admin).
 
