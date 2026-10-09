@@ -110,6 +110,73 @@ class EmbudoService
         ];
     }
 
+    public function detalle(int $empresaId, ?int $vendedorId, RangoDashboard $rango, string $tipo, ?string $etapa): array
+    {
+        $query = match ($tipo) {
+            'abiertas' => CrmOportunidad::where('empresa_id', $empresaId)
+                ->where('etapa', $etapa)
+                ->when($vendedorId !== null, fn ($q) => $q->where('vendedor_id', $vendedorId)),
+            'ganadas' => $this->cohorte($empresaId, $vendedorId, $rango)->where('etapa', 'cerrado_ganado'),
+            'perdidas' => $this->perdidasEn($this->cohorte($empresaId, $vendedorId, $rango), $etapa),
+            'llegaron' => $this->llegaronA($this->cohorte($empresaId, $vendedorId, $rango), $etapa),
+            default => throw new \InvalidArgumentException("Tipo de detalle inválido: {$tipo}"),
+        };
+
+        $total = (clone $query)->count();
+        $items = $query->with(['cliente:id,nombre', 'prospecto:id,nombre', 'vendedor:id,nombre'])
+            ->orderByDesc('monto_esperado')
+            ->orderBy('id')
+            ->limit(self::LIMITE_DETALLE)
+            ->get()
+            ->map(fn (CrmOportunidad $o) => [
+                'id' => $o->id,
+                'nombre' => $o->nombre,
+                'cuenta' => $o->cliente
+                    ? ['tipo' => 'cliente', 'nombre' => $o->cliente->nombre]
+                    : ($o->prospecto ? ['tipo' => 'prospecto', 'nombre' => $o->prospecto->nombre] : null),
+                'monto' => (float) $o->monto_esperado,
+                'probabilidad' => $o->probabilidad,
+                'etapa' => $o->etapa,
+                'vendedor' => $o->vendedor ? ['id' => $o->vendedor->id, 'nombre' => $o->vendedor->nombre] : null,
+                'fechaCierreEsperada' => $o->fecha_cierre_esperada?->toDateString(),
+                'fechaCierreReal' => $o->fecha_cierre_real?->toIso8601String(),
+                'motivoPerdida' => $o->motivo_perdida,
+            ])
+            ->all();
+
+        return ['total' => $total, 'items' => $items];
+    }
+
+    private function perdidasEn(Builder $cohorte, ?string $etapa): Builder
+    {
+        $cohorte->where('etapa', 'cerrado_perdido');
+
+        if ($etapa === 'sin_registro') {
+            return $cohorte->whereDoesntHave('historialEtapas', fn ($h) => $h
+                ->where('etapa_hasta', 'cerrado_perdido')
+                ->whereNotNull('etapa_desde'));
+        }
+
+        return $cohorte->whereHas('historialEtapas', fn ($h) => $h
+            ->where('etapa_hasta', 'cerrado_perdido')
+            ->where('etapa_desde', $etapa));
+    }
+
+    /** Llegó a $etapa: su etapa actual o alguna de su historial es $etapa o posterior (las ganadas, siempre). */
+    private function llegaronA(Builder $cohorte, ?string $etapa): Builder
+    {
+        $orden = array_search($etapa, self::ETAPAS_ABIERTAS, true);
+        if ($orden === false || $orden === 0) {
+            return $cohorte;
+        }
+
+        $alcanzadas = array_slice(self::ETAPAS_ABIERTAS, $orden);
+
+        return $cohorte->where(fn ($q) => $q
+            ->whereIn('etapa', [...$alcanzadas, 'cerrado_ganado'])
+            ->orWhereHas('historialEtapas', fn ($h) => $h->whereIn('etapa_hasta', $alcanzadas)));
+    }
+
     /** Oportunidades creadas en el rango (las borradas no cuentan). */
     private function cohorte(int $empresaId, ?int $vendedorId, RangoDashboard $rango): Builder
     {

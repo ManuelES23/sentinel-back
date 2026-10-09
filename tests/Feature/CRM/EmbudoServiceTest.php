@@ -219,4 +219,79 @@ class EmbudoServiceTest extends TestCase
         $this->assertSame(2, $this->servicio->conversion($this->enterprise->id, null, $this->octubre())['total']);
         $this->assertSame(1, $this->servicio->conversion($this->enterprise->id, $this->vendedor->id, $this->octubre())['total']);
     }
+
+    private function detalle(string $tipo, ?string $etapa): array
+    {
+        return $this->servicio->detalle($this->enterprise->id, null, $this->octubre(), $tipo, $etapa);
+    }
+
+    public function test_detalle_abiertas_ignora_el_periodo_y_ordena_por_monto(): void
+    {
+        $this->oportunidad('2026-08-01', [], ['nombre' => 'Vieja', 'monto_esperado' => 500]);
+        $this->oportunidad('2026-10-02', [], ['nombre' => 'Grande', 'monto_esperado' => 9000]);
+        $this->oportunidad('2026-10-02', ['2026-10-03' => 'calificado'], ['nombre' => 'Otra etapa']);
+        $this->ahora('2026-10-20');
+
+        $r = $this->detalle('abiertas', 'prospecto');
+
+        $this->assertSame(2, $r['total']);
+        $this->assertSame(['Grande', 'Vieja'], array_column($r['items'], 'nombre'));
+        $this->assertSame(9000.0, $r['items'][0]['monto']);
+        $this->assertSame(['id' => $this->vendedor->id, 'nombre' => 'Juan Pérez'], $r['items'][0]['vendedor']);
+    }
+
+    public function test_detalle_llegaron_incluye_las_que_pasaron_la_etapa(): void
+    {
+        $this->oportunidad('2026-10-01', ['2026-10-02' => 'calificado'], ['nombre' => 'Calificada']);
+        $this->oportunidad('2026-10-01', ['2026-10-02' => 'propuesta'], ['nombre' => 'Saltó']);
+        $this->oportunidad('2026-10-01', ['2026-10-02' => 'calificado', '2026-10-03' => 'cerrado_perdido'], ['nombre' => 'Perdida en calificado']);
+        $this->oportunidad('2026-10-01', [], ['nombre' => 'Se quedó']);
+        $this->oportunidad('2026-10-01', ['2026-10-02' => 'cerrado_ganado'], ['nombre' => 'Ganada']);
+        $this->ahora('2026-10-20');
+
+        $nombres = array_column($this->detalle('llegaron', 'calificado')['items'], 'nombre');
+        sort($nombres);
+
+        $this->assertSame(['Calificada', 'Ganada', 'Perdida en calificado', 'Saltó'], $nombres);
+        $this->assertSame(5, $this->detalle('llegaron', 'prospecto')['total']);
+    }
+
+    public function test_detalle_perdidas_por_etapa_y_sin_registro(): void
+    {
+        $this->oportunidad('2026-10-01', ['2026-10-02' => 'calificado', '2026-10-03' => 'cerrado_perdido'], ['nombre' => 'En calificado', 'motivo_perdida' => 'Precio']);
+        $sin = $this->oportunidad('2026-10-01', ['2026-10-02' => 'cerrado_perdido'], ['nombre' => 'Sin registro']);
+        CrmOportunidadEtapa::where('oportunidad_id', $sin->id)->where('etapa_hasta', 'cerrado_perdido')->update(['etapa_desde' => null]);
+        $this->ahora('2026-10-20');
+
+        $calificado = $this->detalle('perdidas', 'calificado');
+        $this->assertSame(['En calificado'], array_column($calificado['items'], 'nombre'));
+        $this->assertSame('Precio', $calificado['items'][0]['motivoPerdida']);
+        $this->assertSame(['Sin registro'], array_column($this->detalle('perdidas', 'sin_registro')['items'], 'nombre'));
+    }
+
+    public function test_detalle_ganadas_de_la_cohorte(): void
+    {
+        $this->oportunidad('2026-10-01', ['2026-10-05' => 'cerrado_ganado'], ['nombre' => 'De octubre']);
+        $this->oportunidad('2026-09-01', ['2026-10-05' => 'cerrado_ganado'], ['nombre' => 'De septiembre']);
+        $this->ahora('2026-10-20');
+
+        $r = $this->detalle('ganadas', null);
+
+        $this->assertSame(['De octubre'], array_column($r['items'], 'nombre'));
+        $this->assertSame('2026-10-05', substr($r['items'][0]['fechaCierreReal'], 0, 10));
+    }
+
+    public function test_detalle_limita_a_50_con_el_total_real(): void
+    {
+        for ($i = 1; $i <= 55; $i++) {
+            $this->oportunidad('2026-10-01', [], ['monto_esperado' => $i]);
+        }
+        $this->ahora('2026-10-20');
+
+        $r = $this->detalle('abiertas', 'prospecto');
+
+        $this->assertSame(55, $r['total']);
+        $this->assertCount(50, $r['items']);
+        $this->assertSame(55.0, $r['items'][0]['monto']);
+    }
 }
