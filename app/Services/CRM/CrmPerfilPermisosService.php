@@ -47,7 +47,7 @@ class CrmPerfilPermisosService
     private const EXTRA_GERENCIA = [
         'mi-dia' => ['mi-dia' => ['equipo']],
         'agenda' => ['agenda' => ['eliminar']],
-        'oportunidades' => ['oportunidades' => ['eliminar', 'cerrar']],
+        'oportunidades' => ['oportunidades' => ['eliminar', 'cerrar', 'equipo']],
         'clientes' => ['clientes' => ['eliminar', 'asignar_vendedor']],
         'prospectos' => ['prospectos' => ['eliminar', 'asignar_vendedor']],
         'cotizaciones' => ['cotizaciones' => ['aprobar', 'rechazar']],

@@ -181,6 +181,13 @@ Módulo de Administración → Activos Fijos (SF y GE). La carpeta de controlado
 - **Presupuestos:** `montoEsperado` ya es lo ganado (Σ `monto_esperado` de `cerrado_ganado` por `fecha_cierre_real`), aunque su nombre diga «esperado».
 - **Despliegue:** `php artisan migrate` y, una sola vez, `php artisan crm:reconstruir-historial-etapas`. El back va antes que el front.
 
+## CRM · Visibilidad de oportunidades
+
+- `GET crm/oportunidades`, `GET crm/oportunidades/{id}` y `GET crm/oportunidades/resumen` exigen `oportunidades.ver` (403 sin él).
+- Sin `oportunidades.equipo` (perfil vendedor) el usuario solo lee las de su propio `CrmVendedor` activo: el listado y el resumen se fuerzan a él, pedir `vendedor_id` de otro responde 403, `show` de una ajena responde 403 y, sin vendedor vinculado, todo responde 403. Con `equipo` (perfil gerencia) ve a todo el equipo y puede filtrar por vendedor. Ver `OportunidadController::vendedorVisible`.
+- Alcance: solo la lectura de oportunidades. Siguen abiertos dentro del tenant los listados de clientes, prospectos y `crm/cotizaciones`, y las cotizaciones por oportunidad; update/destroy/cambiar-etapa no limitan por vendedor.
+- Despliegue: `php artisan migrate`. La migración crea `equipo` y lo concede a quien ya tiene `oportunidades.cerrar` (gerencia); a cualquier otro que deba ver al equipo se le concede a mano o reaplicando el perfil.
+
 ## Acceso cruzado de entidades (cross-enterprise)
 Tabla pivot `enterprise_entity` (`enterprise_id`, `entity_id`, `access_level: read|write`) — permite que una empresa acceda a bodegas/plantas de otra. Ver `EntityAccessController` (Admin).
 

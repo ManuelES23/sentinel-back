@@ -188,7 +188,7 @@ class CrmPermisosEnforcementTest extends TestCase
         $lecturas = [
             '/api/crm/vendedores', '/api/crm/regiones', '/api/crm/zonas', '/api/crm/bodegas',
             '/api/crm/productos', '/api/crm/productos/buscar?q=Prod', '/api/crm/configuracion-comercial',
-            '/api/crm/clientes', '/api/crm/prospectos', '/api/crm/oportunidades', '/api/crm/cotizaciones',
+            '/api/crm/clientes', '/api/crm/prospectos', '/api/crm/cotizaciones',
             '/api/crm/empresas-externas', '/api/crm/contactos', '/api/crm/actividades',
         ];
 
