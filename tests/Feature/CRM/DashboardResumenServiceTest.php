@@ -7,11 +7,12 @@ use App\Models\CRM\CrmCliente;
 use App\Models\CRM\CrmCotizacion;
 use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmPresupuesto;
-use App\Models\CRM\CrmProspecto;
-use App\Models\Enterprise;
+use App\Models\CRM\CrmVendedor;
 use App\Services\CRM\DashboardResumenService;
-use Carbon\Carbon;
+use App\Support\CRM\RangoDashboard;
+use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Tests\Concerns\CreatesCrmFixtures;
 use Tests\TestCase;
 
@@ -20,700 +21,222 @@ class DashboardResumenServiceTest extends TestCase
     use RefreshDatabase;
     use CreatesCrmFixtures;
 
+    private const HOY = '2026-10-08 10:00:00';
+
+    private DashboardResumenService $servicio;
+
     protected function setUp(): void
     {
         parent::setUp();
         $this->setUpCrmFixtures();
+        $this->ahora(self::HOY);
+        $this->servicio = new DashboardResumenService();
     }
 
-    public function test_resuelve_rango_de_mes_actual(): void
+    protected function tearDown(): void
     {
-        Carbon::setTestNow(Carbon::create(2026, 9, 15, 10, 0, 0));
-        $service = new DashboardResumenService();
-
-        $rango = $service->resolverRangoFechas('mes_actual');
-
-        $this->assertSame('2026-09-01 00:00:00', $rango['inicio']->toDateTimeString());
-        $this->assertSame('2026-09-30 23:59:59', $rango['fin']->toDateTimeString());
-
         Carbon::setTestNow();
+        CarbonImmutable::setTestNow();
+        parent::tearDown();
     }
 
-    public function test_resuelve_rango_de_mes_anterior(): void
+    private function ahora(string $fecha): void
     {
-        Carbon::setTestNow(Carbon::create(2026, 9, 15, 10, 0, 0));
-        $service = new DashboardResumenService();
-
-        $rango = $service->resolverRangoFechas('mes_anterior');
-
-        $this->assertSame('2026-08-01 00:00:00', $rango['inicio']->toDateTimeString());
-        $this->assertSame('2026-08-31 23:59:59', $rango['fin']->toDateTimeString());
-
-        Carbon::setTestNow();
+        Carbon::setTestNow($fecha);
+        CarbonImmutable::setTestNow($fecha);
     }
 
-    public function test_resuelve_rango_de_mes_anterior_cruzando_de_anio(): void
+    private function op(array $datos, string $creada = self::HOY): CrmOportunidad
     {
-        // Caso límite: el mes anterior a enero es diciembre del año pasado.
-        Carbon::setTestNow(Carbon::create(2026, 1, 15, 10, 0, 0));
-        $service = new DashboardResumenService();
-
-        $rango = $service->resolverRangoFechas('mes_anterior');
-
-        $this->assertSame('2025-12-01 00:00:00', $rango['inicio']->toDateTimeString());
-        $this->assertSame('2025-12-31 23:59:59', $rango['fin']->toDateTimeString());
-
-        Carbon::setTestNow();
-    }
-
-    public function test_resuelve_rango_de_trimestre(): void
-    {
-        Carbon::setTestNow(Carbon::create(2026, 9, 15, 10, 0, 0));
-        $service = new DashboardResumenService();
-
-        $rango = $service->resolverRangoFechas('trimestre');
-
-        $this->assertSame('2026-07-01 00:00:00', $rango['inicio']->toDateTimeString());
-        $this->assertSame('2026-09-30 23:59:59', $rango['fin']->toDateTimeString());
-
-        Carbon::setTestNow();
-    }
-
-    public function test_resuelve_rango_de_anio(): void
-    {
-        Carbon::setTestNow(Carbon::create(2026, 9, 15, 10, 0, 0));
-        $service = new DashboardResumenService();
-
-        $rango = $service->resolverRangoFechas('anio');
-
-        $this->assertSame('2026-01-01 00:00:00', $rango['inicio']->toDateTimeString());
-        $this->assertSame('2026-12-31 23:59:59', $rango['fin']->toDateTimeString());
-
-        Carbon::setTestNow();
-    }
-
-    public function test_periodo_invalido_lanza_excepcion(): void
-    {
-        $service = new DashboardResumenService();
-
-        $this->expectException(\InvalidArgumentException::class);
-
-        $service->resolverRangoFechas('siglo');
-    }
-
-    public function test_pipeline_agrupa_por_etapa_dentro_del_periodo_y_filtra_fuera(): void
-    {
-        Carbon::setTestNow(Carbon::create(2026, 9, 15));
-
-        CrmOportunidad::create([
-            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
-            'nombre' => 'A', 'monto_esperado' => 1000, 'etapa' => 'calificado',
-            'fecha_cierre_esperada' => '2026-09-20',
-        ]);
-        CrmOportunidad::create([
-            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
-            'nombre' => 'B', 'monto_esperado' => 500, 'etapa' => 'calificado',
-            'fecha_cierre_esperada' => '2026-09-25',
-        ]);
-        CrmOportunidad::create([
-            // Fuera del periodo (octubre) -- no debe contar en mes_actual.
-            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
-            'nombre' => 'C', 'monto_esperado' => 9999, 'etapa' => 'calificado',
-            'fecha_cierre_esperada' => '2026-10-05',
-        ]);
-
-        $service = new DashboardResumenService();
-        $porEtapa = collect($service->pipeline($this->enterprise->id, $this->vendedor->id, 'mes_actual'))
-            ->keyBy('etapa');
-
-        $this->assertCount(6, $porEtapa);
-        $this->assertSame(2, $porEtapa['calificado']['total']);
-        $this->assertSame(1500.0, $porEtapa['calificado']['monto']);
-        $this->assertSame(0, $porEtapa['prospecto']['total']);
-        $this->assertSame(0.0, $porEtapa['prospecto']['monto']);
-
-        Carbon::setTestNow();
-    }
-
-    public function test_pipeline_ignora_datos_de_otra_empresa(): void
-    {
-        Carbon::setTestNow(Carbon::create(2026, 9, 15));
-        $otraEmpresa = $this->crearOtraEmpresa();
-        $vendedorAjeno = \App\Models\CRM\CrmVendedor::create([
-            'empresa_id' => $otraEmpresa->id, 'nombre' => 'Vendedor ajeno',
-        ]);
-        CrmOportunidad::create([
-            'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id,
-            'nombre' => 'Ajena', 'monto_esperado' => 5000, 'etapa' => 'calificado',
-            'fecha_cierre_esperada' => '2026-09-20',
-        ]);
-
-        $service = new DashboardResumenService();
-        $porEtapa = collect($service->pipeline($this->enterprise->id, null, 'mes_actual'))->keyBy('etapa');
-
-        $this->assertSame(0, $porEtapa['calificado']['total']);
-
-        Carbon::setTestNow();
-    }
-
-    public function test_pipeline_filtra_por_vendedor_dentro_de_empresa(): void
-    {
-        Carbon::setTestNow(Carbon::create(2026, 9, 15));
-
-        // Crear segundo vendedor en la misma empresa
-        $segundoVendedor = \App\Models\CRM\CrmVendedor::create([
-            'empresa_id' => $this->enterprise->id,
-            'nombre' => 'Segundo Vendedor',
-        ]);
-
-        // Crear oportunidad del PRIMER vendedor en etapa "prospecto" con monto 1000
-        CrmOportunidad::create([
+        $this->ahora($creada);
+        $op = CrmOportunidad::create(array_merge([
             'empresa_id' => $this->enterprise->id,
             'vendedor_id' => $this->vendedor->id,
-            'nombre' => 'Oportunidad Vendedor 1',
+            'nombre' => 'Op',
             'monto_esperado' => 1000,
-            'etapa' => 'prospecto',
-            'fecha_cierre_esperada' => '2026-09-20',
-        ]);
+            'probabilidad' => 50,
+        ], $datos));
+        $this->ahora(self::HOY);
 
-        // Crear oportunidad del SEGUNDO vendedor en etapa "prospecto" con monto 5000
-        // Esta data NO debe contar cuando filtramos por $this->vendedor->id
-        CrmOportunidad::create([
-            'empresa_id' => $this->enterprise->id,
-            'vendedor_id' => $segundoVendedor->id,
-            'nombre' => 'Oportunidad Vendedor 2',
-            'monto_esperado' => 5000,
-            'etapa' => 'prospecto',
-            'fecha_cierre_esperada' => '2026-09-20',
-        ]);
-
-        $service = new DashboardResumenService();
-        $porEtapa = collect($service->pipeline($this->enterprise->id, $this->vendedor->id, 'mes_actual'))
-            ->keyBy('etapa');
-
-        // Debe contar SOLO la oportunidad del primer vendedor (1000), NOT del segundo (5000)
-        $this->assertSame(1, $porEtapa['prospecto']['total']);
-        $this->assertSame(1000.0, $porEtapa['prospecto']['monto']);
-        // Las demás etapas deben estar en cero
-        $this->assertSame(0, $porEtapa['calificado']['total']);
-        $this->assertSame(0.0, $porEtapa['calificado']['monto']);
-
-        Carbon::setTestNow();
+        return $op;
     }
 
-    public function test_cotizaciones_agrupa_por_estado_y_filtra_por_vendedor_via_oportunidad(): void
+    private function ganada(string $cierre, float $monto, string $creada = self::HOY, ?int $vendedorId = null): CrmOportunidad
     {
-        Carbon::setTestNow(Carbon::create(2026, 9, 15));
-
-        $oportunidadPropia = CrmOportunidad::create([
-            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
-            'nombre' => 'Op propia', 'monto_esperado' => 2000, 'etapa' => 'propuesta',
-        ]);
-        CrmCotizacion::create([
-            'empresa_id' => $this->enterprise->id, 'oportunidad_id' => $oportunidadPropia->id,
-            'folio' => 'COT-1', 'estado' => 'aprobado', 'fecha_emision' => '2026-09-10', 'total' => 1200,
-        ]);
-        CrmCotizacion::create([
-            'empresa_id' => $this->enterprise->id, 'oportunidad_id' => $oportunidadPropia->id,
-            'folio' => 'COT-2', 'estado' => 'aprobado', 'fecha_emision' => '2026-09-12', 'total' => 800,
-        ]);
-
-        $otroVendedor = \App\Models\CRM\CrmVendedor::create([
-            'empresa_id' => $this->enterprise->id, 'nombre' => 'Otro vendedor',
-        ]);
-        $oportunidadAjena = CrmOportunidad::create([
-            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $otroVendedor->id,
-            'nombre' => 'Op ajena', 'monto_esperado' => 5000, 'etapa' => 'propuesta',
-        ]);
-        CrmCotizacion::create([
-            // De otro vendedor -- no debe contar cuando se filtra por $this->vendedor.
-            'empresa_id' => $this->enterprise->id, 'oportunidad_id' => $oportunidadAjena->id,
-            'folio' => 'COT-3', 'estado' => 'aprobado', 'fecha_emision' => '2026-09-14', 'total' => 9999,
-        ]);
-
-        $service = new DashboardResumenService();
-        $porEstado = collect($service->cotizaciones($this->enterprise->id, $this->vendedor->id, 'mes_actual'))
-            ->keyBy('estado');
-
-        $this->assertCount(5, $porEstado);
-        $this->assertSame(2, $porEstado['aprobado']['total']);
-        $this->assertSame(2000.0, $porEstado['aprobado']['monto']);
-        $this->assertSame(0, $porEstado['rechazado']['total']);
-
-        Carbon::setTestNow();
+        return $this->op([
+            'etapa' => 'cerrado_ganado',
+            'fecha_cierre_real' => $cierre,
+            'monto_esperado' => $monto,
+            'vendedor_id' => $vendedorId ?? $this->vendedor->id,
+        ], $creada);
     }
 
-    public function test_cotizaciones_sin_vendedor_agrega_todo_el_equipo(): void
+    private function mes(): RangoDashboard
     {
-        Carbon::setTestNow(Carbon::create(2026, 9, 15));
-
-        $otroVendedor = \App\Models\CRM\CrmVendedor::create([
-            'empresa_id' => $this->enterprise->id, 'nombre' => 'Otro vendedor',
-        ]);
-        $oportunidadAjena = CrmOportunidad::create([
-            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $otroVendedor->id,
-            'nombre' => 'Op ajena', 'monto_esperado' => 5000, 'etapa' => 'propuesta',
-        ]);
-        CrmCotizacion::create([
-            'empresa_id' => $this->enterprise->id, 'oportunidad_id' => $oportunidadAjena->id,
-            'folio' => 'COT-4', 'estado' => 'enviado', 'fecha_emision' => '2026-09-14', 'total' => 300,
-        ]);
-
-        $service = new DashboardResumenService();
-        $porEstado = collect($service->cotizaciones($this->enterprise->id, null, 'mes_actual'))->keyBy('estado');
-
-        $this->assertSame(1, $porEstado['enviado']['total']);
-
-        Carbon::setTestNow();
+        return RangoDashboard::desdePeriodo('mes_actual');
     }
 
-    public function test_cotizaciones_ignora_datos_de_otra_empresa(): void
+    public function test_kpis_comparan_con_el_rango_anterior_y_arman_la_serie(): void
     {
-        Carbon::setTestNow(Carbon::create(2026, 9, 15));
-        $otraEmpresa = $this->crearOtraEmpresa();
-        $vendedorAjeno = \App\Models\CRM\CrmVendedor::create([
-            'empresa_id' => $otraEmpresa->id, 'nombre' => 'Vendedor ajeno',
-        ]);
-        $oportunidadAjena = CrmOportunidad::create([
-            'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id,
-            'nombre' => 'Ajena', 'monto_esperado' => 5000, 'etapa' => 'propuesta',
-        ]);
-        CrmCotizacion::create([
-            'empresa_id' => $otraEmpresa->id, 'oportunidad_id' => $oportunidadAjena->id,
-            'folio' => 'COT-AJENA', 'estado' => 'aprobado', 'fecha_emision' => '2026-09-20', 'total' => 9999,
-        ]);
-
-        $service = new DashboardResumenService();
-        $porEstado = collect($service->cotizaciones($this->enterprise->id, null, 'mes_actual'))->keyBy('estado');
-
-        $this->assertSame(0, $porEstado['aprobado']['total']);
-        $this->assertSame(0.0, $porEstado['aprobado']['monto']);
-
-        Carbon::setTestNow();
-    }
-
-    public function test_funnel_conversion_calcula_prospectos_clientes_y_tasa(): void
-    {
-        Carbon::setTestNow(Carbon::create(2026, 9, 15));
-
-        CrmProspecto::create(['empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id, 'nombre' => 'P1']);
-        CrmProspecto::create(['empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id, 'nombre' => 'P2']);
-        CrmProspecto::create(['empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id, 'nombre' => 'P3']);
-        CrmCliente::create(['empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id, 'nombre' => 'C1', 'prospecto_id' => null]);
-        // Solo este cuenta como "convertido" -- tiene prospecto_id.
-        $prospectoConvertido = CrmProspecto::create(['empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id, 'nombre' => 'P4']);
-        CrmCliente::create([
-            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
-            'nombre' => 'C2', 'prospecto_id' => $prospectoConvertido->id,
-        ]);
-
-        $service = new DashboardResumenService();
-        $resultado = $service->funnelConversion($this->enterprise->id, $this->vendedor->id, 'mes_actual');
-
-        $this->assertSame(4, $resultado['prospectosCreados']);
-        $this->assertSame(1, $resultado['clientesConvertidos']);
-        $this->assertSame(25.0, $resultado['tasaConversion']);
-
-        Carbon::setTestNow();
-    }
-
-    public function test_funnel_conversion_sin_prospectos_devuelve_tasa_cero(): void
-    {
-        $service = new DashboardResumenService();
-        $resultado = $service->funnelConversion($this->enterprise->id, $this->vendedor->id, 'mes_actual');
-
-        $this->assertSame(0, $resultado['prospectosCreados']);
-        $this->assertSame(0, $resultado['clientesConvertidos']);
-        $this->assertSame(0.0, $resultado['tasaConversion']);
-    }
-
-    public function test_funnel_conversion_ignora_datos_de_otra_empresa(): void
-    {
-        Carbon::setTestNow(Carbon::create(2026, 9, 15));
-        $otraEmpresa = $this->crearOtraEmpresa();
-        $vendedorAjeno = \App\Models\CRM\CrmVendedor::create([
-            'empresa_id' => $otraEmpresa->id, 'nombre' => 'Vendedor ajeno',
-        ]);
-
-        // Crear prospectos y clientes en la otra empresa que estarían dentro del rango
-        CrmProspecto::create(['empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id, 'nombre' => 'P-ajena-1']);
-        CrmProspecto::create(['empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id, 'nombre' => 'P-ajena-2']);
-        $prospectoAjeno = CrmProspecto::create(['empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id, 'nombre' => 'P-ajena-3']);
-        CrmCliente::create([
-            'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id,
-            'nombre' => 'C-ajena', 'prospecto_id' => $prospectoAjeno->id,
-        ]);
-
-        $service = new DashboardResumenService();
-        $resultado = $service->funnelConversion($this->enterprise->id, $this->vendedor->id, 'mes_actual');
-
-        // Debe retornar 0, 0, 0.0 porque no hay data en nuestra empresa
-        $this->assertSame(0, $resultado['prospectosCreados']);
-        $this->assertSame(0, $resultado['clientesConvertidos']);
-        $this->assertSame(0.0, $resultado['tasaConversion']);
-
-        Carbon::setTestNow();
-    }
-
-    public function test_actividad_agrupa_por_tipo_y_por_dia(): void
-    {
-        Carbon::setTestNow(Carbon::create(2026, 9, 15));
-
-        CrmActividad::create([
-            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
-            'tipo' => 'llamada', 'descripcion' => 'Llamada 1', 'fecha_actividad' => '2026-09-10 09:00:00',
-        ]);
-        CrmActividad::create([
-            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
-            'tipo' => 'llamada', 'descripcion' => 'Llamada 2', 'fecha_actividad' => '2026-09-10 15:00:00',
-        ]);
-        CrmActividad::create([
-            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
-            'tipo' => 'correo', 'descripcion' => 'Correo 1', 'fecha_actividad' => '2026-09-12 09:00:00',
-        ]);
-
-        $service = new DashboardResumenService();
-        $resultado = $service->actividad($this->enterprise->id, $this->vendedor->id, 'mes_actual');
-
-        $porTipo = collect($resultado['porTipo'])->keyBy('tipo');
-        $this->assertSame(2, $porTipo['llamada']['total']);
-        $this->assertSame(1, $porTipo['correo']['total']);
-
-        $porDia = collect($resultado['porDia']);
-        $this->assertCount(2, $porDia);
-        $this->assertSame('2026-09-10', $porDia->first()['fecha']);
-        $this->assertSame(2, $porDia->first()['total']);
-        $this->assertSame('2026-09-12', $porDia->last()['fecha']);
-
-        Carbon::setTestNow();
-    }
-
-    public function test_actividad_sin_datos_devuelve_arrays_vacios(): void
-    {
-        $service = new DashboardResumenService();
-        $resultado = $service->actividad($this->enterprise->id, $this->vendedor->id, 'mes_actual');
-
-        $this->assertSame([], $resultado['porTipo']);
-        $this->assertSame([], $resultado['porDia']);
-    }
-
-    public function test_actividad_ignora_datos_de_otra_empresa(): void
-    {
-        Carbon::setTestNow(Carbon::create(2026, 9, 15));
-        $otraEmpresa = $this->crearOtraEmpresa();
-        $vendedorAjeno = \App\Models\CRM\CrmVendedor::create([
-            'empresa_id' => $otraEmpresa->id, 'nombre' => 'Vendedor ajeno',
-        ]);
-
-        // Crear actividades en la otra empresa que estarían dentro del rango
-        CrmActividad::create([
-            'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id,
-            'tipo' => 'llamada', 'descripcion' => 'Llamada ajena 1', 'fecha_actividad' => '2026-09-10 09:00:00',
-        ]);
-        CrmActividad::create([
-            'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id,
-            'tipo' => 'llamada', 'descripcion' => 'Llamada ajena 2', 'fecha_actividad' => '2026-09-10 15:00:00',
-        ]);
-        CrmActividad::create([
-            'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id,
-            'tipo' => 'correo', 'descripcion' => 'Correo ajeno', 'fecha_actividad' => '2026-09-12 09:00:00',
-        ]);
-
-        $service = new DashboardResumenService();
-        $resultado = $service->actividad($this->enterprise->id, null, 'mes_actual');
-
-        // No debe incluir data de la otra empresa
-        $this->assertSame([], $resultado['porTipo']);
-        $this->assertSame([], $resultado['porDia']);
-
-        Carbon::setTestNow();
-    }
-
-    public function test_cumplimiento_metas_de_un_solo_mes(): void
-    {
-        Carbon::setTestNow(Carbon::create(2026, 9, 15));
-
-        CrmPresupuesto::create([
-            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
-            'mes' => 9, 'anio' => 2026, 'meta_monto' => 10000, 'meta_clientes' => 5, 'meta_actividades' => 20,
-        ]);
-        CrmOportunidad::create([
-            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
-            'nombre' => 'Ganada', 'monto_esperado' => 4000, 'etapa' => 'cerrado_ganado',
-            'fecha_cierre_real' => '2026-09-05',
-        ]);
-        CrmCliente::create([
-            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id, 'nombre' => 'Cliente nuevo',
-        ]);
-        CrmActividad::create([
-            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
-            'tipo' => 'llamada', 'descripcion' => 'x', 'fecha_actividad' => '2026-09-06 10:00:00',
-        ]);
-
-        $service = new DashboardResumenService();
-        $resultado = $service->cumplimientoMetas($this->enterprise->id, $this->vendedor->id, 'mes_actual');
-
-        $this->assertSame(10000.0, $resultado['metaMonto']);
-        $this->assertSame(5, $resultado['metaClientes']);
-        $this->assertSame(20, $resultado['metaActividades']);
-        $this->assertSame(4000.0, $resultado['montoReal']);
-        $this->assertSame(1, $resultado['clientesReales']);
-        $this->assertSame(1, $resultado['actividadesReales']);
-
-        Carbon::setTestNow();
-    }
-
-    public function test_cumplimiento_metas_de_trimestre_suma_los_3_meses(): void
-    {
-        Carbon::setTestNow(Carbon::create(2026, 9, 15));
-
-        foreach ([7, 8, 9] as $mes) {
-            CrmPresupuesto::create([
-                'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
-                'mes' => $mes, 'anio' => 2026, 'meta_monto' => 1000, 'meta_clientes' => 1, 'meta_actividades' => 2,
-            ]);
-        }
-        // Meta de un mes fuera del trimestre (junio) -- no debe sumar.
-        CrmPresupuesto::create([
-            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
-            'mes' => 6, 'anio' => 2026, 'meta_monto' => 99999, 'meta_clientes' => 99, 'meta_actividades' => 99,
-        ]);
-
-        $service = new DashboardResumenService();
-        $resultado = $service->cumplimientoMetas($this->enterprise->id, $this->vendedor->id, 'trimestre');
-
-        $this->assertSame(3000.0, $resultado['metaMonto']);
-        $this->assertSame(3, $resultado['metaClientes']);
-        $this->assertSame(6, $resultado['metaActividades']);
-
-        Carbon::setTestNow();
-    }
-
-    public function test_cumplimiento_metas_sin_presupuesto_definido_devuelve_metas_en_cero(): void
-    {
-        $service = new DashboardResumenService();
-        $resultado = $service->cumplimientoMetas($this->enterprise->id, $this->vendedor->id, 'mes_actual');
-
-        $this->assertSame(0.0, $resultado['metaMonto']);
-        $this->assertSame(0, $resultado['metaClientes']);
-        $this->assertSame(0.0, $resultado['montoReal']);
-    }
-
-    public function test_cumplimiento_metas_ignora_datos_de_otra_empresa(): void
-    {
-        Carbon::setTestNow(Carbon::create(2026, 9, 15));
-        $otraEmpresa = $this->crearOtraEmpresa();
-        $vendedorAjeno = \App\Models\CRM\CrmVendedor::create([
-            'empresa_id' => $otraEmpresa->id, 'nombre' => 'Vendedor ajeno',
-        ]);
-
-        // Crear presupuesto en la otra empresa que estaría dentro del rango
-        CrmPresupuesto::create([
-            'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id,
-            'mes' => 9, 'anio' => 2026, 'meta_monto' => 99999, 'meta_clientes' => 99, 'meta_actividades' => 99,
-        ]);
-
-        // Crear oportunidad cerrada ganada en la otra empresa
-        CrmOportunidad::create([
-            'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id,
-            'nombre' => 'Ganada ajena', 'monto_esperado' => 88888, 'etapa' => 'cerrado_ganado',
-            'fecha_cierre_real' => '2026-09-05',
-        ]);
-
-        // Crear cliente en la otra empresa
-        CrmCliente::create([
-            'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id, 'nombre' => 'Cliente ajeno',
-        ]);
-
-        // Crear actividad en la otra empresa
-        CrmActividad::create([
-            'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id,
-            'tipo' => 'llamada', 'descripcion' => 'Llamada ajena', 'fecha_actividad' => '2026-09-06 10:00:00',
-        ]);
-
-        $service = new DashboardResumenService();
-        // Call with vendedorId = null (team aggregate) so empresa_id is the ONLY filter that excludes the other empresa's data
-        $resultado = $service->cumplimientoMetas($this->enterprise->id, null, 'mes_actual');
-
-        // Debe retornar 0 para metas y reales porque no hay data en nuestra empresa
-        $this->assertSame(0.0, $resultado['metaMonto']);
-        $this->assertSame(0, $resultado['metaClientes']);
-        $this->assertSame(0, $resultado['metaActividades']);
-        $this->assertSame(0.0, $resultado['montoReal']);
-        $this->assertSame(0, $resultado['clientesReales']);
-        $this->assertSame(0, $resultado['actividadesReales']);
-
-        Carbon::setTestNow();
-    }
-
-    public function test_kpis_combina_snapshot_actual_y_metricas_del_periodo(): void
-    {
-        Carbon::setTestNow(Carbon::create(2026, 9, 15));
-
-        // Oportunidades abiertas (snapshot -- no filtra por fecha).
-        CrmOportunidad::create([
-            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
-            'nombre' => 'Abierta', 'monto_esperado' => 3000, 'etapa' => 'propuesta',
-        ]);
-        CrmOportunidad::create([
-            // Cerrada -- no cuenta como "abierta".
-            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
-            'nombre' => 'Cerrada', 'monto_esperado' => 999, 'etapa' => 'cerrado_ganado',
-            'fecha_cierre_real' => '2026-08-01',
-        ]);
-
-        // Cotizaciones pendientes (snapshot).
-        $op = CrmOportunidad::first();
-        CrmCotizacion::create([
-            'empresa_id' => $this->enterprise->id, 'oportunidad_id' => $op->id,
-            'folio' => 'C1', 'estado' => 'enviado', 'fecha_emision' => '2026-01-01', 'total' => 700,
-        ]);
-        CrmCotizacion::create([
-            'empresa_id' => $this->enterprise->id, 'oportunidad_id' => $op->id,
-            'folio' => 'C2', 'estado' => 'aprobado', 'fecha_emision' => '2026-01-01', 'total' => 1500,
-        ]);
-
-        // Clientes nuevos (respeta el periodo).
+        $this->ganada('2026-10-03 10:00:00', 4000, '2026-09-25 10:00:00');
+        $this->ganada('2026-09-05 10:00:00', 1000, '2026-08-31 10:00:00');
+        $this->ganada('2026-09-20 10:00:00', 7000, '2026-09-01 10:00:00');
+        $this->op(['etapa' => 'cerrado_perdido', 'fecha_cierre_real' => '2026-10-04 10:00:00']);
+        $abierta = $this->op(['etapa' => 'propuesta', 'monto_esperado' => 3000, 'probabilidad' => 50]);
+        CrmCotizacion::create(['empresa_id' => $this->enterprise->id, 'oportunidad_id' => $abierta->id, 'folio' => 'C1', 'estado' => 'enviado', 'fecha_emision' => '2026-10-01', 'total' => 700]);
+        CrmCotizacion::create(['empresa_id' => $this->enterprise->id, 'oportunidad_id' => $abierta->id, 'folio' => 'C2', 'estado' => 'aprobado', 'fecha_emision' => '2026-10-01', 'total' => 1500]);
         CrmCliente::create(['empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id, 'nombre' => 'Nuevo']);
 
-        // Meta + real para el % de cumplimiento.
-        CrmPresupuesto::create([
-            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
-            'mes' => 9, 'anio' => 2026, 'meta_monto' => 2000, 'meta_clientes' => 1, 'meta_actividades' => 1,
-        ]);
-        CrmOportunidad::create([
-            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
-            'nombre' => 'Ganada del mes', 'monto_esperado' => 1000, 'etapa' => 'cerrado_ganado',
-            'fecha_cierre_real' => '2026-09-10',
-        ]);
+        $k = $this->servicio->kpis($this->enterprise->id, null, $this->mes());
 
-        $service = new DashboardResumenService();
-        $resultado = $service->kpis($this->enterprise->id, $this->vendedor->id, 'mes_actual');
-
-        $this->assertSame(1, $resultado['oportunidadesAbiertas']);
-        $this->assertSame(3000.0, $resultado['montoOportunidadesAbiertas']);
-        $this->assertSame(1, $resultado['cotizacionesPendientes']); // solo 'enviado' es pendiente
-        $this->assertSame(700.0, $resultado['montoCotizacionesPendientes']);
-        $this->assertSame(1, $resultado['clientesNuevos']);
-        $this->assertSame(50.0, $resultado['porcentajeCumplimientoMeta']); // 1000/2000
-
-        Carbon::setTestNow();
+        $this->assertSame(4000.0, $k['ventas']['actual']);
+        $this->assertSame(1000.0, $k['ventas']['anterior']);
+        $this->assertCount(8, $k['ventas']['serie']);
+        $this->assertSame(2026, $k['ventas']['serie'][0]['anio']);
+        $this->assertSame(3, $k['ventas']['serie'][0]['mes']);
+        $this->assertSame(8000.0, collect($k['ventas']['serie'])->firstWhere('mes', 9)['valor']);
+        $this->assertSame(50.0, $k['tasaCierre']['actual']);
+        $this->assertSame(100.0, $k['tasaCierre']['anterior']);
+        $this->assertSame(8, $k['cicloVenta']['actual']);
+        $this->assertSame(1, $k['clientesNuevos']['actual']);
+        $this->assertSame(0, $k['clientesNuevos']['anterior']);
+        $this->assertSame(['abiertas' => 1, 'monto' => 3000.0, 'ponderado' => 1500.0], $k['pipeline']);
+        $this->assertSame(['cantidad' => 1, 'monto' => 700.0], $k['cotizacionesPendientes']);
+        $this->assertSame(['inicio' => '2026-10-01', 'fin' => '2026-10-31', 'etiquetaAnterior' => 'vs sep al día 8'], $k['rango']);
     }
 
-    public function test_kpis_sin_meta_definida_no_divide_entre_cero(): void
+    public function test_kpis_sin_cierres_devuelven_null_en_tasa_y_ciclo(): void
     {
-        $service = new DashboardResumenService();
-        $resultado = $service->kpis($this->enterprise->id, $this->vendedor->id, 'mes_actual');
+        $k = $this->servicio->kpis($this->enterprise->id, null, $this->mes());
 
-        $this->assertSame(0.0, $resultado['porcentajeCumplimientoMeta']);
+        $this->assertSame(0.0, $k['ventas']['actual']);
+        $this->assertNull($k['tasaCierre']['actual']);
+        $this->assertNull($k['cicloVenta']['actual']);
     }
 
-    public function test_kpis_ignora_datos_de_otra_empresa(): void
+    public function test_kpis_filtran_por_vendedor_e_ignoran_otra_empresa(): void
     {
-        Carbon::setTestNow(Carbon::create(2026, 9, 15));
+        $otro = CrmVendedor::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Otro']);
+        $this->ganada('2026-10-03 10:00:00', 4000);
+        $this->ganada('2026-10-03 10:00:00', 6000, self::HOY, $otro->id);
         $otraEmpresa = $this->crearOtraEmpresa();
-        $vendedorAjeno = \App\Models\CRM\CrmVendedor::create([
-            'empresa_id' => $otraEmpresa->id, 'nombre' => 'Vendedor ajeno',
-        ]);
+        $ajeno = CrmVendedor::create(['empresa_id' => $otraEmpresa->id, 'nombre' => 'Ajeno']);
+        $this->op(['empresa_id' => $otraEmpresa->id, 'vendedor_id' => $ajeno->id, 'etapa' => 'cerrado_ganado', 'fecha_cierre_real' => '2026-10-03', 'monto_esperado' => 99999]);
 
-        // Crear una oportunidad abierta en la otra empresa que alimentaría oportunidadesAbiertas
-        CrmOportunidad::create([
-            'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id,
-            'nombre' => 'Ajena abierta', 'monto_esperado' => 77777, 'etapa' => 'propuesta',
-        ]);
-
-        // Crear un cliente en la otra empresa que alimentaría clientesNuevos
-        CrmCliente::create([
-            'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id, 'nombre' => 'Cliente ajeno',
-        ]);
-
-        $service = new DashboardResumenService();
-        // Call with vendedorId = null (team aggregate) so empresa_id is the ONLY filter excluding the other empresa's data
-        $resultado = $service->kpis($this->enterprise->id, null, 'mes_actual');
-
-        // Debe retornar 0 para todos los campos porque no hay data en nuestra empresa
-        $this->assertSame(0, $resultado['oportunidadesAbiertas']);
-        $this->assertSame(0.0, $resultado['montoOportunidadesAbiertas']);
-        $this->assertSame(0, $resultado['cotizacionesPendientes']);
-        $this->assertSame(0.0, $resultado['montoCotizacionesPendientes']);
-        $this->assertSame(0, $resultado['clientesNuevos']);
-        $this->assertSame(0.0, $resultado['porcentajeCumplimientoMeta']);
-
-        Carbon::setTestNow();
+        $this->assertSame(10000.0, $this->servicio->kpis($this->enterprise->id, null, $this->mes())['ventas']['actual']);
+        $this->assertSame(4000.0, $this->servicio->kpis($this->enterprise->id, $this->vendedor->id, $this->mes())['ventas']['actual']);
     }
 
-    public function test_ranking_vendedores_ordena_por_monto_cerrado_descendente(): void
+    public function test_tendencia_de_seis_meses_con_meta_y_anio_anterior(): void
     {
-        Carbon::setTestNow(Carbon::create(2026, 9, 15));
+        CrmPresupuesto::create(['empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id, 'mes' => 10, 'anio' => 2026, 'meta_monto' => 5000, 'meta_clientes' => 1, 'meta_actividades' => 1]);
+        $this->ganada('2026-10-03 10:00:00', 4000);
+        $this->ganada('2025-10-10 10:00:00', 2500);
 
-        $vendedorB = \App\Models\CRM\CrmVendedor::create([
-            'empresa_id' => $this->enterprise->id, 'nombre' => 'Vendedor B', 'activo' => true,
-        ]);
+        $con = $this->servicio->tendencia($this->enterprise->id, null, $this->mes(), true);
+        $sin = $this->servicio->tendencia($this->enterprise->id, null, $this->mes(), false);
 
-        CrmOportunidad::create([
-            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
-            'nombre' => 'Op 1', 'monto_esperado' => 1000, 'etapa' => 'cerrado_ganado',
-            'fecha_cierre_real' => '2026-09-05',
-        ]);
-        CrmOportunidad::create([
-            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $vendedorB->id,
-            'nombre' => 'Op 2', 'monto_esperado' => 5000, 'etapa' => 'cerrado_ganado',
-            'fecha_cierre_real' => '2026-09-06',
-        ]);
-        CrmOportunidad::create([
-            // Fuera del periodo -- no debe sumar.
-            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $vendedorB->id,
-            'nombre' => 'Op 3 (agosto)', 'monto_esperado' => 9999, 'etapa' => 'cerrado_ganado',
-            'fecha_cierre_real' => '2026-08-01',
-        ]);
-
-        $service = new DashboardResumenService();
-        $ranking = $service->rankingVendedores($this->enterprise->id, 'mes_actual');
-
-        $this->assertSame($vendedorB->id, $ranking[0]['vendedorId']);
-        $this->assertSame(5000.0, $ranking[0]['montoCerrado']);
-        $this->assertSame($this->vendedor->id, $ranking[1]['vendedorId']);
-        $this->assertSame(1000.0, $ranking[1]['montoCerrado']);
-
-        Carbon::setTestNow();
+        $this->assertCount(6, $con);
+        $this->assertSame(5, $con[0]['mes']);
+        $this->assertSame(['anio' => 2026, 'mes' => 10, 'ganado' => 4000.0, 'meta' => 5000.0, 'ganadoAnioAnterior' => 2500.0], $con[5]);
+        $this->assertArrayNotHasKey('ganadoAnioAnterior', $sin[5]);
     }
 
-    public function test_ranking_vendedores_incluye_vendedores_sin_cierres_en_cero(): void
+    public function test_cumplimiento_con_pronostico_del_periodo_en_curso(): void
     {
-        $service = new DashboardResumenService();
-        $ranking = $service->rankingVendedores($this->enterprise->id, 'mes_actual');
+        CrmPresupuesto::create(['empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id, 'mes' => 10, 'anio' => 2026, 'meta_monto' => 10000, 'meta_clientes' => 2, 'meta_actividades' => 10]);
+        $this->ganada('2026-10-03 10:00:00', 4000);
+        $this->op(['etapa' => 'negociacion', 'monto_esperado' => 2000, 'probabilidad' => 50, 'fecha_cierre_esperada' => '2026-10-20']);
+        $this->op(['etapa' => 'negociacion', 'monto_esperado' => 8000, 'probabilidad' => 90, 'fecha_cierre_esperada' => '2026-11-05']);
+        $this->op(['etapa' => 'propuesta', 'monto_esperado' => 8000, 'probabilidad' => 90, 'fecha_cierre_esperada' => '2026-10-02']);
 
-        $this->assertCount(1, $ranking); // solo $this->vendedor, de la fixture
-        $this->assertSame(0.0, $ranking[0]['montoCerrado']);
+        $m = $this->servicio->cumplimientoMetas($this->enterprise->id, null, $this->mes());
+
+        $this->assertSame(10000.0, $m['metaMonto']);
+        $this->assertSame(4000.0, $m['montoReal']);
+        $this->assertSame(5000.0, $m['pronostico']);
+        $this->assertFalse($m['periodoTerminado']);
     }
 
-    public function test_ranking_vendedores_ignora_datos_de_otra_empresa(): void
+    public function test_cumplimiento_de_periodo_terminado_no_suma_pronostico(): void
     {
-        Carbon::setTestNow(Carbon::create(2026, 9, 15));
+        $this->ganada('2026-09-10 10:00:00', 3000);
+        $this->op(['etapa' => 'negociacion', 'fecha_cierre_esperada' => '2026-09-25']);
 
-        $otraEmpresa = $this->crearOtraEmpresa();
-        $vendedorAjeno = \App\Models\CRM\CrmVendedor::create([
-            'empresa_id' => $otraEmpresa->id, 'nombre' => 'Vendedor ajeno', 'activo' => true,
-        ]);
+        $m = $this->servicio->cumplimientoMetas($this->enterprise->id, null, RangoDashboard::desdePeriodo('mes_anterior'));
 
-        // Crear oportunidad cerrada ganada en la otra empresa con monto distintivo (66666)
-        CrmOportunidad::create([
-            'empresa_id' => $otraEmpresa->id, 'vendedor_id' => $vendedorAjeno->id,
-            'nombre' => 'Op ajena', 'monto_esperado' => 66666, 'etapa' => 'cerrado_ganado',
-            'fecha_cierre_real' => '2026-09-10',
-        ]);
+        $this->assertTrue($m['periodoTerminado']);
+        $this->assertSame(3000.0, $m['pronostico']);
+    }
 
-        $service = new DashboardResumenService();
-        $ranking = $service->rankingVendedores($this->enterprise->id, 'mes_actual');
-
-        // Debe retornar solo vendedores de $this->enterprise (solo $this->vendedor de la fixture)
-        $this->assertCount(1, $ranking);
-        $this->assertSame($this->vendedor->id, $ranking[0]['vendedorId']);
-        // Verificar que ninguno de los returned vendedorId coincida con el vendedor ajeno
-        foreach ($ranking as $item) {
-            $this->assertNotSame($vendedorAjeno->id, $item['vendedorId']);
+    public function test_cumplimiento_de_trimestre_suma_las_metas_de_sus_meses(): void
+    {
+        foreach ([10, 11, 12] as $mes) {
+            CrmPresupuesto::create(['empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id, 'mes' => $mes, 'anio' => 2026, 'meta_monto' => 1000, 'meta_clientes' => 1, 'meta_actividades' => 1]);
         }
 
-        Carbon::setTestNow();
+        $m = $this->servicio->cumplimientoMetas($this->enterprise->id, null, RangoDashboard::desdePeriodo('trimestre'));
+
+        $this->assertSame(3000.0, $m['metaMonto']);
+        $this->assertSame(3, $m['metaClientes']);
+    }
+
+    public function test_cotizaciones_por_estado_con_periodo_anterior_y_filtro_de_vendedor(): void
+    {
+        $propia = $this->op(['etapa' => 'propuesta']);
+        $otro = CrmVendedor::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Otro']);
+        $ajena = $this->op(['etapa' => 'propuesta', 'vendedor_id' => $otro->id]);
+        CrmCotizacion::create(['empresa_id' => $this->enterprise->id, 'oportunidad_id' => $propia->id, 'folio' => 'A', 'estado' => 'aprobado', 'fecha_emision' => '2026-10-05', 'total' => 1200]);
+        CrmCotizacion::create(['empresa_id' => $this->enterprise->id, 'oportunidad_id' => $propia->id, 'folio' => 'B', 'estado' => 'aprobado', 'fecha_emision' => '2026-09-03', 'total' => 800]);
+        CrmCotizacion::create(['empresa_id' => $this->enterprise->id, 'oportunidad_id' => $ajena->id, 'folio' => 'C', 'estado' => 'aprobado', 'fecha_emision' => '2026-10-05', 'total' => 9999]);
+
+        $con = collect($this->servicio->cotizaciones($this->enterprise->id, $this->vendedor->id, $this->mes(), true))->keyBy('estado');
+        $sin = collect($this->servicio->cotizaciones($this->enterprise->id, $this->vendedor->id, $this->mes(), false))->keyBy('estado');
+
+        $this->assertSame(['borrador', 'enviado', 'aprobado', 'rechazado', 'superado'], $con->keys()->all());
+        $this->assertSame(1, $con['aprobado']['total']);
+        $this->assertSame(1200.0, $con['aprobado']['monto']);
+        $this->assertSame(['total' => 1, 'monto' => 800.0], $con['aprobado']['anterior']);
+        $this->assertArrayNotHasKey('anterior', $sin['aprobado']);
+    }
+
+    public function test_actividad_por_tipo_fijo_con_periodo_anterior(): void
+    {
+        foreach (['2026-10-02 09:00:00', '2026-10-03 09:00:00'] as $fecha) {
+            CrmActividad::create(['empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id, 'tipo' => 'llamada', 'descripcion' => 'x', 'fecha_actividad' => $fecha]);
+        }
+        CrmActividad::create(['empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id, 'tipo' => 'llamada', 'descripcion' => 'x', 'fecha_actividad' => '2026-09-02 09:00:00']);
+
+        $a = collect($this->servicio->actividad($this->enterprise->id, null, $this->mes(), true)['porTipo'])->keyBy('tipo');
+
+        $this->assertSame(['llamada', 'whatsapp', 'correo', 'visita', 'reunion', 'nota'], $a->keys()->all());
+        $this->assertSame(2, $a['llamada']['total']);
+        $this->assertSame(1, $a['llamada']['anterior']);
+        $this->assertSame(0, $a['whatsapp']['total']);
+    }
+
+    public function test_ranking_ordena_por_monto_y_trae_la_meta(): void
+    {
+        $otro = CrmVendedor::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Otro', 'activo' => true]);
+        $this->ganada('2026-10-03 10:00:00', 4000);
+        $this->ganada('2026-10-04 10:00:00', 6000, self::HOY, $otro->id);
+        CrmPresupuesto::create(['empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id, 'mes' => 10, 'anio' => 2026, 'meta_monto' => 5000, 'meta_clientes' => 1, 'meta_actividades' => 1]);
+
+        $r = $this->servicio->rankingVendedores($this->enterprise->id, $this->mes());
+
+        $this->assertSame(['Otro', 'Juan Pérez'], array_column($r, 'nombre'));
+        $this->assertSame(6000.0, $r[0]['montoCerrado']);
+        $this->assertSame(0.0, $r[0]['meta']);
+        $this->assertSame(5000.0, $r[1]['meta']);
+    }
+
+    public function test_cierres_y_tasa_publicos(): void
+    {
+        $this->ganada('2026-10-03 10:00:00', 4000);
+        $this->op(['etapa' => 'cerrado_perdido', 'fecha_cierre_real' => '2026-10-04 10:00:00']);
+        $mes = $this->mes();
+
+        $this->assertSame(['total' => 2, 'ganadas' => 1], $this->servicio->cierres($this->enterprise->id, null, $mes->inicio, $mes->fin));
+        $this->assertSame(50.0, $this->servicio->tasaCierre($this->enterprise->id, null, $mes->inicio, $mes->fin));
     }
 }

@@ -4,6 +4,9 @@ namespace App\Http\Controllers\Api\CRM;
 
 use App\Events\CRM\OportunidadUpdated;
 use App\Models\CRM\CrmOportunidad;
+use App\Services\CRM\DashboardResumenService;
+use App\Services\CRM\EmbudoService;
+use App\Support\CRM\RangoDashboard;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
@@ -37,6 +40,34 @@ class OportunidadController extends CrmBaseController
         $paginated = $query->paginate($perPage);
 
         return $this->jsonPaginated($paginated);
+    }
+
+    /** GET /crm/oportunidades/resumen -- cifras de la cabecera del tablero (spec 2026-10-08 §6.4). */
+    public function resumen(Request $request, EmbudoService $embudos, DashboardResumenService $metricas): JsonResponse
+    {
+        $empresaId = $this->getEmpresaId();
+        abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
+        $this->exigirPermisoSubmodulo($empresaId, 'oportunidades', 'oportunidades', 'ver', 'No tienes permiso para ver oportunidades.');
+
+        $validated = $request->validate([
+            'vendedor_id' => ['nullable', 'integer', $this->existeEnEmpresa('crm_vendedores', $empresaId)],
+        ]);
+        $vendedorId = isset($validated['vendedor_id']) ? (int) $validated['vendedor_id'] : null;
+
+        $porEtapa = $embudos->pipeline($empresaId, $vendedorId);
+        $mes = RangoDashboard::desdePeriodo('mes_actual');
+
+        return $this->jsonSuccess([
+            'abiertas' => array_sum(array_column($porEtapa, 'cantidad')),
+            'monto' => round(array_sum(array_column($porEtapa, 'monto')), 2),
+            'ponderado' => round(array_sum(array_column($porEtapa, 'ponderado')), 2),
+            'porEtapa' => $porEtapa,
+            'cerradasMes' => $metricas->cierres($empresaId, $vendedorId, $mes->inicio, $mes->fin)['total'],
+            'tasaCierreMes' => [
+                'actual' => $metricas->tasaCierre($empresaId, $vendedorId, $mes->inicio, $mes->fin),
+                'anterior' => $metricas->tasaCierre($empresaId, $vendedorId, $mes->inicioAnterior, $mes->finAnterior),
+            ],
+        ]);
     }
 
     /** GET /crm/oportunidades/{oportunidad} */

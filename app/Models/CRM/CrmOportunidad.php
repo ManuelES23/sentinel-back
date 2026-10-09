@@ -3,7 +3,9 @@
 namespace App\Models\CRM;
 
 use App\Models\Enterprise;
+use App\Observers\CRM\CrmOportunidadObserver;
 use App\Traits\Loggable;
+use Illuminate\Database\Eloquent\Attributes\ObservedBy;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -11,6 +13,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
+#[ObservedBy([CrmOportunidadObserver::class])]
 class CrmOportunidad extends Model
 {
     use HasFactory, Loggable, SoftDeletes;
@@ -89,6 +92,11 @@ class CrmOportunidad extends Model
     public function cliente(): BelongsTo
     {
         return $this->belongsTo(CrmCliente::class, 'cliente_id');
+    }
+
+    public function historialEtapas(): HasMany
+    {
+        return $this->hasMany(CrmOportunidadEtapa::class, 'oportunidad_id');
     }
 
     public function productos(): HasMany
