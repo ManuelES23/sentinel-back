@@ -4,125 +4,177 @@ namespace App\Http\Controllers\Api\CRM;
 
 use App\Models\CRM\CrmVendedor;
 use App\Services\CRM\DashboardResumenService;
+use App\Services\CRM\EmbudoService;
+use App\Support\CRM\RangoDashboard;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Validation\ValidationException;
 
 /**
  * DashboardController
- * 7 endpoints de solo lectura con métricas ejecutivas del CRM (kpis,
- * pipeline, cotizaciones, funnel de conversión, actividad, cumplimiento de
- * metas, ranking de vendedores). Toda la agregación vive en
- * DashboardResumenService; este controller solo resuelve permisos/alcance.
+ * Endpoints de solo lectura del Dashboard del CRM (spec 2026-10-08 §6).
+ * Toda la agregación vive en DashboardResumenService y EmbudoService; aquí
+ * solo se resuelven permisos, alcance del vendedor y filtros comunes.
  */
 class DashboardController extends CrmBaseController
 {
     use FiltraPorEmpresa;
     use VerificaPermisoSubmodulo;
 
-    private const PERIODOS_VALIDOS = ['mes_actual', 'mes_anterior', 'trimestre', 'anio'];
+    private const MAX_DIAS_PERSONALIZADO = 366;
 
-    public function __construct(private readonly DashboardResumenService $resumen) {}
+    public function __construct(
+        private readonly DashboardResumenService $resumen,
+        private readonly EmbudoService $embudos,
+    ) {}
 
     public function kpis(Request $request): JsonResponse
     {
-        [$empresaId, $vendedorId, $periodo] = $this->contexto($request);
+        $c = $this->contexto($request);
 
-        return $this->jsonSuccess($this->resumen->kpis($empresaId, $vendedorId, $periodo));
+        return $this->jsonSuccess($this->resumen->kpis($c['empresaId'], $c['vendedorId'], $c['rango']));
     }
 
-    public function pipeline(Request $request): JsonResponse
+    public function embudo(Request $request): JsonResponse
     {
-        [$empresaId, $vendedorId, $periodo] = $this->contexto($request);
+        $c = $this->contexto($request);
 
-        return $this->jsonSuccess($this->resumen->pipeline($empresaId, $vendedorId, $periodo));
+        return $this->jsonSuccess($this->embudos->pipeline($c['empresaId'], $c['vendedorId']));
     }
 
-    public function cotizaciones(Request $request): JsonResponse
+    public function embudoConversion(Request $request): JsonResponse
     {
-        [$empresaId, $vendedorId, $periodo] = $this->contexto($request);
+        $c = $this->contexto($request);
 
-        return $this->jsonSuccess($this->resumen->cotizaciones($empresaId, $vendedorId, $periodo));
+        return $this->jsonSuccess($this->embudos->conversion($c['empresaId'], $c['vendedorId'], $c['rango']));
     }
 
-    public function funnelConversion(Request $request): JsonResponse
+    public function tendencia(Request $request): JsonResponse
     {
-        [$empresaId, $vendedorId, $periodo] = $this->contexto($request);
+        $c = $this->contexto($request);
 
-        return $this->jsonSuccess($this->resumen->funnelConversion($empresaId, $vendedorId, $periodo));
-    }
-
-    public function actividad(Request $request): JsonResponse
-    {
-        [$empresaId, $vendedorId, $periodo] = $this->contexto($request);
-
-        return $this->jsonSuccess($this->resumen->actividad($empresaId, $vendedorId, $periodo));
+        return $this->jsonSuccess($this->resumen->tendencia($c['empresaId'], $c['vendedorId'], $c['rango'], $c['comparar']));
     }
 
     public function cumplimientoMetas(Request $request): JsonResponse
     {
-        [$empresaId, $vendedorId, $periodo] = $this->contexto($request);
+        $c = $this->contexto($request);
 
-        return $this->jsonSuccess($this->resumen->cumplimientoMetas($empresaId, $vendedorId, $periodo));
+        return $this->jsonSuccess($this->resumen->cumplimientoMetas($c['empresaId'], $c['vendedorId'], $c['rango']));
     }
 
-    /** GET /crm/dashboard/ranking-vendedores -- único endpoint que exige 'ejecutivo', sin vendedorId (siempre agregado de equipo). */
+    public function cotizaciones(Request $request): JsonResponse
+    {
+        $c = $this->contexto($request);
+
+        return $this->jsonSuccess($this->resumen->cotizaciones($c['empresaId'], $c['vendedorId'], $c['rango'], $c['comparar']));
+    }
+
+    public function actividad(Request $request): JsonResponse
+    {
+        $c = $this->contexto($request);
+
+        return $this->jsonSuccess($this->resumen->actividad($c['empresaId'], $c['vendedorId'], $c['rango'], $c['comparar']));
+    }
+
+    /** GET /crm/dashboard/detalle?tipo=&etapa= -- lista para el cajón de detalle (§6.3). */
+    public function detalle(Request $request): JsonResponse
+    {
+        $c = $this->contexto($request);
+        $validated = $request->validate([
+            'tipo' => 'required|in:abiertas,llegaron,perdidas,ganadas',
+            'etapa' => 'required_unless:tipo,ganadas|nullable|in:prospecto,calificado,propuesta,negociacion,sin_registro',
+        ]);
+
+        // EmbudoService::detalle no valida la etapa: aquí se acota por tipo.
+        $tipo = $validated['tipo'];
+        $etapa = $validated['etapa'] ?? null;
+        if ($tipo === 'ganadas' && $etapa !== null) {
+            throw ValidationException::withMessages(['etapa' => 'Las oportunidades ganadas no se filtran por etapa.']);
+        }
+        if ($etapa === 'sin_registro' && $tipo !== 'perdidas') {
+            throw ValidationException::withMessages(['etapa' => 'La etapa sin_registro solo aplica a las perdidas.']);
+        }
+
+        return $this->jsonSuccess($this->embudos->detalle($c['empresaId'], $c['vendedorId'], $c['rango'], $tipo, $etapa));
+    }
+
+    /** GET /crm/dashboard/ranking-vendedores -- exige 'ejecutivo' (no 'ver'); siempre de todo el equipo. */
     public function rankingVendedores(Request $request): JsonResponse
+    {
+        $empresaId = $this->empresaConPermiso('ejecutivo', 'No tienes permiso para ver el ranking de vendedores.');
+        $filtros = $this->filtros($request, $empresaId, true);
+
+        return $this->jsonSuccess($this->resumen->rankingVendedores($empresaId, $filtros['rango']));
+    }
+
+    /** @return array{empresaId: int, vendedorId: ?int, rango: RangoDashboard, comparar: bool} */
+    private function contexto(Request $request): array
+    {
+        $empresaId = $this->empresaConPermiso('ver', 'No tienes permiso para ver el dashboard.');
+        $ejecutivo = $this->tienePermisoSubmodulo($empresaId, 'dashboard', 'dashboard', 'ejecutivo');
+
+        return ['empresaId' => $empresaId] + $this->filtros($request, $empresaId, $ejecutivo);
+    }
+
+    private function empresaConPermiso(string $permiso, string $mensaje): int
     {
         $empresaId = $this->getEmpresaId();
         abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
-        abort_unless(
-            $this->tienePermisoSubmodulo($empresaId, 'dashboard', 'dashboard', 'ejecutivo'),
-            403,
-            'No tienes permiso para ver el ranking de vendedores.',
-        );
+        abort_unless($this->tienePermisoSubmodulo($empresaId, 'dashboard', 'dashboard', $permiso), 403, $mensaje);
 
-        $periodo = $this->resolverPeriodo($request);
+        return $empresaId;
+    }
 
-        return $this->jsonSuccess($this->resumen->rankingVendedores($empresaId, $periodo));
+    /** @return array{vendedorId: ?int, rango: RangoDashboard, comparar: bool} */
+    private function filtros(Request $request, int $empresaId, bool $ejecutivo): array
+    {
+        $validated = $request->validate([
+            'periodo' => 'nullable|in:'.implode(',', RangoDashboard::PERIODOS),
+            'desde' => 'required_if:periodo,personalizado|nullable|date_format:Y-m-d',
+            'hasta' => 'required_if:periodo,personalizado|nullable|date_format:Y-m-d|after_or_equal:desde',
+            'vendedor_id' => 'nullable|integer',
+            'comparar' => 'nullable|boolean',
+        ]);
+
+        $periodo = $validated['periodo'] ?? 'mes_actual';
+        $rango = RangoDashboard::desdePeriodo($periodo, $validated['desde'] ?? null, $validated['hasta'] ?? null);
+        if ($periodo === 'personalizado' && $rango->dias() > self::MAX_DIAS_PERSONALIZADO) {
+            throw ValidationException::withMessages(['hasta' => 'El rango personalizado no puede pasar de 366 días.']);
+        }
+
+        $solicitado = isset($validated['vendedor_id']) ? (int) $validated['vendedor_id'] : null;
+
+        return [
+            'vendedorId' => $this->resolverVendedor($empresaId, $ejecutivo, $solicitado),
+            'rango' => $rango,
+            'comparar' => (bool) ($validated['comparar'] ?? false),
+        ];
     }
 
     /**
-     * Resuelve (empresaId, vendedorId, periodo) para los 6 endpoints
-     * regulares. vendedorId es null cuando el usuario tiene 'ejecutivo'
-     * (agregado de equipo, sin filtro); si solo tiene 'ver', se resuelve a
-     * su propio CrmVendedor -- o a 0 si no tiene ninguno (0 nunca es un id
-     * real, así que el service devuelve ceros de forma natural sin una
-     * rama especial por método).
-     *
-     * @return array{0: int, 1: ?int, 2: string}
+     * Con 'ejecutivo': el vendedor pedido (debe ser de la empresa) o null
+     * (todo el equipo). Sin 'ejecutivo': siempre el vendedor propio, o 0 si
+     * no tiene ninguno (0 nunca es un id real y el servicio devuelve ceros).
      */
-    private function contexto(Request $request): array
+    private function resolverVendedor(int $empresaId, bool $ejecutivo, ?int $solicitado): ?int
     {
-        $empresaId = $this->getEmpresaId();
-        abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
-        abort_unless(
-            $this->tienePermisoSubmodulo($empresaId, 'dashboard', 'dashboard', 'ver'),
-            403,
-            'No tienes permiso para ver el dashboard.',
-        );
+        if ($ejecutivo) {
+            if ($solicitado === null) {
+                return null;
+            }
+            if (! CrmVendedor::where('empresa_id', $empresaId)->whereKey($solicitado)->exists()) {
+                throw ValidationException::withMessages(['vendedor_id' => 'El vendedor no pertenece a esta empresa.']);
+            }
 
-        $periodo = $this->resolverPeriodo($request);
-
-        if ($this->tienePermisoSubmodulo($empresaId, 'dashboard', 'dashboard', 'ejecutivo')) {
-            return [$empresaId, null, $periodo];
+            return $solicitado;
         }
 
-        $vendedorId = CrmVendedor::where('empresa_id', $empresaId)
-            ->where('user_id', Auth::id())
-            ->value('id');
+        $propio = CrmVendedor::where('empresa_id', $empresaId)->where('user_id', Auth::id())->value('id');
 
-        return [$empresaId, $vendedorId !== null ? (int) $vendedorId : 0, $periodo];
-    }
-
-    private function resolverPeriodo(Request $request): string
-    {
-        $validated = $request->validate([
-            'periodo' => 'nullable|in:'.implode(',', self::PERIODOS_VALIDOS),
-        ]);
-
-        return $validated['periodo'] ?? 'mes_actual';
+        return $propio !== null ? (int) $propio : 0;
     }
 }

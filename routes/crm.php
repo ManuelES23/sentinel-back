@@ -206,29 +206,17 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
 
     // -------------------------------------------------
     // DASHBOARD
-    // 7 endpoints de métricas ejecutivas
+    // Métricas y embudos (spec 2026-10-08 §6.2)
     // -------------------------------------------------
-    Route::get('dashboard/kpis', [
-        App\Http\Controllers\Api\CRM\DashboardController::class, 'kpis'
-    ]);
-    Route::get('dashboard/pipeline', [
-        App\Http\Controllers\Api\CRM\DashboardController::class, 'pipeline'
-    ]);
-    Route::get('dashboard/cotizaciones', [
-        App\Http\Controllers\Api\CRM\DashboardController::class, 'cotizaciones'
-    ]);
-    Route::get('dashboard/funnel-conversion', [
-        App\Http\Controllers\Api\CRM\DashboardController::class, 'funnelConversion'
-    ]);
-    Route::get('dashboard/actividad', [
-        App\Http\Controllers\Api\CRM\DashboardController::class, 'actividad'
-    ]);
-    Route::get('dashboard/cumplimiento-metas', [
-        App\Http\Controllers\Api\CRM\DashboardController::class, 'cumplimientoMetas'
-    ]);
-    Route::get('dashboard/ranking-vendedores', [
-        App\Http\Controllers\Api\CRM\DashboardController::class, 'rankingVendedores'
-    ]);
+    Route::get('dashboard/kpis', [App\Http\Controllers\Api\CRM\DashboardController::class, 'kpis']);
+    Route::get('dashboard/embudo', [App\Http\Controllers\Api\CRM\DashboardController::class, 'embudo']);
+    Route::get('dashboard/embudo-conversion', [App\Http\Controllers\Api\CRM\DashboardController::class, 'embudoConversion']);
+    Route::get('dashboard/tendencia', [App\Http\Controllers\Api\CRM\DashboardController::class, 'tendencia']);
+    Route::get('dashboard/cumplimiento-metas', [App\Http\Controllers\Api\CRM\DashboardController::class, 'cumplimientoMetas']);
+    Route::get('dashboard/cotizaciones', [App\Http\Controllers\Api\CRM\DashboardController::class, 'cotizaciones']);
+    Route::get('dashboard/actividad', [App\Http\Controllers\Api\CRM\DashboardController::class, 'actividad']);
+    Route::get('dashboard/ranking-vendedores', [App\Http\Controllers\Api\CRM\DashboardController::class, 'rankingVendedores']);
+    Route::get('dashboard/detalle', [App\Http\Controllers\Api\CRM\DashboardController::class, 'detalle']);
 
     // -------------------------------------------------
     // INTEGRACIONES · DIALPAD
