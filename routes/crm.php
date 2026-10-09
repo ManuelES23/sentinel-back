@@ -114,6 +114,8 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     // OPORTUNIDADES
     // CRUD (cambio de etapa se agrega en la Tarea 6)
     // -------------------------------------------------
+    // Antes del apiResource: si no, "resumen" se toma como {oportunidad}.
+    Route::get('oportunidades/resumen', [App\Http\Controllers\Api\CRM\OportunidadController::class, 'resumen']);
     Route::patch('oportunidades/{oportunidad}/cambiar-etapa', [
         App\Http\Controllers\Api\CRM\OportunidadController::class, 'cambiarEtapa'
     ]);
