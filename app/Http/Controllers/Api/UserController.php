@@ -15,6 +15,7 @@ use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Illuminate\Validation\Rules\Password;
 
 class UserController extends Controller
@@ -30,7 +31,7 @@ class UserController extends Controller
             ->get(['user_id', 'enterprise_id'])
             ->groupBy('user_id');
 
-        $users = User::with('applications')->get()->map(function ($user) use ($empresasPorUsuario) {
+        $users = User::with(['applications', 'employee.enterprise', 'employee.position'])->get()->map(function ($user) use ($empresasPorUsuario) {
             return [
                 'id' => $user->id,
                 'name' => $user->name,
@@ -39,6 +40,7 @@ class UserController extends Controller
                 'role' => $user->role ?? 'user',
                 'must_change_password' => (bool) $user->must_change_password,
                 'created_at' => $user->created_at,
+                'employee' => $this->resumenEmpleado($user->employee),
                 'permissions' => [
                     'enterprises' => ($empresasPorUsuario->get($user->id) ?? collect())
                         ->pluck('enterprise_id')->unique()->values()->toArray(),
@@ -77,12 +79,16 @@ class UserController extends Controller
         $validated['password'] = Hash::make($validated['password']);
         $validated['role'] = $validated['role'] ?? 'user';
 
-        $user = User::create($validated);
+        $user = DB::transaction(function () use ($validated, $employeeId) {
+            $user = User::create($validated);
 
-        // Si se especificó un empleado, vincularlo al usuario
-        if ($employeeId) {
-            Employee::where('id', $employeeId)->update(['user_id' => $user->id]);
-        }
+            // Si se especificó un empleado, vincularlo al usuario
+            if ($employeeId) {
+                $this->ligarEmpleado($user, $employeeId);
+            }
+
+            return $user;
+        });
 
         return response()->json([
             'message' => 'Usuario creado exitosamente',
@@ -119,6 +125,8 @@ class UserController extends Controller
             'email' => ['sometimes', 'string', 'email', 'max:255', Rule::unique('users')->ignore($user->id)],
             'phone' => 'nullable|string|max:20',
             'role' => 'sometimes|in:user,admin,superadmin',
+            // Presente y null = quitar el empleado; ausente = no tocar el vínculo.
+            'employee_id' => 'sometimes|nullable|integer|exists:employees,id',
         ]);
 
         if (isset($validated['role']) && $validated['role'] !== $user->role) {
@@ -128,12 +136,77 @@ class UserController extends Controller
             }
         }
 
-        $user->update($validated);
+        $cambiaEmpleado = array_key_exists('employee_id', $validated);
+        $employeeId = $validated['employee_id'] ?? null;
+        unset($validated['employee_id']);
+
+        DB::transaction(function () use ($user, $validated, $cambiaEmpleado, $employeeId) {
+            $user->update($validated);
+
+            if ($cambiaEmpleado) {
+                $this->ligarEmpleado($user, $employeeId);
+            }
+        });
+
+        $user->load('employee.enterprise', 'employee.position');
 
         return response()->json([
             'message' => 'Usuario actualizado exitosamente',
-            'user' => $user
+            'user' => array_merge($user->withoutRelations()->toArray(), [
+                'employee' => $this->resumenEmpleado($user->employee),
+            ]),
         ]);
+    }
+
+    /**
+     * Liga el usuario con un empleado de RH (o lo desliga si $employeeId es
+     * null). Un usuario tiene un solo empleado: el anterior queda libre. No se
+     * toma el empleado de otro usuario ni uno inactivo. Llamar dentro de una
+     * transacción.
+     */
+    private function ligarEmpleado(User $user, ?int $employeeId): void
+    {
+        $anterior = Employee::where('user_id', $user->id)->value('id');
+        if ($anterior === $employeeId) {
+            return;
+        }
+
+        if ($employeeId) {
+            $empleado = Employee::with('user:id,name')->lockForUpdate()->findOrFail($employeeId);
+
+            if ($empleado->user_id && (int) $empleado->user_id !== (int) $user->id) {
+                throw ValidationException::withMessages([
+                    'employee_id' => "Este empleado ya está ligado al usuario {$empleado->user?->name}.",
+                ]);
+            }
+            if ($empleado->status !== 'active') {
+                throw ValidationException::withMessages(['employee_id' => 'El empleado no está activo.']);
+            }
+        }
+
+        Employee::where('user_id', $user->id)->update(['user_id' => null]);
+        if ($employeeId) {
+            Employee::whereKey($employeeId)->update(['user_id' => $user->id]);
+        }
+
+        ActivityLog::log('user_employee_link', User::class, $user->id,
+            ['employee_id' => $anterior], ['employee_id' => $employeeId]);
+    }
+
+    private function resumenEmpleado(?Employee $empleado): ?array
+    {
+        if (! $empleado) {
+            return null;
+        }
+
+        return [
+            'id' => $empleado->id,
+            'employee_number' => $empleado->employee_number,
+            'full_name' => $empleado->full_name,
+            'enterprise_id' => $empleado->enterprise_id,
+            'enterprise_name' => $empleado->enterprise?->name,
+            'position' => $empleado->position?->name,
+        ];
     }
 
     /**
