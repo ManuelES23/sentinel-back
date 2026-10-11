@@ -42,6 +42,7 @@ class Product extends Model
         'image',
         'is_active',
         'requiere_revision',
+        'is_fixed_asset',
         'dias_alerta_caducidad',
         'metadata',
     ];
@@ -60,6 +61,7 @@ class Product extends Model
         'sale_price' => 'decimal:4',
         'is_for_sale' => 'boolean',
         'requiere_revision' => 'boolean',
+        'is_fixed_asset' => 'boolean',
         'dias_alerta_caducidad' => 'integer',
         'metadata' => 'array',
     ];

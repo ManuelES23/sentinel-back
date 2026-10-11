@@ -31,6 +31,14 @@ Route::prefix('auth')->group(function () {
     });
 });
 
+// Descarga de respaldos de la BD: enlace firmado de 5 min que genera
+// admin/backups/{backup}/download-url (solo superadmin). Firma relativa para
+// que valga aunque el proxy cambie http/https o el host.
+Route::get('backups/{backup}/download', [App\Http\Controllers\Api\Admin\DatabaseBackupController::class, 'download'])
+    ->whereNumber('backup')
+    ->middleware(['throttle:30,1', 'signed:relative'])
+    ->name('backups.download');
+
 // Rutas protegidas
 Route::middleware('auth:sanctum')->group(function () {
 
@@ -762,6 +770,16 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('settings', [App\Http\Controllers\Api\Admin\SystemSettingsController::class, 'show']);
         Route::put('settings', [App\Http\Controllers\Api\Admin\SystemSettingsController::class, 'update']);
         Route::post('settings/mail/test', [App\Http\Controllers\Api\Admin\SystemSettingsController::class, 'sendTestMail']);
+
+        // Respaldos de la base de datos (solo superadmin)
+        Route::middleware('admin:superadmin')->prefix('backups')->group(function () {
+            Route::get('/', [App\Http\Controllers\Api\Admin\DatabaseBackupController::class, 'index']);
+            Route::get('status', [App\Http\Controllers\Api\Admin\DatabaseBackupController::class, 'status']);
+            Route::post('/', [App\Http\Controllers\Api\Admin\DatabaseBackupController::class, 'store']);
+            Route::put('config', [App\Http\Controllers\Api\Admin\DatabaseBackupController::class, 'updateConfig']);
+            Route::post('{backup}/download-url', [App\Http\Controllers\Api\Admin\DatabaseBackupController::class, 'downloadUrl']);
+            Route::delete('{backup}', [App\Http\Controllers\Api\Admin\DatabaseBackupController::class, 'destroy']);
+        });
 
         // Logs de actividad
         Route::get('logs', [App\Http\Controllers\Api\Admin\ActivityLogController::class, 'index']);

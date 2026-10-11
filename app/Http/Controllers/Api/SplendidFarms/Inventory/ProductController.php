@@ -125,6 +125,7 @@ class ProductController extends Controller
             'metadata' => 'nullable|array',
             'ingrediente_activo' => 'nullable|string|max:255',
             'dias_alerta_caducidad' => 'nullable|integer|min:0|max:3650',
+            'is_fixed_asset' => 'boolean',
         ]);
 
         if (filter_var($validated['track_expiry'] ?? false, FILTER_VALIDATE_BOOLEAN)) {
@@ -220,6 +221,7 @@ class ProductController extends Controller
             'metadata' => 'nullable|array',
             'ingrediente_activo' => 'nullable|string|max:255',
             'dias_alerta_caducidad' => 'nullable|integer|min:0|max:3650',
+            'is_fixed_asset' => 'boolean',
         ]);
 
         if (filter_var($validated['track_expiry'] ?? false, FILTER_VALIDATE_BOOLEAN)) {

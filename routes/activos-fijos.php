@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\ActivosFijos\AltaPendienteController;
 use App\Http\Controllers\Api\ActivosFijos\AsignacionActivoController;
 use App\Http\Controllers\Api\ActivosFijos\ContextoActivosController;
 use App\Http\Controllers\Api\SplendidFarms\Inventory\AssetCategoryController;
@@ -39,4 +40,9 @@ Route::prefix('activos-fijos')->group(function () {
     Route::post('asignaciones/{asignacion}/carta-firmada', [AsignacionActivoController::class, 'subirCartaFirmada']);
     Route::get('asignaciones/{asignacion}/carta-firmada', [AsignacionActivoController::class, 'descargarCartaFirmada']);
     Route::get('asignaciones/{asignacion}/carta', [AsignacionActivoController::class, 'carta']);
+
+    // Altas desde recepciones de compra (fase 3)
+    Route::get('altas-pendientes', [AltaPendienteController::class, 'index']);
+    Route::post('altas-pendientes/alta', [AltaPendienteController::class, 'alta']);
+    Route::post('altas-pendientes/descartar', [AltaPendienteController::class, 'descartar']);
 });

@@ -19,6 +19,7 @@ use Symfony\Component\HttpFoundation\Response;
  *   ->middleware('admin:gestiona') administradores que, según UserPolicy,
  *                                pueden gestionar al usuario {user} (un admin
  *                                no toca los permisos de un superadmin)
+ *   ->middleware('admin:superadmin') solo superadministradores (respaldos de la BD)
  *
  * Protege la asignación de permisos, la gestión de usuarios y la estructura
  * Aplicación → Módulo → Submódulo: sin este guard cualquier usuario
@@ -35,6 +36,13 @@ class EnsureUserIsAdmin
         if ($user && self::esAdmin($user)) {
             if ($modo === 'gestiona') {
                 return $this->segunJerarquia($request, $next, $user);
+            }
+
+            if ($modo === 'superadmin' && $user->role !== 'superadmin') {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Solo los superadministradores pueden gestionar respaldos.',
+                ], 403);
             }
 
             return $next($request);
