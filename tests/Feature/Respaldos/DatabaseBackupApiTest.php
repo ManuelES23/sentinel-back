@@ -7,6 +7,8 @@ use App\Models\ActivityLog;
 use App\Models\DatabaseBackup;
 use App\Models\User;
 use App\Services\Respaldos\CicloRespaldos;
+use App\Services\Respaldos\DatabaseBackupService;
+use App\Services\SettingsService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Storage;
@@ -195,5 +197,24 @@ class DatabaseBackupApiTest extends TestCase
         $this->assertNull($b->fresh());
         Storage::disk('local')->assertMissing('backups/sentinel_a.sql.gz');
         $this->assertTrue(ActivityLog::where('action', 'backup_delete')->exists());
+    }
+
+    public function test_si_el_archivo_no_se_pudo_borrar_no_se_reporta_eliminado(): void
+    {
+        // Simula un borrado que falla en silencio (permisos): el archivo sigue en disco.
+        $this->app->instance(CicloRespaldos::class, new class(app(DatabaseBackupService::class), app(SettingsService::class)) extends CicloRespaldos {
+            protected function borrarArchivo(string $rutaRelativa): void {}
+        });
+        $b = $this->completado();
+        Sanctum::actingAs($this->superadmin);
+
+        $this->deleteJson("/api/admin/backups/{$b->id}")
+            ->assertStatus(500)
+            ->assertJsonPath('success', false)
+            ->assertJsonPath('message', 'No se pudo borrar el archivo del servidor. Revisa los permisos de storage/app/private/backups.');
+
+        $this->assertNotNull($b->fresh());
+        Storage::disk('local')->assertExists('backups/sentinel_a.sql.gz');
+        $this->assertFalse(ActivityLog::where('action', 'backup_delete')->exists());
     }
 }

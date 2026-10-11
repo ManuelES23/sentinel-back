@@ -156,8 +156,18 @@ class DatabaseBackupController extends Controller
             ], 409);
         }
 
-        ActivityLog::log('backup_delete', 'database_backups', $backup->id, ['filename' => $backup->filename, 'status' => $backup->status]);
-        $this->ciclo->eliminar($backup);
+        // El modelo se borra dentro de eliminar(): se captura antes para el log.
+        $id = $backup->id;
+        $antes = ['filename' => $backup->filename, 'status' => $backup->status];
+
+        if (! $this->ciclo->eliminar($backup)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No se pudo borrar el archivo del servidor. Revisa los permisos de storage/app/private/backups.',
+            ], 500);
+        }
+
+        ActivityLog::log('backup_delete', 'database_backups', $id, $antes);
 
         return response()->json(['success' => true, 'message' => 'Respaldo eliminado.']);
     }

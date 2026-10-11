@@ -5,6 +5,7 @@ namespace Tests\Feature\Respaldos;
 use App\Contracts\VolcadorBaseDatos;
 use App\Models\DatabaseBackup;
 use App\Services\Respaldos\CicloRespaldos;
+use App\Services\Respaldos\DatabaseBackupService;
 use App\Services\SettingsService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
@@ -137,6 +138,27 @@ class EjecutarRespaldosCommandTest extends TestCase
         Storage::disk('local')->assertExists('backups/m.sql.gz');
         $this->assertNull($fallidoViejo->fresh());
         $this->assertNotNull($fallidoNuevo->fresh());
+    }
+
+    public function test_retencion_no_lanza_y_conserva_la_fila_si_el_archivo_no_se_puede_borrar(): void
+    {
+        app(SettingsService::class)->update(['backups.enabled' => false, 'backups.keep_scheduled' => 1]);
+        $this->a('2026-10-10 12:00:00');
+        $viejo = DatabaseBackup::create(['type' => 'programado', 'status' => 'completado', 'filename' => 'viejo.sql.gz']);
+        Storage::disk('local')->put('backups/viejo.sql.gz', 'x');
+        $nuevo = DatabaseBackup::create(['type' => 'programado', 'status' => 'completado', 'filename' => 'nuevo.sql.gz']);
+        Storage::disk('local')->put('backups/nuevo.sql.gz', 'x');
+
+        // Simula un borrado que falla en silencio (permisos): el archivo sigue en disco.
+        $ciclo = new class(app(DatabaseBackupService::class), app(SettingsService::class)) extends CicloRespaldos {
+            protected function borrarArchivo(string $rutaRelativa): void {}
+        };
+        $ciclo->aplicarRetencion();
+
+        // La fila queda para reintentar al minuto siguiente.
+        $this->assertNotNull($viejo->fresh());
+        Storage::disk('local')->assertExists('backups/viejo.sql.gz');
+        $this->assertNotNull($nuevo->fresh());
     }
 
     public function test_latido_y_programador_activo(): void

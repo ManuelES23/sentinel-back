@@ -6,6 +6,7 @@ use App\Models\DatabaseBackup;
 use App\Services\SettingsService;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
 /**
@@ -112,7 +113,10 @@ class CicloRespaldos
             ->skip($conservar)
             ->take(PHP_INT_MAX)
             ->get()
-            ->each(fn (DatabaseBackup $b) => $this->eliminar($b));
+            // Si el archivo no se pudo borrar la fila se queda y se reintenta al minuto siguiente.
+            ->each(function (DatabaseBackup $b) {
+                $this->eliminar($b);
+            });
 
         DatabaseBackup::where('status', DatabaseBackup::ESTADO_FALLIDO)
             ->where('created_at', '<', now()->subDays(self::DIAS_FALLIDOS))
@@ -134,13 +138,30 @@ class CicloRespaldos
         return today()->addDay()->setTime($config['hour'], 0);
     }
 
-    /** Borra archivo y fila. Lo usan la retención y el controlador. */
-    public function eliminar(DatabaseBackup $backup): void
+    /**
+     * Borra archivo y fila. Lo usan la retención y el controlador. Si el archivo
+     * sigue en disco (el disco no lanza al fallar: típico de permisos) conserva
+     * la fila para no dejar un volcado huérfano que nadie vea, y devuelve false.
+     */
+    public function eliminar(DatabaseBackup $backup): bool
     {
-        if ($backup->rutaRelativa()) {
-            Storage::disk('local')->delete($backup->rutaRelativa());
+        $ruta = $backup->rutaRelativa();
+        if ($ruta !== null) {
+            $this->borrarArchivo($ruta);
+            if (Storage::disk('local')->exists($ruta)) {
+                Log::error('No se pudo borrar el archivo de respaldo', ['backup_id' => $backup->id, 'filename' => $backup->filename]);
+
+                return false;
+            }
         }
         $backup->delete();
+
+        return true;
+    }
+
+    protected function borrarArchivo(string $rutaRelativa): void
+    {
+        Storage::disk('local')->delete($rutaRelativa);
     }
 
     private function hayProgramadoEl(Carbon $dia): bool
