@@ -124,6 +124,18 @@ class UsuarioEmpleadoLigadoTest extends TestCase
         $this->assertFalse(User::where('email', 'nuevo@x.test')->exists());
     }
 
+    public function test_al_crear_desde_empleado_la_respuesta_trae_su_resumen(): void
+    {
+        Sanctum::actingAs($this->admin);
+        $empleado = $this->empleado();
+
+        $this->postJson('/api/users', [
+            'name' => 'Ana López', 'email' => 'ana@x.test', 'password' => 'Password123!', 'employee_id' => $empleado->id,
+        ])->assertCreated()
+            ->assertJsonPath('user.employee.id', $empleado->id)
+            ->assertJsonPath('user.employee.full_name', 'Ana López');
+    }
+
     public function test_un_usuario_sin_rol_admin_no_puede_ligar(): void
     {
         Sanctum::actingAs(User::factory()->create(['role' => 'user']));
