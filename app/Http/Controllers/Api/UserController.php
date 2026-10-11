@@ -65,7 +65,7 @@ class UserController extends Controller
             'password' => ['required', 'string', Password::defaults()],
             'phone' => 'nullable|string|max:20',
             'role' => 'nullable|in:user,admin,superadmin',
-            'employee_id' => 'nullable|exists:employees,id',
+            'employee_id' => 'nullable|integer|exists:employees,id',
         ], PasswordPolicy::messages());
 
         $permiso = Gate::inspect('create', [User::class, $validated['role'] ?? null]);
@@ -170,8 +170,9 @@ class UserController extends Controller
      */
     private function ligarEmpleado(User $user, ?int $employeeId): void
     {
-        $anterior = Employee::where('user_id', $user->id)->value('id');
-        if ($anterior === $employeeId) {
+        // Lista: datos viejos pueden tener más de un empleado con el mismo usuario.
+        $anteriores = Employee::where('user_id', $user->id)->orderBy('id')->pluck('id')->all();
+        if ($anteriores === ($employeeId ? [$employeeId] : [])) {
             return;
         }
 
@@ -194,7 +195,7 @@ class UserController extends Controller
         }
 
         ActivityLog::log('user_employee_link', User::class, $user->id,
-            ['employee_id' => $anterior], ['employee_id' => $employeeId]);
+            ['employee_ids' => $anteriores], ['employee_id' => $employeeId]);
     }
 
     private function resumenEmpleado(?Employee $empleado): ?array
