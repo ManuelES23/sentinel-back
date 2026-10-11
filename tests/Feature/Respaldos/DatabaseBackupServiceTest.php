@@ -102,4 +102,24 @@ class DatabaseBackupServiceTest extends TestCase
 
         $this->assertSame(DatabaseBackup::ESTADO_FALLIDO, $b->fresh()->status);
     }
+
+    public function test_generar_nunca_lanza_aunque_falle_la_comprobacion_de_espacio(): void
+    {
+        $this->app->instance(DatabaseBackupService::class, new class($this->volcador) extends DatabaseBackupService
+        {
+            protected function espacioLibre(string $directorio): float
+            {
+                throw new RuntimeException('disco no disponible');
+            }
+        });
+        $b = $this->pendiente();
+
+        app(DatabaseBackupService::class)->generar($b);
+        $b->refresh();
+
+        $this->assertSame(DatabaseBackup::ESTADO_FALLIDO, $b->status);
+        $this->assertSame('No se pudo generar el respaldo. Revisa el log del servidor para más detalle.', $b->error);
+        $this->assertNotNull($b->finished_at);
+        $this->assertSame(0, $this->volcador->llamadas);
+    }
 }

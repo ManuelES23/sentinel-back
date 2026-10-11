@@ -24,27 +24,27 @@ class DatabaseBackupService
 
     public function generar(DatabaseBackup $backup): void
     {
-        $disco = Storage::disk('local');
-        $disco->makeDirectory(DatabaseBackup::DIRECTORIO);
-
-        $backup->forceFill([
-            'filename' => sprintf('sentinel_%s_%s_%d.sql.gz', now()->format('Y-m-d_His'), $backup->type, $backup->id),
-            'status' => DatabaseBackup::ESTADO_EN_PROCESO,
-            'started_at' => now(),
-            'finished_at' => null,
-            'error' => null,
-        ])->save();
-
-        $final = $disco->path($backup->rutaRelativa());
-        $parcial = $final.'.partial';
-
-        if ($this->espacioLibre(dirname($final)) < $this->espacioRequerido()) {
-            $this->marcarFallido($backup, self::MENSAJE_ESPACIO);
-
-            return;
-        }
-
         try {
+            $disco = Storage::disk('local');
+            $disco->makeDirectory(DatabaseBackup::DIRECTORIO);
+
+            $backup->forceFill([
+                'filename' => sprintf('sentinel_%s_%s_%d.sql.gz', now()->format('Y-m-d_His'), $backup->type, $backup->id),
+                'status' => DatabaseBackup::ESTADO_EN_PROCESO,
+                'started_at' => now(),
+                'finished_at' => null,
+                'error' => null,
+            ])->save();
+
+            $final = $disco->path($backup->rutaRelativa());
+            $parcial = $final.'.partial';
+
+            if ($this->espacioLibre(dirname($final)) < $this->espacioRequerido()) {
+                $this->marcarFallido($backup, self::MENSAJE_ESPACIO);
+
+                return;
+            }
+
             @set_time_limit(0);
             $this->volcador->volcar($parcial);
 
