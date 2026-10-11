@@ -36,3 +36,9 @@ Schedule::command('crm:sincronizar-dialpad')->everyFifteenMinutes()->withoutOver
 // Alertas de caducidad de inventario: una vez al día, antes de la jornada,
 // para que cada encargado vea sus lotes vencidos o por caducar.
 Schedule::command('inventario:alertas-caducidad')->dailyAt('07:00');
+
+// Respaldos de la BD: cada minuto crea el programado del día (a la hora de
+// los ajustes), procesa los manuales pendientes y aplica la retención. Va por
+// el programador y no por la cola porque retry_after (90 s) relanzaría en
+// paralelo un volcado largo. Expira el candado a las 3 h por si el proceso muere.
+Schedule::command('respaldos:ejecutar')->everyMinute()->withoutOverlapping(180)->runInBackground();
