@@ -144,8 +144,9 @@ class DatabaseBackupApiTest extends TestCase
             ->json('data.url');
         $this->assertTrue(ActivityLog::where('action', 'backup_download')->exists());
 
-        // Se pide solo ruta + query: así valida aunque el proxy cambie http/https o el host.
-        $relativa = parse_url($url, PHP_URL_PATH).'?'.parse_url($url, PHP_URL_QUERY);
+        // El backend devuelve solo la ruta firmada: el front la resuelve contra el origen de la API.
+        $this->assertStringStartsWith('/api/backups/', $url);
+        $relativa = $url;
         $this->app['auth']->forgetGuards();
         $respuesta = $this->get($relativa);
         $respuesta->assertOk();
@@ -216,5 +217,49 @@ class DatabaseBackupApiTest extends TestCase
         $this->assertNotNull($b->fresh());
         Storage::disk('local')->assertExists('backups/sentinel_a.sql.gz');
         $this->assertFalse(ActivityLog::where('action', 'backup_delete')->exists());
+    }
+
+    public function test_si_la_carpeta_no_es_accesible_no_se_da_el_archivo_por_borrado(): void
+    {
+        // Simula que el usuario web no puede entrar a la carpeta (exists() daría false aunque el archivo siga ahí).
+        $this->app->instance(CicloRespaldos::class, new class(app(DatabaseBackupService::class), app(SettingsService::class)) extends CicloRespaldos {
+            protected function directorioAccesible(): bool
+            {
+                return false;
+            }
+        });
+        $b = $this->completado();
+        Sanctum::actingAs($this->superadmin);
+
+        $this->deleteJson("/api/admin/backups/{$b->id}")
+            ->assertStatus(500)
+            ->assertJsonPath('success', false)
+            ->assertJsonPath('message', 'No se pudo borrar el archivo del servidor. Revisa los permisos de storage/app/private/backups.');
+
+        $this->assertNotNull($b->fresh());
+        Storage::disk('local')->assertExists('backups/sentinel_a.sql.gz');
+        $this->assertFalse(ActivityLog::where('action', 'backup_delete')->exists());
+    }
+
+    public function test_url_firmada_de_un_respaldo_no_sirve_para_otro(): void
+    {
+        $a = $this->completado('a.sql.gz');
+        $b = $this->completado('b.sql.gz');
+        Sanctum::actingAs($this->superadmin);
+
+        $url = $this->postJson("/api/admin/backups/{$a->id}/download-url")->json('data.url');
+        $this->app['auth']->forgetGuards();
+
+        $cambiada = str_replace("/api/backups/{$a->id}/download", "/api/backups/{$b->id}/download", $url);
+        $this->assertNotSame($url, $cambiada);
+        $this->get($cambiada)->assertForbidden();
+        $this->get($url)->assertOk();
+    }
+
+    public function test_sin_autenticar_da_401(): void
+    {
+        $this->getJson('/api/admin/backups')->assertUnauthorized();
+        $this->postJson('/api/admin/backups')->assertUnauthorized();
+        $this->assertSame(0, DatabaseBackup::count());
     }
 }

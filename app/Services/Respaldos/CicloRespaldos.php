@@ -147,6 +147,12 @@ class CicloRespaldos
     {
         $ruta = $backup->rutaRelativa();
         if ($ruta !== null) {
+            // Si la carpeta no se puede recorrer, exists() daría false aunque el archivo siga ahí.
+            if (! $this->directorioAccesible()) {
+                Log::error('La carpeta de respaldos no es accesible para este proceso', ['backup_id' => $backup->id, 'filename' => $backup->filename]);
+
+                return false;
+            }
             $this->borrarArchivo($ruta);
             if (Storage::disk('local')->exists($ruta)) {
                 Log::error('No se pudo borrar el archivo de respaldo', ['backup_id' => $backup->id, 'filename' => $backup->filename]);
@@ -157,6 +163,19 @@ class CicloRespaldos
         $backup->delete();
 
         return true;
+    }
+
+    /** Falso si la carpeta existe pero este proceso no puede leerla ni entrar en ella (permisos). */
+    protected function directorioAccesible(): bool
+    {
+        $dir = Storage::disk('local')->path(DatabaseBackup::DIRECTORIO);
+
+        if (! is_dir($dir)) {
+            return true;
+        }
+
+        // En Windows is_executable() es siempre falso para carpetas: solo se comprueba la lectura.
+        return is_readable($dir) && (PHP_OS_FAMILY === 'Windows' || is_executable($dir));
     }
 
     protected function borrarArchivo(string $rutaRelativa): void

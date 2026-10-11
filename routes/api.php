@@ -35,7 +35,8 @@ Route::prefix('auth')->group(function () {
 // admin/backups/{backup}/download-url (solo superadmin). Firma relativa para
 // que valga aunque el proxy cambie http/https o el host.
 Route::get('backups/{backup}/download', [App\Http\Controllers\Api\Admin\DatabaseBackupController::class, 'download'])
-    ->middleware('signed:relative')
+    ->whereNumber('backup')
+    ->middleware(['throttle:30,1', 'signed:relative'])
     ->name('backups.download');
 
 // Rutas protegidas

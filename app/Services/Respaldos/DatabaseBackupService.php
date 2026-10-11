@@ -4,6 +4,7 @@ namespace App\Services\Respaldos;
 
 use App\Contracts\VolcadorBaseDatos;
 use App\Models\DatabaseBackup;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use RuntimeException;
@@ -26,7 +27,8 @@ class DatabaseBackupService
     {
         try {
             $disco = Storage::disk('local');
-            $disco->makeDirectory(DatabaseBackup::DIRECTORIO);
+            // No usar makeDirectory: Flysystem hace chmod 0700 en cada corrida y deja la carpeta ilegible para el usuario web.
+            File::ensureDirectoryExists($disco->path(DatabaseBackup::DIRECTORIO), 0775);
 
             $backup->forceFill([
                 'filename' => sprintf('sentinel_%s_%s_%d.sql.gz', now()->format('Y-m-d_His'), $backup->type, $backup->id),
@@ -62,7 +64,13 @@ class DatabaseBackupService
                 'finished_at' => now(),
             ])->save();
         } catch (Throwable $e) {
-            Log::error('Respaldo de BD fallido', ['backup_id' => $backup->id, 'error' => $e->getMessage()]);
+            Log::error('Respaldo de BD fallido', [
+                'backup_id' => $backup->id,
+                'error' => $e->getMessage(),
+                'exception' => get_class($e),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
             $this->marcarFallido($backup, self::MENSAJE_GENERICO);
         }
     }

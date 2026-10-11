@@ -125,13 +125,13 @@ class DatabaseBackupController extends Controller
         }
 
         $expira = now()->addMinutes(self::MINUTOS_URL);
-        // Firma relativa: valida aunque el proxy cambie http/https o el host.
+        // Firma y URL relativas: no dependen del esquema/host que Laravel vea tras el proxy; el front las resuelve contra el origen de la API.
         $relativa = URL::temporarySignedRoute('backups.download', $expira, ['backup' => $backup->id], absolute: false);
         ActivityLog::log('backup_download', 'database_backups', $backup->id);
 
         return response()->json([
             'success' => true,
-            'data' => ['url' => url($relativa), 'expires_at' => $expira->toIso8601String()],
+            'data' => ['url' => $relativa, 'expires_at' => $expira->toIso8601String()],
         ]);
     }
 
