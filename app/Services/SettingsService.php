@@ -36,6 +36,9 @@ class SettingsService
         'mail.password' => ['default' => '', 'rules' => ['nullable', 'string', 'max:255'], 'secret' => true],
         'mail.from_address' => ['default' => '', 'rules' => ['nullable', 'email', 'max:255']],
         'mail.from_name' => ['default' => null, 'rules' => ['nullable', 'string', 'max:255']],
+        'backups.enabled' => ['default' => true, 'rules' => ['boolean']],
+        'backups.hour' => ['default' => 2, 'rules' => ['integer', 'min:0', 'max:23']],
+        'backups.keep_scheduled' => ['default' => 7, 'rules' => ['integer', 'min:1', 'max:90']],
     ];
 
     /** Reglas extra que solo aplican al validar la petición completa. */
@@ -43,6 +46,23 @@ class SettingsService
         'mail.host' => ['required_if_accepted:mail.enabled'],
         'mail.from_address' => ['required_if_accepted:mail.enabled'],
     ];
+
+    /**
+     * Claves que el endpoint general (/admin/settings, nivel admin) no lee ni
+     * escribe: tienen su propio endpoint con permisos más estrictos.
+     */
+    public const PREFIJOS_RESERVADOS = ['backups.'];
+
+    private static function esReservada(string $key): bool
+    {
+        foreach (self::PREFIJOS_RESERVADOS as $prefijo) {
+            if (str_starts_with($key, $prefijo)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     public function get(string $key): mixed
     {
@@ -117,6 +137,9 @@ class SettingsService
     {
         $datos = [];
         foreach ($this->all() as $key => $valor) {
+            if (self::esReservada($key)) {
+                continue;
+            }
             [$grupo, $campo] = explode('.', $key, 2);
             if (self::DEFINITIONS[$key]['secret'] ?? false) {
                 $datos[$grupo][$campo.'_set'] = $valor !== '';
@@ -129,10 +152,25 @@ class SettingsService
         return $datos;
     }
 
+    /** @return array{enabled: bool, hour: int, keep_scheduled: int} */
+    public function backupConfig(): array
+    {
+        $todo = $this->all();
+
+        return [
+            'enabled' => $todo['backups.enabled'],
+            'hour' => $todo['backups.hour'],
+            'keep_scheduled' => $todo['backups.keep_scheduled'],
+        ];
+    }
+
     public static function rulesForRequest(): array
     {
         $reglas = [];
         foreach (self::DEFINITIONS as $key => $definicion) {
+            if (self::esReservada($key)) {
+                continue;
+            }
             // Sin 'sometimes' en las claves con reglas condicionales: deben
             // evaluarse aunque falten (p. ej. SMTP activo sin servidor).
             $extra = self::REQUEST_EXTRA_RULES[$key] ?? [];
@@ -175,6 +213,9 @@ class SettingsService
             'mail.password' => 'la contraseña SMTP',
             'mail.from_address' => 'el correo del remitente',
             'mail.from_name' => 'el nombre del remitente',
+            'backups.enabled' => 'los respaldos automáticos',
+            'backups.hour' => 'la hora del respaldo',
+            'backups.keep_scheduled' => 'los respaldos a conservar',
         ];
     }
 
