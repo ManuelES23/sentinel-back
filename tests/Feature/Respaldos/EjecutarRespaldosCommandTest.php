@@ -154,6 +154,26 @@ class EjecutarRespaldosCommandTest extends TestCase
         $this->assertFalse(app(CicloRespaldos::class)->programadorActivo());
     }
 
+    public function test_programador_activo_mientras_hay_un_volcado_en_curso(): void
+    {
+        $this->a('2026-10-10 12:00:00');
+        app(CicloRespaldos::class)->registrarLatido();
+        $this->a('2026-10-10 12:10:00');
+        DatabaseBackup::create(['type' => 'manual', 'status' => 'en_proceso', 'filename' => 'x.sql.gz', 'started_at' => now()->subMinutes(10)]);
+
+        $this->assertTrue(app(CicloRespaldos::class)->programadorActivo());
+    }
+
+    public function test_programador_inactivo_si_el_volcado_en_curso_esta_atascado(): void
+    {
+        $this->a('2026-10-10 12:00:00');
+        app(CicloRespaldos::class)->registrarLatido();
+        $this->a('2026-10-10 15:00:00');
+        DatabaseBackup::create(['type' => 'manual', 'status' => 'en_proceso', 'filename' => 'x.sql.gz', 'started_at' => now()->subHours(3)]);
+
+        $this->assertFalse(app(CicloRespaldos::class)->programadorActivo());
+    }
+
     public function test_proximo_programado(): void
     {
         $ciclo = app(CicloRespaldos::class);

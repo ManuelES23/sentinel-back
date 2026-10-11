@@ -48,8 +48,17 @@ class CicloRespaldos
     public function programadorActivo(): bool
     {
         $latido = $this->ultimoLatido();
+        if ($latido !== null && $latido->greaterThan(now()->subMinutes(self::MINUTOS_LATIDO_VIVO))) {
+            return true;
+        }
 
-        return $latido !== null && $latido->greaterThan(now()->subMinutes(self::MINUTOS_LATIDO_VIVO));
+        // Mientras corre un volcado largo, withoutOverlapping bloquea las corridas
+        // de cada minuto y el latido no se renueva; un volcado en curso (y no
+        // atascado: pasadas 2 h lo marca fallido marcarAtascados) prueba que el
+        // programador está vivo.
+        return DatabaseBackup::where('status', DatabaseBackup::ESTADO_EN_PROCESO)
+            ->where('started_at', '>=', now()->subMinutes(self::MINUTOS_ATASCADO))
+            ->exists();
     }
 
     public function marcarAtascados(): int
