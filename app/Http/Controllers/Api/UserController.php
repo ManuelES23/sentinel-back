@@ -90,9 +90,13 @@ class UserController extends Controller
             return $user;
         });
 
+        $user->load('employee.enterprise', 'employee.position');
+
         return response()->json([
             'message' => 'Usuario creado exitosamente',
-            'user' => $user->load('employee')
+            'user' => array_merge($user->withoutRelations()->toArray(), [
+                'employee' => $this->resumenEmpleado($user->employee),
+            ]),
         ], 201);
     }
 
