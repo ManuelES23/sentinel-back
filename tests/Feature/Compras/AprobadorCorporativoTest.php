@@ -90,6 +90,27 @@ class AprobadorCorporativoTest extends TestCase
         $this->assertTrue(app(AprobadorOrdenCompra::class)->aprobadoresDe($oc)->isEmpty());
     }
 
+    public function test_regla_por_nivel_jerarquico_no_extiende_al_corporativo_a_otras_empresas(): void
+    {
+        // Regla pensada para gerentes de cada empresa: nivel <= 3, todas las empresas.
+        ApprovalFlowStep::create([
+            'approval_process_id' => ApprovalProcess::findByCode('purchase_orders')->id,
+            'enterprise_id' => null, 'step_order' => 1, 'approver_type' => 'hierarchy_level', 'min_hierarchy_level' => 3,
+            'approval_scope' => 'enterprise', 'can_approve' => true, 'can_reject' => true, 'is_active' => true,
+        ]);
+        $gerenteRh = User::factory()->create(['role' => 'user']);
+        $puesto = Position::create(['enterprise_id' => $this->corporativo->id, 'code' => 'RH', 'name' => 'Gerente de RH',
+            'hierarchy_level' => 2, 'can_approve' => true, 'approval_scope' => 'enterprise']);
+        $empleado = Employee::create(['enterprise_id' => $this->corporativo->id, 'employee_number' => 'RH1', 'first_name' => 'Gerente',
+            'last_name' => 'RH', 'hire_date' => '2026-01-01', 'qr_code' => Str::random(32), 'position_id' => $puesto->id,
+            'status' => 'active', 'user_id' => $gerenteRh->id]);
+        $aprobador = app(AprobadorOrdenCompra::class);
+
+        $this->assertFalse($aprobador->puedeAprobar($gerenteRh, $this->crearOrden(['status' => 'pending'])));
+        $this->assertSame([$this->corporativo->id], $aprobador->empresasQuePuedeAprobar($empleado));
+        $this->assertTrue($aprobador->puedeAprobar($gerenteRh, $this->crearOrden(['status' => 'pending', 'enterprise_id' => $this->corporativo->id])));
+    }
+
     public function test_corporativo_no_aprueba_su_propia_orden(): void
     {
         $directora = $this->aprobadorDe($this->corporativo, $this->empresa);

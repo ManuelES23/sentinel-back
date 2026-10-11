@@ -17,7 +17,7 @@ use Illuminate\Support\Collection;
  *
  * Aprobador de la empresa de la OC: respeta el alcance (departamento o empresa).
  * Aprobador corporativo (empleado de Grupo Espléndido): aprueba las OC de las
- * empresas cuya regla incluye su puesto (o de todas, si la regla no fija
+ * empresas cuya regla nombra su puesto (o de todas, si esa regla no fija
  * empresa); su departamento es del corporativo, así que el alcance es toda la
  * empresa de la OC.
  */
@@ -55,12 +55,17 @@ class AprobadorOrdenCompra
         }
 
         $proceso = $this->proceso();
-        if (! $proceso || ! $proceso->canBeApprovedBy($empleado, $empresaId)) {
+        if (! $proceso) {
             return false;
         }
 
         if ($corporativo) {
-            return true;
+            return $this->pasosConSuPuesto($proceso, $empleado)
+                ->contains(fn ($p) => $p->enterprise_id === null || (int) $p->enterprise_id === $empresaId);
+        }
+
+        if (! $proceso->canBeApprovedBy($empleado, $empresaId)) {
+            return false;
         }
 
         $pasos = $proceso->activeSteps()
@@ -90,30 +95,49 @@ class AprobadorOrdenCompra
     /**
      * Empresas de las que este empleado puede autorizar OC: la suya si una
      * regla lo incluye y, si es corporativo, las que fije cada regla con su
-     * puesto (todas, si alguna regla no fija empresa).
+     * puesto (todas, si alguna de esas reglas no fija empresa).
      *
      * @return array<int, int>
      */
     public function empresasQuePuedeAprobar(Employee $empleado): array
     {
         $proceso = $this->proceso();
-        if (! $proceso || ! $proceso->is_active || ! $proceso->requires_approval || $empleado->status !== 'active') {
+        if (! $proceso || $empleado->status !== 'active') {
             return [];
         }
 
         $propia = (int) $empleado->enterprise_id;
-        $pasos = $proceso->activeSteps()->get()
-            ->filter(fn ($paso) => $paso->matchesEmployee($empleado));
+        $empresas = $proceso->canBeApprovedBy($empleado, $propia) ? [$propia] : [];
 
-        if (! $this->esCorporativo($empleado)) {
-            return $pasos->contains(fn ($p) => $p->enterprise_id === null || (int) $p->enterprise_id === $propia) ? [$propia] : [];
+        if ($this->esCorporativo($empleado)) {
+            $pasos = $this->pasosConSuPuesto($proceso, $empleado);
+            $empresas = $pasos->contains(fn ($p) => $p->enterprise_id === null)
+                ? Enterprise::pluck('id')->map(fn ($id) => (int) $id)->all()
+                : array_merge($empresas, $pasos->pluck('enterprise_id')->map(fn ($id) => (int) $id)->all());
         }
 
-        if ($pasos->contains(fn ($p) => $p->enterprise_id === null)) {
-            return Enterprise::pluck('id')->map(fn ($id) => (int) $id)->all();
+        return array_values(array_unique($empresas));
+    }
+
+    /**
+     * Reglas que nombran el puesto del empleado. Solo estas extienden a un
+     * corporativo a otras empresas: una regla por nivel jerárquico pensada
+     * para los gerentes de cada empresa no lo vuelve aprobador de todas.
+     *
+     * @return Collection<int, \App\Models\ApprovalFlowStep>
+     */
+    private function pasosConSuPuesto(ApprovalProcess $proceso, Employee $empleado): Collection
+    {
+        if (! $proceso->is_active || ! $proceso->requires_approval || ! $empleado->position_id) {
+            return collect();
         }
 
-        return $pasos->pluck('enterprise_id')->map(fn ($id) => (int) $id)->unique()->values()->all();
+        return $proceso->activeSteps()
+            ->where('approver_type', 'position')
+            ->where('position_id', $empleado->position_id)
+            ->get()
+            ->filter(fn ($paso) => $paso->matchesEmployee($empleado))
+            ->values();
     }
 
     public function esCorporativo(Employee $empleado): bool
