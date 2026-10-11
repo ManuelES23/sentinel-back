@@ -235,3 +235,12 @@ DB_DATABASE=sentinel
 DB_USERNAME=root
 DB_PASSWORD=MasterKey
 ```
+
+## Respaldos de la base de datos
+
+- `/admin/backups` (solo `role = superadmin`, middleware `admin:superadmin`). El panel crea filas `pendiente` en `database_backups`; `respaldos:ejecutar` (programador, cada minuto, `withoutOverlapping(180)`) las genera, crea el programado diario (`backups.hour`), marca `fallido` lo atascado >2 h, aplica la retención (`backups.keep_scheduled`, solo programados; fallidos >30 días) y deja un latido en caché (`backups.scheduler_heartbeat`).
+- **No usa la cola a propósito:** `retry_after` (90 s) relanzaría en paralelo un volcado largo.
+- Volcado: `App\Contracts\VolcadorBaseDatos` → `MysqlDumpPhpVolcador` (druidfi/mysqldump-php, PHP puro). Las pruebas lo sustituyen por `Tests\Support\VolcadorFalso` porque corren en SQLite; la prueba real es `@group mysql` con `BACKUP_TEST_DB_*`.
+- Las claves `backups.*` de `SettingsService` están reservadas: el endpoint general `/admin/settings` (nivel admin) no las lee ni las escribe.
+- Descarga: `POST admin/backups/{id}/download-url` → URL firmada **relativa** de 5 min a `GET api/backups/{id}/download` (`signed:relative`, sin Sanctum).
+- Guía de restauración y despliegue: `docs/respaldos.md`.
