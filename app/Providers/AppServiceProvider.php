@@ -2,7 +2,9 @@
 
 namespace App\Providers;
 
+use App\Contracts\VolcadorBaseDatos;
 use App\Services\MailSettings;
+use App\Services\Respaldos\MysqlDumpPhpVolcador;
 use App\Services\SettingsService;
 use App\Support\PasswordPolicy;
 use Illuminate\Cache\RateLimiting\Limit;
@@ -25,6 +27,10 @@ class AppServiceProvider extends ServiceProvider
     {
         $this->app->singleton(\App\Services\SettingsService::class);
         $this->app->singleton(\App\Services\MailSettings::class);
+
+        $this->app->bind(VolcadorBaseDatos::class, fn () => new MysqlDumpPhpVolcador(
+            config('database.connections.'.config('database.default'))
+        ));
     }
 
     /**
