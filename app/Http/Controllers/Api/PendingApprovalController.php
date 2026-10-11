@@ -16,6 +16,7 @@ use App\Models\SfFieldCheck;
 use App\Models\TimeClockCheck;
 use App\Models\VacationBalance;
 use App\Models\VacationRequest;
+use App\Services\Compras\AprobadorOrdenCompra;
 use App\Services\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -24,6 +25,8 @@ use Illuminate\Support\Facades\Schema;
 
 class PendingApprovalController extends Controller
 {
+    private ?AprobadorOrdenCompra $aprobadorOc = null;
+
     /**
      * Obtener resumen de pendientes por aprobar para el usuario autenticado
      */
@@ -131,9 +134,7 @@ class PendingApprovalController extends Controller
             }
 
             // Determinar el alcance (scope) del empleado para este proceso
-            $scope = $process->code === ApprovalProcess::INVENTORY_MOVEMENTS && $hasTransferPermission
-                ? 'enterprise'
-                : $this->getEmployeeScope($process, $employee);
+            $scope = $this->alcanceParaProceso($process, $employee, $hasTransferPermission);
 
             // Contar pendientes según el tipo de proceso
             $count = $this->countPendingItems($process->code, $employee, $scope);
@@ -247,10 +248,8 @@ class PendingApprovalController extends Controller
                 continue;
             }
 
-            $scope = $process->code === ApprovalProcess::INVENTORY_MOVEMENTS && $hasTransferPermission
-                ? 'enterprise'
-                : $this->getEmployeeScope($process, $employee);
-            $items = $this->getPendingItems($process->code, $employee, $scope);
+            $scope = $this->alcanceParaProceso($process, $employee, $hasTransferPermission);
+            $items =$this->getPendingItems($process->code, $employee, $scope);
 
             $result[] = [
                 'process_id' => $process->id,
@@ -273,6 +272,23 @@ class PendingApprovalController extends Controller
                 'processes' => $result,
             ],
         ]);
+    }
+
+    /**
+     * Alcance que se informa por proceso. Las transferencias con permiso
+     * explícito y las OC que autoriza un corporativo abarcan toda la empresa.
+     */
+    private function alcanceParaProceso(ApprovalProcess $process, Employee $employee, bool $hasTransferPermission): string
+    {
+        if ($process->code === ApprovalProcess::INVENTORY_MOVEMENTS && $hasTransferPermission) {
+            return 'enterprise';
+        }
+
+        if ($process->code === ApprovalProcess::PURCHASE_ORDERS && $this->aprobadorOc()->esCorporativo($employee)) {
+            return 'enterprise';
+        }
+
+        return $this->getEmployeeScope($process, $employee);
     }
 
     /**
@@ -489,11 +505,11 @@ class PendingApprovalController extends Controller
         if (! $user) {
             return collect();
         }
-        $aprobador = app(\App\Services\Compras\AprobadorOrdenCompra::class);
+        $aprobador = $this->aprobadorOc();
 
         return PurchaseOrder::where('status', 'pending')
             ->where('created_by', '!=', $employee->user_id)
-            ->where(fn ($q) => $q->where('enterprise_id', $employee->enterprise_id)->orWhereNull('enterprise_id'))
+            ->where(fn ($q) => $q->whereIn('enterprise_id', $aprobador->empresasQuePuedeAprobar($employee))->orWhereNull('enterprise_id'))
             ->with(['supplier:id,business_name,trade_name', 'createdByUser:id,name', 'createdByUser.employee'])
             ->orderBy('created_at', 'desc')
             ->limit(200)
@@ -1326,7 +1342,17 @@ class PendingApprovalController extends Controller
             return $this->canApproveInventoryMovement($request, $user, $employee);
         }
 
+        // OC: un corporativo puede autorizar las de otras empresas (AprobadorOrdenCompra).
+        if ($process->code === ApprovalProcess::PURCHASE_ORDERS) {
+            return $this->aprobadorOc()->empresasQuePuedeAprobar($employee) !== [];
+        }
+
         return $process->canBeApprovedBy($employee, $enterpriseId);
+    }
+
+    private function aprobadorOc(): AprobadorOrdenCompra
+    {
+        return $this->aprobadorOc ??= app(AprobadorOrdenCompra::class);
     }
 
     private function canApproveInventoryMovement(Request $request, $user, ?Employee $employee): bool
