@@ -184,9 +184,69 @@ Módulo de Administración → Activos Fijos (SF y GE). La carpeta de controlado
 ## CRM · Visibilidad de oportunidades
 
 - `GET crm/oportunidades`, `GET crm/oportunidades/{id}` y `GET crm/oportunidades/resumen` exigen `oportunidades.ver` (403 sin él).
-- Sin `oportunidades.equipo` (perfil vendedor) el usuario solo lee las de su propio `CrmVendedor` activo: el listado y el resumen se fuerzan a él, pedir `vendedor_id` de otro responde 403, `show` de una ajena responde 403 y, sin vendedor vinculado, todo responde 403. Con `equipo` (perfil gerencia) ve a todo el equipo y puede filtrar por vendedor. Ver `OportunidadController::vendedorVisible`.
-- Alcance: solo la lectura de oportunidades. Siguen abiertos dentro del tenant los listados de clientes, prospectos y `crm/cotizaciones`, y las cotizaciones por oportunidad; update/destroy/cambiar-etapa no limitan por vendedor.
-- Despliegue: `php artisan migrate`. La migración crea `equipo` y lo concede a quien ya tiene `oportunidades.cerrar` (gerencia); a cualquier otro que deba ver al equipo se le concede a mano o reaplicando el perfil.
+- Sin `oportunidades.equipo` (perfil vendedor) el usuario solo lee las de su propio `CrmVendedor` activo: el listado y el resumen se fuerzan a él, pedir `vendedor_id` de otro responde 403, `show` de una ajena responde 403 y, sin vendedor vinculado, todo responde 403. Con `equipo` (perfil gerencia) ve a todo el equipo y puede filtrar por vendedor.
+- La regla vive en `App\Services\CRM\VisibilidadOportunidades`, con dos sabores:
+  - Estricto: `exigirVer`, `vendedorVisible` y `exigirVisible`, que abortan con 403. Lo usan los endpoints de oportunidades.
+  - `alcance()`: no aborta y devuelve `App\Support\CRM\AlcanceOportunidades` (`puedeVer`, `todas`, `vendedorId`, `aplicar($query)`). Lo usan los datos incrustados.
+  - El Dashboard NO usa esta regla: depende de `dashboard.ejecutivo` (`DashboardController::resolverVendedor`), y ahí el vendedor propio no se exige activo.
+- **Alcance — limitado por vendedor:**
+  - Las 3 lecturas: `GET crm/oportunidades`, `/{id}` y `/resumen`.
+  - Las fichas: `GET crm/clientes/{id}` (`oportunidades`), `GET crm/clientes/{id}/resumen` (`metricas.oportunidades`, `metricas.valor_pipeline` y las 10 últimas) y `GET crm/prospectos/{id}` (`oportunidades`). Sin `ver` las listas salen vacías y las cifras en 0, y siempre se filtran por la empresa. La ficha en sí sigue abierta.
+  - Las escrituras: `PUT`, `DELETE` y `PATCH cambiar-etapa`, en este orden: tenant (404), permiso de la acción (403) y visibilidad (403 «No puedes modificar las oportunidades de otro vendedor.»; también exige `ver`).
+  - En `PUT`, sin `equipo`, `vendedor_id` solo puede ser el vendedor actual. Reasignar a otro responde 403 «No puedes asignar la oportunidad a otro vendedor.».
+- **Alcance — sigue abierto dentro del tenant:**
+  - Los listados de clientes y prospectos (no incrustan oportunidades).
+  - `GET crm/cotizaciones`, que incrusta `oportunidad` con nombre, vendedor, cliente y prospecto.
+  - Las cotizaciones por oportunidad: `GET/POST crm/oportunidades/{id}/cotizaciones`.
+  - Aprobar o rechazar cotizaciones: `aprobar` cierra como ganada la oportunidad de cualquier vendedor.
+  - Las actividades e historial (`GET crm/actividades?entidad_tipo=oportunidad`, `actividades` del resumen del cliente).
+  - `POST crm/oportunidades` acepta cualquier `vendedor_id` de la empresa.
+  - Mi día con `mi-dia.equipo` ve las oportunidades de otro vendedor (permiso propio de Mi día).
+  - El canal en tiempo real `module.{empresa}.crm.oportunidades` difunde la oportunidad completa a todos los que tienen acceso al módulo. El front ignora el payload para quien no tiene `equipo`, pero sigue visible en la pestaña Red del navegador. Es un riesgo residual aceptado hasta tener canales por vendedor o un payload recortado.
+- **Despliegue:**
+  1. `php artisan migrate`. La migración `2026_10_09_100000_add_crm_oportunidades_equipo_permission` crea `equipo` y lo concede, por empresa, a quien en ese CRM ya tiene `oportunidades.cerrar`, `dashboard.ejecutivo` o `mi-dia.equipo`. No reactiva una fila `equipo` revocada.
+  2. Listar quién recibirá 403 en el tablero. No hay bypass de superadmin en `tienePermisoSubmodulo`, así que la cuenta dueña suele salir aquí. Usuarios con `ver` concedido, sin `equipo` y sin `crm_vendedores` activo en esa empresa:
+     ```sql
+     SELECT e.id AS empresa_id, e.name AS empresa, u.id AS user_id, u.name, u.email, u.role
+     FROM user_submodule_permissions usp
+     JOIN submodule_permission_types spt ON spt.id = usp.permission_type_id AND spt.slug = 'ver'
+     JOIN submodules s   ON s.id = usp.submodule_id AND s.slug = 'oportunidades'
+     JOIN modules m      ON m.id = s.module_id AND m.slug = 'oportunidades'
+     JOIN applications a ON a.id = m.application_id AND a.slug = 'crm'
+     JOIN enterprises e  ON e.id = a.enterprise_id
+     JOIN users u        ON u.id = usp.user_id
+     WHERE usp.is_granted = 1
+       AND NOT EXISTS (
+         SELECT 1
+         FROM user_submodule_permissions eq
+         JOIN submodule_permission_types eqt ON eqt.id = eq.permission_type_id AND eqt.slug = 'equipo'
+         WHERE eq.user_id = usp.user_id AND eq.submodule_id = usp.submodule_id AND eq.is_granted = 1
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM crm_vendedores v
+         WHERE v.empresa_id = a.enterprise_id AND v.user_id = usp.user_id AND v.activo = 1
+       )
+     ORDER BY e.name, u.name;
+     ```
+  3. Usuarios con acceso activo al submódulo oportunidades (ven la entrada del menú) pero sin `ver` concedido:
+     ```sql
+     SELECT e.id AS empresa_id, e.name AS empresa, u.id AS user_id, u.name, u.email, u.role
+     FROM user_submodule_access usa
+     JOIN submodules s   ON s.id = usa.submodule_id AND s.slug = 'oportunidades'
+     JOIN modules m      ON m.id = s.module_id AND m.slug = 'oportunidades'
+     JOIN applications a ON a.id = m.application_id AND a.slug = 'crm'
+     JOIN enterprises e  ON e.id = a.enterprise_id
+     JOIN users u        ON u.id = usa.user_id
+     WHERE usa.is_active = 1
+       AND NOT EXISTS (
+         SELECT 1
+         FROM user_submodule_permissions usp
+         JOIN submodule_permission_types spt ON spt.id = usp.permission_type_id AND spt.slug = 'ver'
+         WHERE usp.user_id = usa.user_id AND usp.submodule_id = usa.submodule_id AND usp.is_granted = 1
+       )
+     ORDER BY e.name, u.name;
+     ```
+  4. Para cada fila, una de tres: conceder `equipo` (o `ver`, para la segunda consulta), vincular o reactivar su `CrmVendedor`, o aceptar el 403.
 
 ## Acceso cruzado de entidades (cross-enterprise)
 Tabla pivot `enterprise_entity` (`enterprise_id`, `entity_id`, `access_level: read|write`) — permite que una empresa acceda a bodegas/plantas de otra. Ver `EntityAccessController` (Admin).
