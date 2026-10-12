@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Inventario\Peps;
 
+use App\Models\Area;
 use App\Models\CapaCosto;
 use App\Models\InventoryStock;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -158,6 +159,67 @@ class ArranqueCapasTest extends TestCase
 
         $this->assertEqualsWithDelta(10.0, (float) CapaCosto::first()->unit_cost, 0.000001);
         $this->artisan('inventario:verificar-capas')->assertExitCode(1);
+    }
+
+    public function test_existencias_huerfanas_se_omiten_sin_abortar_y_verificar_las_reporta(): void
+    {
+        $this->setUpAlmacenFixtures();
+        $this->darStock($this->almacenA, $this->insumo, 10);
+        $ahora = now();
+        $base = ['product_id' => $this->insumo->id, 'quantity' => 5, 'reserved_quantity' => 0, 'unit_cost' => 10, 'total_cost' => 50, 'created_at' => $ahora, 'updated_at' => $ahora];
+        // Sin FK en inventory_stock: un almacén y un área borrados a mano dejan filas huérfanas.
+        $idEntidadHuerfana = DB::table('inventory_stock')->insertGetId($base + ['entity_id' => 987654, 'area_id' => null]);
+        $idAreaHuerfana = DB::table('inventory_stock')->insertGetId($base + ['entity_id' => $this->almacenB->id, 'area_id' => 987655]);
+
+        $this->migrar();
+
+        $this->assertSame(1, CapaCosto::count());
+        $this->assertSame($this->almacenA->id, (int) CapaCosto::first()->entity_id);
+        $this->assertSame(3, InventoryStock::count());
+        $this->artisan('inventario:verificar-capas')->assertExitCode(1);
+        $this->assertNull(DB::table('inventory_cost_layers')->where('entity_id', 987654)->first());
+        $this->assertNotNull($idEntidadHuerfana);
+        $this->assertNotNull($idAreaHuerfana);
+    }
+
+    public function test_union_con_area_y_lote_con_espacios_no_choca_con_el_indice_unico(): void
+    {
+        $this->setUpAlmacenFixtures();
+        $area = Area::create(['code' => 'ARE-ARR', 'name' => 'Bodega', 'slug' => 'bodega-arr', 'is_active' => true]);
+        foreach ([[' L-1', 6], ['L-1', 4]] as [$lote, $cantidad]) {
+            InventoryStock::create([
+                'product_id' => $this->insumo->id, 'entity_id' => $this->almacenA->id, 'area_id' => $area->id,
+                'quantity' => $cantidad, 'reserved_quantity' => 0, 'unit_cost' => 10, 'total_cost' => $cantidad * 10, 'lot_number' => $lote,
+            ]);
+        }
+
+        $this->migrar();
+
+        $this->assertSame(1, InventoryStock::count());
+        $fila = InventoryStock::first();
+        $this->assertSame('L-1', $fila->lot_number);
+        $this->assertEqualsWithDelta(10.0, (float) $fila->quantity, 0.0001);
+        $this->assertEqualsWithDelta(100.0, (float) $fila->total_cost, 0.0001);
+        $this->assertSame(1, CapaCosto::count());
+        $this->assertEqualsWithDelta(100.0, $this->valorCapas(), 0.01);
+        $this->artisan('inventario:verificar-capas')->assertExitCode(0);
+    }
+
+    public function test_lotes_que_solo_difieren_en_mayusculas_son_la_misma_cubeta(): void
+    {
+        $this->setUpAlmacenFixtures();
+        $this->darStock($this->almacenA, $this->insumo, 6, 'L-1');
+        $this->darStock($this->almacenA, $this->insumo, 4, 'l-1');
+
+        $this->migrar();
+
+        $this->assertSame(1, InventoryStock::count());
+        $this->assertSame('L-1', InventoryStock::first()->lot_number);
+        $this->assertEqualsWithDelta(100.0, (float) InventoryStock::first()->total_cost, 0.0001);
+        $this->assertSame(1, CapaCosto::count());
+        $this->assertEqualsWithDelta(100.0, $this->valorCapas(), 0.01);
+        $this->migrar();
+        $this->assertSame(1, CapaCosto::count());
     }
 
     public function test_down_borra_solo_las_capas_de_arranque(): void

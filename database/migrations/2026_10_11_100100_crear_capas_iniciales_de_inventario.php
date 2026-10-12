@@ -50,8 +50,10 @@ return new class extends Migration
                     $cambios['last_movement_at'] = $ultimo;
                 }
 
-                DB::table('inventory_stock')->where('id', $primera->id)->update($cambios);
+                // Primero se borran los duplicados: al normalizar el lote de la superviviente (p. ej. ' L-1' -> 'L-1')
+                // chocaría con el índice único contra la fila que se va a unir.
                 DB::table('inventory_stock')->whereIn('id', $grupo->slice(1)->pluck('id')->all())->delete();
+                DB::table('inventory_stock')->where('id', $primera->id)->update($cambios);
                 Log::warning('Capas PEPS: filas de stock duplicadas unidas', ['clave' => $clave, 'ids' => $grupo->pluck('id')->all()]);
             }
         });
@@ -66,9 +68,19 @@ return new class extends Migration
                 $conCapas[$this->clave($c->product_id, $c->entity_id, $c->area_id, $c->lot_number)] = true;
             }
 
+            // inventory_stock no tiene llaves foráneas; la capa sí: una existencia de un almacén o área borrados
+            // a mano haría fallar el insert (y todo el despliegue), así que se omite y se avisa.
+            $almacenes = array_flip(DB::table('entities')->pluck('id')->all());
+            $areas = array_flip(DB::table('areas')->pluck('id')->all());
+
             $ahora = now();
-            DB::table('inventory_stock')->where('quantity', '!=', 0)->orderBy('id')->chunkById(500, function ($filas) use (&$conCapas, $ahora) {
+            DB::table('inventory_stock')->where('quantity', '!=', 0)->orderBy('id')->chunkById(500, function ($filas) use (&$conCapas, $ahora, $almacenes, $areas) {
                 foreach ($filas as $f) {
+                    if (! isset($almacenes[$f->entity_id]) || ($f->area_id !== null && ! isset($areas[$f->area_id]))) {
+                        Log::warning('Capas PEPS: existencia huérfana omitida', ['stock_id' => $f->id, 'entity_id' => $f->entity_id, 'area_id' => $f->area_id]);
+
+                        continue;
+                    }
                     $clave = $this->clave($f->product_id, $f->entity_id, $f->area_id, $f->lot_number);
                     if (isset($conCapas[$clave])) {
                         continue;
@@ -110,9 +122,10 @@ return new class extends Migration
         return $unitCost;
     }
 
+    /** Llave de cubeta. El lote va sin espacios y en minúsculas: la colación de MySQL (utf8mb4_unicode_ci) no distingue mayúsculas. */
     private function clave(mixed $producto, mixed $almacen, mixed $area, mixed $lote): string
     {
-        return implode('|', [$producto, $almacen, $area ?? '-', trim((string) $lote)]);
+        return implode('|', [$producto, $almacen, $area ?? '-', mb_strtolower(trim((string) $lote))]);
     }
 
     public function down(): void
