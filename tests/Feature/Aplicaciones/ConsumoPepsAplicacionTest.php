@@ -41,6 +41,7 @@ class ConsumoPepsAplicacionTest extends TestCase
         $this->assertEqualsWithDelta(400, $this->costoDe($apl), 0.0001);
         $this->assertEqualsWithDelta(6, (float) InventoryStock::where('lot_number', 'L-A')->value('quantity'), 0.0001);
         $this->assertEqualsWithDelta(10, (float) InventoryStock::where('lot_number', 'L-B')->value('quantity'), 0.0001);
+        $this->artisan('inventario:verificar-capas')->assertExitCode(0);
     }
 
     public function test_editar_aplicacion_tras_compra_a_otro_precio_conserva_su_costo(): void
@@ -54,6 +55,7 @@ class ConsumoPepsAplicacionTest extends TestCase
         $consumidor->reconsumir(Aplicacion::find($apl->id));
 
         $this->assertEqualsWithDelta(400, $this->costoDe($apl), 0.0001);
+        $this->artisan('inventario:verificar-capas')->assertExitCode(0);
     }
 
     public function test_borrar_aplicacion_devuelve_al_costo_original(): void
@@ -68,5 +70,6 @@ class ConsumoPepsAplicacionTest extends TestCase
         $fila = InventoryStock::where('product_id', $this->insumo->id)->where('entity_id', $this->almacenA->id)->first();
         $this->assertEqualsWithDelta(60, (float) $fila->quantity, 0.0001);
         $this->assertEqualsWithDelta(10 * 100 + 50 * 150, (float) $fila->total_cost, 0.0001);
+        $this->artisan('inventario:verificar-capas')->assertExitCode(0);
     }
 }

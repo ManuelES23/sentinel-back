@@ -97,6 +97,7 @@ class ProduccionEmpaquePepsTest extends TestCase
 
         $this->assertEqualsWithDelta(20, (float) $this->fila()->quantity, 0.0001);
         $this->assertEqualsWithDelta(2500, (float) $this->fila()->total_cost, 0.0001);
+        $this->artisan('inventario:verificar-capas')->assertExitCode(0);
     }
 
     public function test_editar_las_cajas_revierte_las_porciones_y_vuelve_a_consumir(): void
@@ -113,5 +114,6 @@ class ProduccionEmpaquePepsTest extends TestCase
 
         $this->assertEqualsWithDelta(20, (float) $this->fila()->quantity, 0.0001);
         $this->assertEqualsWithDelta(2500, (float) $this->fila()->total_cost, 0.0001);
+        $this->artisan('inventario:verificar-capas')->assertExitCode(0);
     }
 }

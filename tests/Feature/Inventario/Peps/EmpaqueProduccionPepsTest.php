@@ -22,5 +22,6 @@ class EmpaqueProduccionPepsTest extends TestCase
 
         $this->assertEqualsWithDelta(20, (float) $fila->quantity, 0.0001);
         $this->assertEqualsWithDelta(2500, (float) $fila->total_cost, 0.0001);
+        $this->artisan('inventario:verificar-capas')->assertExitCode(0);
     }
 }

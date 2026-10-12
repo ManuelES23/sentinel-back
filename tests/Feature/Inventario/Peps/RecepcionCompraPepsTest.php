@@ -47,5 +47,6 @@ class RecepcionCompraPepsTest extends TestCase
         $this->assertSame(CapaCosto::ORIGEN_COMPRA, $capa->origen);
         $this->assertEqualsWithDelta(100, (float) $capa->unit_cost, 0.0001);
         $this->assertSame(PurchaseReceipt::find($rec->id)->receipt_date->toDateString(), $capa->fecha_entrada->toDateString());
+        $this->artisan('inventario:verificar-capas')->assertExitCode(0);
     }
 }
