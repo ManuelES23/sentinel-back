@@ -3,6 +3,8 @@
 namespace App\Models;
 
 use App\Services\ActivosFijos\UnidadesVigentes;
+use App\Services\Inventory\CapasCosto;
+use App\Support\Inventario\Cubeta;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -162,5 +164,38 @@ class InventoryStock extends Model
         $stock->save();
 
         return $stock;
+    }
+
+    /**
+     * Único escritor de cantidades. Llamar DESPUÉS de la operación del motor de
+     * capas (CapasCosto); al final sincroniza unit_cost/total_cost desde las capas.
+     */
+    public static function ajustarCantidad(Cubeta $c, float $delta, mixed $expiry = null, ?int $movementId = null, bool $allowNegative = false): self
+    {
+        $stock = $c->filtrar(self::query())->lockForUpdate()->first()
+            ?? new self([
+                'product_id' => $c->productId,
+                'entity_id' => $c->entityId,
+                'area_id' => $c->areaId,
+                'lot_number' => $c->lote,
+                'unit_cost' => 0,
+                'total_cost' => 0,
+            ]);
+
+        $nueva = round((float) ($stock->quantity ?? 0) + $delta, 4);
+        $stock->quantity = $allowNegative ? $nueva : max(0, $nueva);
+
+        if ($expiry) {
+            $stock->expiry_date = $expiry;
+        }
+        if ($movementId) {
+            $stock->last_movement_id = $movementId;
+            $stock->last_movement_at = now();
+        }
+
+        $stock->save();
+        app(CapasCosto::class)->sincronizarFila($c);
+
+        return $stock->refresh();
     }
 }
