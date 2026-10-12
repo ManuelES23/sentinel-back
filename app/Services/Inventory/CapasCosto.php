@@ -276,8 +276,10 @@ class CapasCosto
     }
 
     /**
-     * Con capas, restaura la cantidad_inicial de cada porción, por lo que el llamador debe
-     * ajustar AMBAS filas por la cantidad del movimiento ($d->cantidad).
+     * Con capas, restaura la cantidad_inicial de cada porción. En el flujo de movimientos las
+     * capas del destino siempre suman lo recibido (la diferencia no recibida ya regresó al
+     * origen al aprobar), así que el llamador debe ajustar AMBAS filas por la cantidad que
+     * devuelve el motor ($r->cantidad), NO por la cantidad del movimiento.
      */
     public function deshacerTransferencia(Cubeta $origen, Cubeta $destino, int $detalleId, float $cantidad, float $costoRespaldo): ResultadoMovimiento
     {

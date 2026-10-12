@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\SplendidFarms\Inventory;
 
 use App\Http\Controllers\Controller;
 use App\Events\InventoryMovementUpdated;
+use App\Models\CapaCosto;
 use App\Models\Enterprise;
 use App\Models\Entity;
 use App\Models\InventoryMovement;
@@ -900,12 +901,15 @@ class InventoryMovementController extends Controller
                     data_get($movement->metadata, 'stock_deducted_at_creation', false)
                 ) {
                     foreach ($movement->details as $detail) {
-                        $this->stock->aumentar(
+                        $this->stock->devolver(
                             $detail,
-                            $movement->source_entity_id,
+                            (int) $movement->source_entity_id,
                             $movement->source_entity_type,
                             $movement,
-                            true // esReversa
+                            (float) ($detail->base_quantity ?? $detail->quantity),
+                            null,
+                            null,
+                            'Eliminación de ' . $movement->document_number
                         );
                     }
                 }
@@ -926,6 +930,9 @@ class InventoryMovementController extends Controller
                 'message' => 'Movimiento eliminado exitosamente'
             ]);
 
+        } catch (ValidationException $e) {
+            DB::rollBack();
+            throw $e;
         } catch (\Exception $e) {
             DB::rollBack();
             return response()->json([
@@ -1022,6 +1029,7 @@ class InventoryMovementController extends Controller
             }
 
             $receptionSummaryLines = [];
+            $solicitadoPorDetalle = [];
 
             foreach ($movement->details as $detail) {
                 $requestedQuantity = (float) ($detail->quantity ?? 0);
@@ -1030,6 +1038,11 @@ class InventoryMovementController extends Controller
                 if ($requestedQuantity <= 0 && $requestedBaseQuantity > 0) {
                     $requestedQuantity = $requestedBaseQuantity;
                 }
+
+                // Lo solicitado en unidad base, antes de que la recepción parcial reescriba el renglón.
+                $solicitadoPorDetalle[(int) $detail->id] = $requestedBaseQuantity > 0
+                    ? $requestedBaseQuantity
+                    : round($requestedQuantity * max((float) ($detail->conversion_factor ?? 1), 0.000001), 4);
 
                 $receivedQuantity = $requestedQuantity;
 
@@ -1109,39 +1122,65 @@ class InventoryMovementController extends Controller
                 // Procesar según dirección y efecto
                 if ($movementType->direction === 'in' ||
                     ($movementType->direction === 'adjustment' && $movementType->effect === 'increase')) {
-                    // Entrada: incrementar stock en destino
+                    // Entrada: incrementar stock en destino (abre una capa de costo)
                     $this->stock->aumentar(
                         $detail,
-                        $movement->destination_entity_id,
+                        (int) $movement->destination_entity_id,
                         $movement->destination_entity_type,
-                        $movement
+                        $movement,
+                        $movementType->direction === 'adjustment' ? CapaCosto::ORIGEN_AJUSTE : CapaCosto::ORIGEN_ENTRADA
                     );
                 } elseif ($movementType->direction === 'out' ||
                           ($movementType->direction === 'adjustment' && $movementType->effect === 'decrease')) {
-                    // Salida: decrementar stock en origen
+                    // Salida: decrementar stock en origen (el costo real PEPS queda en el renglón)
                     $this->stock->disminuir(
                         $detail,
-                        $movement->source_entity_id,
+                        (int) $movement->source_entity_id,
                         $movement->source_entity_type,
                         $movement
                     );
                 } elseif ($movementType->direction === 'transfer') {
-                    // Transferencia: el origen se descontó al crear; solo incrementar destino.
-                    // Para transferencias antiguas (sin la marca) seguir descontando origen.
+                    // Transferencia: el origen se descontó al crear (las porciones quedaron ligadas
+                    // al renglón); al aprobar se llevan al destino. Para transferencias antiguas
+                    // (sin la marca) primero se descuenta el origen, ya con la cantidad recibida.
                     $stockAlreadyDeducted = (bool) data_get($movement->metadata, 'stock_deducted_at_creation', false);
                     if (!$stockAlreadyDeducted) {
                         $this->stock->disminuir(
                             $detail,
-                            $movement->source_entity_id,
+                            (int) $movement->source_entity_id,
                             $movement->source_entity_type,
                             $movement
                         );
                     }
-                    $this->stock->aumentar(
+
+                    $recibido = (float) ($detail->base_quantity ?? $detail->quantity);
+                    $solicitado = $solicitadoPorDetalle[(int) $detail->id] ?? $recibido;
+
+                    // Primero la diferencia no recibida vuelve al origen (toma las últimas
+                    // porciones salidas); después lo recibido llega al destino con lo que queda,
+                    // es decir, con lo más antiguo. En transferencias antiguas el origen solo
+                    // se descontó por lo recibido, así que no hay diferencia que devolver.
+                    if ($stockAlreadyDeducted && $solicitado - $recibido > 0.0001) {
+                        $this->stock->devolver(
+                            $detail,
+                            (int) $movement->source_entity_id,
+                            $movement->source_entity_type,
+                            $movement,
+                            round($solicitado - $recibido, 4),
+                            null,
+                            null,
+                            'Diferencia no recibida de ' . $movement->document_number
+                        );
+                    }
+
+                    $this->stock->devolver(
                         $detail,
-                        $movement->destination_entity_id,
-                        $movement->destination_entity_type,
-                        $movement
+                        (int) $movement->source_entity_id,
+                        $movement->source_entity_type,
+                        $movement,
+                        $recibido,
+                        (int) $movement->destination_entity_id,
+                        $movement->destination_entity_type
                     );
                 }
             }
@@ -1385,12 +1424,15 @@ class InventoryMovementController extends Controller
                 ) {
                     $movement->loadMissing('details.product:id,name');
                     foreach ($movement->details as $detail) {
-                        $this->stock->aumentar(
+                        $this->stock->devolver(
                             $detail,
-                            $movement->source_entity_id,
+                            (int) $movement->source_entity_id,
                             $movement->source_entity_type,
                             $movement,
-                            true // esReversa
+                            (float) ($detail->base_quantity ?? $detail->quantity),
+                            null,
+                            null,
+                            'Cancelación de ' . $movement->document_number
                         );
                     }
                 }
@@ -1404,36 +1446,33 @@ class InventoryMovementController extends Controller
                     // Revertir según dirección (inverso de approve)
                     if ($movementType->direction === 'in' ||
                         ($movementType->direction === 'adjustment' && $movementType->effect === 'increase')) {
-                        $this->stock->disminuir(
+                        // Quita las capas de la entrada; si ya se usaron, el motor lanza un 422.
+                        $this->stock->revertirEntrada(
                             $detail,
-                            $movement->destination_entity_id,
+                            (int) $movement->destination_entity_id,
                             $movement->destination_entity_type,
-                            $movement,
-                            true // esReversa
+                            $movement
                         );
                     } elseif ($movementType->direction === 'out' ||
                               ($movementType->direction === 'adjustment' && $movementType->effect === 'decrease')) {
-                        $this->stock->aumentar(
+                        $this->stock->devolver(
                             $detail,
-                            $movement->source_entity_id,
+                            (int) $movement->source_entity_id,
                             $movement->source_entity_type,
                             $movement,
-                            true
+                            (float) ($detail->base_quantity ?? $detail->quantity),
+                            null,
+                            null,
+                            'Cancelación de ' . $movement->document_number
                         );
                     } elseif ($movementType->direction === 'transfer') {
-                        $this->stock->aumentar(
+                        $this->stock->deshacerTransferencia(
                             $detail,
-                            $movement->source_entity_id,
+                            (int) $movement->source_entity_id,
                             $movement->source_entity_type,
-                            $movement,
-                            true
-                        );
-                        $this->stock->disminuir(
-                            $detail,
-                            $movement->destination_entity_id,
+                            (int) $movement->destination_entity_id,
                             $movement->destination_entity_type,
-                            $movement,
-                            true
+                            $movement
                         );
                     }
                 }
