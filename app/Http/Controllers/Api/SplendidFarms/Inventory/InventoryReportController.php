@@ -211,7 +211,7 @@ class InventoryReportController extends Controller
                     'total_quantity' => $items->sum('quantity'),
                     'total_reserved' => $items->sum('reserved_quantity'),
                     'total_available' => $items->sum('available_quantity'),
-                    'total_value' => $items->sum('quantity') * ($product->cost_price ?? 0),
+                    'total_value' => round((float) $items->sum('total_cost'), 4),
                     'production_consumed_quantity' => round((float) $totalConsumedQuantity, 4),
                     'production_consumed_cost' => round((float) $totalConsumedCost, 4),
                     'locations' => $items->map(function ($item) {
@@ -673,6 +673,7 @@ class InventoryReportController extends Controller
         $query = Product::with(['category:id,name,code', 'unit:id,name,abbreviation'])
             ->forEnterprise($empresa->id)
             ->withSum(['stock as total_stock' => fn ($q) => $q->whereIn('entity_id', $ids)], 'quantity')
+            ->withSum(['stock as total_cost_value' => fn ($q) => $q->whereIn('entity_id', $ids)], 'total_cost')
             ->where('track_inventory', true);
 
         // Filtrar por categoría
@@ -690,7 +691,8 @@ class InventoryReportController extends Controller
             // define un accessor getTotalStockAttribute() que recalcula sin filtrar,
             // así que se lee el atributo crudo para respetar el filtro por almacén.
             $stock = (float) ($product->getAttributes()['total_stock'] ?? 0);
-            $costValue = $stock * ($product->cost_price ?? 0);
+            // Valor real de las capas PEPS (suma de total_cost de las filas visibles), no cantidad x precio de catálogo.
+            $costValue = (float) ($product->getAttributes()['total_cost_value'] ?? 0);
             $saleValue = $stock * ($product->sale_price ?? 0);
             
             return [
