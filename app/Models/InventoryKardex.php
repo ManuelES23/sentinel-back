@@ -111,7 +111,8 @@ class InventoryKardex extends Model
         ?string $lotNumber = null,
         ?string $serialNumber = null,
         ?int $areaId = null,
-        ?int $productorId = null
+        ?int $productorId = null,
+        ?string $descripcion = null
     ): self {
         // Obtener el movimiento para extraer datos
         $movement = InventoryMovement::find($movementId);
@@ -141,7 +142,7 @@ class InventoryKardex extends Model
             'movement_date' => $movement ? $movement->movement_date : now(),
             'document_number' => $movement ? $movement->document_number : '',
             'transaction_type' => $transactionType,
-            'description' => $movement ? $movement->description : null,
+            'description' => $descripcion ?? ($movement ? $movement->description : null),
             'quantity' => $quantity,
             'balance_quantity' => $newBalance,
             'unit_cost' => $unitCost,

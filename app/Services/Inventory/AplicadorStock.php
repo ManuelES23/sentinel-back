@@ -2,55 +2,102 @@
 
 namespace App\Services\Inventory;
 
+use App\Models\CapaCosto;
 use App\Models\InventoryKardex;
 use App\Models\InventoryMovement;
+use App\Models\InventoryMovementDetail;
 use App\Models\InventoryStock;
 use App\Models\Lote;
+use App\Support\Inventario\Cubeta;
+use App\Support\Inventario\ResultadoMovimiento;
 
 /**
- * Aplica el efecto de un renglón de movimiento sobre el stock (por lote) y
- * lo registra en el kardex. Extraído de InventoryMovementController para que
- * las recepciones de compra usen exactamente el mismo camino.
+ * Efecto de un renglón de movimiento: motor PEPS → cantidad de la fila →
+ * kardex con la dirección física real y el costo real de la operación.
  */
 class AplicadorStock
 {
-    public function aumentar(object $detail, ?int $entityId, ?string $entityType, InventoryMovement $movement, bool $esReversa = false): void
+    public function __construct(private CapasCosto $capas)
     {
-        $this->aplicar($detail, $entityId, $entityType, $movement, 1, $esReversa ? 'decrease' : 'increase');
     }
 
-    public function disminuir(object $detail, ?int $entityId, ?string $entityType, InventoryMovement $movement, bool $esReversa = false): void
+    public function aumentar(InventoryMovementDetail $d, int $entityId, ?string $entityType, InventoryMovement $m, string $origen = CapaCosto::ORIGEN_ENTRADA): ResultadoMovimiento
     {
-        $this->aplicar($detail, $entityId, $entityType, $movement, -1, $esReversa ? 'increase' : 'decrease');
+        $c = $this->cubeta($d, $entityId);
+        $r = $this->capas->entrar($c, $this->cantidad($d), (float) ($d->unit_cost ?? 0), $m->movement_date ?? now(), $origen, $m->id, $d->id);
+        InventoryStock::ajustarCantidad($c, $r->cantidad, $d->expiry_date, $m->id);
+        $this->kardex($d, $entityId, $entityType, $m, 'increase', $r);
+
+        return $r;
     }
 
-    private function aplicar(object $detail, ?int $entityId, ?string $entityType, InventoryMovement $movement, int $signo, string $efectoKardex): void
+    public function disminuir(InventoryMovementDetail $d, int $entityId, ?string $entityType, InventoryMovement $m): ResultadoMovimiento
     {
-        $quantity = $detail->base_quantity ?? $detail->quantity;
+        $c = $this->cubeta($d, $entityId);
+        $r = $this->capas->salir($c, $this->cantidad($d), $m->id, $d->id);
+        InventoryStock::ajustarCantidad($c, -$r->cantidad, null, $m->id);
+        $d->forceFill(['unit_cost' => round($r->costoUnitario(), 4), 'total_cost' => round($r->importe, 4)])->save();
+        $this->kardex($d, $entityId, $entityType, $m, 'decrease', $r);
 
-        InventoryStock::updateStock(
-            $detail->product_id,
-            $entityId,
-            null, // area_id (no manejado en este contexto)
-            $signo * $quantity,
-            $detail->unit_cost ?? 0,
-            $detail->lot_number,
-            $detail->expiry_date,
-            $movement->id
-        );
+        return $r;
+    }
+
+    public function devolver(InventoryMovementDetail $salida, int $origenId, ?string $origenType, InventoryMovement $m, float $cantidad,
+        ?int $destinoId = null, ?string $destinoType = null, ?string $descripcion = null): ResultadoMovimiento
+    {
+        $origen = $this->cubeta($salida, $origenId);
+        $destino = $destinoId ? $this->cubeta($salida, $destinoId) : null;
+        $r = $this->capas->devolver($origen, $cantidad, $salida->id, null, $destino, (float) ($salida->unit_cost ?? 0), $m->id);
+        $entrega = $destino ?? $origen;
+        InventoryStock::ajustarCantidad($entrega, $r->cantidad, $salida->expiry_date, $m->id);
+        $this->kardex($salida, $entrega->entityId, $destino ? $destinoType : $origenType, $m, 'increase', $r, $descripcion);
+
+        return $r;
+    }
+
+    public function revertirEntrada(InventoryMovementDetail $entrada, int $entityId, ?string $entityType, InventoryMovement $m): ResultadoMovimiento
+    {
+        $c = $this->cubeta($entrada, $entityId);
+        $r = $this->capas->revertirEntrada($c, $entrada->id, $this->cantidad($entrada));
+        InventoryStock::ajustarCantidad($c, -$r->cantidad, null, $m->id);
+        $this->kardex($entrada, $entityId, $entityType, $m, 'decrease', $r, 'Cancelación de ' . ($m->document_number ?? 'movimiento'));
+
+        return $r;
+    }
+
+    public function deshacerTransferencia(InventoryMovementDetail $d, int $origenId, ?string $origenType, int $destinoId, ?string $destinoType, InventoryMovement $m): ResultadoMovimiento
+    {
+        $origen = $this->cubeta($d, $origenId);
+        $destino = $this->cubeta($d, $destinoId);
+        $r = $this->capas->deshacerTransferencia($origen, $destino, $d->id, $this->cantidad($d), (float) ($d->unit_cost ?? 0));
+        InventoryStock::ajustarCantidad($destino, -$r->cantidad, null, $m->id);
+        InventoryStock::ajustarCantidad($origen, $r->cantidad, $d->expiry_date, $m->id);
+        $texto = 'Cancelación de ' . ($m->document_number ?? 'transferencia');
+        $this->kardex($d, $destinoId, $destinoType, $m, 'decrease', $r, $texto);
+        $this->kardex($d, $origenId, $origenType, $m, 'increase', $r, $texto);
+
+        return $r;
+    }
+
+    private function cubeta(InventoryMovementDetail $d, int $entityId): Cubeta
+    {
+        return new Cubeta((int) $d->product_id, $entityId, null, $d->lot_number);
+    }
+
+    private function cantidad(InventoryMovementDetail $d): float
+    {
+        return (float) ($d->base_quantity ?? $d->quantity);
+    }
+
+    private function kardex(InventoryMovementDetail $d, int $entityId, ?string $entityType, InventoryMovement $m, string $tipo, ResultadoMovimiento $r, ?string $descripcion = null): void
+    {
+        if ($r->cantidad <= 0) {
+            return;
+        }
 
         InventoryKardex::recordEntry(
-            $detail->product_id,
-            $entityId,
-            $entityType,
-            $movement->id,
-            $efectoKardex,
-            $quantity,
-            $detail->unit_cost ?? 0,
-            $detail->lot_number,
-            $detail->serial_number ?? null,
-            null, // area_id
-            $this->productorId($detail)
+            $d->product_id, $entityId, $entityType, $m->id, $tipo, $r->cantidad, $r->costoUnitario(),
+            $d->lot_number, $d->serial_number ?? null, null, $this->productorId($d), $descripcion,
         );
     }
 
