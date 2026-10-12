@@ -6,13 +6,12 @@ use App\Events\CRM\OportunidadUpdated;
 use App\Models\CRM\CrmOportunidad;
 use App\Services\CRM\DashboardResumenService;
 use App\Services\CRM\EmbudoService;
-use App\Services\CRM\VendedorActualService;
+use App\Services\CRM\VisibilidadOportunidades;
 use App\Support\CRM\RangoDashboard;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 
 class OportunidadController extends CrmBaseController
 {
@@ -21,14 +20,16 @@ class OportunidadController extends CrmBaseController
 
     private const RELACIONES = CrmOportunidad::RELACIONES_API;
 
+    public function __construct(private readonly VisibilidadOportunidades $visibilidad) {}
+
     /** GET /crm/oportunidades */
     public function index(Request $request): JsonResponse
     {
         $empresaId = $this->getEmpresaId();
         abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
-        $this->exigirPermisoSubmodulo($empresaId, 'oportunidades', 'oportunidades', 'ver', 'No tienes permiso para ver oportunidades.');
+        $this->visibilidad->exigirVer($empresaId);
 
-        $vendedorId = $this->vendedorVisible($empresaId, $request->integer('vendedor_id') ?: null);
+        $vendedorId = $this->visibilidad->vendedorVisible($empresaId, $request->integer('vendedor_id') ?: null);
 
         $query = CrmOportunidad::query()
             ->where('empresa_id', $empresaId)
@@ -52,12 +53,12 @@ class OportunidadController extends CrmBaseController
     {
         $empresaId = $this->getEmpresaId();
         abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
-        $this->exigirPermisoSubmodulo($empresaId, 'oportunidades', 'oportunidades', 'ver', 'No tienes permiso para ver oportunidades.');
+        $this->visibilidad->exigirVer($empresaId);
 
         $validated = $request->validate([
             'vendedor_id' => ['nullable', 'integer', $this->existeEnEmpresa('crm_vendedores', $empresaId)],
         ]);
-        $vendedorId = $this->vendedorVisible($empresaId, isset($validated['vendedor_id']) ? (int) $validated['vendedor_id'] : null);
+        $vendedorId = $this->visibilidad->vendedorVisible($empresaId, isset($validated['vendedor_id']) ? (int) $validated['vendedor_id'] : null);
 
         $porEtapa = $embudos->pipeline($empresaId, $vendedorId);
         $mes = RangoDashboard::desdePeriodo('mes_actual');
@@ -79,9 +80,7 @@ class OportunidadController extends CrmBaseController
     public function show(Request $request, CrmOportunidad $oportunidad): JsonResponse
     {
         $this->verificarEmpresa($oportunidad);
-        $empresaId = $this->getEmpresaId();
-        $this->exigirPermisoSubmodulo($empresaId, 'oportunidades', 'oportunidades', 'ver', 'No tienes permiso para ver oportunidades.');
-        $this->vendedorVisible($empresaId, (int) $oportunidad->vendedor_id);
+        $this->visibilidad->exigirVisible((int) $oportunidad->empresa_id, $oportunidad);
         $oportunidad->load(self::RELACIONES);
 
         return $this->jsonSuccess($oportunidad);
@@ -253,28 +252,5 @@ class OportunidadController extends CrmBaseController
         $this->difundir(new OportunidadUpdated('updated', $oportunidad->toArray()));
 
         return $this->jsonSuccess($oportunidad, 'Etapa actualizada correctamente');
-    }
-
-    /**
-     * Vendedor cuyas oportunidades puede leer el usuario. Con
-     * oportunidades.equipo (gerencia) devuelve lo solicitado (null = todo el
-     * equipo); sin él queda limitado a su propio CrmVendedor activo: si no lo
-     * tiene vinculado, o pide el de otro, 403.
-     */
-    private function vendedorVisible(int $empresaId, ?int $solicitado): ?int
-    {
-        if ($this->tienePermisoSubmodulo($empresaId, 'oportunidades', 'oportunidades', 'equipo')) {
-            return $solicitado;
-        }
-
-        $propio = app(VendedorActualService::class)->vendedorDelUsuario($empresaId, (int) Auth::id());
-        abort_unless($propio, 403, 'Tu usuario no está vinculado a un vendedor activo.');
-        abort_unless(
-            $solicitado === null || $solicitado === (int) $propio->id,
-            403,
-            'No puedes ver las oportunidades de otro vendedor.',
-        );
-
-        return (int) $propio->id;
     }
 }
