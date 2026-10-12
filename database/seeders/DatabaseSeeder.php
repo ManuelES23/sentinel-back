@@ -41,6 +41,7 @@ class DatabaseSeeder extends Seeder
         // Seeders del módulo CRM
         $this->call([
             CrmPermisosSeeder::class,
+            CrmPlantillasWhatsappSeeder::class,
         ]);
     }
 }

@@ -61,6 +61,9 @@ class CrmPermisosSeeder extends Seeder
                 ['slug' => 'ver',    'name' => 'Ver configuración comercial',    'order' => 1],
                 ['slug' => 'editar', 'name' => 'Editar configuración comercial', 'order' => 2],
             ]],
+            // CRM · WhatsApp Fase 0. La migración 2026_10_12_200100 lo agrega a las
+            // empresas ya sembradas; mantener ambos iguales.
+            ['slug' => 'plantillas-whatsapp', 'name' => 'Plantillas de WhatsApp', 'icon' => 'MessageCircle', 'order' => 7, 'permisos' => $this->permisosBase()],
         ]);
 
         $this->crearModulo($app, 'prospectos', 'Prospectos', 'UserPlus', 4, [
