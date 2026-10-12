@@ -344,6 +344,10 @@ class AsignacionApiTest extends TestCase
 
     public function test_busca_responsables_de_la_empresa_del_activo(): void
     {
+        // La búsqueda también recorre users.name y users.email de los usuarios con acceso a la
+        // empresa. El usuario de las fixtures se crea con nombre y correo aleatorios de Faker, y
+        // si contienen "ana" (Susana, Diana...) entra en los resultados y la cuenta sale 2.
+        $this->actingUser->update(['name' => 'Usuario Prueba', 'email' => 'usuario.prueba@example.test']);
         $activo = $this->crearActivo();
         $this->crearEmpleado($this->enterprise, ['first_name' => 'Ana', 'last_name' => 'Pérez']);
         $this->crearEmpleado($this->corporativo, ['first_name' => 'Ana', 'last_name' => 'Ajena']);
@@ -356,6 +360,21 @@ class AsignacionApiTest extends TestCase
 
         Sanctum::actingAs($this->usuarioCon(['view']));
         $this->getJson(self::BASE."/activos/{$activo->id}/responsables?q=Ana")->assertForbidden();
+    }
+
+    public function test_los_responsables_tambien_ofrecen_a_los_usuarios_con_acceso_a_la_empresa(): void
+    {
+        $this->actingUser->update(['name' => 'Ana Usuaria', 'email' => 'ana.usuaria@example.test']);
+        $activo = $this->crearActivo();
+        $this->crearEmpleado($this->enterprise, ['first_name' => 'Ana', 'last_name' => 'Pérez']);
+
+        $this->getJson(self::BASE."/activos/{$activo->id}/responsables?q=Ana")
+            ->assertOk()
+            ->assertJsonCount(2, 'data')
+            ->assertJsonPath('data.0.nombre', 'Ana Pérez')
+            ->assertJsonPath('data.0.tipo', 'employee')
+            ->assertJsonPath('data.1.nombre', 'Ana Usuaria')
+            ->assertJsonPath('data.1.tipo', 'user');
     }
 
     public function test_la_lista_filtra_por_estado_y_busqueda_y_respeta_el_alcance(): void
