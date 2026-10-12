@@ -248,6 +248,10 @@ Módulo de Administración → Activos Fijos (SF y GE). La carpeta de controlado
   - En el despliegue la migración concede `agenda.equipo` a quien tiene `mi-dia.equipo`, así que quedan alineados. Pero si después se revoca `agenda.equipo` y se deja `mi-dia.equipo`, siguen funcionando.
   - No se cambió el código.
 - `POST/PATCH crm/actividades` validan `vendedor_id` con `exists:crm_vendedores,id` sin filtrar por empresa.
+- Riesgos previos, sin cambio de código:
+  - `VerificaPermisoSubmodulo::tienePermisoSubmodulo` busca la concesión por `submodule_id` y por el slug del tipo, pero no comprueba que el `permission_type` sea de ese submódulo. Hoy es inofensivo: en la BD local hay 269 376 filas cruzadas (tipo de otro submódulo), todas con `is_granted = 0`, creadas por el seeder. Una concesión cruzada con `is_granted = 1` sí abriría el permiso.
+  - `GET crm/cotizaciones` acepta `per_page` sin tope.
+  - `GET crm/actividades` (y el historial) no exigen `actividades.ver`. Solo se filtran por empresa y por la visibilidad de oportunidades.
 - Canales en tiempo real: `module.{empresa}.crm.oportunidades`, `…crm.cotizaciones`, `…crm.agenda` y `…crm.actividades` difunden el registro completo a todos los que tienen acceso al módulo. Aunque el front lo ignore, sigue visible en la pestaña Red del navegador. Es un riesgo residual aceptado hasta tener canales por vendedor o un payload recortado.
 
 ### Despliegue
