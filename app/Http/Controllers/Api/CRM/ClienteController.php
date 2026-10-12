@@ -6,6 +6,7 @@ use App\Events\CRM\ClienteUpdated;
 use App\Events\CRM\VendedorAsignado;
 use App\Models\CRM\CrmActividad;
 use App\Models\CRM\CrmCliente;
+use App\Services\CRM\VisibilidadOportunidades;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
@@ -22,6 +23,8 @@ class ClienteController extends CrmBaseController
         'region:id,nombre',
         'prospecto:id,nombre',
     ];
+
+    public function __construct(private readonly VisibilidadOportunidades $visibilidad) {}
 
     /**
      * GET /crm/clientes
@@ -59,7 +62,14 @@ class ClienteController extends CrmBaseController
     public function show(Request $request, CrmCliente $cliente): JsonResponse
     {
         $this->verificarEmpresa($request, $cliente);
-        $cliente->load(array_merge(self::RELACIONES, ['contactos', 'oportunidades']));
+        $alcance = $this->visibilidad->alcance((int) $cliente->empresa_id);
+
+        // Solo las oportunidades que el usuario puede ver (sin
+        // oportunidades.ver, ninguna; sin equipo, las de su vendedor).
+        $cliente->load(array_merge(self::RELACIONES, [
+            'contactos',
+            'oportunidades' => fn ($q) => $alcance->aplicar($q),
+        ]));
 
         return $this->jsonSuccess($cliente, 'Cliente encontrado');
     }
@@ -71,14 +81,16 @@ class ClienteController extends CrmBaseController
     public function resumen(Request $request, CrmCliente $cliente): JsonResponse
     {
         $this->verificarEmpresa($request, $cliente);
+        // Conteo, valor del pipeline y últimas oportunidades: solo lo visible.
+        $alcance = $this->visibilidad->alcance((int) $cliente->empresa_id);
 
         $cliente->loadCount([
             'contactos',
-            'oportunidades',
+            'oportunidades' => fn ($q) => $alcance->aplicar($q),
             'actividades',
         ]);
 
-        $oportunidades = $cliente->oportunidades()
+        $oportunidades = $alcance->aplicar($cliente->oportunidades())
             ->select('id', 'cliente_id', 'etapa', 'monto_esperado', 'created_at')
             ->orderByDesc('created_at')
             ->limit(10)
@@ -99,7 +111,7 @@ class ClienteController extends CrmBaseController
                 'contactos'    => $cliente->contactos_count,
                 'oportunidades' => $cliente->oportunidades_count,
                 'actividades'   => $cliente->actividades_count,
-                'valor_pipeline' => (float) $cliente->oportunidades()
+                'valor_pipeline' => (float) $alcance->aplicar($cliente->oportunidades())
                     ->whereNotIn('etapa', ['cerrado_ganado', 'cerrado_perdido'])
                     ->sum('monto_esperado'),
             ],
