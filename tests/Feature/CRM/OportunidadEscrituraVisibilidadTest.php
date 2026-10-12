@@ -2,10 +2,12 @@
 
 namespace Tests\Feature\CRM;
 
+use App\Events\CRM\OportunidadUpdated;
 use App\Models\CRM\CrmCliente;
 use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmVendedor;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Event;
 use Laravel\Sanctum\Sanctum;
 use Tests\Concerns\CreatesCrmFixtures;
 use Tests\TestCase;
@@ -285,5 +287,69 @@ class OportunidadEscrituraVisibilidadTest extends TestCase
         $this->cambiarEtapa($this->propia, ['etapa' => 'propuesta'])->assertForbidden();
 
         $this->assertSame('calificado', $this->propia->fresh()->etapa);
+    }
+
+    // ── store ─────────────────────────────────────────────────────────────
+
+    private function crear(int $vendedorId)
+    {
+        return $this->withHeaders($this->crmHeaders())->postJson(self::BASE_URL, [
+            'nombre' => 'Nueva', 'cliente_id' => $this->propia->cliente_id, 'vendedor_id' => $vendedorId,
+        ]);
+    }
+
+    public function test_sin_equipo_no_crea_una_oportunidad_para_otro_vendedor(): void
+    {
+        Event::fake([OportunidadUpdated::class]);
+        $this->permisos(['ver', 'crear']);
+
+        $this->crear($this->vendedor->id)
+            ->assertForbidden()
+            ->assertJsonPath('message', 'No puedes asignar la oportunidad a otro vendedor.');
+
+        $this->assertSame(2, CrmOportunidad::count());
+        Event::assertNotDispatched(OportunidadUpdated::class);
+    }
+
+    public function test_sin_equipo_crea_oportunidades_para_su_vendedor(): void
+    {
+        $this->permisos(['crear']);
+
+        $this->crear($this->propio->id)->assertCreated()->assertJsonPath('data.vendedor_id', $this->propio->id);
+
+        $this->assertSame(2, CrmOportunidad::where('vendedor_id', $this->propio->id)->count());
+    }
+
+    public function test_sin_equipo_ni_vendedor_activo_no_crea_oportunidades(): void
+    {
+        $this->propio->update(['activo' => false]);
+        $this->permisos(['ver', 'crear']);
+
+        $this->crear($this->propio->id)
+            ->assertForbidden()
+            ->assertJsonPath('message', 'Tu usuario no está vinculado a un vendedor activo.');
+
+        $this->assertSame(2, CrmOportunidad::count());
+    }
+
+    public function test_con_equipo_crea_oportunidades_para_cualquier_vendedor_de_la_empresa(): void
+    {
+        $this->permisos(['crear', 'equipo']);
+
+        $this->crear($this->vendedor->id)->assertCreated();
+
+        $this->assertSame(2, CrmOportunidad::where('vendedor_id', $this->vendedor->id)->count());
+    }
+
+    public function test_el_equipo_de_otra_empresa_no_sirve_para_crear_en_esta(): void
+    {
+        $otra = $this->crearOtraEmpresa();
+        $this->otorgarAccesoA($otra);
+        $this->otorgarTodosLosPermisosCrm($otra);
+        $this->permisos(['crear']);
+
+        $this->crear($this->vendedor->id)->assertForbidden();
+
+        $this->assertSame(2, CrmOportunidad::count());
     }
 }

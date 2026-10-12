@@ -77,6 +77,9 @@ class CrmPermisosEnforcementTest extends TestCase
     private function crearCotizacionEnviadaPorApi(): int
     {
         $this->otorgarPermisosCrm('cotizaciones', 'cotizaciones', ['crear', 'editar']);
+        // La oportunidad es de otro vendedor: cotizar sobre ella exige verla
+        // (ver CotizacionVisibilidadTest).
+        $this->otorgarPermisosCrm('oportunidades', 'oportunidades', ['ver', 'equipo']);
 
         $id = $this->withHeaders($this->crmHeaders())
             ->postJson("/api/crm/oportunidades/{$this->oportunidad->id}/cotizaciones", [
@@ -188,7 +191,9 @@ class CrmPermisosEnforcementTest extends TestCase
         $lecturas = [
             '/api/crm/vendedores', '/api/crm/regiones', '/api/crm/zonas', '/api/crm/bodegas',
             '/api/crm/productos', '/api/crm/productos/buscar?q=Prod', '/api/crm/configuracion-comercial',
-            '/api/crm/clientes', '/api/crm/prospectos', '/api/crm/cotizaciones',
+            // GET /api/crm/cotizaciones ya no: exige cotizaciones.ver y la
+            // visibilidad de oportunidades (ver CotizacionVisibilidadTest).
+            '/api/crm/clientes', '/api/crm/prospectos',
             '/api/crm/empresas-externas', '/api/crm/contactos', '/api/crm/actividades',
         ];
 

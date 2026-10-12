@@ -49,7 +49,7 @@ class AgendaControllerTest extends TestCase
             ['name' => 'Agenda', 'order' => 1, 'is_active' => true],
         );
 
-        foreach (['ver', 'crear', 'editar', 'eliminar'] as $slug) {
+        foreach (['ver', 'crear', 'editar', 'eliminar', 'equipo'] as $slug) {
             $tipo = SubmodulePermissionType::firstOrCreate(
                 ['submodule_id' => $submodulo->id, 'slug' => $slug],
                 ['name' => ucfirst($slug), 'order' => 1, 'is_active' => true],
@@ -77,7 +77,7 @@ class AgendaControllerTest extends TestCase
 
     public function test_crea_un_evento_con_permiso_crear(): void
     {
-        $this->otorgarPermisosAgenda(['ver', 'crear']);
+        $this->otorgarPermisosAgenda(['ver', 'crear', 'equipo']);
 
         $response = $this->withHeaders($this->crmHeaders())->postJson('/api/crm/agenda', [
             'tipo' => 'llamada',
@@ -138,7 +138,7 @@ class AgendaControllerTest extends TestCase
 
     public function test_crea_evento_ligado_a_una_entidad(): void
     {
-        $this->otorgarPermisosAgenda(['ver', 'crear']);
+        $this->otorgarPermisosAgenda(['ver', 'crear', 'equipo']);
         $cliente = CrmCliente::create([
             'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
             'nombre' => 'Cliente X', 'email' => 'cliente@x.com',
@@ -160,7 +160,7 @@ class AgendaControllerTest extends TestCase
 
     public function test_rechaza_entidad_relacionada_de_otra_empresa(): void
     {
-        $this->otorgarPermisosAgenda(['ver', 'crear']);
+        $this->otorgarPermisosAgenda(['ver', 'crear', 'equipo']);
         $otraEmpresa = $this->crearOtraEmpresa();
         $clienteAjeno = CrmCliente::create([
             'empresa_id' => $otraEmpresa->id, 'nombre' => 'Ajeno', 'email' => 'a@a.com',
@@ -179,7 +179,7 @@ class AgendaControllerTest extends TestCase
 
     public function test_completar_genera_una_actividad_cuando_hay_entidad_relacionada(): void
     {
-        $this->otorgarPermisosAgenda(['ver', 'editar']);
+        $this->otorgarPermisosAgenda(['ver', 'editar', 'equipo']);
         $cliente = CrmCliente::create([
             'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
             'nombre' => 'Cliente X', 'email' => 'cliente@x.com',
@@ -204,7 +204,7 @@ class AgendaControllerTest extends TestCase
 
     public function test_completar_no_genera_actividad_sin_entidad_relacionada(): void
     {
-        $this->otorgarPermisosAgenda(['ver', 'editar']);
+        $this->otorgarPermisosAgenda(['ver', 'editar', 'equipo']);
         $evento = CrmAgenda::create([
             'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
             'tipo' => 'llamada', 'titulo' => 'Llamada libre',
@@ -220,7 +220,7 @@ class AgendaControllerTest extends TestCase
 
     public function test_completar_dos_veces_da_422(): void
     {
-        $this->otorgarPermisosAgenda(['ver', 'editar']);
+        $this->otorgarPermisosAgenda(['ver', 'editar', 'equipo']);
         $evento = CrmAgenda::create([
             'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
             'tipo' => 'llamada', 'titulo' => 'X', 'completado' => true,
@@ -236,7 +236,7 @@ class AgendaControllerTest extends TestCase
 
     public function test_editar_recordatorio_resetea_recordatorio_enviado_at(): void
     {
-        $this->otorgarPermisosAgenda(['ver', 'editar']);
+        $this->otorgarPermisosAgenda(['ver', 'editar', 'equipo']);
         $evento = CrmAgenda::create([
             'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
             'tipo' => 'llamada', 'titulo' => 'X',
@@ -261,7 +261,7 @@ class AgendaControllerTest extends TestCase
         // persistida -- antes 'after_or_equal:fecha_inicio' resolvía el
         // comparador ausente a 0 y dejaba pasar cualquier fecha_fin,
         // incluyendo una anterior a la fecha_inicio real del evento.
-        $this->otorgarPermisosAgenda(['ver', 'editar']);
+        $this->otorgarPermisosAgenda(['ver', 'editar', 'equipo']);
         $evento = CrmAgenda::create([
             'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
             'tipo' => 'llamada', 'titulo' => 'X',
@@ -284,7 +284,7 @@ class AgendaControllerTest extends TestCase
         // contra la fecha_fin ya persistida -- antes no existía ningún
         // closure simétrico en fecha_inicio, así que un fecha_inicio
         // posterior a la fecha_fin real del evento pasaba sin error.
-        $this->otorgarPermisosAgenda(['ver', 'editar']);
+        $this->otorgarPermisosAgenda(['ver', 'editar', 'equipo']);
         $evento = CrmAgenda::create([
             'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
             'tipo' => 'llamada', 'titulo' => 'X',
@@ -341,7 +341,7 @@ class AgendaControllerTest extends TestCase
         // vez de espacio -- lo que produce un <input type="datetime-local">)
         // se interpretara como "cambió", reseteando recordatorio_enviado_at
         // y re-notificando un recordatorio que ya se había enviado.
-        $this->otorgarPermisosAgenda(['ver', 'editar']);
+        $this->otorgarPermisosAgenda(['ver', 'editar', 'equipo']);
         $recordatorio = now()->addHours(3)->second(0);
         $evento = CrmAgenda::create([
             'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
@@ -382,7 +382,7 @@ class AgendaControllerTest extends TestCase
 
     public function test_elimina_con_permiso_eliminar(): void
     {
-        $this->otorgarPermisosAgenda(['ver', 'eliminar']);
+        $this->otorgarPermisosAgenda(['ver', 'eliminar', 'equipo']);
         $evento = CrmAgenda::create([
             'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
             'tipo' => 'llamada', 'titulo' => 'X',
@@ -423,9 +423,9 @@ class AgendaControllerTest extends TestCase
         $response->assertOk()->assertJsonCount(1, 'data');
     }
 
-    public function test_con_permiso_crear_puede_consultar_cualquier_vendedor(): void
+    public function test_con_permiso_equipo_puede_consultar_cualquier_vendedor(): void
     {
-        $this->otorgarPermisosAgenda(['ver', 'crear']);
+        $this->otorgarPermisosAgenda(['ver', 'crear', 'equipo']);
 
         $response = $this->withHeaders($this->crmHeaders())
             ->getJson("/api/crm/agenda?vendedor_id={$this->vendedor->id}");
@@ -435,7 +435,7 @@ class AgendaControllerTest extends TestCase
 
     public function test_filtra_por_rango_de_fechas(): void
     {
-        $this->otorgarPermisosAgenda(['ver', 'crear']);
+        $this->otorgarPermisosAgenda(['ver', 'crear', 'equipo']);
         CrmAgenda::create([
             'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
             'tipo' => 'llamada', 'titulo' => 'Dentro de rango',
@@ -476,7 +476,7 @@ class AgendaControllerTest extends TestCase
 
     public function test_vencidos_devuelve_solo_pendientes_cuya_hora_de_fin_ya_paso(): void
     {
-        $this->otorgarPermisosAgenda(['ver', 'crear']);
+        $this->otorgarPermisosAgenda(['ver', 'crear', 'equipo']);
         $base = ['empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id, 'tipo' => 'llamada'];
 
         CrmAgenda::create($base + [
@@ -506,7 +506,7 @@ class AgendaControllerTest extends TestCase
 
     public function test_vencidos_no_incluye_eventos_de_otro_vendedor(): void
     {
-        $this->otorgarPermisosAgenda(['ver', 'crear']);
+        $this->otorgarPermisosAgenda(['ver', 'crear', 'equipo']);
         $otroVendedor = CrmVendedor::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Otro vendedor']);
         CrmAgenda::create([
             'empresa_id' => $this->enterprise->id, 'vendedor_id' => $otroVendedor->id,
