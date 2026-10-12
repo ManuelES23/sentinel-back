@@ -24,8 +24,8 @@ class FixedAssetController extends Controller
     private const RELATIONS = [
         'enterprise:id,name,slug',
         'brand:id,name,code',
-        'category:id,name,code,parent_id,icon',
-        'subcategory:id,name,code,parent_id,icon',
+        'category:id,name,code,parent_id,icon,depreciation_rate,salvage_percent',
+        'subcategory:id,name,code,parent_id,icon,depreciation_rate,salvage_percent',
         'branch:id,name,code',
         'entity:id,name,code,entity_type_id',
         'entity.entityType:id,code,name,icon,color',
@@ -267,6 +267,9 @@ class FixedAssetController extends Controller
             'purchase_date' => 'nullable|date',
             'invoice_number' => 'nullable|string|max:100',
             'purchase_value' => 'nullable|numeric|min:0',
+            'depreciation_start' => 'nullable|date',
+            'depreciation_rate' => 'nullable|numeric|gt:0|max:100',
+            'salvage_percent' => 'nullable|numeric|min:0|lt:100',
 
             'is_active' => 'boolean',
             'metadata' => 'nullable|array',

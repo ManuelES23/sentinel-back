@@ -23,12 +23,16 @@ class AssetCategory extends Model
         'order',
         'is_active',
         'metadata',
+        'depreciation_rate',
+        'salvage_percent',
     ];
 
     protected $casts = [
         'is_active' => 'boolean',
         'metadata' => 'array',
         'order' => 'integer',
+        'depreciation_rate' => 'decimal:2',
+        'salvage_percent' => 'decimal:2',
     ];
 
     /**

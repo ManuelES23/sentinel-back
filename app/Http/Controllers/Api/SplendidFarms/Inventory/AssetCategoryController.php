@@ -94,6 +94,8 @@ class AssetCategoryController extends Controller
             'icon' => 'nullable|string|max:100',
             'order' => 'nullable|integer|min:0',
             'is_active' => 'boolean',
+            'depreciation_rate' => 'nullable|numeric|gt:0|max:100',
+            'salvage_percent' => 'nullable|numeric|min:0|lt:100',
             'metadata' => 'nullable|array',
         ]);
 
@@ -143,6 +145,8 @@ class AssetCategoryController extends Controller
             'icon' => 'nullable|string|max:100',
             'order' => 'nullable|integer|min:0',
             'is_active' => 'boolean',
+            'depreciation_rate' => 'nullable|numeric|gt:0|max:100',
+            'salvage_percent' => 'nullable|numeric|min:0|lt:100',
             'metadata' => 'nullable|array',
         ]);
 
