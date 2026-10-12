@@ -10,7 +10,7 @@ use Illuminate\Http\Request;
 
 /**
  * Permisos de Activos Fijos (user_submodule_permissions) del submódulo
- * administration/activos-fijos/{activos|tipos-activo|asignaciones} de la empresa actual.
+ * administration/activos-fijos/{activos|tipos-activo|asignaciones|depreciacion} de la empresa actual.
  * El catálogo de tipos es central: solo se escribe desde Grupo Espléndido.
  */
 class PermisosActivos
@@ -77,18 +77,21 @@ class PermisosActivos
         $activos = [];
         $tipos = [];
         $asignaciones = [];
+        $depreciacion = [];
         foreach (self::PERMISOS as $permiso) {
             $activos[$permiso] = $this->puede($user, $empresa, 'activos', $permiso);
             $tipos[$permiso] = $permiso === 'view'
                 ? $this->puede($user, $empresa, 'tipos-activo', 'view')
                 : $corporativo && $this->puede($user, $empresa, 'tipos-activo', $permiso);
             $asignaciones[$permiso] = $this->puede($user, $empresa, 'asignaciones', $permiso);
+            $depreciacion[$permiso] = $this->puede($user, $empresa, 'depreciacion', $permiso);
         }
 
         return [
             'activos' => $activos,
             'tipos_activo' => $tipos,
             'asignaciones' => $asignaciones,
+            'depreciacion' => $depreciacion,
             'corporativo' => $corporativo,
         ];
     }
