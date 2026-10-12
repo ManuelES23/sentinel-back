@@ -237,6 +237,10 @@ Módulo de Administración → Activos Fijos (SF y GE). La carpeta de controlado
 - Dashboard: depende de `dashboard.ejecutivo`, no de `equipo`, y no exige vendedor activo. Su bloque de cotizaciones y de actividad sigue esa regla.
 - Mi día con `mi-dia.equipo` ve el día (eventos, oportunidades y cotizaciones por vencer) de otro vendedor. Es un permiso propio de Mi día. Al completar desde Mi día un evento ajeno ya se exige `agenda.equipo`.
 - `PATCH crm/agenda/{id}/completar` sobre un evento propio ligado a una oportunidad que después se reasignó a otro vendedor sigue registrando la actividad en esa oportunidad.
+- **Evento cruzado creado por gerencia.** Un gerente con `agenda.equipo` y `oportunidades.equipo` puede crear, en la agenda del vendedor A, un evento ligado a una oportunidad del vendedor B (`POST crm/agenda` solo exige que el gerente vea la oportunidad).
+  - Después, A ve la oportunidad completa de B en Mi día: `MiDiaService::resumen` carga `entidad` de sus eventos sin filtrar por visibilidad.
+  - Al completar el evento (`AgendaController::completar`), A registra la actividad y programa el siguiente evento sobre esa oportunidad.
+  - No se arregló en código.
 - `POST/PATCH crm/actividades` validan `vendedor_id` con `exists:crm_vendedores,id` sin filtrar por empresa.
 - Canales en tiempo real: `module.{empresa}.crm.oportunidades`, `…crm.cotizaciones`, `…crm.agenda` y `…crm.actividades` difunden el registro completo a todos los que tienen acceso al módulo. Aunque el front lo ignore, sigue visible en la pestaña Red del navegador. Es un riesgo residual aceptado hasta tener canales por vendedor o un payload recortado.
 
