@@ -6,6 +6,7 @@ use App\Events\CRM\AgendaUpdated;
 use App\Models\CRM\CrmActividad;
 use App\Models\CRM\CrmAgenda;
 use App\Models\CRM\CrmCliente;
+use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmVendedor;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Event;
@@ -268,6 +269,36 @@ class AgendaVisibilidadTest extends TestCase
             ->assertOk();
 
         $this->assertTrue($this->eventoPropio->fresh()->completado);
+    }
+
+    public function test_sin_equipo_completa_su_evento_ligado_a_su_oportunidad_con_siguiente_paso(): void
+    {
+        $cliente = CrmCliente::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Cliente', 'estatus' => 'activo']);
+        $oportunidad = CrmOportunidad::create([
+            'empresa_id' => $this->enterprise->id, 'cliente_id' => $cliente->id,
+            'vendedor_id' => $this->propio->id, 'nombre' => 'Propia', 'etapa' => 'calificado',
+        ]);
+        $this->eventoPropio->update(['entidad_type' => CrmOportunidad::class, 'entidad_id' => $oportunidad->id]);
+        $this->permisos(['ver', 'crear', 'editar']);
+
+        $response = $this->withHeaders($this->crmHeaders())
+            ->patchJson("/api/crm/agenda/{$this->eventoPropio->id}/completar", [
+                'resultado' => 'Pidió la propuesta',
+                'siguiente' => ['tipo' => 'llamada', 'titulo' => 'Llamar de nuevo', 'fecha_inicio' => now()->addDays(2)->toDateTimeString()],
+            ]);
+
+        $response->assertOk();
+        $this->assertTrue($this->eventoPropio->fresh()->completado);
+        $this->assertDatabaseHas('crm_actividades', [
+            'entidad_type' => CrmOportunidad::class, 'entidad_id' => $oportunidad->id,
+            'vendedor_id' => $this->propio->id, 'resultado' => 'Pidió la propuesta', 'fuente' => 'agenda',
+        ]);
+        $siguiente = CrmAgenda::where('titulo', 'Llamar de nuevo')->first();
+        $this->assertNotNull($siguiente);
+        $this->assertSame($this->propio->id, (int) $siguiente->vendedor_id);
+        $this->assertSame(CrmOportunidad::class, $siguiente->entidad_type);
+        $this->assertSame($oportunidad->id, (int) $siguiente->entidad_id);
+        $this->assertSame($siguiente->id, $response->json('data.siguiente_evento.id'));
     }
 
     public function test_sin_equipo_no_elimina_el_evento_de_otro_vendedor_aunque_tenga_eliminar(): void
