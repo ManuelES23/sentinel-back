@@ -72,6 +72,64 @@ class DepreciacionApiTest extends TestCase
         $this->deleteJson(self::URL_DEPRECIACION . '/cierres/' . $cierre->id, ['reason' => 'x'])->assertForbidden();
     }
 
+    public function test_solo_create_cierra_el_mes_pero_no_lo_reabre(): void
+    {
+        Sanctum::actingAs($this->usuarioDepreciacion($this->enterprise, ['create']));
+
+        $this->postJson(self::URL_DEPRECIACION . '/cierres', ['month' => '2026-05'])->assertCreated();
+        $cierre = DepreciationClose::where('enterprise_id', $this->enterprise->id)->firstOrFail();
+
+        $this->deleteJson(self::URL_DEPRECIACION . '/cierres/' . $cierre->id, ['reason' => 'Falta una tasa'])
+            ->assertForbidden();
+        $this->assertNotNull(DepreciationClose::find($cierre->id));
+    }
+
+    public function test_solo_delete_reabre_el_mes_pero_no_lo_cierra(): void
+    {
+        $cierre = $this->cerrarMayo();
+        Sanctum::actingAs($this->usuarioDepreciacion($this->enterprise, ['delete']));
+
+        $this->postJson(self::URL_DEPRECIACION . '/cierres', ['month' => '2026-04'])->assertForbidden();
+        $this->assertSame(1, DepreciationClose::where('enterprise_id', $this->enterprise->id)->count());
+
+        $this->deleteJson(self::URL_DEPRECIACION . '/cierres/' . $cierre->id, ['reason' => 'Falta una tasa'])
+            ->assertOk();
+        $this->assertNull(DepreciationClose::find($cierre->id));
+    }
+
+    public function test_solo_view_lee_pero_no_cierra_ni_reabre(): void
+    {
+        $cierre = $this->cerrarMayo();
+        Sanctum::actingAs($this->usuarioDepreciacion($this->enterprise, ['view']));
+
+        $this->getJson(self::URL_DEPRECIACION . '?month=2026-05')->assertOk();
+        $this->getJson(self::URL_DEPRECIACION . '/cierres')->assertOk();
+        $this->postJson(self::URL_DEPRECIACION . '/cierres', ['month' => '2026-04'])->assertForbidden();
+        $this->deleteJson(self::URL_DEPRECIACION . '/cierres/' . $cierre->id, ['reason' => 'x'])->assertForbidden();
+        $this->assertNotNull(DepreciationClose::find($cierre->id));
+    }
+
+    public function test_sin_autenticar_las_cuatro_rutas_responden_401(): void
+    {
+        $cierre = $this->cerrarMayo();
+
+        $this->getJson(self::URL_DEPRECIACION . '?month=2026-05')->assertUnauthorized();
+        $this->getJson(self::URL_DEPRECIACION . '/cierres')->assertUnauthorized();
+        $this->postJson(self::URL_DEPRECIACION . '/cierres', ['month' => '2026-04'])->assertUnauthorized();
+        $this->deleteJson(self::URL_DEPRECIACION . '/cierres/' . $cierre->id, ['reason' => 'x'])->assertUnauthorized();
+        $this->assertNotNull(DepreciationClose::find($cierre->id));
+    }
+
+    public function test_un_usuario_de_ge_con_delete_reabre_un_cierre_de_sf_que_ve_en_su_alcance(): void
+    {
+        $cierre = $this->cerrarMayo();
+        Sanctum::actingAs($this->usuarioDepreciacion($this->corporativo, ['delete']));
+
+        $this->deleteJson(self::URL_DEPRECIACION_GE . '/cierres/' . $cierre->id, ['reason' => 'Corrección desde corporativo'])
+            ->assertOk();
+        $this->assertNull(DepreciationClose::find($cierre->id));
+    }
+
     public function test_cerrar_y_despues_ver_la_foto(): void
     {
         Sanctum::actingAs($this->usuarioDepreciacion());
