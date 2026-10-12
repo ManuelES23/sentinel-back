@@ -104,6 +104,14 @@ class OportunidadController extends CrmBaseController
             'notas' => 'nullable|string',
         ]);
 
+        // Asignarla a otro vendedor es decisión de gerencia (misma regla que
+        // update): sin equipo solo al CrmVendedor activo propio.
+        if (! $this->visibilidad->veAlEquipo($empresaId)) {
+            $propio = $this->visibilidad->vendedorPropioId($empresaId);
+            abort_unless($propio !== null, 403, VisibilidadOportunidades::MENSAJE_SIN_VENDEDOR);
+            abort_unless((int) $validated['vendedor_id'] === $propio, 403, 'No puedes asignar la oportunidad a otro vendedor.');
+        }
+
         $error = $this->validarProspectoOCliente($validated);
         if ($error) {
             return $this->jsonError($error, 422);
