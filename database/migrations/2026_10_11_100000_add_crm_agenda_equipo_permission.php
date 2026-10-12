@@ -12,12 +12,20 @@ use Illuminate\Support\Facades\Schema;
  * En cada empresa por separado (dentro de SU aplicación crm):
  * 1. Crea el tipo `equipo` del submódulo agenda y lo concede a quien ya tiene
  *    concedido `agenda.eliminar` (solo lo da el perfil gerencia),
- *    `mi-dia.equipo` u `oportunidades.equipo` (ya ven al equipo).
+ *    `mi-dia.equipo`, `oportunidades.cerrar` o `dashboard.ejecutivo` (ya ven
+ *    al equipo). Son las fuentes ORIGINALES: las mismas tres últimas por las
+ *    que la migración 2026_10_09_100000 concedió `oportunidades.equipo`, así
+ *    que en el primer despliegue equivale a «quien ya ve al equipo».
+ *    `oportunidades.equipo` NO es fuente a propósito: el paso 2 lo concede a
+ *    los aprobadores, y usarlo aquí les daría `agenda.equipo` en una segunda
+ *    corrida (o tras down() + up()). Quien solo tiene `oportunidades.equipo`
+ *    dado a mano no recibe el de agenda.
  * 2. Concede `oportunidades.equipo` a quien tiene concedido
  *    `cotizaciones.aprobar` o `cotizaciones.rechazar`: aprobar o rechazar
  *    exige ahora poder ver la oportunidad, y así un aprobador configurado a
- *    mano no se queda bloqueado. Corre DESPUÉS del paso 1, para que ese
- *    equipo recién concedido no arrastre también el de agenda.
+ *    mano no se queda bloqueado. No concede `oportunidades.ver`. Decisión de
+ *    riesgo: un vendedor configurado a mano con `aprobar` pasa a ver todo el
+ *    equipo (ver el checklist de despliegue en CLAUDE.md).
  *
  * Idempotente: el tipo y cada concesión se crean solo si no existen; una fila
  * `equipo` ya presente (aunque esté revocada, is_granted = false) no se toca.
@@ -29,7 +37,8 @@ return new class extends Migration
     private const YA_VEN_LA_AGENDA_DEL_EQUIPO = [
         ['agenda', 'agenda', 'eliminar'],
         ['mi-dia', 'mi-dia', 'equipo'],
-        ['oportunidades', 'oportunidades', 'equipo'],
+        ['oportunidades', 'oportunidades', 'cerrar'],
+        ['dashboard', 'dashboard', 'ejecutivo'],
     ];
 
     /** [módulo, submódulo, permiso] que necesitan ver las oportunidades de todo el equipo. */

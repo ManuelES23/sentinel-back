@@ -240,8 +240,11 @@ Módulo de Administración → Activos Fijos (SF y GE). La carpeta de controlado
 1. `php artisan migrate`. Corren, en este orden:
    - `2026_10_09_100000_add_crm_oportunidades_equipo_permission`: crea `oportunidades.equipo` y lo concede, por empresa, a quien en ese CRM ya tiene `oportunidades.cerrar`, `dashboard.ejecutivo` o `mi-dia.equipo`.
    - `2026_10_11_100000_add_crm_agenda_equipo_permission`, en dos pasos y por empresa:
-     1. Crea `agenda.equipo` y lo concede a quien ya tiene `agenda.eliminar`, `mi-dia.equipo` u `oportunidades.equipo`.
-     2. Concede `oportunidades.equipo` a quien tiene `cotizaciones.aprobar` o `cotizaciones.rechazar`. Va después del paso 1, así que ese equipo recién concedido no da también el de agenda.
+     1. Crea `agenda.equipo` y lo concede a quien ya tiene `agenda.eliminar`, `mi-dia.equipo`, `oportunidades.cerrar` o `dashboard.ejecutivo`. Las tres últimas son las fuentes por las que la migración `2026_10_09` ya concedió `oportunidades.equipo`. Por eso, en el primer despliegue, el resultado equivale a «quien ya ve al equipo».
+        - `oportunidades.equipo` NO cuenta como fuente, a propósito: el paso 2 se lo concede a los aprobadores. Si contara, una segunda corrida (o `down()` + `up()`) les daría también `agenda.equipo`.
+        - Con estas fuentes, volver a correrla da siempre el mismo resultado.
+        - Quien solo tiene `oportunidades.equipo` dado a mano no recibe el de agenda.
+     2. Concede `oportunidades.equipo` a quien tiene `cotizaciones.aprobar` o `cotizaciones.rechazar` (ver el paso 6 del checklist).
    - Ninguna reactiva una fila `equipo` revocada (`is_granted = 0`).
 2. Listar quién recibirá 403 en el tablero de oportunidades. No hay bypass de superadmin en `tienePermisoSubmodulo`, así que la cuenta dueña suele salir aquí. Usuarios con `ver` concedido, sin `equipo` y sin `crm_vendedores` activo en esa empresa:
    ```sql

@@ -117,11 +117,15 @@ class AgendaEquipoMigracionTest extends TestCase
         $this->prepararDosEmpresas();
         $conEliminar = User::factory()->create();
         $conMiDiaEquipo = User::factory()->create();
-        $conOportunidadesEquipo = User::factory()->create();
+        $conCerrar = User::factory()->create();
+        $conEjecutivo = User::factory()->create();
+        $soloOportunidadesEquipo = User::factory()->create();
         $vendedor = User::factory()->create();
         $this->concederEn($this->enterprise, $conEliminar, 'agenda', 'agenda', 'eliminar');
         $this->concederEn($this->enterprise, $conMiDiaEquipo, 'mi-dia', 'mi-dia', 'equipo');
-        $this->concederEn($this->enterprise, $conOportunidadesEquipo, 'oportunidades', 'oportunidades', 'equipo');
+        $this->concederEn($this->enterprise, $conCerrar, 'oportunidades', 'oportunidades', 'cerrar');
+        $this->concederEn($this->enterprise, $conEjecutivo, 'dashboard', 'dashboard', 'ejecutivo');
+        $this->concederEn($this->enterprise, $soloOportunidadesEquipo, 'oportunidades', 'oportunidades', 'equipo');
         foreach (['ver', 'crear', 'editar'] as $slug) {
             $this->concederEn($this->enterprise, $vendedor, 'agenda', 'agenda', $slug);
         }
@@ -130,8 +134,30 @@ class AgendaEquipoMigracionTest extends TestCase
 
         $this->assertTrue($this->agendaEquipo($this->enterprise, $conEliminar));
         $this->assertTrue($this->agendaEquipo($this->enterprise, $conMiDiaEquipo));
-        $this->assertTrue($this->agendaEquipo($this->enterprise, $conOportunidadesEquipo));
+        $this->assertTrue($this->agendaEquipo($this->enterprise, $conCerrar));
+        $this->assertTrue($this->agendaEquipo($this->enterprise, $conEjecutivo));
+        // oportunidades.equipo no es fuente (lo concede el paso 2 a aprobadores).
+        $this->assertFalse($this->agendaEquipo($this->enterprise, $soloOportunidadesEquipo));
         $this->assertFalse($this->agendaEquipo($this->enterprise, $vendedor));
+    }
+
+    public function test_un_aprobador_sin_otra_fuente_nunca_recibe_agenda_equipo_aunque_se_corra_otra_vez(): void
+    {
+        $this->prepararDosEmpresas();
+        $aprobador = User::factory()->create();
+        $this->concederEn($this->enterprise, $aprobador, 'cotizaciones', 'cotizaciones', 'aprobar');
+
+        $this->subir();
+        $this->subir();
+
+        $this->assertTrue($this->oportunidadesEquipo($this->enterprise, $aprobador));
+        $this->assertFalse($this->agendaEquipo($this->enterprise, $aprobador));
+
+        $this->bajar();
+        $this->subir();
+
+        $this->assertTrue($this->oportunidadesEquipo($this->enterprise, $aprobador));
+        $this->assertFalse($this->agendaEquipo($this->enterprise, $aprobador));
     }
 
     public function test_concede_oportunidades_equipo_a_quien_aprueba_o_rechaza_cotizaciones(): void
@@ -161,6 +187,8 @@ class AgendaEquipoMigracionTest extends TestCase
         $this->concederEn($this->enterprise, $revocado, 'agenda', 'agenda', 'eliminar', otorgado: false);
         $this->concederEn($this->enterprise, $revocado, 'mi-dia', 'mi-dia', 'equipo', otorgado: false);
         $this->concederEn($this->enterprise, $revocado, 'oportunidades', 'oportunidades', 'equipo', otorgado: false);
+        $this->concederEn($this->enterprise, $revocado, 'oportunidades', 'oportunidades', 'cerrar', otorgado: false);
+        $this->concederEn($this->enterprise, $revocado, 'dashboard', 'dashboard', 'ejecutivo', otorgado: false);
         $this->concederEn($this->enterprise, $revocado, 'cotizaciones', 'cotizaciones', 'aprobar', otorgado: false);
         $this->concederEn($this->enterprise, $revocado, 'cotizaciones', 'cotizaciones', 'rechazar', otorgado: false);
 
