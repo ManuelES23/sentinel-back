@@ -133,11 +133,28 @@ class CapasCostoTest extends TestCase
         // Reusa la regla de UnidadesVigentes: si hay unidades vigentes, no deja salir por debajo.
         $this->entra(2, 100, '2026-10-01');
         $this->mock(\App\Services\ActivosFijos\UnidadesVigentes::class, function ($m) {
-            $m->shouldReceive('exigirRespaldo')->once()->andThrow(ValidationException::withMessages(['stock' => 'respaldo']));
+            $m->shouldReceive('exigirRespaldo')->once()->with($this->insumo->id, $this->almacenA->id, null, -1.0)->andThrow(ValidationException::withMessages(['stock' => 'respaldo']));
         });
 
         $this->expectException(ValidationException::class);
         app(CapasCosto::class)->salir($this->c, 1);
+    }
+
+    public function test_faltante_posterior_se_costea_al_ultimo_costo_y_no_al_del_faltante_viejo(): void
+    {
+        $this->entra(5, 100, '2026-10-01');
+        $this->motor->salir($this->c, 8, null, null, 'empaque', true);
+        InventoryStock::ajustarCantidad($this->c, -8, null, null, true);
+
+        $this->entra(10, 120, '2026-10-06'); // cubre el faltante y deja 7 a 120
+
+        $r = $this->motor->salir($this->c, 10, null, null, 'segundo', true);
+        InventoryStock::ajustarCantidad($this->c, -10, null, null, true);
+
+        $this->assertEqualsWithDelta(1200, $r->importe, 0.0001); // 7×120 + 3×120, no 3×100
+        $this->assertEqualsWithDelta(-3, (float) CapaCosto::where('origen', CapaCosto::ORIGEN_FALTANTE)->value('cantidad_restante'), 0.0001);
+        $this->assertEqualsWithDelta(120, (float) CapaCosto::where('origen', CapaCosto::ORIGEN_FALTANTE)->value('unit_cost'), 0.0001);
+        $this->assertEqualsWithDelta(-3, (float) $this->fila()->quantity, 0.0001);
     }
 
     public function test_fecha_mas_vieja(): void

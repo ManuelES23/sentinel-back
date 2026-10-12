@@ -151,12 +151,15 @@ class CapasCosto
 
     public function ultimoCosto(Cubeta $c): float
     {
-        $costo = CapaCosto::deCubeta($c)->where('unit_cost', '>', 0)->orderByDesc('fecha_entrada')->orderByDesc('id')->value('unit_cost');
+        // Las capas de faltante nunca fijan el último costo: su costo es derivado de éste.
+        $costo = CapaCosto::deCubeta($c)->where('origen', '!=', CapaCosto::ORIGEN_FALTANTE)
+            ->where('unit_cost', '>', 0)->orderByDesc('fecha_entrada')->orderByDesc('id')->value('unit_cost');
         if ($costo !== null) {
             return (float) $costo;
         }
 
         $costo = CapaCosto::where('product_id', $c->productId)->where('entity_id', $c->entityId)
+            ->where('origen', '!=', CapaCosto::ORIGEN_FALTANTE)
             ->where('unit_cost', '>', 0)->orderByDesc('fecha_entrada')->orderByDesc('id')->value('unit_cost');
 
         return (float) ($costo ?? $this->fila($c)?->unit_cost ?? 0);
@@ -218,8 +221,18 @@ class CapasCosto
 
     private function faltante(Cubeta $c, Collection $capas): CapaCosto
     {
-        return $capas->first(fn ($k) => $k->origen === CapaCosto::ORIGEN_FALTANTE)
-            ?? $this->crearCapa($c, 0, $this->ultimoCosto($c), now(), CapaCosto::ORIGEN_FALTANTE);
+        $faltante = $capas->first(fn ($k) => $k->origen === CapaCosto::ORIGEN_FALTANTE);
+        if (! $faltante) {
+            return $this->crearCapa($c, 0, $this->ultimoCosto($c), now(), CapaCosto::ORIGEN_FALTANTE);
+        }
+
+        // Un faltante cerrado se reutiliza, pero a valor de hoy: el nuevo faltante
+        // se costea al último costo conocido, no al que tenía cuando se abrió el anterior.
+        if ((float) $faltante->cantidad_restante >= -self::TOL) {
+            $faltante->update(['unit_cost' => round($this->ultimoCosto($c), 6), 'fecha_entrada' => now()]);
+        }
+
+        return $faltante;
     }
 
     private function porcion(CapaCosto $capa, float $cantidad, ?int $movimientoId, ?int $detalleId, ?string $referencia): void
