@@ -7,7 +7,9 @@ use App\Models\Product;
 use App\Models\Enterprise;
 use App\Models\InventoryStock;
 use App\Services\Inventory\AlmacenAccessService;
+use App\Services\Inventory\CapasCosto;
 use App\Services\Inventory\LoteCaducidadValidator;
+use App\Support\Inventario\Cubeta;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
@@ -346,28 +348,24 @@ class ProductController extends Controller
 
     private function marcarExistenciasSinLote(Product $product): void
     {
-        $sinLote = InventoryStock::where('product_id', $product->id)->whereNull('lot_number')->get();
+        $motor = app(CapasCosto::class);
+        $sinLote = InventoryStock::where('product_id', $product->id)
+            ->where(fn ($q) => $q->whereNull('lot_number')->orWhere('lot_number', ''))->get();
 
         foreach ($sinLote as $fila) {
-            $destino = InventoryStock::where('product_id', $product->id)
-                ->where('entity_id', $fila->entity_id)
-                ->where('area_id', $fila->area_id)
-                ->where('lot_number', LoteCaducidadValidator::SIN_LOTE)
-                ->first();
+            // Las capas viajan con la existencia: el valor no cambia al reetiquetar.
+            $de = Cubeta::deFila($fila);
+            $a = new Cubeta($de->productId, $de->entityId, $de->areaId, LoteCaducidadValidator::SIN_LOTE);
+            $motor->reetiquetar($de, $a);
 
+            $destino = $a->filtrar(InventoryStock::query())->first();
             if (! $destino) {
                 $fila->update(['lot_number' => LoteCaducidadValidator::SIN_LOTE]);
-                continue;
+            } else {
+                $destino->update(['quantity' => (float) $destino->quantity + (float) $fila->quantity]);
+                $fila->delete();
             }
-
-            $cantidad = (float) $destino->quantity + (float) $fila->quantity;
-            $valor = (float) $destino->total_cost + (float) $fila->total_cost;
-            $destino->update([
-                'quantity' => $cantidad,
-                'unit_cost' => $cantidad > 0 ? $valor / $cantidad : $destino->unit_cost,
-                'total_cost' => $valor,
-            ]);
-            $fila->delete();
+            $motor->sincronizarFila($a);
         }
     }
 
