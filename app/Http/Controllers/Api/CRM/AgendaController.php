@@ -9,13 +9,12 @@ use App\Models\CRM\CrmCliente;
 use App\Models\CRM\CrmEmpresaExterna;
 use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmProspecto;
-use App\Models\CRM\CrmVendedor;
 use App\Services\CRM\SeguimientoService;
+use App\Services\CRM\VisibilidadAgenda;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
@@ -24,6 +23,11 @@ use Illuminate\Validation\Rule;
  * CRUD de eventos/tareas planeadas por vendedor, opcionalmente ligados a
  * una entidad CRM. Al completar, genera una Actividad en el timeline de
  * la entidad relacionada (si tenía una) -- ver completar().
+ *
+ * Visibilidad (VisibilidadAgenda): sin agenda.equipo el usuario solo lee y
+ * modifica los eventos de su propio CrmVendedor activo; con él, los de
+ * cualquier vendedor de la empresa. Orden en las acciones por id: tenant
+ * (404), permiso de la acción (403) y vendedor del evento (403).
  */
 class AgendaController extends CrmBaseController
 {
@@ -52,7 +56,10 @@ class AgendaController extends CrmBaseController
         'tarea' => 'nota',
     ];
 
-    public function __construct(private readonly SeguimientoService $seguimientos) {}
+    public function __construct(
+        private readonly SeguimientoService $seguimientos,
+        private readonly VisibilidadAgenda $visibilidad,
+    ) {}
 
     /** GET /crm/agenda?desde=&hasta=&vendedor_id=&tipo=&completado=&vencidos= */
     public function index(Request $request): JsonResponse
@@ -74,7 +81,7 @@ class AgendaController extends CrmBaseController
             'vencidos' => 'nullable|boolean',
         ]);
 
-        $vendedorId = $this->resolverVendedorId($empresaId, (int) $validated['vendedor_id']);
+        $vendedorId = $this->visibilidad->vendedorVisible($empresaId, (int) $validated['vendedor_id']);
 
         // Pendientes vencidos: eventos no completados cuya hora de fin ya
         // pasó, sin importar el rango. Sin esto, la vista de lista (que
@@ -124,7 +131,7 @@ class AgendaController extends CrmBaseController
             'descripcion' => 'nullable|string',
             'fecha_inicio' => 'required|date',
             'fecha_fin' => 'required|date|after_or_equal:fecha_inicio',
-            'vendedor_id' => 'required|integer',
+            'vendedor_id' => ['required', 'integer', $this->existeEnEmpresa('crm_vendedores', $empresaId)],
             'entidad_tipo' => ['nullable', 'required_with:entidad_id', Rule::in(array_keys(self::TIPOS))],
             'entidad_id' => 'nullable|integer|required_with:entidad_tipo',
             'recordatorio_at' => 'nullable|date|before_or_equal:fecha_inicio',
@@ -133,7 +140,7 @@ class AgendaController extends CrmBaseController
             'recordatorio_at.before_or_equal' => 'El recordatorio debe ser antes del inicio del evento.',
         ]);
 
-        $vendedorId = $this->resolverVendedorId($empresaId, (int) $validated['vendedor_id']);
+        $vendedorId = $this->visibilidad->vendedorVisible($empresaId, (int) $validated['vendedor_id']);
 
         $entidadType = null;
         if (! empty($validated['entidad_tipo'])) {
@@ -178,6 +185,7 @@ class AgendaController extends CrmBaseController
             403,
             'No tienes permiso para editar eventos de agenda.',
         );
+        $this->visibilidad->exigirEventoVisible($agenda);
 
         $validated = $request->validate([
             'tipo' => ['sometimes', 'required', Rule::in(self::TIPOS_AGENDA)],
@@ -297,6 +305,8 @@ class AgendaController extends CrmBaseController
             );
         }
 
+        $this->visibilidad->exigirEventoVisible($agenda);
+
         if ($agenda->completado) {
             return $this->jsonError('Este evento ya fue marcado como completado.', 422);
         }
@@ -349,6 +359,7 @@ class AgendaController extends CrmBaseController
             403,
             'No tienes permiso para eliminar eventos de agenda.',
         );
+        $this->visibilidad->exigirEventoVisible($agenda);
 
         $data = $agenda->toArray();
         $agenda->delete();
@@ -366,33 +377,5 @@ class AgendaController extends CrmBaseController
         if ((int) $agenda->empresa_id !== (int) $empresaId) {
             abort(404, 'Evento de agenda no encontrado');
         }
-    }
-
-    /**
-     * Resuelve qué vendedor_id puede consultarse/asignarse. Mismo patrón
-     * que PresupuestoController::resolverVendedorId() (spec §4, misma
-     * regla de precedencia): 'crear'/'editar' = gerencia, puede elegir
-     * cualquier vendedor; solo 'ver' = forzado al propio CrmVendedor.
-     */
-    private function resolverVendedorId(int $empresaId, int $vendedorIdSolicitado): int
-    {
-        $esGerencia = $this->tienePermisoSubmodulo($empresaId, 'agenda', 'agenda', 'crear')
-            || $this->tienePermisoSubmodulo($empresaId, 'agenda', 'agenda', 'editar');
-
-        if ($esGerencia) {
-            return $vendedorIdSolicitado;
-        }
-
-        $vendedorPropioId = CrmVendedor::where('empresa_id', $empresaId)
-            ->where('user_id', Auth::id())
-            ->value('id');
-
-        abort_unless(
-            $vendedorPropioId !== null && (int) $vendedorPropioId === $vendedorIdSolicitado,
-            403,
-            'No puedes ver o modificar la agenda de otro vendedor.',
-        );
-
-        return $vendedorIdSolicitado;
     }
 }
