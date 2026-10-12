@@ -8,6 +8,7 @@ use App\Models\CRM\CrmCliente;
 use App\Models\CRM\CrmEmpresaExterna;
 use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmProspecto;
+use App\Services\CRM\VisibilidadOportunidades;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
@@ -23,6 +24,11 @@ use Illuminate\Validation\Rule;
  *  - entidad_tipo: 'prospecto' | 'cliente' | 'oportunidad' | 'empresa_externa' (alias corto)
  *  - entidad_id:   ID del recurso relacionado
  * Internamente se traduce a entidad_type (nombre completo del modelo).
+ *
+ * Las actividades de una oportunidad heredan su visibilidad
+ * (VisibilidadOportunidades): el listado y el historial ocultan las de
+ * oportunidades que el usuario no puede ver, y show/update/destroy y store
+ * responden 404 como si no existieran.
  */
 class ActividadController extends CrmBaseController
 {
@@ -45,6 +51,8 @@ class ActividadController extends CrmBaseController
     protected const TIPOS_ACTIVIDAD = ['llamada', 'whatsapp', 'correo', 'visita', 'reunion', 'nota'];
 
     protected const RELACIONES = ['vendedor:id,nombre,email'];
+
+    public function __construct(private readonly VisibilidadOportunidades $visibilidad) {}
 
     /**
      * GET /crm/actividades?entidad_tipo=&entidad_id=&tipo=&vendedor_id=&search=
@@ -102,6 +110,7 @@ class ActividadController extends CrmBaseController
         return CrmActividad::query()
             ->with(self::RELACIONES)
             ->where('empresa_id', $empresaId)
+            ->when($empresaId, fn ($q) => $this->limitarAOportunidadesVisibles($q, (int) $empresaId))
             ->when($filtros['entidad_tipo'] ?? null, function ($q, $tipo) {
                 $q->where('entidad_type', self::TIPOS[$tipo]);
             })
@@ -174,7 +183,10 @@ class ActividadController extends CrmBaseController
         ]);
 
         $modelClass = self::TIPOS[$validated['entidad_tipo']];
-        $entidad = $modelClass::where('empresa_id', $empresaId)->find($validated['entidad_id']);
+        // Una oportunidad que el usuario no puede ver responde igual que una inexistente.
+        $entidad = $this->visibilidad->entidadVisible(
+            $modelClass::where('empresa_id', $empresaId)->find($validated['entidad_id'])
+        );
         if (!$entidad) {
             return $this->jsonError('La entidad relacionada no existe o no pertenece a la empresa.', 404);
         }
@@ -260,5 +272,33 @@ class ActividadController extends CrmBaseController
         if ((int) $actividad->empresa_id !== (int) $empresaId) {
             abort(404, 'Actividad no encontrada');
         }
+
+        // La de una oportunidad que no puede ver, igual que inexistente.
+        if ($actividad->entidad_type === CrmOportunidad::class) {
+            $alcance = $this->visibilidad->alcance((int) $empresaId);
+            if (! $alcance->todas) {
+                $oportunidad = CrmOportunidad::find($actividad->entidad_id);
+                abort_unless($oportunidad && $alcance->incluye($oportunidad), 404, 'Actividad no encontrada');
+            }
+        }
+    }
+
+    /**
+     * Sin oportunidades.equipo, quita las actividades de oportunidades que el
+     * usuario no puede ver (de otro vendedor, eliminadas o, sin
+     * oportunidades.ver, todas las de oportunidades). Las de clientes,
+     * prospectos y empresas externas no cambian.
+     */
+    private function limitarAOportunidadesVisibles($query, int $empresaId): void
+    {
+        $alcance = $this->visibilidad->alcance($empresaId);
+        if ($alcance->todas) {
+            return;
+        }
+
+        $query->where(fn ($w) => $w
+            ->whereNull('entidad_type')
+            ->orWhere('entidad_type', '!=', CrmOportunidad::class)
+            ->orWhereIn('entidad_id', $alcance->aplicar(CrmOportunidad::query()->select('crm_oportunidades.id'))));
     }
 }

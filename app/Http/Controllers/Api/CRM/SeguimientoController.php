@@ -6,6 +6,7 @@ use App\Events\CRM\ActividadUpdated;
 use App\Events\CRM\AgendaUpdated;
 use App\Services\CRM\SeguimientoService;
 use App\Services\CRM\VendedorActualService;
+use App\Services\CRM\VisibilidadOportunidades;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
@@ -22,6 +23,7 @@ class SeguimientoController extends CrmBaseController
     public function __construct(
         private readonly SeguimientoService $seguimientos,
         private readonly VendedorActualService $vendedores,
+        private readonly VisibilidadOportunidades $visibilidad,
     ) {}
 
     public function store(Request $request): JsonResponse
@@ -56,7 +58,10 @@ class SeguimientoController extends CrmBaseController
             $this->exigirPermisoSubmodulo($empresaId, 'agenda', 'agenda', 'crear', 'No tienes permiso para programar eventos de agenda.');
         }
 
-        $entidad = $this->seguimientos->buscarEntidad($empresaId, $validated['entidad_tipo'], (int) $validated['entidad_id']);
+        // Una oportunidad que el usuario no puede ver responde igual que una inexistente.
+        $entidad = $this->visibilidad->entidadVisible(
+            $this->seguimientos->buscarEntidad($empresaId, $validated['entidad_tipo'], (int) $validated['entidad_id'])
+        );
         if (! $entidad) {
             throw ValidationException::withMessages([
                 'entidad_id' => 'El registro no existe o no pertenece a la empresa.',
