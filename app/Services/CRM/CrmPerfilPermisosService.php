@@ -23,10 +23,9 @@ use InvalidArgumentException;
  * El menú lateral ya muestra solo lo que el usuario tiene permitido, así que
  * el perfil define qué ve cada persona sin cambiar el sidebar.
  *
- * Nota sobre Agenda: AgendaController trata "crear" o "editar" como
- * gerencia (puede consultar la agenda de cualquier vendedor). El vendedor
- * necesita ambos para registrar y completar sus eventos, así que el perfil
- * vendedor los incluye; el formulario sigue preseleccionando su propia agenda.
+ * Nota sobre Agenda: ver la agenda de otro vendedor exige `agenda.equipo`
+ * (solo gerencia). "crear" y "editar" ya no cuentan como gerencia: el
+ * vendedor los necesita para registrar y completar sus propios eventos.
  */
 class CrmPerfilPermisosService
 {
@@ -46,7 +45,7 @@ class CrmPerfilPermisosService
 
     private const EXTRA_GERENCIA = [
         'mi-dia' => ['mi-dia' => ['equipo']],
-        'agenda' => ['agenda' => ['eliminar']],
+        'agenda' => ['agenda' => ['eliminar', 'equipo']],
         'oportunidades' => ['oportunidades' => ['eliminar', 'cerrar', 'equipo']],
         'clientes' => ['clientes' => ['eliminar', 'asignar_vendedor']],
         'prospectos' => ['prospectos' => ['eliminar', 'asignar_vendedor']],
