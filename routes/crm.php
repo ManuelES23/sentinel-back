@@ -58,6 +58,12 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
         App\Http\Controllers\Api\CRM\ConfiguracionComercialController::class, 'destroyImpuesto'
     ]);
 
+    // Plantillas de WhatsApp por empresa (WhatsApp Fase 0). Lectura abierta
+    // dentro del tenant; escribir exige catalogos.plantillas-whatsapp.
+    Route::apiResource('plantillas-whatsapp', App\Http\Controllers\Api\CRM\PlantillaWhatsappController::class)
+        ->parameters(['plantillas-whatsapp' => 'plantilla'])
+        ->except(['show']);
+
     // -------------------------------------------------
     // PROSPECTOS
     // CRUD + convertir-cliente + asignar-vendedor
