@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\SplendidFarms\Inventory;
 
+use App\Models\CapaCosto;
 use App\Models\Enterprise;
 use App\Models\InventoryStock;
 use App\Models\Product;
@@ -89,6 +90,35 @@ class ProductoControlLotesMasivoTest extends TestCase
         $this->aplicar([$this->insumo->id], 'lotes_caducidad')->assertOk();
 
         $this->assertSame('SIN-LOTE', InventoryStock::where('product_id', $this->insumo->id)->value('lot_number'));
+    }
+
+    public function test_activar_lotes_mueve_capas_a_sin_lote_sin_cambiar_valor(): void
+    {
+        InventoryStock::updateStock($this->insumo->id, $this->almacenA->id, null, 8, 100);
+        InventoryStock::updateStock($this->insumo->id, $this->almacenA->id, null, 2, 150);
+
+        $this->aplicar([$this->insumo->id], 'lotes')->assertOk();
+
+        $fila = InventoryStock::where('product_id', $this->insumo->id)->where('lot_number', 'SIN-LOTE')->firstOrFail();
+        $this->assertEqualsWithDelta(1100, (float) $fila->total_cost, 0.0001);
+        $this->assertEqualsWithDelta(10, (float) $fila->quantity, 0.0001);
+        $this->assertSame(0, CapaCosto::where('product_id', $this->insumo->id)->whereNull('lot_number')->count());
+        $this->assertSame(2, CapaCosto::where('product_id', $this->insumo->id)->where('lot_number', 'SIN-LOTE')->count());
+    }
+
+    public function test_activar_lotes_fusiona_con_la_fila_sin_lote_existente_conservando_el_valor(): void
+    {
+        InventoryStock::updateStock($this->insumo->id, $this->almacenA->id, null, 4, 100);
+        InventoryStock::updateStock($this->insumo->id, $this->almacenA->id, null, 6, 200, 'SIN-LOTE');
+
+        $this->aplicar([$this->insumo->id], 'lotes')->assertOk();
+
+        $filas = InventoryStock::where('product_id', $this->insumo->id)->get();
+        $this->assertCount(1, $filas);
+        $this->assertSame('SIN-LOTE', $filas->first()->lot_number);
+        $this->assertEqualsWithDelta(10, (float) $filas->first()->quantity, 0.0001);
+        $this->assertEqualsWithDelta(1600, (float) $filas->first()->total_cost, 0.0001);
+        $this->assertSame(0, CapaCosto::where('product_id', $this->insumo->id)->whereNull('lot_number')->count());
     }
 
     public function test_omite_y_reporta_el_articulo_con_varios_lotes_en_existencia_pero_aplica_al_resto(): void

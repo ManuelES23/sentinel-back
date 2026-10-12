@@ -66,4 +66,40 @@ class AplicadorStockTest extends TestCase
 
         $this->assertEquals(5, (float) InventoryStock::where('entity_id', $this->almacenA->id)->where('lot_number', 'L-1')->value('quantity'));
     }
+
+    public function test_disminuir_escribe_costo_peps_en_renglon_y_kardex(): void
+    {
+        $mov = $this->movimiento();
+        foreach ([[8, 100, 'L'], [50, 120, 'M']] as [$q, $c, $s]) {
+            $e = InventoryMovementDetail::create(['movement_id' => $mov->id, 'product_id' => $this->insumo->id, 'quantity' => $q, 'unit_cost' => $c]);
+            app(AplicadorStock::class)->aumentar($e, $this->almacenA->id, 'entity', $mov);
+        }
+        $salida = InventoryMovementDetail::create(['movement_id' => $mov->id, 'product_id' => $this->insumo->id, 'quantity' => 10, 'unit_cost' => 999]);
+
+        $r = app(AplicadorStock::class)->disminuir($salida, $this->almacenA->id, 'entity', $mov);
+
+        $this->assertEqualsWithDelta(1040, $r->importe, 0.0001);
+        $this->assertEqualsWithDelta(104, (float) $salida->fresh()->unit_cost, 0.0001);
+        $this->assertEqualsWithDelta(1040, (float) $salida->fresh()->total_cost, 0.0001);
+        $k = InventoryKardex::where('movement_id', $mov->id)->latest('id')->first();
+        $this->assertSame('decrease', $k->transaction_type);
+        $this->assertEqualsWithDelta(1040, (float) $k->total_cost, 0.0001);
+        $this->assertEqualsWithDelta(5760, (float) $k->balance_value, 0.0001);
+    }
+
+    public function test_devolver_registra_kardex_como_aumento_con_descripcion(): void
+    {
+        $mov = $this->movimiento();
+        $e = InventoryMovementDetail::create(['movement_id' => $mov->id, 'product_id' => $this->insumo->id, 'quantity' => 5, 'unit_cost' => 100]);
+        app(AplicadorStock::class)->aumentar($e, $this->almacenA->id, 'entity', $mov);
+        $s = InventoryMovementDetail::create(['movement_id' => $mov->id, 'product_id' => $this->insumo->id, 'quantity' => 2]);
+        app(AplicadorStock::class)->disminuir($s, $this->almacenA->id, 'entity', $mov);
+
+        app(AplicadorStock::class)->devolver($s, $this->almacenA->id, 'entity', $mov, 2, null, null, 'Cancelación de prueba');
+
+        $k = InventoryKardex::where('movement_id', $mov->id)->latest('id')->first();
+        $this->assertSame('increase', $k->transaction_type);
+        $this->assertSame('Cancelación de prueba', $k->description);
+        $this->assertEqualsWithDelta(500, (float) $k->balance_value, 0.0001);
+    }
 }

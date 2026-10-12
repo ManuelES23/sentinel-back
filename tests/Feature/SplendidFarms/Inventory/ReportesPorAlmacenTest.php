@@ -46,6 +46,32 @@ class ReportesPorAlmacenTest extends TestCase
         $this->assertEquals(5, $fila['quantity']);
     }
 
+    public function test_valorizado_usa_el_costo_real_de_las_capas(): void
+    {
+        $this->insumo->update(['cost_price' => 1]);
+        \App\Models\InventoryStock::updateStock($this->insumo->id, $this->almacenA->id, null, 8, 100);
+        \App\Models\InventoryStock::updateStock($this->insumo->id, $this->almacenA->id, null, 2, 150);
+
+        $fila = collect($this->getJson(self::BASE . '/valorizado', $this->headersEmpresa())->assertOk()->json('data.products'))
+            ->firstWhere('id', $this->insumo->id);
+
+        // 8 x 100 + 2 x 150 = 1100 de las capas nuevas, más los 50 (5 x 10) de la fila L-A sembrada en setUp.
+        $this->assertEqualsWithDelta(1150, (float) $fila['cost_value'], 0.0001);
+        $this->assertEquals(15, $fila['quantity']);
+    }
+
+    public function test_stock_agrupado_usa_el_costo_real_de_las_capas(): void
+    {
+        $this->insumo->update(['cost_price' => 1]);
+        \App\Models\InventoryStock::updateStock($this->insumo->id, $this->almacenA->id, null, 8, 100);
+        \App\Models\InventoryStock::updateStock($this->insumo->id, $this->almacenA->id, null, 2, 150);
+
+        $grupo = collect($this->getJson(self::BASE . '/stock?grouped_by_product=1', $this->headersEmpresa())->assertOk()->json('data.stock'))
+            ->first(fn ($g) => ($g['product']['id'] ?? null) === $this->insumo->id);
+
+        $this->assertEqualsWithDelta(1150, (float) $grupo['total_value'], 0.0001);
+    }
+
     public function test_valorizado_con_stock_only_filtra_por_stock_visible(): void
     {
         $sinStock = Product::create([

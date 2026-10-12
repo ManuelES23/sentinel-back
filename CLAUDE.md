@@ -485,3 +485,16 @@ DB_PASSWORD=MasterKey
 - Las claves `backups.*` de `SettingsService` están reservadas: el endpoint general `/admin/settings` (nivel admin) no las lee ni las escribe.
 - Descarga: `POST admin/backups/{id}/download-url` → URL firmada **relativa** de 5 min a `GET api/backups/{id}/download` (`signed:relative`, sin Sanctum).
 - Guía de restauración y despliegue: `docs/respaldos.md`.
+
+## Inventario · Costeo PEPS por capas
+
+- Todo el inventario se costea PEPS. `inventory_cost_layers` (capas) e `inventory_cost_layer_consumptions` (porciones de cada salida). `products.cost_method` se ignora.
+- Motor `App\Services\Inventory\CapasCosto`: `entrar`, `salir` (con `permitirNegativo` → capa `faltante`), `devolver` (porciones exactas, últimas primero; a otra cubeta conserva costo y fecha), `revertirEntrada` (422 `movement` si ya se usó), `deshacerTransferencia`, `reetiquetar`, `sincronizarFila`, `conciliar` (crea la capa inicial de filas sin capas).
+- Orden obligatorio: operación del motor → `InventoryStock::ajustarCantidad()` (único escritor de cantidad; sincroniza `unit_cost`/`total_cost` desde las capas).
+- `AplicadorStock` orquesta motor + cantidad + kardex (dirección física real; ya no existe `esReversa`). Las salidas escriben su costo real en el renglón.
+- Empaque usa `updateStock(..., referencia: 'empaque_produccion:{id}')` y `devolverPorReferencia`.
+- Verificación: `php artisan inventario:verificar-capas` compara cada fila de `inventory_stock` contra la suma de sus capas y lista las inconsistencias (sale 0 si todo cuadra).
+- Despliegue (orden): respaldo → `migrate` (crea capas iniciales) → `php artisan inventario:verificar-capas` (debe salir 0) → `php artisan optimize:clear`. Siempre **antes** que el front.
+- Limitaciones conocidas del motor (aceptadas):
+  - Cancelar una entrada que cubrió un faltante abierto no es exactamente reversible (el faltante ya quedó saldado con el costo de esa entrada).
+  - Las devoluciones a un destino no cubren el faltante abierto de ese destino.

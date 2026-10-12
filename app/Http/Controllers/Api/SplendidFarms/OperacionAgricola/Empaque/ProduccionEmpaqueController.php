@@ -291,6 +291,8 @@ class ProduccionEmpaqueController extends Controller
                 $produccion->recipe_id ? (int) $produccion->recipe_id : null,
                 (int) $produccion->total_cajas,
                 (bool) $produccion->is_cola,
+                false,
+                (int) $produccion->id,
             );
 
             return response()->json([
@@ -385,6 +387,7 @@ class ProduccionEmpaqueController extends Controller
                     $previousTotalCajas,
                     $previousIsCola,
                     true,
+                    (int) $produccion->id,
                 );
 
                 $this->applyRecipeInventoryConsumption(
@@ -392,6 +395,8 @@ class ProduccionEmpaqueController extends Controller
                     $currentRecipeId,
                     $currentTotalCajas,
                     $currentIsCola,
+                    false,
+                    (int) $produccion->id,
                 );
             }
 
@@ -420,6 +425,7 @@ class ProduccionEmpaqueController extends Controller
                     (int) ($produccion->total_cajas ?? 0),
                     (bool) ($produccion->is_cola ?? false),
                     true,
+                    (int) $produccion->id,
                 );
 
                 $produccion->delete();
@@ -1250,6 +1256,8 @@ class ProduccionEmpaqueController extends Controller
                 $recipeId ? (int) $recipeId : null,
                 (int) $validated['total_cajas'],
                 true,
+                false,
+                (int) $produccion->id,
             );
 
             // Detectar si es pallet mixto comparando con entradas anteriores
@@ -1948,6 +1956,7 @@ class ProduccionEmpaqueController extends Controller
         int $totalCajas,
         bool $isCola = false,
         bool $revert = false,
+        ?int $produccionId = null,
     ): void {
         if ($entityId <= 0 || empty($recipeId) || $totalCajas <= 0) {
             return;
@@ -2030,6 +2039,22 @@ class ProduccionEmpaqueController extends Controller
                 continue;
             }
 
+            // Con id de producción el consumo mueve capas PEPS etiquetadas con la referencia y el
+            // reverso devuelve esas mismas porciones. Sin id (no debería pasar) se conserva el
+            // movimiento anterior al costo de receta.
+            $referencia = $produccionId ? "empaque_produccion:{$produccionId}" : null;
+
+            if ($revert && $referencia) {
+                InventoryStock::devolverPorReferencia(
+                    (int) $item->product_id,
+                    $entityId,
+                    $consumedQty,
+                    $referencia,
+                    (float) ($item->cost_per_unit ?? 0),
+                );
+                continue;
+            }
+
             $delta = $revert ? $consumedQty : (-1 * $consumedQty);
 
             InventoryStock::updateStock(
@@ -2042,6 +2067,7 @@ class ProduccionEmpaqueController extends Controller
                 null,
                 null,
                 true,
+                $referencia,
             );
         }
     }
