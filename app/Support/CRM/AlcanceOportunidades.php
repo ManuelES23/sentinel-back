@@ -2,12 +2,14 @@
 
 namespace App\Support\CRM;
 
+use App\Models\CRM\CrmOportunidad;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\Relation;
 
 /**
  * Qué oportunidades puede ver el usuario cuando vienen incrustadas en otra
- * respuesta (ficha de cliente o de prospecto). Lo arma
+ * respuesta (ficha de cliente o de prospecto), en el listado de actividades o
+ * cuando una escritura se cuelga de una oportunidad (incluye()). Lo arma
  * VisibilidadOportunidades::alcance(); nunca aborta.
  *
  * - Sin oportunidades.ver: ninguna.
@@ -26,6 +28,16 @@ final class AlcanceOportunidades
     public function ninguna(): bool
     {
         return ! $this->puedeVer || (! $this->todas && $this->vendedorId === null);
+    }
+
+    /** Si ESTA oportunidad entra en el alcance (misma regla que aplicar()). */
+    public function incluye(CrmOportunidad $oportunidad): bool
+    {
+        if ($this->ninguna() || (int) $oportunidad->empresa_id !== $this->empresaId) {
+            return false;
+        }
+
+        return $this->todas || (int) $oportunidad->vendedor_id === $this->vendedorId;
     }
 
     /**

@@ -5,6 +5,7 @@ namespace App\Services\CRM;
 use App\Models\CRM\CrmOportunidad;
 use App\Support\CRM\AlcanceOportunidades;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Auth;
 
 /**
@@ -19,6 +20,8 @@ use Illuminate\Support\Facades\Auth;
  *   exigirVisible abortan con 403.
  * - Alcance (datos incrustados en otras respuestas): alcance() no aborta y
  *   devuelve un AlcanceOportunidades para filtrar la consulta.
+ * - entidadVisible(): para agenda, actividades y seguimientos que se cuelgan
+ *   de una oportunidad; la no visible se trata como inexistente.
  *
  * El Dashboard NO usa esta regla: su visibilidad depende de
  * dashboard.ejecutivo (ver DashboardController::resolverVendedor).
@@ -89,6 +92,32 @@ class VisibilidadOportunidades
     {
         $this->exigirVer($empresaId);
         $this->vendedorVisible($empresaId, (int) $oportunidad->vendedor_id, $mensajeAjena);
+    }
+
+    /** Sin abortar: si el usuario puede ver ESTA oportunidad (misma regla que exigirVisible). */
+    public function esVisible(CrmOportunidad $oportunidad): bool
+    {
+        return $this->alcance((int) $oportunidad->empresa_id)->incluye($oportunidad);
+    }
+
+    /**
+     * Para las escrituras que cuelgan algo de una entidad (agenda, actividades,
+     * seguimientos): devuelve null si la entidad es una oportunidad que el
+     * usuario no puede ver, para que el endpoint responda exactamente igual
+     * que si no existiera y no sirva de oráculo de existencia.
+     *
+     * @template T of Model
+     *
+     * @param  T|null  $entidad
+     * @return T|null
+     */
+    public function entidadVisible(?Model $entidad): ?Model
+    {
+        if ($entidad instanceof CrmOportunidad && ! $this->esVisible($entidad)) {
+            return null;
+        }
+
+        return $entidad;
     }
 
     /** Sabor que no aborta, para oportunidades incrustadas en otras respuestas. */

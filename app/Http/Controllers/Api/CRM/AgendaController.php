@@ -11,6 +11,7 @@ use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmProspecto;
 use App\Services\CRM\SeguimientoService;
 use App\Services\CRM\VisibilidadAgenda;
+use App\Services\CRM\VisibilidadOportunidades;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
@@ -59,6 +60,7 @@ class AgendaController extends CrmBaseController
     public function __construct(
         private readonly SeguimientoService $seguimientos,
         private readonly VisibilidadAgenda $visibilidad,
+        private readonly VisibilidadOportunidades $oportunidades,
     ) {}
 
     /** GET /crm/agenda?desde=&hasta=&vendedor_id=&tipo=&completado=&vencidos= */
@@ -145,7 +147,10 @@ class AgendaController extends CrmBaseController
         $entidadType = null;
         if (! empty($validated['entidad_tipo'])) {
             $modelClass = self::TIPOS[$validated['entidad_tipo']];
-            $existe = $modelClass::where('empresa_id', $empresaId)->find($validated['entidad_id']);
+            // Una oportunidad que el usuario no puede ver responde igual que una inexistente.
+            $existe = $this->oportunidades->entidadVisible(
+                $modelClass::where('empresa_id', $empresaId)->find($validated['entidad_id'])
+            );
             if (! $existe) {
                 return $this->jsonError('La entidad relacionada no existe o no pertenece a la empresa.', 404);
             }
