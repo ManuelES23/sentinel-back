@@ -3,6 +3,7 @@
 namespace App\Services\Compras;
 
 use App\Models\AccountPayable;
+use App\Models\CapaCosto;
 use App\Models\InventoryMovement;
 use App\Models\MovementType;
 use App\Models\PurchaseOrder;
@@ -79,7 +80,7 @@ class ConfirmadorRecepcion
                     'unit_cost' => $d->unit_cost,
                     'total_cost' => $cantidad * (float) $d->unit_cost,
                 ]);
-                $this->stock->aumentar($detalle, (int) $rec->almacen_id, 'entity', $movimiento);
+                $this->stock->aumentar($detalle, (int) $rec->almacen_id, 'entity', $movimiento, CapaCosto::ORIGEN_COMPRA);
 
                 if ($d->purchase_order_detail_id) {
                     PurchaseOrderDetail::whereKey($d->purchase_order_detail_id)->increment('quantity_received', $cantidad);
