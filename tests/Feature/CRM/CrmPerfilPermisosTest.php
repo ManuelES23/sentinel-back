@@ -103,6 +103,9 @@ class CrmPerfilPermisosTest extends TestCase
         $this->assertFalse($this->tienePermiso('dashboard', 'dashboard', 'ejecutivo'));
         $this->assertFalse($this->tienePermiso('presupuestos', 'presupuestos', 'crear'));
         $this->assertFalse($this->tienePermiso('integraciones', 'dialpad', 'ver'));
+        $this->assertTrue($this->tienePermiso('oportunidades', 'oportunidades', 'ver'));
+        $this->assertFalse($this->tienePermiso('oportunidades', 'oportunidades', 'equipo'));
+        $this->assertFalse($this->tienePermiso('agenda', 'agenda', 'equipo'));
     }
 
     public function test_perfil_gerencia_suma_aprobaciones_metas_y_tablero_ejecutivo(): void
@@ -115,6 +118,8 @@ class CrmPerfilPermisosTest extends TestCase
         $this->assertTrue($this->tienePermiso('dashboard', 'dashboard', 'ejecutivo'));
         $this->assertTrue($this->tienePermiso('presupuestos', 'presupuestos', 'editar'));
         $this->assertTrue($this->tienePermiso('integraciones', 'dialpad', 'editar'));
+        $this->assertTrue($this->tienePermiso('oportunidades', 'oportunidades', 'equipo'));
+        $this->assertTrue($this->tienePermiso('agenda', 'agenda', 'equipo'));
         $this->assertFalse($this->tieneModulo('catalogos'));
     }
 

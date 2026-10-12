@@ -181,6 +181,247 @@ Módulo de Administración → Activos Fijos (SF y GE). La carpeta de controlado
 - **Presupuestos:** `montoEsperado` ya es lo ganado (Σ `monto_esperado` de `cerrado_ganado` por `fecha_cierre_real`), aunque su nombre diga «esperado».
 - **Despliegue:** `php artisan migrate` y, una sola vez, `php artisan crm:reconstruir-historial-etapas`. El back va antes que el front.
 
+## CRM · Visibilidad de oportunidades, agenda y cotizaciones
+
+### Oportunidades
+- `GET crm/oportunidades`, `GET crm/oportunidades/{id}` y `GET crm/oportunidades/resumen` exigen `oportunidades.ver` (403 sin él).
+- Sin `oportunidades.equipo` (perfil vendedor) el usuario solo lee las de su propio `CrmVendedor` activo: el listado y el resumen se fuerzan a él, pedir `vendedor_id` de otro responde 403, `show` de una ajena responde 403 y, sin vendedor vinculado, todo responde 403. Con `equipo` (perfil gerencia) ve a todo el equipo y puede filtrar por vendedor.
+- La regla vive en `App\Services\CRM\VisibilidadOportunidades`, con tres sabores:
+  - Estricto: `exigirVer`, `vendedorVisible` y `exigirVisible`, que abortan con 403. Lo usan los endpoints de oportunidades y de cotizaciones.
+  - `alcance()`: no aborta y devuelve `App\Support\CRM\AlcanceOportunidades` (`puedeVer`, `todas`, `vendedorId`, `aplicar($query)`, `incluye($oportunidad)`). Lo usan los datos incrustados y el listado de actividades.
+  - `entidadVisible($entidad)`: devuelve null si la entidad es una oportunidad que el usuario no puede ver. Lo usan las escrituras que se cuelgan de una entidad (agenda, actividades, seguimientos) para responder igual que si no existiera.
+  - No la usan, con reglas propias:
+    - Dashboard: depende de `dashboard.ejecutivo` (`DashboardController::resolverVendedor`) y ahí no se exige que el vendedor propio esté activo.
+    - Presupuestos: `resumenMensual` y `comparativoAnual` suman lo ganado por vendedor, y quien tiene `presupuestos.crear` o `editar` cuenta como gerencia (`PresupuestoController::resolverVendedorId`).
+    - Mi día (`mi-dia.ver`) y Dashboard (`dashboard.ver`) muestran las oportunidades propias aunque el usuario no tenga `oportunidades.ver`.
+- **Limitado por vendedor:**
+  - Las 3 lecturas: `GET crm/oportunidades`, `/{id}` y `/resumen`.
+  - Las fichas: `GET crm/clientes/{id}` (`oportunidades`), `GET crm/clientes/{id}/resumen` (`metricas.oportunidades`, `metricas.valor_pipeline` y las 10 últimas) y `GET crm/prospectos/{id}` (`oportunidades`). Sin `ver` las listas salen vacías y las cifras en 0, y siempre se filtran por la empresa. La ficha en sí sigue abierta. Las `actividades` del resumen del cliente son las del cliente (no las de sus oportunidades), así que no cambian.
+  - Las escrituras `PUT`, `DELETE` y `PATCH cambiar-etapa`. En `PUT` y `DELETE` el orden es: tenant (404), permiso de la acción (403) y visibilidad (403 «No puedes modificar las oportunidades de otro vendedor.»; también exige `ver`). En `cambiar-etapa` la validación del payload (422) va antes del permiso, porque el permiso (`editar` o `cerrar`) depende de la etapa pedida. Es inofensivo: la validación no depende de la fila.
+  - `PUT` y `POST crm/oportunidades`: sin `equipo`, `vendedor_id` solo puede ser el vendedor actual (en `PUT`) o el `CrmVendedor` activo propio (en `POST`). Otro responde 403 «No puedes asignar la oportunidad a otro vendedor.»; en `POST`, sin vendedor activo, 403 «Tu usuario no está vinculado a un vendedor activo.». Con `equipo`, cualquier vendedor de la empresa.
+- Nota: los listados de clientes y prospectos (`GET crm/clientes`, `GET crm/prospectos`) no incrustan oportunidades.
+
+### Agenda
+- Permiso `agenda.equipo` (módulo `agenda`, submódulo `agenda`, «Ver la agenda de otros vendedores», orden 5). Lo da el perfil gerencia, lo siembra `CrmPermisosSeeder` y lo concede la migración `2026_10_11_100000_add_crm_agenda_equipo_permission`.
+- La regla vive en `App\Services\CRM\VisibilidadAgenda` (`veAlEquipo`, `vendedorVisible`, `exigirEventoVisible`). `crear` y `editar` ya NO cuentan como gerencia.
+  - Con `equipo`: consulta y asigna la agenda de cualquier vendedor de la empresa.
+  - Sin `equipo`: solo la de su `CrmVendedor` ACTIVO. Pedir o tocar la de otro responde 403 «No puedes ver o modificar la agenda de otro vendedor.». Sin vendedor activo vinculado, todo responde 403 «Tu usuario no está vinculado a un vendedor activo.».
+- Endpoints (no hay `GET agenda/{id}`):
+  - `GET crm/agenda` (también con `vencidos=1`): `vendedor_id` sigue obligatorio; sin `equipo` solo se acepta el propio.
+  - `POST crm/agenda`: igual para `vendedor_id`, que además debe ser un vendedor de la empresa (422 si no).
+  - `PUT crm/agenda/{id}`, `PATCH crm/agenda/{id}/completar` y `DELETE crm/agenda/{id}`: tenant (404), permiso de la acción (403) y vendedor del evento (403), antes de validar o tocar nada.
+- Eventos ligados a una oportunidad: ver «Escrituras que se cuelgan de una oportunidad».
+
+### Cotizaciones
+- Leer exige `cotizaciones.ver`; escribir, su propio permiso (`crear`, `editar`, `aprobar`, `rechazar`). En ambos casos además hay que poder VER la oportunidad (`VisibilidadOportunidades`, estricto, que también exige `oportunidades.ver`).
+- Orden: tenant (404), permiso (403) y oportunidad visible (403), antes de validar el estado. Un 403 no cambia filas, no emite eventos, no escribe historial de etapas ni cierra la oportunidad.
+- Mensajes del 403 por oportunidad ajena: lecturas «No puedes ver las cotizaciones de otro vendedor.»; escrituras «No puedes modificar las cotizaciones de otro vendedor.».
+- `GET crm/cotizaciones`: mismo alcance que `GET crm/oportunidades`. Sin `oportunidades.ver`, 403. Sin `equipo`, se fuerza al vendedor propio: pedir otro `vendedor_id` o no tener vendedor activo responde 403. `meta.total` sale de la misma consulta.
+- `GET crm/cotizaciones/{id}`, `PUT`, `PATCH enviar`, `PATCH aprobar`, `PATCH rechazar`, `GET` y `POST crm/oportunidades/{id}/cotizaciones`: 403 sobre una oportunidad ajena.
+- Una cotización cuya oportunidad está eliminada (soft delete) o no existe solo la ve y la toca quien tiene `oportunidades.equipo`.
+- Aprobar o rechazar la cotización de otro vendedor exige `oportunidades.equipo`. El perfil gerencia ya lo tiene y la migración nueva lo concede a quien tenga `cotizaciones.aprobar` o `rechazar`.
+- **Decisión consciente y de riesgo:** sin esa concesión, los gerentes configurados a mano como aprobadores perderían la función.
+  - Contrapartida: un vendedor configurado a mano con `aprobar` pasa a ver todo el equipo.
+  - La migración no concede `oportunidades.ver`.
+  - Antes de migrar se revisa la consulta del paso 6 del checklist y se quita `aprobar` o `equipo` caso por caso.
+
+### Escrituras que se cuelgan de una oportunidad
+- `POST crm/actividades`, `POST crm/agenda` y `POST crm/seguimientos` con `entidad_tipo=oportunidad` exigen poder ver esa oportunidad (`entidadVisible`; sin `oportunidades.ver` no se ve ninguna).
+- Una oportunidad no visible responde EXACTAMENTE igual que una inexistente en cada endpoint, sin crear filas ni emitir eventos. No se unificó el código entre endpoints para no cambiar lo que el front ya maneja:
+  - actividades y agenda: 404 «La entidad relacionada no existe o no pertenece a la empresa.».
+  - seguimientos: 422 en `entidad_id` «El registro no existe o no pertenece a la empresa.».
+- Lecturas de actividades: sin `oportunidades.equipo`, `GET crm/actividades` y `GET crm/{tipo}/{id}/historial` ocultan las actividades de oportunidades que el usuario no ve (de otro vendedor o eliminadas). El historial de una ajena sale vacío, igual que el de una inexistente. `GET`, `PUT` y `DELETE crm/actividades/{id}` de una de ellas responden 404. Las de clientes, prospectos y empresas externas no cambian.
+
+### Sigue abierto dentro del tenant
+- Presupuestos: su regla diverge de la de agenda (`presupuestos.crear` o `editar` = gerencia) y el perfil gerencia es el único con esos permisos. No se cambió.
+- Dashboard: depende de `dashboard.ejecutivo`, no de `equipo`, y no exige vendedor activo. Su bloque de cotizaciones y de actividad sigue esa regla.
+- Mi día con `mi-dia.equipo` ve el día (eventos, oportunidades y cotizaciones por vencer) de otro vendedor. Es un permiso propio de Mi día. Al completar desde Mi día un evento ajeno ya se exige `agenda.equipo`.
+- `PATCH crm/agenda/{id}/completar` sobre un evento propio ligado a una oportunidad que después se reasignó a otro vendedor sigue registrando la actividad en esa oportunidad.
+- **Evento cruzado creado por gerencia.** Un gerente con `agenda.equipo` y `oportunidades.equipo` puede crear, en la agenda del vendedor A, un evento ligado a una oportunidad del vendedor B (`POST crm/agenda` solo exige que el gerente vea la oportunidad).
+  - Después, A ve la oportunidad completa de B en Mi día: `MiDiaService::resumen` carga `entidad` de sus eventos sin filtrar por visibilidad.
+  - Al completar el evento (`AgendaController::completar`), A registra la actividad y programa el siguiente evento sobre esa oportunidad.
+  - No se arregló en código.
+- **Agenda de otro vendedor solo con `mi-dia.equipo`.** Estos endpoints programan eventos en la agenda de otro vendedor sin exigir `agenda.equipo`:
+  - `POST crm/seguimientos` con `siguiente`.
+  - `POST crm/prospectos/rapido` con `primer_contacto`.
+  - Resuelven el vendedor con `VendedorActualService::resolver`, que solo mira `mi-dia.equipo`, y exigen `agenda.crear`.
+  - En el despliegue la migración concede `agenda.equipo` a quien tiene `mi-dia.equipo`, así que quedan alineados. Pero si después se revoca `agenda.equipo` y se deja `mi-dia.equipo`, siguen funcionando.
+  - No se cambió el código.
+- `POST/PATCH crm/actividades` validan `vendedor_id` con `exists:crm_vendedores,id` sin filtrar por empresa.
+- Riesgos previos, sin cambio de código:
+  - `VerificaPermisoSubmodulo::tienePermisoSubmodulo` busca la concesión por `submodule_id` y por el slug del tipo, pero no comprueba que el `permission_type` sea de ese submódulo. Hoy es inofensivo: en la BD local hay 269 376 filas cruzadas (tipo de otro submódulo), todas con `is_granted = 0`, creadas por el seeder. Una concesión cruzada con `is_granted = 1` sí abriría el permiso.
+  - `GET crm/cotizaciones` acepta `per_page` sin tope.
+  - `GET crm/actividades` (y el historial) no exigen `actividades.ver`. Solo se filtran por empresa y por la visibilidad de oportunidades.
+- Canales en tiempo real: `module.{empresa}.crm.oportunidades`, `…crm.cotizaciones`, `…crm.agenda` y `…crm.actividades` difunden el registro completo a todos los que tienen acceso al módulo. Aunque el front lo ignore, sigue visible en la pestaña Red del navegador. Es un riesgo residual aceptado hasta tener canales por vendedor o un payload recortado.
+
+### Despliegue
+1. `php artisan migrate`. Corren, en este orden:
+   - `2026_10_09_100000_add_crm_oportunidades_equipo_permission`: crea `oportunidades.equipo` y lo concede, por empresa, a quien en ese CRM ya tiene `oportunidades.cerrar`, `dashboard.ejecutivo` o `mi-dia.equipo`.
+   - `2026_10_11_100000_add_crm_agenda_equipo_permission`, en dos pasos y por empresa:
+     1. Crea `agenda.equipo` y lo concede a quien ya tiene `agenda.eliminar`, `mi-dia.equipo`, `oportunidades.cerrar` o `dashboard.ejecutivo`. Las tres últimas son las fuentes por las que la migración `2026_10_09` ya concedió `oportunidades.equipo`. Por eso, en el primer despliegue, el resultado equivale a «quien ya ve al equipo».
+        - `oportunidades.equipo` NO cuenta como fuente, a propósito: el paso 2 se lo concede a los aprobadores. Si contara, una segunda corrida (o `down()` + `up()`) les daría también `agenda.equipo`.
+        - Con estas fuentes, volver a correrla da siempre el mismo resultado.
+        - Quien solo tiene `oportunidades.equipo` dado a mano no recibe el de agenda.
+     2. Concede `oportunidades.equipo` a quien tiene `cotizaciones.aprobar` o `cotizaciones.rechazar` (ver el paso 6 del checklist).
+   - Ninguna reactiva una fila `equipo` revocada (`is_granted = 0`).
+2. Listar quién recibirá 403 en el tablero de oportunidades. No hay bypass de superadmin en `tienePermisoSubmodulo`, así que la cuenta dueña suele salir aquí. Usuarios con `ver` concedido, sin `equipo` y sin `crm_vendedores` activo en esa empresa:
+   ```sql
+   SELECT e.id AS empresa_id, e.name AS empresa, u.id AS user_id, u.name, u.email, u.role
+   FROM user_submodule_permissions usp
+   JOIN submodule_permission_types spt ON spt.id = usp.permission_type_id AND spt.slug = 'ver'
+   JOIN submodules s   ON s.id = usp.submodule_id AND s.slug = 'oportunidades'
+   JOIN modules m      ON m.id = s.module_id AND m.slug = 'oportunidades'
+   JOIN applications a ON a.id = m.application_id AND a.slug = 'crm'
+   JOIN enterprises e  ON e.id = a.enterprise_id
+   JOIN users u        ON u.id = usp.user_id
+   WHERE usp.is_granted = 1
+     AND NOT EXISTS (
+       SELECT 1
+       FROM user_submodule_permissions eq
+       JOIN submodule_permission_types eqt ON eqt.id = eq.permission_type_id AND eqt.slug = 'equipo'
+       WHERE eq.user_id = usp.user_id AND eq.submodule_id = usp.submodule_id AND eq.is_granted = 1
+     )
+     AND NOT EXISTS (
+       SELECT 1 FROM crm_vendedores v
+       WHERE v.empresa_id = a.enterprise_id AND v.user_id = usp.user_id AND v.activo = 1
+     )
+   ORDER BY e.name, u.name;
+   ```
+   Estos mismos usuarios reciben 403 en `GET crm/cotizaciones`.
+3. Usuarios con acceso activo al submódulo oportunidades (ven la entrada del menú) pero sin `ver` concedido:
+   ```sql
+   SELECT e.id AS empresa_id, e.name AS empresa, u.id AS user_id, u.name, u.email, u.role
+   FROM user_submodule_access usa
+   JOIN submodules s   ON s.id = usa.submodule_id AND s.slug = 'oportunidades'
+   JOIN modules m      ON m.id = s.module_id AND m.slug = 'oportunidades'
+   JOIN applications a ON a.id = m.application_id AND a.slug = 'crm'
+   JOIN enterprises e  ON e.id = a.enterprise_id
+   JOIN users u        ON u.id = usa.user_id
+   WHERE usa.is_active = 1
+     AND NOT EXISTS (
+       SELECT 1
+       FROM user_submodule_permissions usp
+       JOIN submodule_permission_types spt ON spt.id = usp.permission_type_id AND spt.slug = 'ver'
+       WHERE usp.user_id = usa.user_id AND usp.submodule_id = usa.submodule_id AND usp.is_granted = 1
+     )
+   ORDER BY e.name, u.name;
+   ```
+4. Usuarios con `ver` concedido, vendedor activo y sin `equipo`. Pasan de ver a todo el equipo a ver solo lo suyo, sin 403. Hay que confirmar que ninguno sea en realidad un gerente al que le falta el perfil gerencia:
+   ```sql
+   SELECT e.id AS empresa_id, e.name AS empresa, u.id AS user_id, u.name, u.email, u.role, v.id AS vendedor_id, v.nombre AS vendedor
+   FROM user_submodule_permissions usp
+   JOIN submodule_permission_types spt ON spt.id = usp.permission_type_id AND spt.slug = 'ver'
+   JOIN submodules s   ON s.id = usp.submodule_id AND s.slug = 'oportunidades'
+   JOIN modules m      ON m.id = s.module_id AND m.slug = 'oportunidades'
+   JOIN applications a ON a.id = m.application_id AND a.slug = 'crm'
+   JOIN enterprises e  ON e.id = a.enterprise_id
+   JOIN users u        ON u.id = usp.user_id
+   JOIN crm_vendedores v ON v.empresa_id = a.enterprise_id AND v.user_id = usp.user_id AND v.activo = 1
+   WHERE usp.is_granted = 1
+     AND NOT EXISTS (
+       SELECT 1
+       FROM user_submodule_permissions eq
+       JOIN submodule_permission_types eqt ON eqt.id = eq.permission_type_id AND eqt.slug = 'equipo'
+       WHERE eq.user_id = usp.user_id AND eq.submodule_id = usp.submodule_id AND eq.is_granted = 1
+     )
+   ORDER BY e.name, u.name;
+   ```
+5. Agenda. Después de `migrate`, usuarios con `agenda.crear` o `agenda.editar` concedido, sin `agenda.equipo` y sin `crm_vendedores` activo en esa empresa. Antes podían ver y escribir la agenda de cualquiera y ahora reciben 403 en toda la agenda. Antes de migrar, la misma consulta da de más: incluye a quien la migración le va a conceder `equipo`.
+   ```sql
+   SELECT DISTINCT e.id AS empresa_id, e.name AS empresa, u.id AS user_id, u.name, u.email, u.role
+   FROM user_submodule_permissions usp
+   JOIN submodule_permission_types spt ON spt.id = usp.permission_type_id AND spt.slug IN ('crear', 'editar')
+   JOIN submodules s   ON s.id = usp.submodule_id AND s.slug = 'agenda'
+   JOIN modules m      ON m.id = s.module_id AND m.slug = 'agenda'
+   JOIN applications a ON a.id = m.application_id AND a.slug = 'crm'
+   JOIN enterprises e  ON e.id = a.enterprise_id
+   JOIN users u        ON u.id = usp.user_id
+   WHERE usp.is_granted = 1
+     AND NOT EXISTS (
+       SELECT 1
+       FROM user_submodule_permissions eq
+       JOIN submodule_permission_types eqt ON eqt.id = eq.permission_type_id AND eqt.slug = 'equipo'
+       WHERE eq.user_id = usp.user_id AND eq.submodule_id = usp.submodule_id AND eq.is_granted = 1
+     )
+     AND NOT EXISTS (
+       SELECT 1 FROM crm_vendedores v
+       WHERE v.empresa_id = a.enterprise_id AND v.user_id = usp.user_id AND v.activo = 1
+     )
+   ORDER BY e.name, u.name;
+   ```
+   En la BD local de desarrollo (sin ninguna de las dos migraciones aplicadas) da 1 fila.
+6. Cotizaciones:
+   - Usuarios con `cotizaciones.ver` y sin `oportunidades.ver` en el mismo CRM. Reciben 403 en todas las cotizaciones (local: 0).
+     ```sql
+     SELECT DISTINCT e.id AS empresa_id, e.name AS empresa, u.id AS user_id, u.name, u.email, u.role
+     FROM user_submodule_permissions usp
+     JOIN submodule_permission_types spt ON spt.id = usp.permission_type_id AND spt.slug = 'ver'
+     JOIN submodules s   ON s.id = usp.submodule_id AND s.slug = 'cotizaciones'
+     JOIN modules m      ON m.id = s.module_id AND m.slug = 'cotizaciones'
+     JOIN applications a ON a.id = m.application_id AND a.slug = 'crm'
+     JOIN enterprises e  ON e.id = a.enterprise_id
+     JOIN users u        ON u.id = usp.user_id
+     WHERE usp.is_granted = 1
+       AND NOT EXISTS (
+         SELECT 1
+         FROM user_submodule_permissions ov
+         JOIN submodule_permission_types ovt ON ovt.id = ov.permission_type_id AND ovt.slug = 'ver'
+         JOIN submodules os ON os.id = ov.submodule_id AND os.slug = 'oportunidades'
+         JOIN modules om    ON om.id = os.module_id AND om.slug = 'oportunidades' AND om.application_id = a.id
+         WHERE ov.user_id = usp.user_id AND ov.is_granted = 1
+       )
+     ORDER BY e.name, u.name;
+     ```
+   - **Antes de migrar**, aprobadores que no son gerencia: tienen `aprobar` o `rechazar` concedido y no tienen `oportunidades.cerrar`, `dashboard.ejecutivo` ni `mi-dia.equipo`. La migración les va a conceder `oportunidades.equipo`, así que pasan a ver las oportunidades de todo el equipo. `tiene_oportunidades_ver = 0` marca a quien, además, no tiene `oportunidades.ver`: la migración no lo concede, y sin él sigue recibiendo 403 en cotizaciones y oportunidades.
+     - Revisar cada fila y, caso por caso, quitarle `aprobar` o `rechazar` (si es un vendedor), o quitarle `oportunidades.equipo` después de migrar.
+     - Local: 0.
+     - Si después de migrar a un aprobador le queda una fila `equipo` revocada, la migración no lo toca, y solo aprueba las cotizaciones de sus propias oportunidades.
+     ```sql
+     SELECT DISTINCT e.id AS empresa_id, e.name AS empresa, u.id AS user_id, u.name, u.email, u.role,
+       EXISTS (
+         SELECT 1
+         FROM user_submodule_permissions g
+         JOIN submodule_permission_types gt ON gt.id = g.permission_type_id AND gt.slug = 'ver'
+         JOIN submodules gs ON gs.id = g.submodule_id AND gs.slug = 'oportunidades'
+         JOIN modules gm    ON gm.id = gs.module_id AND gm.slug = 'oportunidades' AND gm.application_id = a.id
+         WHERE g.user_id = usp.user_id AND g.is_granted = 1
+       ) AS tiene_oportunidades_ver
+     FROM user_submodule_permissions usp
+     JOIN submodule_permission_types spt ON spt.id = usp.permission_type_id AND spt.slug IN ('aprobar', 'rechazar')
+     JOIN submodules s   ON s.id = usp.submodule_id AND s.slug = 'cotizaciones'
+     JOIN modules m      ON m.id = s.module_id AND m.slug = 'cotizaciones'
+     JOIN applications a ON a.id = m.application_id AND a.slug = 'crm'
+     JOIN enterprises e  ON e.id = a.enterprise_id
+     JOIN users u        ON u.id = usp.user_id
+     WHERE usp.is_granted = 1
+       AND NOT EXISTS (
+         SELECT 1
+         FROM user_submodule_permissions g
+         JOIN submodule_permission_types gt ON gt.id = g.permission_type_id AND gt.submodule_id = g.submodule_id
+         JOIN submodules gs ON gs.id = g.submodule_id
+         JOIN modules gm    ON gm.id = gs.module_id AND gm.application_id = a.id
+         WHERE g.user_id = usp.user_id AND g.is_granted = 1
+           AND (   (gm.slug = 'oportunidades' AND gs.slug = 'oportunidades' AND gt.slug = 'cerrar')
+                OR (gm.slug = 'dashboard'     AND gs.slug = 'dashboard'     AND gt.slug = 'ejecutivo')
+                OR (gm.slug = 'mi-dia'        AND gs.slug = 'mi-dia'        AND gt.slug = 'equipo'))
+       )
+     ORDER BY e.name, u.name;
+     ```
+7. Para cada fila de los pasos 2, 3 y 5, una de tres: conceder `equipo` (o `ver`, en el paso 3), vincular o reactivar su `CrmVendedor`, o aceptar el 403. En el paso 4, a quien sea gerente se le concede `equipo` o se le aplica el perfil gerencia.
+- **Orden:** `php artisan migrate` va en el mismo despliegue que el código. Mientras no corre, nadie tiene `equipo`: la gerencia queda limitada a su propio vendedor (oportunidades, cotizaciones, agenda) o recibe 403 si no tiene uno vinculado.
+- **Front y back de versiones distintas:**
+
+  | Front | Back | Resultado |
+  |---|---|---|
+  | viejo | nuevo | Los vendedores ven el tablero limitado o vacío (403). El tiempo real del front viejo sigue insertando tarjetas de otros vendedores hasta recargar. «Reasignar vendedor» y crear una oportunidad para otro vendedor responden 403. En la agenda, el vendedor ve la suya. El selector de vendedor del front viejo puede ofrecer a otros vendedores y esa consulta responde 403. La gerencia necesita `agenda.equipo`, que da la migración. Las cotizaciones de otros vendedores responden 403 o no aparecen en el listado. |
+  | nuevo | viejo | Funciona con las reglas viejas del back. Como nadie tiene `equipo` (oportunidades ni agenda), todo lo que el front nuevo decida con esos permisos trata a todos como vendedores. Por ejemplo, si oculta el selector de vendedor de la agenda sin `agenda.equipo`, la gerencia no lo ve aunque el back viejo lo aceptaría. En oportunidades, cada evento en tiempo real recarga la lista completa (unos 800 ms de espera). |
+
+  La ventana probable es front nuevo con back viejo: Netlify despliega al empujar y el back se despliega a mano.
+- **Reversión:**
+  - `down()` de `2026_10_09_100000` borra TODOS los tipos y concesiones `equipo` de oportunidades, incluidos los del seeder, los de un perfil o los dados a mano. No toca el `equipo` de mi-dia ni el de agenda.
+  - `down()` de `2026_10_11_100000` borra TODOS los tipos y concesiones `equipo` de agenda. Las concesiones de `oportunidades.equipo` que hizo a los aprobadores se quedan, porque no se distinguen de las demás.
+  - Si se revierte una migración sin revertir el código, la gerencia pierde la vista del equipo: hay que revertir primero el código, o no revertir la migración.
+
 ## Acceso cruzado de entidades (cross-enterprise)
 Tabla pivot `enterprise_entity` (`enterprise_id`, `entity_id`, `access_level: read|write`) — permite que una empresa acceda a bodegas/plantas de otra. Ver `EntityAccessController` (Admin).
 

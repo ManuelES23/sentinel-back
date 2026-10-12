@@ -91,7 +91,10 @@ class CrmPermisosSeeder extends Seeder
         $this->crearModulo($app, 'oportunidades', 'Oportunidades', 'TrendingUp', 2, [
             ['slug' => 'oportunidades', 'name' => 'Oportunidades', 'icon' => 'TrendingUp', 'order' => 1, 'permisos' => array_merge(
                 $this->permisosBase(),
-                [['slug' => 'cerrar', 'name' => 'Cerrar oportunidad', 'order' => 5]]
+                [
+                    ['slug' => 'cerrar', 'name' => 'Cerrar oportunidad', 'order' => 5],
+                    ['slug' => 'equipo', 'name' => 'Ver las oportunidades de otros vendedores', 'order' => 6],
+                ]
             )],
         ]);
 
@@ -122,7 +125,10 @@ class CrmPermisosSeeder extends Seeder
         ]);
 
         $this->crearModulo($app, 'agenda', 'Agenda', 'CalendarDays', 1, [
-            ['slug' => 'agenda', 'name' => 'Agenda', 'icon' => 'CalendarDays', 'order' => 1, 'permisos' => $this->permisosBase()],
+            ['slug' => 'agenda', 'name' => 'Agenda', 'icon' => 'CalendarDays', 'order' => 1, 'permisos' => array_merge(
+                $this->permisosBase(),
+                [['slug' => 'equipo', 'name' => 'Ver la agenda de otros vendedores', 'order' => 5]]
+            )],
         ]);
 
         $this->crearModulo($app, 'dashboard', 'Dashboard', 'BarChart2', 8, [

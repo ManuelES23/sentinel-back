@@ -24,7 +24,7 @@ class AgendaCompletarSeguimientoTest extends TestCase
         $this->setUpCrmFixtures();
         Sanctum::actingAs($this->actingUser);
         Carbon::setTestNow('2026-09-14 10:00:00');
-        $this->otorgarPermisosCrm('agenda', 'agenda', ['ver', 'crear', 'editar']);
+        $this->otorgarPermisosCrm('agenda', 'agenda', ['ver', 'crear', 'editar', 'equipo']);
         $this->cliente = CrmCliente::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Cliente X']);
     }
 

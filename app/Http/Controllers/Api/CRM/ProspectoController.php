@@ -10,6 +10,7 @@ use App\Models\CRM\CrmCliente;
 use App\Models\CRM\CrmProspecto;
 use App\Services\CRM\SeguimientoService;
 use App\Services\CRM\VendedorActualService;
+use App\Services\CRM\VisibilidadOportunidades;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
@@ -32,6 +33,7 @@ class ProspectoController extends CrmBaseController
     public function __construct(
         private readonly SeguimientoService $seguimientos,
         private readonly VendedorActualService $vendedores,
+        private readonly VisibilidadOportunidades $visibilidad,
     ) {}
 
     /**
@@ -76,10 +78,13 @@ class ProspectoController extends CrmBaseController
     public function show(CrmProspecto $prospecto): JsonResponse
     {
         $this->verificarEmpresa($prospecto);
+        // Solo las oportunidades que el usuario puede ver (sin
+        // oportunidades.ver, ninguna; sin equipo, las de su vendedor).
+        $alcance = $this->visibilidad->alcance((int) $prospecto->empresa_id);
 
         $prospecto->load(array_merge(self::RELACIONES, [
             'contactos',
-            'oportunidades' => fn ($q) => $q->orderByDesc('created_at'),
+            'oportunidades' => fn ($q) => $alcance->aplicar($q)->orderByDesc('created_at'),
             'oportunidades.vendedor:id,nombre',
         ]));
 

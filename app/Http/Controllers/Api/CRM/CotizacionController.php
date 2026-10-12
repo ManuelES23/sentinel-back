@@ -10,23 +10,44 @@ use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmOportunidadProducto;
 use App\Models\CRM\CrmProducto;
 use App\Services\CRM\CotizacionCalculoService;
+use App\Services\CRM\VisibilidadOportunidades;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
+/**
+ * Cotizaciones del CRM. Heredan la visibilidad de su oportunidad
+ * (VisibilidadOportunidades): leer exige cotizaciones.ver y escribir su propio
+ * permiso, y en ambos casos poder VER la oportunidad (sin oportunidades.equipo,
+ * solo las del CrmVendedor activo propio). Orden: tenant (404), permiso (403)
+ * y oportunidad visible (403), antes de cualquier validación de estado o
+ * efecto. Una cotización cuya oportunidad está eliminada (soft delete) o no
+ * existe solo la ve y la toca quien tiene oportunidades.equipo.
+ */
 class CotizacionController extends CrmBaseController
 {
     use FiltraPorEmpresa;
     use VerificaPermisoSubmodulo;
 
-    public function __construct(private readonly CotizacionCalculoService $calculo) {}
+    public const MENSAJE_LEER_AJENA = 'No puedes ver las cotizaciones de otro vendedor.';
+
+    public const MENSAJE_MODIFICAR_AJENA = 'No puedes modificar las cotizaciones de otro vendedor.';
+
+    private const MENSAJE_SIN_VER = 'No tienes permiso para ver cotizaciones.';
+
+    public function __construct(
+        private readonly CotizacionCalculoService $calculo,
+        private readonly VisibilidadOportunidades $visibilidad,
+    ) {}
 
     /** GET /crm/oportunidades/{oportunidad}/cotizaciones */
     public function index(Request $request, CrmOportunidad $oportunidad): JsonResponse
     {
         $this->verificarEmpresaOportunidad($oportunidad);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'cotizaciones', 'cotizaciones', 'ver', self::MENSAJE_SIN_VER);
+        $this->visibilidad->exigirVisible((int) $oportunidad->empresa_id, $oportunidad, self::MENSAJE_LEER_AJENA);
 
         $cotizaciones = $oportunidad->cotizaciones()->with('impuestos')->orderByDesc('created_at')->get();
 
@@ -43,6 +64,11 @@ class CotizacionController extends CrmBaseController
     {
         $empresaId = $this->getEmpresaId();
         abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
+        $this->exigirPermisoSubmodulo($empresaId, 'cotizaciones', 'cotizaciones', 'ver', self::MENSAJE_SIN_VER);
+        // Mismo alcance que GET crm/oportunidades: sin oportunidades.ver 403;
+        // sin equipo, forzado al vendedor propio (pedir otro o no tenerlo, 403).
+        $this->visibilidad->exigirVer($empresaId);
+        $vendedorId = $this->visibilidad->vendedorVisible($empresaId, $request->integer('vendedor_id') ?: null);
 
         $query = CrmCotizacion::query()
             ->where('empresa_id', $empresaId)
@@ -53,7 +79,7 @@ class CotizacionController extends CrmBaseController
                 'oportunidad.vendedor:id,nombre',
             ])
             ->when($request->estado, fn ($q, $estado) => $q->where('estado', $estado))
-            ->when($request->vendedor_id, fn ($q, $id) => $q->whereHas(
+            ->when($vendedorId, fn ($q, $id) => $q->whereHas(
                 'oportunidad', fn ($oq) => $oq->where('vendedor_id', $id)
             ))
             ->when($request->folio, fn ($q, $folio) => $q->where('folio', 'like', "%{$folio}%"))
@@ -69,6 +95,8 @@ class CotizacionController extends CrmBaseController
     public function show(Request $request, CrmCotizacion $cotizacion): JsonResponse
     {
         $this->verificarEmpresa($cotizacion);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'cotizaciones', 'cotizaciones', 'ver', self::MENSAJE_SIN_VER);
+        $this->exigirOportunidadVisible($cotizacion, self::MENSAJE_LEER_AJENA);
         $cotizacion->load(['lineas.producto:id,nombre', 'impuestos']);
 
         return $this->jsonSuccess($cotizacion);
@@ -80,6 +108,7 @@ class CotizacionController extends CrmBaseController
         $this->verificarEmpresaOportunidad($oportunidad);
         $empresaId = $this->getEmpresaId();
         $this->exigirPermisoSubmodulo($empresaId, 'cotizaciones', 'cotizaciones', 'crear', 'No tienes permiso para crear cotizaciones.');
+        $this->visibilidad->exigirVisible((int) $oportunidad->empresa_id, $oportunidad, self::MENSAJE_MODIFICAR_AJENA);
 
         // Una oportunidad perdida ya no admite cotizaciones nuevas: la única
         // razón para cotizar sería aprobarla, y aprobar sobre una perdida está
@@ -144,6 +173,7 @@ class CotizacionController extends CrmBaseController
     {
         $this->verificarEmpresa($cotizacion);
         $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'cotizaciones', 'cotizaciones', 'editar', 'No tienes permiso para editar cotizaciones.');
+        $this->exigirOportunidadVisible($cotizacion, self::MENSAJE_MODIFICAR_AJENA);
 
         if ($cotizacion->estado !== 'borrador') {
             return $this->jsonError('Solo se puede editar una cotización en borrador.', 422);
@@ -207,6 +237,7 @@ class CotizacionController extends CrmBaseController
     {
         $this->verificarEmpresa($cotizacion);
         $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'cotizaciones', 'cotizaciones', 'editar', 'No tienes permiso para enviar cotizaciones.');
+        $this->exigirOportunidadVisible($cotizacion, self::MENSAJE_MODIFICAR_AJENA);
         if ($cotizacion->estado !== 'borrador') {
             return $this->jsonError('Solo una cotización en borrador se puede enviar.', 422);
         }
@@ -222,6 +253,7 @@ class CotizacionController extends CrmBaseController
     {
         $this->verificarEmpresa($cotizacion);
         $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'cotizaciones', 'cotizaciones', 'rechazar', 'No tienes permiso para rechazar cotizaciones.');
+        $this->exigirOportunidadVisible($cotizacion, self::MENSAJE_MODIFICAR_AJENA);
         if ($cotizacion->estado !== 'enviado') {
             return $this->jsonError('Solo una cotización enviada se puede rechazar.', 422);
         }
@@ -237,6 +269,7 @@ class CotizacionController extends CrmBaseController
     {
         $this->verificarEmpresa($cotizacion);
         $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'cotizaciones', 'cotizaciones', 'aprobar', 'No tienes permiso para aprobar cotizaciones.');
+        $this->exigirOportunidadVisible($cotizacion, self::MENSAJE_MODIFICAR_AJENA);
         if ($cotizacion->estado !== 'enviado') {
             return $this->jsonError('Solo una cotización enviada se puede aprobar.', 422);
         }
@@ -310,6 +343,25 @@ class CotizacionController extends CrmBaseController
         $siguiente = $ultimo ? ((int) substr($ultimo, 4)) + 1 : 1;
 
         return 'COT-'.str_pad((string) $siguiente, 5, '0', STR_PAD_LEFT);
+    }
+
+    /**
+     * 403 si el usuario no puede ver la oportunidad de la cotización. Sin
+     * oportunidad (eliminada o inexistente) solo pasa quien tiene equipo.
+     */
+    private function exigirOportunidadVisible(CrmCotizacion $cotizacion, string $mensaje): void
+    {
+        $empresaId = (int) $cotizacion->empresa_id;
+        $oportunidad = $cotizacion->oportunidad;
+
+        if ($oportunidad === null) {
+            $this->visibilidad->exigirVer($empresaId);
+            abort_unless($this->visibilidad->veAlEquipo($empresaId), 403, $mensaje);
+
+            return;
+        }
+
+        $this->visibilidad->exigirVisible($empresaId, $oportunidad, $mensaje);
     }
 
     private function verificarEmpresaOportunidad(CrmOportunidad $oportunidad): void

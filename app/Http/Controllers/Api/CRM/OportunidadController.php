@@ -6,6 +6,7 @@ use App\Events\CRM\OportunidadUpdated;
 use App\Models\CRM\CrmOportunidad;
 use App\Services\CRM\DashboardResumenService;
 use App\Services\CRM\EmbudoService;
+use App\Services\CRM\VisibilidadOportunidades;
 use App\Support\CRM\RangoDashboard;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
@@ -19,17 +20,22 @@ class OportunidadController extends CrmBaseController
 
     private const RELACIONES = CrmOportunidad::RELACIONES_API;
 
+    public function __construct(private readonly VisibilidadOportunidades $visibilidad) {}
+
     /** GET /crm/oportunidades */
     public function index(Request $request): JsonResponse
     {
         $empresaId = $this->getEmpresaId();
         abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
+        $this->visibilidad->exigirVer($empresaId);
+
+        $vendedorId = $this->visibilidad->vendedorVisible($empresaId, $request->integer('vendedor_id') ?: null);
 
         $query = CrmOportunidad::query()
             ->where('empresa_id', $empresaId)
             ->with(self::RELACIONES)
             ->when($request->etapa, fn ($q, $etapa) => $q->where('etapa', $etapa))
-            ->when($request->vendedor_id, fn ($q, $id) => $q->where('vendedor_id', $id))
+            ->when($vendedorId, fn ($q, $id) => $q->where('vendedor_id', $id))
             // Usados por la pestaña "Oportunidades" de la ficha de cliente y
             // de prospecto, para listar solo las de ese registro.
             ->when($request->cliente_id, fn ($q, $id) => $q->where('cliente_id', $id))
@@ -47,12 +53,12 @@ class OportunidadController extends CrmBaseController
     {
         $empresaId = $this->getEmpresaId();
         abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
-        $this->exigirPermisoSubmodulo($empresaId, 'oportunidades', 'oportunidades', 'ver', 'No tienes permiso para ver oportunidades.');
+        $this->visibilidad->exigirVer($empresaId);
 
         $validated = $request->validate([
             'vendedor_id' => ['nullable', 'integer', $this->existeEnEmpresa('crm_vendedores', $empresaId)],
         ]);
-        $vendedorId = isset($validated['vendedor_id']) ? (int) $validated['vendedor_id'] : null;
+        $vendedorId = $this->visibilidad->vendedorVisible($empresaId, isset($validated['vendedor_id']) ? (int) $validated['vendedor_id'] : null);
 
         $porEtapa = $embudos->pipeline($empresaId, $vendedorId);
         $mes = RangoDashboard::desdePeriodo('mes_actual');
@@ -74,6 +80,7 @@ class OportunidadController extends CrmBaseController
     public function show(Request $request, CrmOportunidad $oportunidad): JsonResponse
     {
         $this->verificarEmpresa($oportunidad);
+        $this->visibilidad->exigirVisible((int) $oportunidad->empresa_id, $oportunidad);
         $oportunidad->load(self::RELACIONES);
 
         return $this->jsonSuccess($oportunidad);
@@ -97,6 +104,14 @@ class OportunidadController extends CrmBaseController
             'notas' => 'nullable|string',
         ]);
 
+        // Asignarla a otro vendedor es decisión de gerencia (misma regla que
+        // update): sin equipo solo al CrmVendedor activo propio.
+        if (! $this->visibilidad->veAlEquipo($empresaId)) {
+            $propio = $this->visibilidad->vendedorPropioId($empresaId);
+            abort_unless($propio !== null, 403, VisibilidadOportunidades::MENSAJE_SIN_VENDEDOR);
+            abort_unless((int) $validated['vendedor_id'] === $propio, 403, 'No puedes asignar la oportunidad a otro vendedor.');
+        }
+
         $error = $this->validarProspectoOCliente($validated);
         if ($error) {
             return $this->jsonError($error, 422);
@@ -118,6 +133,7 @@ class OportunidadController extends CrmBaseController
         $this->verificarEmpresa($oportunidad);
         $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'oportunidades', 'oportunidades', 'editar', 'No tienes permiso para editar oportunidades.');
         $empresaId = (int) $oportunidad->empresa_id;
+        $this->visibilidad->exigirVisible($empresaId, $oportunidad, VisibilidadOportunidades::MENSAJE_MODIFICAR_AJENA);
 
         $validated = $request->validate([
             'prospecto_id' => ['sometimes', 'nullable', 'integer', $this->existeEnEmpresa('crm_prospectos', $empresaId)],
@@ -129,6 +145,16 @@ class OportunidadController extends CrmBaseController
             'fecha_cierre_esperada' => 'sometimes|nullable|date',
             'notas' => 'sometimes|nullable|string',
         ]);
+
+        // Reasignar a otro vendedor es decisión de gerencia: sin equipo solo
+        // se acepta el vendedor propio (el actual, porque solo edita las suyas).
+        abort_if(
+            array_key_exists('vendedor_id', $validated)
+                && (int) $validated['vendedor_id'] !== (int) $oportunidad->vendedor_id
+                && ! $this->visibilidad->veAlEquipo($empresaId),
+            403,
+            'No puedes asignar la oportunidad a otro vendedor.',
+        );
 
         if (array_key_exists('prospecto_id', $validated) || array_key_exists('cliente_id', $validated)) {
             $mezclado = [
@@ -154,6 +180,7 @@ class OportunidadController extends CrmBaseController
     {
         $this->verificarEmpresa($oportunidad);
         $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'oportunidades', 'oportunidades', 'eliminar', 'No tienes permiso para eliminar oportunidades.');
+        $this->visibilidad->exigirVisible((int) $oportunidad->empresa_id, $oportunidad, VisibilidadOportunidades::MENSAJE_MODIFICAR_AJENA);
 
         $data = $oportunidad->toArray();
         $oportunidad->delete();
@@ -206,6 +233,8 @@ class OportunidadController extends CrmBaseController
         } else {
             $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'oportunidades', 'oportunidades', 'editar', 'No tienes permiso para editar oportunidades.');
         }
+
+        $this->visibilidad->exigirVisible((int) $oportunidad->empresa_id, $oportunidad, VisibilidadOportunidades::MENSAJE_MODIFICAR_AJENA);
 
         // Terminal es terminal: una oportunidad ya cerrada (ganada o perdida)
         // no se reabre ni se mueve a la otra etapa terminal. "forzar" solo
