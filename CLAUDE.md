@@ -220,6 +220,10 @@ Módulo de Administración → Activos Fijos (SF y GE). La carpeta de controlado
 - `GET crm/cotizaciones/{id}`, `PUT`, `PATCH enviar`, `PATCH aprobar`, `PATCH rechazar`, `GET` y `POST crm/oportunidades/{id}/cotizaciones`: 403 sobre una oportunidad ajena.
 - Una cotización cuya oportunidad está eliminada (soft delete) o no existe solo la ve y la toca quien tiene `oportunidades.equipo`.
 - Aprobar o rechazar la cotización de otro vendedor exige `oportunidades.equipo`. El perfil gerencia ya lo tiene y la migración nueva lo concede a quien tenga `cotizaciones.aprobar` o `rechazar`.
+- **Decisión consciente y de riesgo:** sin esa concesión, los gerentes configurados a mano como aprobadores perderían la función.
+  - Contrapartida: un vendedor configurado a mano con `aprobar` pasa a ver todo el equipo.
+  - La migración no concede `oportunidades.ver`.
+  - Antes de migrar se revisa la consulta del paso 6 del checklist y se quita `aprobar` o `equipo` caso por caso.
 
 ### Escrituras que se cuelgan de una oportunidad
 - `POST crm/actividades`, `POST crm/agenda` y `POST crm/seguimientos` con `entidad_tipo=oportunidad` exigen poder ver esa oportunidad (`entidadVisible`; sin `oportunidades.ver` no se ve ninguna).
@@ -354,7 +358,41 @@ Módulo de Administración → Activos Fijos (SF y GE). La carpeta de controlado
        )
      ORDER BY e.name, u.name;
      ```
-   - Después de `migrate`, aprobadores (`aprobar` o `rechazar`) sin `oportunidades.equipo` concedido: solo les queda una fila `equipo` revocada. Solo aprueban las cotizaciones de sus propias oportunidades. Para listarlos, cambiar la primera condición de la consulta anterior por `spt.slug IN ('aprobar', 'rechazar')`, y en el `NOT EXISTS` usar `ovt.slug = 'equipo'`. Local, antes de migrar: 1.
+   - **Antes de migrar**, aprobadores que no son gerencia: tienen `aprobar` o `rechazar` concedido y no tienen `oportunidades.cerrar`, `dashboard.ejecutivo` ni `mi-dia.equipo`. La migración les va a conceder `oportunidades.equipo`, así que pasan a ver las oportunidades de todo el equipo. `tiene_oportunidades_ver = 0` marca a quien, además, no tiene `oportunidades.ver`: la migración no lo concede, y sin él sigue recibiendo 403 en cotizaciones y oportunidades.
+     - Revisar cada fila y, caso por caso, quitarle `aprobar` o `rechazar` (si es un vendedor), o quitarle `oportunidades.equipo` después de migrar.
+     - Local: 0.
+     - Si después de migrar a un aprobador le queda una fila `equipo` revocada, la migración no lo toca, y solo aprueba las cotizaciones de sus propias oportunidades.
+     ```sql
+     SELECT DISTINCT e.id AS empresa_id, e.name AS empresa, u.id AS user_id, u.name, u.email, u.role,
+       EXISTS (
+         SELECT 1
+         FROM user_submodule_permissions g
+         JOIN submodule_permission_types gt ON gt.id = g.permission_type_id AND gt.slug = 'ver'
+         JOIN submodules gs ON gs.id = g.submodule_id AND gs.slug = 'oportunidades'
+         JOIN modules gm    ON gm.id = gs.module_id AND gm.slug = 'oportunidades' AND gm.application_id = a.id
+         WHERE g.user_id = usp.user_id AND g.is_granted = 1
+       ) AS tiene_oportunidades_ver
+     FROM user_submodule_permissions usp
+     JOIN submodule_permission_types spt ON spt.id = usp.permission_type_id AND spt.slug IN ('aprobar', 'rechazar')
+     JOIN submodules s   ON s.id = usp.submodule_id AND s.slug = 'cotizaciones'
+     JOIN modules m      ON m.id = s.module_id AND m.slug = 'cotizaciones'
+     JOIN applications a ON a.id = m.application_id AND a.slug = 'crm'
+     JOIN enterprises e  ON e.id = a.enterprise_id
+     JOIN users u        ON u.id = usp.user_id
+     WHERE usp.is_granted = 1
+       AND NOT EXISTS (
+         SELECT 1
+         FROM user_submodule_permissions g
+         JOIN submodule_permission_types gt ON gt.id = g.permission_type_id AND gt.submodule_id = g.submodule_id
+         JOIN submodules gs ON gs.id = g.submodule_id
+         JOIN modules gm    ON gm.id = gs.module_id AND gm.application_id = a.id
+         WHERE g.user_id = usp.user_id AND g.is_granted = 1
+           AND (   (gm.slug = 'oportunidades' AND gs.slug = 'oportunidades' AND gt.slug = 'cerrar')
+                OR (gm.slug = 'dashboard'     AND gs.slug = 'dashboard'     AND gt.slug = 'ejecutivo')
+                OR (gm.slug = 'mi-dia'        AND gs.slug = 'mi-dia'        AND gt.slug = 'equipo'))
+       )
+     ORDER BY e.name, u.name;
+     ```
 7. Para cada fila de los pasos 2, 3 y 5, una de tres: conceder `equipo` (o `ver`, en el paso 3), vincular o reactivar su `CrmVendedor`, o aceptar el 403. En el paso 4, a quien sea gerente se le concede `equipo` o se le aplica el perfil gerencia.
 - **Orden:** `php artisan migrate` va en el mismo despliegue que el código. Mientras no corre, nadie tiene `equipo`: la gerencia queda limitada a su propio vendedor (oportunidades, cotizaciones, agenda) o recibe 403 si no tiene uno vinculado.
 - **Front y back de versiones distintas:**
