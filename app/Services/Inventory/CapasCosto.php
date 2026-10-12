@@ -214,8 +214,13 @@ class CapasCosto
             if ($destino) {
                 $this->crearCapa($destino, $toma, (float) $consumo->unit_cost, $capa->fecha_entrada,
                     CapaCosto::ORIGEN_TRANSFERENCIA, $movimientoId, $detalleId, $capa->id);
-            } else {
+            } elseif ($this->mismoCosto($capa, (float) $consumo->unit_cost)) {
                 $capa->update(['cantidad_restante' => round((float) $capa->cantidad_restante + $toma, 4)]);
+            } else {
+                // La capa fue re-preciada (faltante reutilizado): sumarle la porción movería
+                // el valor a su costo actual. Se crea una capa aparte al costo del consumo.
+                $this->crearCapa($origen, $toma, (float) $consumo->unit_cost, $capa->fecha_entrada,
+                    CapaCosto::ORIGEN_DEVOLUCION, $movimientoId, $detalleId, $capa->id);
             }
 
             $consumo->update(['cantidad_devuelta' => round((float) $consumo->cantidad_devuelta + $toma, 4)]);
@@ -228,16 +233,30 @@ class CapasCosto
 
         if ($restante > self::TOL) {
             // Salida anterior al despliegue (sin porciones): entra al costo de respaldo.
-            $c = $destino ?? $origen;
+            // No se llama a entrar(): conciliaría contra una fila que el llamador aún no ajusta
+            // y recortaría capas ya movidas por este mismo método.
             $costo = $costoRespaldo > 0 ? $costoRespaldo : $this->ultimoCosto($origen);
-            $this->entrar($c, $restante, $costo, now(),
-                $destino ? CapaCosto::ORIGEN_TRANSFERENCIA : CapaCosto::ORIGEN_DEVOLUCION, $movimientoId, $detalleId);
+            if ($destino) {
+                $this->crearCapa($destino, $restante, $costo, now(), CapaCosto::ORIGEN_TRANSFERENCIA, $movimientoId, $detalleId);
+            } else {
+                $resto = $this->cubrirFaltante($this->capas($origen), $restante);
+                if ($resto > self::TOL) {
+                    $this->crearCapa($origen, $resto, $costo, now(), CapaCosto::ORIGEN_DEVOLUCION, $movimientoId, $detalleId);
+                }
+            }
             $importe += $restante * $costo;
         }
 
         return new ResultadoMovimiento($cantidad, $importe);
     }
 
+    /**
+     * Borra las capas de una entrada intacta. Limitaciones: una entrada que cubrió (total o
+     * parcialmente) un faltante no tiene capa o la tiene incompleta, así que el resultado
+     * puede traer menos cantidad que el movimiento; el llamador debe ajustar la fila por la
+     * cantidad del movimiento y no por $r->cantidad. Si fue absorbida por completo cae a la
+     * ruta legada (salir), que falla por stock insuficiente si ya no hay existencias.
+     */
     public function revertirEntrada(Cubeta $c, ?int $detalleId, float $cantidad): ResultadoMovimiento
     {
         $this->conciliar($c);
@@ -256,6 +275,10 @@ class CapasCosto
         return new ResultadoMovimiento($total, $importe);
     }
 
+    /**
+     * Con capas, restaura la cantidad_inicial de cada porción, por lo que el llamador debe
+     * ajustar AMBAS filas por la cantidad del movimiento ($d->cantidad).
+     */
     public function deshacerTransferencia(Cubeta $origen, Cubeta $destino, int $detalleId, float $cantidad, float $costoRespaldo): ResultadoMovimiento
     {
         $this->conciliar($origen);
@@ -274,8 +297,10 @@ class CapasCosto
         $importe = 0.0;
         foreach ($capas as $capa) {
             $q = (float) $capa->cantidad_inicial;
-            $original = $capa->capa_origen_id ? CapaCosto::lockForUpdate()->find($capa->capa_origen_id) : null;
-            if ($original) {
+            $original = $capa->capa_origen_id
+                ? $origen->filtrar(CapaCosto::query())->lockForUpdate()->find($capa->capa_origen_id)
+                : null;
+            if ($original && $this->mismoCosto($original, (float) $capa->unit_cost)) {
                 $original->update(['cantidad_restante' => round((float) $original->cantidad_restante + $q, 4)]);
             } else {
                 $this->crearCapa($origen, $q, (float) $capa->unit_cost, $capa->fecha_entrada, CapaCosto::ORIGEN_DEVOLUCION);
@@ -291,10 +316,16 @@ class CapasCosto
     public function reetiquetar(Cubeta $de, Cubeta $a): void
     {
         $this->conciliar($de);
+        $this->conciliar($a); // si el destino tiene existencia sin capas, que no se diluya al mezclar
         CapaCosto::deCubeta($de)->update(['lot_number' => $a->lote, 'area_id' => $a->areaId]);
     }
 
     // ---- internos ----
+
+    private function mismoCosto(CapaCosto $capa, float $costo): bool
+    {
+        return abs((float) $capa->unit_cost - $costo) <= 0.000001;
+    }
 
     private function exigirIntactas(Collection $capas): void
     {
