@@ -7,6 +7,7 @@ use App\Support\Inventario\Cubeta;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Facades\Log;
 
 class InventoryStock extends Model
 {
@@ -166,8 +167,16 @@ class InventoryStock extends Model
                 'total_cost' => 0,
             ]);
 
+        // Sin recorte a cero: el motor de capas (CapasCosto::salir) es la autoridad de suficiencia y
+        // la fila debe valer siempre lo mismo que la suma neta de las capas. Recortar aquí la
+        // desincronizaba en cubetas con faltante abierto.
         $nueva = round((float) ($stock->quantity ?? 0) + $delta, 4);
-        $stock->quantity = $allowNegative ? $nueva : max(0, $nueva);
+        if ($nueva < 0 && ! $allowNegative) {
+            Log::warning('Existencia negativa sin permiso de negativos; la fila se mantiene igual a las capas.', [
+                'producto' => $c->productId, 'almacen' => $c->entityId, 'lote' => $c->lote, 'cantidad' => $nueva,
+            ]);
+        }
+        $stock->quantity = $nueva;
 
         if ($expiry) {
             $stock->expiry_date = $expiry;

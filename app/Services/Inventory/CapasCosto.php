@@ -100,7 +100,9 @@ class CapasCosto
 
         $capas = $this->capas($c);
         $vivas = $capas->filter(fn ($k) => (float) $k->cantidad_restante > self::TOL);
-        $disponible = round((float) $vivas->sum(fn ($k) => (float) $k->cantidad_restante), 4);
+        // Disponibilidad NETA (capas positivas menos el faltante abierto): es lo que vale la fila
+        // tras conciliar. Solo se consumen las capas positivas, en orden PEPS.
+        $disponible = round((float) $capas->sum(fn ($k) => (float) $k->cantidad_restante), 4);
 
         if ($disponible + self::TOL < $cantidad && ! $permitirNegativo) {
             $producto = Product::whereKey($c->productId)->value('name') ?? "ID:{$c->productId}";
@@ -270,6 +272,8 @@ class CapasCosto
         $this->exigirIntactas($capas);
         $importe = (float) $capas->sum(fn ($k) => (float) $k->cantidad_inicial * (float) $k->unit_cost);
         $total = round((float) $capas->sum(fn ($k) => (float) $k->cantidad_inicial), 4);
+        // Quitar la entrada baja la existencia: no puede dejarla bajo lo que respalda activos fijos vigentes.
+        app(UnidadesVigentes::class)->exigirRespaldo($c->productId, $c->entityId, $c->lote, -$total);
         CapaCosto::whereIn('id', $capas->pluck('id'))->delete();
 
         return new ResultadoMovimiento($total, $importe);
@@ -295,6 +299,9 @@ class CapasCosto
         }
 
         $this->exigirIntactas($capas);
+        // Deshacer la transferencia quita lo recibido del destino: no puede dejarlo bajo lo que respalda activos fijos vigentes.
+        app(UnidadesVigentes::class)->exigirRespaldo($destino->productId, $destino->entityId, $destino->lote,
+            -round((float) $capas->sum(fn ($k) => (float) $k->cantidad_inicial), 4));
         $total = 0.0;
         $importe = 0.0;
         foreach ($capas as $capa) {
