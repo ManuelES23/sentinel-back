@@ -200,6 +200,63 @@ class DepreciacionCierreTest extends TestCase
         $this->cierres->cerrar($this->enterprise, $this->mes('2026-05'), $usuario);
     }
 
+    public function test_reabrir_exige_un_motivo_no_vacio(): void
+    {
+        $usuario = $this->usuarioDepreciacion();
+        $cierre = $this->cierres->cerrar($this->enterprise, $this->mes('2026-05'), $usuario);
+
+        try {
+            $this->cierres->reabrir($cierre, "   \n ", $usuario);
+            $this->fail('Debió rechazar el motivo vacío.');
+        } catch (ValidationException $e) {
+            $this->assertArrayHasKey('reason', $e->errors());
+        }
+
+        $this->assertNotNull(DepreciationClose::find($cierre->id));
+        $this->assertSame(0, ActivityLog::where('action', 'reopen')->count());
+    }
+
+    public function test_reabrir_registra_datos_utiles_y_el_motivo_sin_espacios_sobrantes(): void
+    {
+        $this->crearActivoDepreciable();
+        $this->crearActivoDepreciable(['name' => 'Sin tasa', 'depreciation_rate' => null]);
+        $usuario = $this->usuarioDepreciacion();
+        $cierre = $this->cierres->cerrar($this->enterprise, $this->mes('2026-05'), $usuario);
+
+        $this->cierres->reabrir($cierre, '  Corregir tasa  ', $usuario);
+
+        $log = ActivityLog::where('action', 'reopen')->where('model_id', $cierre->id)->first();
+        $this->assertSame('Corregir tasa', $log->new_values['reason']);
+        $this->assertSame($usuario->id, $log->new_values['reopened_by']);
+        $this->assertSame($this->enterprise->id, $log->old_values['enterprise_id']);
+        $this->assertSame(1, $log->old_values['excluded_count']);
+        $this->assertSame('900.00', $log->old_values['accumulated_total']);
+        $this->assertSame('11100.00', $log->old_values['book_total']);
+        $this->assertSame('180.00', $log->old_values['month_total']);
+    }
+
+    public function test_el_mismo_mes_se_puede_cerrar_en_dos_empresas(): void
+    {
+        $usuario = $this->usuarioDepreciacion();
+
+        $this->cierres->cerrar($this->enterprise, $this->mes('2026-05'), $usuario);
+        $this->cierres->cerrar($this->corporativo, $this->mes('2026-05'), $usuario);
+
+        $this->assertSame(2, DepreciationClose::where('period', '2026-05-01')->count());
+    }
+
+    public function test_un_cierre_de_otra_empresa_posterior_no_impide_reabrir_el_ultimo_de_esta(): void
+    {
+        $usuario = $this->usuarioDepreciacion();
+        $propio = $this->cierres->cerrar($this->enterprise, $this->mes('2026-04'), $usuario);
+        $this->cierres->cerrar($this->corporativo, $this->mes('2026-05'), $usuario);
+
+        $this->cierres->reabrir($propio, 'Corrección', $usuario);
+
+        $this->assertNull(DepreciationClose::find($propio->id));
+        $this->assertSame(1, DepreciationClose::count());
+    }
+
     public function test_aarreglo_formatea_el_cierre(): void
     {
         $usuario = $this->usuarioDepreciacion();

@@ -93,7 +93,7 @@ class CierreDepreciacion
             ->first();
 
         if ($cierre) {
-            $lines = $cierre->lines()->orderBy('code')->get()->map(fn ($l) => [
+            $lines = $cierre->lines()->orderBy('code')->orderBy('id')->get()->map(fn ($l) => [
                 'fixed_asset_id' => $l->fixed_asset_id,
                 'code' => $l->code,
                 'name' => $l->name,
@@ -135,6 +135,9 @@ class CierreDepreciacion
             throw ValidationException::withMessages(['month' => 'No se puede cerrar un mes futuro.']);
         }
 
+        // Dos cierres simultáneos del mismo mes toman gap lock en el `lockForUpdate()` y MySQL
+        // lanza deadlock (1213) en el INSERT; con reintentos el segundo ya ve el cierre
+        // ganador y responde 422 en vez de 500.
         return DB::transaction(function () use ($empresa, $mes, $usuario) {
             $yaCerrado = DepreciationClose::where('enterprise_id', $empresa->id)
                 ->where('period', $mes->toDateString())
@@ -169,12 +172,17 @@ class CierreDepreciacion
             }
 
             return $cierre;
-        });
+        }, 3);
     }
 
     /** Solo el último mes cerrado de la empresa. El motivo y el autor quedan en el log de actividad. */
     public function reabrir(DepreciationClose $cierre, string $motivo, User $usuario): void
     {
+        $motivo = trim($motivo);
+        if ($motivo === '') {
+            throw ValidationException::withMessages(['reason' => 'Indica el motivo de la reapertura.']);
+        }
+
         DB::transaction(function () use ($cierre, $motivo, $usuario) {
             $ultimo = DepreciationClose::where('enterprise_id', $cierre->enterprise_id)
                 ->orderByDesc('period')
@@ -189,7 +197,15 @@ class CierreDepreciacion
                 action: 'reopen',
                 model: 'DepreciationClose',
                 modelId: $cierre->id,
-                oldValues: ['period' => $cierre->period, 'assets_count' => $cierre->assets_count, 'month_total' => $cierre->month_total],
+                oldValues: [
+                    'enterprise_id' => $cierre->enterprise_id,
+                    'period' => $cierre->period,
+                    'assets_count' => $cierre->assets_count,
+                    'excluded_count' => $cierre->excluded_count,
+                    'month_total' => $cierre->month_total,
+                    'accumulated_total' => $cierre->accumulated_total,
+                    'book_total' => $cierre->book_total,
+                ],
                 newValues: ['reason' => $motivo, 'reopened_by' => $usuario->id],
             );
 
