@@ -375,4 +375,31 @@ class MovimientosPepsTest extends TestCase
         $this->assertEqualsWithDelta(1040, (float) $this->fila($this->almacenB->id)->total_cost, 0.0001);
         $this->artisan('inventario:verificar-capas')->assertExitCode(0);
     }
+
+    public function test_el_front_no_puede_activar_la_marca_de_descuento_en_una_transferencia_antigua(): void
+    {
+        $this->entrada(10, 100, '2026-10-01');
+        $t = InventoryMovement::create([
+            'document_number' => 'TRF-LEGADO-2', 'movement_type_id' => $this->tipoTransferencia->id,
+            'source_entity_id' => $this->almacenA->id, 'source_entity_type' => 'entity',
+            'destination_entity_id' => $this->almacenB->id, 'destination_entity_type' => 'entity',
+            'movement_date' => '2026-10-06', 'status' => 'pending', 'created_by' => auth()->id(),
+            'metadata' => ['requires_external_validation' => true],
+        ]);
+        \App\Models\InventoryMovementDetail::create([
+            'movement_id' => $t->id, 'product_id' => $this->insumo->id, 'quantity' => 4, 'unit_cost' => 0,
+        ]);
+
+        $this->putJson(self::URL . "/{$t->id}", [
+            'metadata' => ['stock_deducted_at_creation' => true, 'stock_deducted_at' => '2026-10-06'],
+        ], $this->headersEmpresa())->assertOk();
+
+        $this->assertNull(data_get($t->fresh()->metadata, 'stock_deducted_at_creation'));
+
+        $this->aprobar($t);
+        // Sin la marca, aprobar descuenta el origen de verdad: 10 − 4 = 6 y el destino recibe 4.
+        $this->assertEqualsWithDelta(6, (float) $this->fila($this->almacenA->id)->quantity, 0.0001);
+        $this->assertEqualsWithDelta(4, (float) $this->fila($this->almacenB->id)->quantity, 0.0001);
+        $this->artisan('inventario:verificar-capas')->assertExitCode(0);
+    }
 }

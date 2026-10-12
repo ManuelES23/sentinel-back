@@ -798,6 +798,9 @@ class InventoryMovementController extends Controller
                 // La marca no la controla el front: si se perdiera, approve() descontaría el origen otra vez.
                 $movementMetadata['stock_deducted_at_creation'] = true;
                 $movementMetadata['stock_deducted_at'] ??= data_get($movement->metadata, 'stock_deducted_at');
+            } else {
+                // Tampoco puede activarla: aprobaría sin que el origen se haya descontado nunca.
+                unset($movementMetadata['stock_deducted_at_creation'], $movementMetadata['stock_deducted_at']);
             }
 
             $movement->update([
