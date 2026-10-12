@@ -55,7 +55,7 @@ class OportunidadResumenTest extends TestCase
 
     public function test_devuelve_totales_por_etapa_y_tasa_del_mes(): void
     {
-        $this->otorgarPermisosCrm('oportunidades', 'oportunidades', ['ver']);
+        $this->otorgarPermisosCrm('oportunidades', 'oportunidades', ['ver', 'equipo']);
         $this->op(['etapa' => 'prospecto']);
         $this->op(['etapa' => 'propuesta', 'monto_esperado' => 2000]);
         $this->op(['etapa' => 'cerrado_ganado', 'fecha_cierre_real' => '2026-10-03 10:00:00']);
@@ -75,12 +75,35 @@ class OportunidadResumenTest extends TestCase
 
     public function test_filtra_por_vendedor(): void
     {
-        $this->otorgarPermisosCrm('oportunidades', 'oportunidades', ['ver']);
+        $this->otorgarPermisosCrm('oportunidades', 'oportunidades', ['ver', 'equipo']);
         $otro = CrmVendedor::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Otro']);
         $this->op(['etapa' => 'prospecto']);
         $this->op(['etapa' => 'prospecto', 'vendedor_id' => $otro->id]);
 
         $this->resumen("?vendedor_id={$otro->id}")->assertOk()->assertJsonPath('data.abiertas', 1);
+    }
+
+    public function test_sin_equipo_el_resumen_se_limita_al_vendedor_propio(): void
+    {
+        $this->otorgarPermisosCrm('oportunidades', 'oportunidades', ['ver']);
+        $propio = CrmVendedor::create([
+            'empresa_id' => $this->enterprise->id, 'user_id' => $this->actingUser->id,
+            'nombre' => 'Propio', 'activo' => true,
+        ]);
+        $this->op(['etapa' => 'prospecto']);
+        $this->op(['etapa' => 'prospecto', 'vendedor_id' => $propio->id]);
+        $this->op(['etapa' => 'calificado', 'vendedor_id' => $propio->id]);
+
+        $this->resumen()->assertOk()->assertJsonPath('data.abiertas', 2);
+        $this->resumen("?vendedor_id={$propio->id}")->assertOk()->assertJsonPath('data.abiertas', 2);
+        $this->resumen("?vendedor_id={$this->vendedor->id}")->assertStatus(403);
+    }
+
+    public function test_sin_equipo_y_sin_vendedor_vinculado_el_resumen_responde_403(): void
+    {
+        $this->otorgarPermisosCrm('oportunidades', 'oportunidades', ['ver']);
+
+        $this->resumen()->assertStatus(403);
     }
 
     public function test_vendedor_de_otra_empresa_devuelve_422(): void
