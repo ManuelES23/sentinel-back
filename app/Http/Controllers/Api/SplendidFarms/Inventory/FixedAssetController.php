@@ -11,6 +11,7 @@ use App\Services\ActivosFijos\AlcanceActivos;
 use App\Services\ActivosFijos\CreadorActivo;
 use App\Services\ActivosFijos\GeneradorCodigoActivo;
 use App\Services\ActivosFijos\PermisosActivos;
+use App\Services\ActivosFijos\ResolutorDepreciacion;
 use App\Services\ActivosFijos\ValidadorRelacionesActivo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -46,6 +47,7 @@ class FixedAssetController extends Controller
         private GeneradorCodigoActivo $codigos,
         private CreadorActivo $creador,
         private ValidadorRelacionesActivo $relaciones,
+        private ResolutorDepreciacion $depreciacion,
     ) {
     }
 
@@ -85,9 +87,12 @@ class FixedAssetController extends Controller
 
         $porPagina = min(max((int) $request->input('per_page', self::POR_PAGINA), 1), self::POR_PAGINA_MAX);
 
+        $pagina = $query->orderBy('name')->orderBy('id')->paginate($porPagina);
+        $pagina->getCollection()->each(fn (FixedAsset $activo) => $this->conDepreciacion($activo));
+
         return response()->json([
             'success' => true,
-            'data' => $query->orderBy('name')->orderBy('id')->paginate($porPagina),
+            'data' => $pagina,
         ]);
     }
 
@@ -119,6 +124,7 @@ class FixedAssetController extends Controller
         }
 
         $asset->load(self::RELATIONS);
+        $this->conDepreciacion($asset);
         $this->emitir('created', $asset);
 
         return response()->json([
@@ -135,7 +141,7 @@ class FixedAssetController extends Controller
 
         return response()->json([
             'success' => true,
-            'data' => $asset->load(self::RELATIONS),
+            'data' => $this->conDepreciacion($asset->load(self::RELATIONS)),
         ]);
     }
 
@@ -183,6 +189,7 @@ class FixedAssetController extends Controller
         }
 
         $asset = $asset->fresh(self::RELATIONS);
+        $this->conDepreciacion($asset);
         $this->emitir('updated', $asset);
 
         return response()->json([
@@ -320,6 +327,14 @@ class FixedAssetController extends Controller
     private function debeSincronizar(Request $request): bool
     {
         return $request->has('characteristics') || $request->boolean('sync_characteristics');
+    }
+
+    /** Resumen de depreciación a la fecha de hoy; se agrega al JSON, no se guarda. */
+    private function conDepreciacion(FixedAsset $activo): FixedAsset
+    {
+        $activo->setAttribute('depreciacion', $this->depreciacion->resumen($activo));
+
+        return $activo;
     }
 
     private function emitir(string $accion, FixedAsset $asset): void
