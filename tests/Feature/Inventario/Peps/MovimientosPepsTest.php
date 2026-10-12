@@ -79,6 +79,7 @@ class MovimientosPepsTest extends TestCase
 
         $this->assertEqualsWithDelta(1040, (float) $m->details()->first()->total_cost, 0.0001);
         $this->assertEqualsWithDelta(5760, (float) $this->fila($this->almacenA->id)->total_cost, 0.0001);
+        $this->artisan('inventario:verificar-capas')->assertExitCode(0);
     }
 
     public function test_transferencia_completa_lleva_las_capas_al_destino(): void
@@ -91,6 +92,7 @@ class MovimientosPepsTest extends TestCase
         $this->assertEqualsWithDelta(1040, (float) $this->fila($this->almacenB->id)->total_cost, 0.0001);
         $min = CapaCosto::where('entity_id', $this->almacenB->id)->min('fecha_entrada');
         $this->assertSame('2026-10-01', substr((string) $min, 0, 10));
+        $this->artisan('inventario:verificar-capas')->assertExitCode(0);
     }
 
     public function test_transferencia_recibida_parcial_devuelve_la_diferencia_al_origen_y_el_destino_recibe_lo_mas_viejo(): void
@@ -117,6 +119,7 @@ class MovimientosPepsTest extends TestCase
         // El origen conserva 2×100 (devueltas) y 50×120.
         $this->assertEqualsWithDelta(52, $this->restante($this->almacenA->id), 0.0001);
         $this->assertEqualsWithDelta(2, (float) CapaCosto::where('entity_id', $this->almacenA->id)->where('unit_cost', 100)->sum('cantidad_restante'), 0.0001);
+        $this->artisan('inventario:verificar-capas')->assertExitCode(0);
     }
 
     public function test_cancelar_transferencia_recibida_parcial_ajusta_las_filas_por_lo_recibido(): void
@@ -137,6 +140,7 @@ class MovimientosPepsTest extends TestCase
         $this->assertEqualsWithDelta(0, (float) $b->total_cost, 0.0001);
         $this->assertEqualsWithDelta(58, $this->restante($this->almacenA->id), 0.0001);
         $this->assertSame(0, CapaCosto::where('entity_id', $this->almacenB->id)->count());
+        $this->artisan('inventario:verificar-capas')->assertExitCode(0);
     }
 
     public function test_transferencia_antigua_sin_descuento_previo_recibida_parcial_descuenta_solo_lo_recibido(): void
@@ -162,6 +166,10 @@ class MovimientosPepsTest extends TestCase
         $this->assertEqualsWithDelta(6200, (float) $origen->total_cost, 0.0001);
         $this->assertEqualsWithDelta(6, (float) $destino->quantity, 0.0001);
         $this->assertEqualsWithDelta(600, (float) $destino->total_cost, 0.0001);
+        // El renglón de una transferencia antigua también queda con el costo real de lo recibido.
+        $this->assertEqualsWithDelta(100, (float) $d->fresh()->unit_cost, 0.0001);
+        $this->assertEqualsWithDelta(600, (float) $d->fresh()->total_cost, 0.0001);
+        $this->artisan('inventario:verificar-capas')->assertExitCode(0);
     }
 
     public function test_cancelar_salida_aprobada_devuelve_porciones_y_kardex_sube(): void
@@ -180,6 +188,7 @@ class MovimientosPepsTest extends TestCase
         $this->assertEqualsWithDelta(6800, (float) $k->balance_value, 0.0001);
         // El renglón original conserva su costo real PEPS (no se sobrescribe al cancelar).
         $this->assertEqualsWithDelta(1040, (float) $m->details()->first()->total_cost, 0.0001);
+        $this->artisan('inventario:verificar-capas')->assertExitCode(0);
     }
 
     public function test_cancelar_entrada_aprobada_sin_uso_quita_capas_y_kardex_netea_cero(): void
@@ -204,6 +213,7 @@ class MovimientosPepsTest extends TestCase
             0.0001
         );
         $this->assertEqualsWithDelta(900, (float) $kardex->last()->balance_value, 0.0001);
+        $this->artisan('inventario:verificar-capas')->assertExitCode(0);
     }
 
     public function test_cancelar_entrada_ya_usada_se_bloquea_y_no_cambia_nada(): void
@@ -223,6 +233,7 @@ class MovimientosPepsTest extends TestCase
         $this->assertSame($capasAntes, CapaCosto::orderBy('id')->get(['id', 'cantidad_inicial', 'cantidad_restante'])->toArray());
         $this->assertSame($kardexAntes, InventoryKardex::count());
         $this->assertSame('approved', $entrada->fresh()->status);
+        $this->artisan('inventario:verificar-capas')->assertExitCode(0);
     }
 
     public function test_cancelar_transferencia_aprobada_deshace_filas_capas_y_kardex_en_ambos_lados(): void
@@ -250,6 +261,7 @@ class MovimientosPepsTest extends TestCase
         $this->assertEqualsWithDelta(6800, (float) $ultimoOrigen->balance_value, 0.0001);
         $this->assertSame('decrease', $ultimoDestino->transaction_type);
         $this->assertEqualsWithDelta(0, (float) $ultimoDestino->balance_value, 0.0001);
+        $this->artisan('inventario:verificar-capas')->assertExitCode(0);
     }
 
     public function test_cancelar_transferencia_aprobada_con_destino_usado_se_bloquea(): void
@@ -265,6 +277,7 @@ class MovimientosPepsTest extends TestCase
             ->assertJsonPath('errors.movement.0', self::YA_USADA);
         $this->assertEqualsWithDelta(3, (float) $this->fila($this->almacenB->id)->quantity, 0.0001);
         $this->assertEqualsWithDelta(6, (float) $this->fila($this->almacenA->id)->quantity, 0.0001);
+        $this->artisan('inventario:verificar-capas')->assertExitCode(0);
     }
 
     public function test_borrar_transferencia_pendiente_regresa_todo_al_origen(): void
@@ -277,6 +290,7 @@ class MovimientosPepsTest extends TestCase
         $this->assertEqualsWithDelta(10, (float) $this->fila($this->almacenA->id)->quantity, 0.0001);
         $this->assertEqualsWithDelta(1000, (float) $this->fila($this->almacenA->id)->total_cost, 0.0001);
         $this->assertEqualsWithDelta(10, $this->restante($this->almacenA->id), 0.0001);
+        $this->artisan('inventario:verificar-capas')->assertExitCode(0);
     }
 
     public function test_cancelar_transferencia_pendiente_regresa_al_costo_original_de_cada_porcion(): void
@@ -297,5 +311,68 @@ class MovimientosPepsTest extends TestCase
         $k = InventoryKardex::where('movement_id', $t->id)->latest('id')->first();
         $this->assertSame('increase', $k->transaction_type);
         $this->assertEqualsWithDelta(1040, (float) $k->quantity * (float) $k->unit_cost, 0.0001);
+        $this->artisan('inventario:verificar-capas')->assertExitCode(0);
+    }
+
+    public function test_recepcion_parcial_deja_en_el_renglon_el_costo_real_de_lo_recibido(): void
+    {
+        $this->entrada(8, 100, '2026-10-01');
+        $this->entrada(50, 120, '2026-10-05');
+        $t = $this->transferencia(10); // al crear: 8×100 + 2×120 = 1040 → renglón a 104
+        $t->update(['metadata' => array_merge($t->metadata ?? [], ['requires_external_validation' => true])]);
+        $detalle = $t->details()->first();
+        $this->assertEqualsWithDelta(1040, (float) $detalle->fresh()->total_cost, 0.0001);
+
+        $this->aprobar($t, ['received_quantities' => [['detail_id' => $detalle->id, 'quantity' => 6]]]);
+
+        // Llegan 6 a $100 (lo más viejo): el renglón muestra 600, no 6 × el promedio de toda la salida (624).
+        $detalle->refresh();
+        $this->assertEqualsWithDelta(6, (float) $detalle->quantity, 0.0001);
+        $this->assertEqualsWithDelta(100, (float) $detalle->unit_cost, 0.0001);
+        $this->assertEqualsWithDelta(600, (float) $detalle->total_cost, 0.0001);
+        $this->assertEqualsWithDelta(600, (float) $t->fresh()->total_amount, 0.0001);
+        $this->assertEqualsWithDelta(600, (float) $this->fila($this->almacenB->id)->total_cost, 0.0001);
+        $this->artisan('inventario:verificar-capas')->assertExitCode(0);
+    }
+
+    public function test_recepcion_completa_deja_en_el_renglon_el_costo_de_las_porciones_enviadas(): void
+    {
+        $this->entrada(8, 100, '2026-10-01');
+        $this->entrada(50, 120, '2026-10-05');
+        $t = $this->transferencia(10);
+        $this->aprobar($t);
+
+        $detalle = $t->details()->first();
+        $this->assertEqualsWithDelta(104, (float) $detalle->unit_cost, 0.0001);
+        $this->assertEqualsWithDelta(1040, (float) $detalle->total_cost, 0.0001);
+        $this->artisan('inventario:verificar-capas')->assertExitCode(0);
+    }
+
+    public function test_editar_una_transferencia_pendiente_ya_descontada_no_pisa_el_costo_del_renglon(): void
+    {
+        $this->entrada(8, 100, '2026-10-01');
+        $this->entrada(50, 120, '2026-10-05');
+        $t = $this->transferencia(10);
+        $detalle = $t->details()->first();
+        $this->assertEqualsWithDelta(1040, (float) $detalle->total_cost, 0.0001);
+
+        // El front reenvía el renglón con unit_cost 0 (no conoce el costo PEPS).
+        $this->putJson(self::URL . "/{$t->id}", [
+            'description' => 'Corrección de nota',
+            'metadata' => ['nota' => 'x'], // sin la marca interna de descuento
+            'details' => [['id' => $detalle->id, 'product_id' => $this->insumo->id, 'quantity' => 10, 'unit_cost' => 0]],
+        ], $this->headersEmpresa())->assertOk();
+
+        $detalle->refresh();
+        $this->assertEqualsWithDelta(104, (float) $detalle->unit_cost, 0.0001);
+        $this->assertEqualsWithDelta(1040, (float) $detalle->total_cost, 0.0001);
+        $this->assertEqualsWithDelta(1040, (float) $t->fresh()->total_amount, 0.0001);
+        $this->assertTrue((bool) data_get($t->fresh()->metadata, 'stock_deducted_at_creation'));
+
+        $this->aprobar($t);
+        // El origen no se descuenta dos veces: 58 − 10 = 48 y el destino recibe 10 por 1040.
+        $this->assertEqualsWithDelta(48, (float) $this->fila($this->almacenA->id)->quantity, 0.0001);
+        $this->assertEqualsWithDelta(1040, (float) $this->fila($this->almacenB->id)->total_cost, 0.0001);
+        $this->artisan('inventario:verificar-capas')->assertExitCode(0);
     }
 }

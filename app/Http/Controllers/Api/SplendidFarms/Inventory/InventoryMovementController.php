@@ -784,6 +784,9 @@ class InventoryMovementController extends Controller
         DB::beginTransaction();
 
         try {
+            // Una transferencia pendiente ya descontó su origen al crearse (y sus renglones llevan el costo PEPS real).
+            $yaDescontado = (bool) data_get($movement->metadata, 'stock_deducted_at_creation', false);
+
             // Actualizar movimiento
             $movementMetadata = $this->buildApprovalMetadata(
                 $request,
@@ -791,6 +794,11 @@ class InventoryMovementController extends Controller
                 $validated['destination_entity_id'] ?? $movement->destination_entity_id,
                 $validated['metadata'] ?? $movement->metadata,
             );
+            if ($yaDescontado) {
+                // La marca no la controla el front: si se perdiera, approve() descontaría el origen otra vez.
+                $movementMetadata['stock_deducted_at_creation'] = true;
+                $movementMetadata['stock_deducted_at'] ??= data_get($movement->metadata, 'stock_deducted_at');
+            }
 
             $movement->update([
                 'source_entity_id' => $validated['source_entity_id'] ?? $movement->source_entity_id,
@@ -814,7 +822,7 @@ class InventoryMovementController extends Controller
                     if (isset($detail['id'])) {
                         // Actualizar existente. Por modelo (no por query builder) para que
                         // el cast de expiry_date normalice la fecha ISO que devuelve la API.
-                        $movement->details()->findOrFail($detail['id'])->update([
+                        $cambios = [
                             'product_id' => $detail['product_id'],
                             'quantity' => $detail['quantity'],
                             'unit_id' => $detail['unit_id'] ?? null,
@@ -823,7 +831,13 @@ class InventoryMovementController extends Controller
                             'serial_number' => $detail['serial_number'] ?? null,
                             'expiry_date' => $detail['expiry_date'] ?? null,
                             'notes' => $detail['notes'] ?? null,
-                        ]);
+                        ];
+                        // Transferencia ya descontada: unit_cost/total_cost del renglón son el costo PEPS real
+                        // de lo que salió; el front no lo conoce (manda 0) y no debe pisarlo.
+                        if ($yaDescontado) {
+                            unset($cambios['unit_cost']);
+                        }
+                        $movement->details()->findOrFail($detail['id'])->update($cambios);
                     } else {
                         // Crear nuevo
                         InventoryMovementDetail::create([
@@ -1108,6 +1122,8 @@ class InventoryMovementController extends Controller
                 }
 
                 if (!empty($insufficientStock)) {
+                    DB::rollBack();
+
                     return response()->json([
                         'status' => 'error',
                         'message' => 'Stock insuficiente para los siguientes productos: ' . implode(', ', $insufficientStock),
@@ -1173,7 +1189,7 @@ class InventoryMovementController extends Controller
                         );
                     }
 
-                    $this->stock->devolver(
+                    $llegada = $this->stock->devolver(
                         $detail,
                         (int) $movement->source_entity_id,
                         $movement->source_entity_type,
@@ -1182,6 +1198,15 @@ class InventoryMovementController extends Controller
                         (int) $movement->destination_entity_id,
                         $movement->destination_entity_type
                     );
+
+                    // El renglón queda con el costo real de lo que llegó (no con el promedio de toda
+                    // la salida, que en una recepción parcial incluye porciones que regresaron al origen).
+                    if ($llegada->cantidad > 0) {
+                        $detail->forceFill([
+                            'unit_cost' => round($llegada->costoUnitario(), 4),
+                            'total_cost' => round($llegada->importe, 4),
+                        ])->save();
+                    }
                 }
             }
 
