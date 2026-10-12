@@ -108,6 +108,7 @@ class ReporteEmpaqueController extends Controller
                 'cajas_producidas' => (int) $recepcion->cajas_producidas,
                 'kg_producidos' => round((float) $recepcion->kg_producidos, 2),
                 'status' => $recepcion->status,
+                'observaciones' => $recepcion->observaciones,
             ];
         });
 

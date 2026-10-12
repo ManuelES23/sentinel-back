@@ -51,6 +51,20 @@ class ReporteEmpaqueControllerTest extends TestCase
         $this->assertEquals(50.0, $resumen['rendimiento_pct']); // 500kg producidos / 1000kg recibidos
     }
 
+    public function test_incluye_las_observaciones_de_la_recepcion(): void
+    {
+        $this->crearRecepcionConProduccion($this->productorPrincipal, 'A', ['observaciones' => 'Fruta con golpes']);
+        $this->crearRecepcionConProduccion($this->productorPrincipal, 'B', ['observaciones' => null]);
+
+        $response = $this->getJson(self::BASE_URL.'?temporada_id='.$this->temporada->id);
+
+        $response->assertOk();
+        $porFolio = collect($response->json('data.recepciones'))->keyBy('folio_recepcion');
+
+        $this->assertSame('Fruta con golpes', $porFolio['REC-A']['observaciones']);
+        $this->assertNull($porFolio['REC-B']['observaciones']);
+    }
+
     public function test_excluye_recepciones_de_otra_temporada(): void
     {
         $this->crearRecepcionConProduccion($this->productorPrincipal, 'A');
