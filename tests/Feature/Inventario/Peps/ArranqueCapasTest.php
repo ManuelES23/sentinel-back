@@ -222,6 +222,49 @@ class ArranqueCapasTest extends TestCase
         $this->assertSame(1, CapaCosto::count());
     }
 
+    public function test_lotes_con_espacios_o_vacios_de_filas_no_duplicadas_tambien_se_recortan(): void
+    {
+        $this->setUpAlmacenFixtures();
+        $this->darStock($this->almacenA, $this->insumo, 4, ' L-1');   // espacio al inicio, sin duplicado
+        $this->darStock($this->almacenB, $this->insumo, 3, 'L-2 ');   // espacio al final
+        $this->darStock($this->almacenA, $this->insumo, 2, '   ');    // solo espacios: es "sin lote"
+        $valorAntes = (float) InventoryStock::sum('total_cost');
+
+        $this->migrar();
+
+        $this->assertSame(['L-1', null], InventoryStock::where('entity_id', $this->almacenA->id)->orderBy('id')->pluck('lot_number')->all());
+        $this->assertSame('L-2', InventoryStock::where('entity_id', $this->almacenB->id)->value('lot_number'));
+        $this->assertSame(['L-1', null], CapaCosto::where('entity_id', $this->almacenA->id)->orderBy('id')->pluck('lot_number')->all());
+        $this->assertEqualsWithDelta($valorAntes, $this->valorCapas(), 0.0001);
+        $this->artisan('inventario:verificar-capas')->assertExitCode(0);
+
+        // Filas y capas ya coinciden con la cubeta del motor: una salida del lote la encuentra.
+        InventoryStock::updateStock($this->insumo->id, $this->almacenA->id, null, -1, 0, 'L-1');
+        $this->assertEqualsWithDelta(3, (float) InventoryStock::where('entity_id', $this->almacenA->id)->where('lot_number', 'L-1')->value('quantity'), 0.0001);
+        $this->assertSame(2, InventoryStock::where('entity_id', $this->almacenA->id)->count());
+        $this->artisan('inventario:verificar-capas')->assertExitCode(0);
+
+        // Idempotente.
+        $this->migrar();
+        $this->assertSame(3, CapaCosto::count());
+        $this->artisan('inventario:verificar-capas')->assertExitCode(0);
+    }
+
+    public function test_recortar_lotes_no_choca_con_el_indice_unico_porque_las_duplicadas_se_unen_antes(): void
+    {
+        $this->setUpAlmacenFixtures();
+        $this->darStock($this->almacenA, $this->insumo, 6, ' L-1');
+        $this->darStock($this->almacenA, $this->insumo, 4, 'L-1 ');
+        $this->darStock($this->almacenB, $this->insumo, 5, ' M-9');
+
+        $this->migrar();
+
+        $this->assertSame(['L-1'], InventoryStock::where('entity_id', $this->almacenA->id)->pluck('lot_number')->all());
+        $this->assertEqualsWithDelta(10.0, (float) InventoryStock::where('entity_id', $this->almacenA->id)->value('quantity'), 0.0001);
+        $this->assertSame('M-9', InventoryStock::where('entity_id', $this->almacenB->id)->value('lot_number'));
+        $this->artisan('inventario:verificar-capas')->assertExitCode(0);
+    }
+
     public function test_down_borra_solo_las_capas_de_arranque(): void
     {
         $this->setUpAlmacenFixtures();

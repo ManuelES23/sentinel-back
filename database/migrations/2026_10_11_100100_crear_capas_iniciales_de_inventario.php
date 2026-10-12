@@ -17,6 +17,7 @@ return new class extends Migration
     public function up(): void
     {
         $this->unirFilasDuplicadas();
+        $this->recortarLotes();
         $this->crearCapas();
     }
 
@@ -56,6 +57,27 @@ return new class extends Migration
                 DB::table('inventory_stock')->where('id', $primera->id)->update($cambios);
                 Log::warning('Capas PEPS: filas de stock duplicadas unidas', ['clave' => $clave, 'ids' => $grupo->pluck('id')->all()]);
             }
+        });
+    }
+
+    /**
+     * Deja el lote de TODAS las filas recortado (y NULL si queda vacío), igual que Cubeta: el motor busca la
+     * fila por el lote recortado, así que una fila no duplicada con ' L-1' nunca coincidiría con sus capas.
+     * Va después de unir duplicados: dos filas que solo difieren en espacios ya son una sola, así que el
+     * recorte no puede chocar con el índice único. Idempotente.
+     */
+    private function recortarLotes(): void
+    {
+        DB::transaction(function () {
+            DB::table('inventory_stock')->whereNotNull('lot_number')->orderBy('id')->chunkById(500, function ($filas) {
+                foreach ($filas as $f) {
+                    $lote = trim($f->lot_number);
+                    $lote = $lote === '' ? null : $lote;
+                    if ($lote !== $f->lot_number) {
+                        DB::table('inventory_stock')->where('id', $f->id)->update(['lot_number' => $lote]);
+                    }
+                }
+            });
         });
     }
 
