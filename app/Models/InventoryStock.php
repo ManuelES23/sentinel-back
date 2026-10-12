@@ -2,7 +2,6 @@
 
 namespace App\Models;
 
-use App\Services\ActivosFijos\UnidadesVigentes;
 use App\Services\Inventory\CapasCosto;
 use App\Support\Inventario\Cubeta;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -114,7 +113,9 @@ class InventoryStock extends Model
     }
 
     /**
-     * Actualizar stock después de un movimiento
+     * Movimiento de cantidad sin renglón de movimiento (hoy: producción de
+     * Empaque). Entradas crean capa; salidas toman PEPS. La regla de activos
+     * fijos vigentes vive en CapasCosto::salir().
      */
     public static function updateStock(
         int $productId,
@@ -125,45 +126,28 @@ class InventoryStock extends Model
         ?string $lotNumber = null,
         ?string $expiryDate = null,
         ?int $movementId = null,
-        bool $allowNegative = false
+        bool $allowNegative = false,
+        ?string $referencia = null,
     ): self {
-        $stock = self::firstOrNew([
-            'product_id' => $productId,
-            'entity_id' => $entityId,
-            'area_id' => $areaId,
-            'lot_number' => $lotNumber,
-        ]);
+        $c = new Cubeta($productId, $entityId, $areaId, $lotNumber);
+        $motor = app(CapasCosto::class);
 
-        $newQuantity = ($stock->quantity ?? 0) + $quantityChange;
-
-        // Las unidades de activos fijos vigentes no se pueden sacar del almacén. La regla mide
-        // toda la cubeta del lote (todas las áreas; nulo, vacío y SIN-LOTE juntos), no solo esta fila.
-        if ($quantityChange < 0) {
-            app(UnidadesVigentes::class)->exigirRespaldo($productId, $entityId, $lotNumber, $quantityChange);
+        if ($quantityChange > 0) {
+            $motor->entrar($c, $quantityChange, $unitCost, now(), CapaCosto::ORIGEN_ENTRADA, $movementId);
+        } elseif ($quantityChange < 0) {
+            $motor->salir($c, -$quantityChange, $movementId, null, $referencia, $allowNegative);
         }
 
-        // Si es entrada, recalcular costo promedio
-        if ($quantityChange > 0 && $unitCost > 0) {
-            $currentTotal = ($stock->quantity ?? 0) * ($stock->unit_cost ?? 0);
-            $newTotal = $currentTotal + ($quantityChange * $unitCost);
-            $stock->unit_cost = $newQuantity > 0 ? $newTotal / $newQuantity : $unitCost;
-        }
+        return self::ajustarCantidad($c, $quantityChange, $expiryDate, $movementId, $allowNegative);
+    }
 
-        $stock->quantity = $allowNegative ? $newQuantity : max(0, $newQuantity);
-        $stock->total_cost = $stock->quantity * ($stock->unit_cost ?? 0);
-        
-        if ($expiryDate) {
-            $stock->expiry_date = $expiryDate;
-        }
-        
-        if ($movementId) {
-            $stock->last_movement_id = $movementId;
-            $stock->last_movement_at = now();
-        }
+    /** Devuelve lo que una salida sin movimiento tomó (por referencia); lo que no tenga porciones entra a $costoRespaldo. */
+    public static function devolverPorReferencia(int $productId, int $entityId, float $cantidad, string $referencia, float $costoRespaldo): self
+    {
+        $c = new Cubeta($productId, $entityId);
+        $r = app(CapasCosto::class)->devolver($c, $cantidad, null, $referencia, null, $costoRespaldo);
 
-        $stock->save();
-
-        return $stock;
+        return self::ajustarCantidad($c, $r->cantidad, null, null, true);
     }
 
     /**
