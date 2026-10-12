@@ -125,6 +125,7 @@ class OportunidadController extends CrmBaseController
         $this->verificarEmpresa($oportunidad);
         $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'oportunidades', 'oportunidades', 'editar', 'No tienes permiso para editar oportunidades.');
         $empresaId = (int) $oportunidad->empresa_id;
+        $this->visibilidad->exigirVisible($empresaId, $oportunidad, VisibilidadOportunidades::MENSAJE_MODIFICAR_AJENA);
 
         $validated = $request->validate([
             'prospecto_id' => ['sometimes', 'nullable', 'integer', $this->existeEnEmpresa('crm_prospectos', $empresaId)],
@@ -136,6 +137,16 @@ class OportunidadController extends CrmBaseController
             'fecha_cierre_esperada' => 'sometimes|nullable|date',
             'notas' => 'sometimes|nullable|string',
         ]);
+
+        // Reasignar a otro vendedor es decisión de gerencia: sin equipo solo
+        // se acepta el vendedor propio (el actual, porque solo edita las suyas).
+        abort_if(
+            array_key_exists('vendedor_id', $validated)
+                && (int) $validated['vendedor_id'] !== (int) $oportunidad->vendedor_id
+                && ! $this->visibilidad->veAlEquipo($empresaId),
+            403,
+            'No puedes asignar la oportunidad a otro vendedor.',
+        );
 
         if (array_key_exists('prospecto_id', $validated) || array_key_exists('cliente_id', $validated)) {
             $mezclado = [
@@ -161,6 +172,7 @@ class OportunidadController extends CrmBaseController
     {
         $this->verificarEmpresa($oportunidad);
         $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'oportunidades', 'oportunidades', 'eliminar', 'No tienes permiso para eliminar oportunidades.');
+        $this->visibilidad->exigirVisible((int) $oportunidad->empresa_id, $oportunidad, VisibilidadOportunidades::MENSAJE_MODIFICAR_AJENA);
 
         $data = $oportunidad->toArray();
         $oportunidad->delete();
@@ -213,6 +225,8 @@ class OportunidadController extends CrmBaseController
         } else {
             $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'oportunidades', 'oportunidades', 'editar', 'No tienes permiso para editar oportunidades.');
         }
+
+        $this->visibilidad->exigirVisible((int) $oportunidad->empresa_id, $oportunidad, VisibilidadOportunidades::MENSAJE_MODIFICAR_AJENA);
 
         // Terminal es terminal: una oportunidad ya cerrada (ganada o perdida)
         // no se reabre ni se mueve a la otra etapa terminal. "forzar" solo

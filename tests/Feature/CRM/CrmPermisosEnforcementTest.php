@@ -229,7 +229,9 @@ class CrmPermisosEnforcementTest extends TestCase
 
     public function test_cerrar_una_oportunidad_exige_el_permiso_cerrar_aunque_tenga_editar(): void
     {
-        $this->otorgarPermisosCrm('oportunidades', 'oportunidades', ['editar']);
+        // ver + equipo: cambiar la etapa exige poder ver la oportunidad, que
+        // es de otro vendedor (ver OportunidadEscrituraVisibilidadTest).
+        $this->otorgarPermisosCrm('oportunidades', 'oportunidades', ['ver', 'equipo', 'editar']);
 
         $this->withHeaders($this->crmHeaders())
             ->patchJson("/api/crm/oportunidades/{$this->oportunidad->id}/cambiar-etapa", [
