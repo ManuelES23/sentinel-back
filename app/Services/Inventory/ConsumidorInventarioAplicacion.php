@@ -8,6 +8,7 @@ use App\Models\CosteoAgricola;
 use App\Models\InventoryMovement;
 use App\Models\InventoryStock;
 use App\Models\MovementType;
+use App\Support\Inventario\Cubeta;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -22,7 +23,7 @@ class ConsumidorInventarioAplicacion
 {
     private const TOLERANCIA = 0.0001;
 
-    public function __construct(private AplicadorStock $stock)
+    public function __construct(private AplicadorStock $stock, private CapasCosto $capas)
     {
     }
 
@@ -101,11 +102,14 @@ class ConsumidorInventarioAplicacion
                 ]);
             } else {
                 // Se devuelve al almacén del movimiento, no al de la aplicación (en una
-                // edición este ya puede venir cambiado). Es una entrada normal con el
-                // costo original de cada porción: el promedio de la fila no se altera y
-                // el saldo del kardex vuelve al anterior (esReversa lo desalinearía).
+                // edición este ya puede venir cambiado). Cada porción regresa a su capa
+                // (o a una nueva) al costo con que se consumió, aunque después haya
+                // entrado stock a otro precio.
                 foreach ($movimiento->details as $renglon) {
-                    $this->stock->aumentar($renglon, (int) $movimiento->source_entity_id, $movimiento->source_entity_type, $movimiento);
+                    $this->stock->devolver(
+                        $renglon, (int) $movimiento->source_entity_id, $movimiento->source_entity_type, $movimiento,
+                        (float) ($renglon->base_quantity ?? $renglon->quantity), null, null, 'Reverso de ' . $movimiento->document_number,
+                    );
                 }
 
                 $movimiento->delete();
@@ -217,6 +221,12 @@ class ConsumidorInventarioAplicacion
             return [[], 0.0, true];
         }
 
+        // Primero el lote cuya capa viva es más vieja (PEPS entre filas); sin capas, al final.
+        $filas = $filas->sortBy(fn ($fila) => [
+            $this->capas->fechaMasVieja(Cubeta::deFila($fila))?->getTimestamp() ?? PHP_INT_MAX,
+            $fila->id,
+        ])->values();
+
         $porciones = [];
         $restante = $necesaria;
 
@@ -252,7 +262,6 @@ class ConsumidorInventarioAplicacion
         foreach ($porciones as $porcion) {
             $fila = $porcion['stock'];
             $cantidad = $porcion['cantidad'];
-            $costo = (float) $fila->unit_cost;
 
             $renglon = $movimiento->details()->create([
                 'product_id' => $producto->id,
@@ -262,14 +271,15 @@ class ConsumidorInventarioAplicacion
                 'base_quantity' => $cantidad,
                 'lot_number' => $fila->lot_number,
                 'expiry_date' => $fila->expiry_date,
-                'unit_cost' => $costo,
-                'total_cost' => $cantidad * $costo,
+                'unit_cost' => 0,
+                'total_cost' => 0,
             ]);
 
-            $this->stock->disminuir($renglon, (int) $aplicacion->almacen_id, 'entity', $movimiento);
+            // El costo real sale de las capas; disminuir lo escribe en el renglón.
+            $r = $this->stock->disminuir($renglon, (int) $aplicacion->almacen_id, 'entity', $movimiento);
 
-            $cubierta += $cantidad;
-            $importe += $cantidad * $costo;
+            $cubierta += $r->cantidad;
+            $importe += $r->importe;
         }
 
         return [$cubierta, $importe];
