@@ -104,7 +104,7 @@ trait CreatesAplicacionesFixtures
     }
 
     /** Entrada real (movimiento + stock + kardex), para probar que el kardex queda alineado con el stock. */
-    protected function entrarStock(Entity $almacen, Product $producto, float $cantidad, string $lote, float $costo): void
+    protected function entrarStock(Entity $almacen, Product $producto, float $cantidad, ?string $lote, float $costo): void
     {
         $movimiento = InventoryMovement::create([
             'document_number' => 'in-TEST-' . str_pad((string) (InventoryMovement::withTrashed()->count() + 1), 5, '0', STR_PAD_LEFT),
@@ -125,6 +125,12 @@ trait CreatesAplicacionesFixtures
         ]);
 
         app(AplicadorStock::class)->aumentar($detalle, $almacen->id, 'entity', $movimiento);
+    }
+
+    /** Compra posterior (capa nueva a otro precio) sobre la misma cubeta. */
+    protected function comprar(Entity $almacen, Product $producto, float $cantidad, float $costo, ?string $lote = null): void
+    {
+        $this->entrarStock($almacen, $producto, $cantidad, $lote, $costo);
     }
 
     protected function stockTotal(Entity $almacen, Product $producto): float
