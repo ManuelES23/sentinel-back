@@ -193,6 +193,17 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     ]);
 
     // -------------------------------------------------
+    // WHATSAPP (Fase 0, sin API): destinatarios y mensaje prellenado.
+    // El registro de la actividad sigue siendo POST seguimientos.
+    // -------------------------------------------------
+    Route::get('whatsapp/destinatarios', [
+        App\Http\Controllers\Api\CRM\WhatsAppController::class, 'destinatarios'
+    ]);
+    Route::post('whatsapp/renderizar', [
+        App\Http\Controllers\Api\CRM\WhatsAppController::class, 'renderizar'
+    ]);
+
+    // -------------------------------------------------
     // AGENDA
     // CRUD + completar (genera Actividad automáticamente)
     // -------------------------------------------------
