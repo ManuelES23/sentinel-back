@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 
 class FixedAsset extends Model
@@ -49,6 +50,9 @@ class FixedAsset extends Model
         'purchase_value',
         'supplier_id',
         'purchase_receipt_id',
+        'depreciation_start',
+        'depreciation_rate',
+        'salvage_percent',
         'is_active',
         'metadata',
     ];
@@ -59,6 +63,9 @@ class FixedAsset extends Model
         'useful_life_years' => 'integer',
         'purchase_date' => 'date',
         'purchase_value' => 'decimal:2',
+        'depreciation_start' => 'date',
+        'depreciation_rate' => 'decimal:2',
+        'salvage_percent' => 'decimal:2',
         'is_active' => 'boolean',
         'metadata' => 'array',
     ];
@@ -78,6 +85,12 @@ class FixedAsset extends Model
                 $asset->slug = Str::slug($asset->name).'-'.Str::random(6);
             }
         });
+    }
+
+    /** El inicio se guarda siempre como el primer día del mes. */
+    public function setDepreciationStartAttribute($value): void
+    {
+        $this->attributes['depreciation_start'] = $value ? Carbon::parse($value)->startOfMonth()->toDateString() : null;
     }
 
     // Relaciones
