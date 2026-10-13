@@ -101,7 +101,16 @@ class WhatsAppController extends CrmBaseController
             Enterprise::whereKey($empresaId)->value('name'),
         );
 
-        return $this->jsonSuccess($this->mensajes->renderizar($plantilla, $valores));
+        try {
+            $resultado = $this->mensajes->renderizar($plantilla, $valores);
+        } catch (\InvalidArgumentException) {
+            // Cuerpo guardado con UTF-8 inválido (entró sin pasar por la validación).
+            throw ValidationException::withMessages([
+                'plantilla_id' => 'La plantilla tiene caracteres no válidos. Corrígela en Catálogos › Plantillas de WhatsApp.',
+            ]);
+        }
+
+        return $this->jsonSuccess($resultado);
     }
 
     /** 403 sin empresa de contexto o sin actividades.crear (el permiso que exige el registro). */

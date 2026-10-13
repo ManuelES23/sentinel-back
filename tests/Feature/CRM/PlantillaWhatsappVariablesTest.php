@@ -51,4 +51,22 @@ class PlantillaWhatsappVariablesTest extends TestCase
             $this->assertLessThanOrEqual(1000, mb_strlen($plantilla['cuerpo']));
         }
     }
+
+    public function test_un_cuerpo_con_utf8_invalido_lanza_excepcion_y_nunca_devuelve_null(): void
+    {
+        $invalido = "Hola \xFF {{nombre}}";
+
+        foreach ([
+            fn () => PlantillaWhatsappVariables::usadas($invalido),
+            fn () => PlantillaWhatsappVariables::desconocidas($invalido),
+            fn () => PlantillaWhatsappVariables::sustituir($invalido, ['nombre' => 'Juan']),
+        ] as $llamada) {
+            try {
+                $llamada();
+                $this->fail('Se esperaba InvalidArgumentException con UTF-8 inválido.');
+            } catch (\InvalidArgumentException $e) {
+                $this->assertSame(PlantillaWhatsappVariables::MENSAJE_TEXTO_INVALIDO, $e->getMessage());
+            }
+        }
+    }
 }

@@ -162,4 +162,21 @@ class PlantillaWhatsappControllerTest extends TestCase
 
         $this->assertDatabaseMissing('crm_plantillas_whatsapp', ['id' => $plantilla->id]);
     }
+
+    public function test_utf8_invalido_en_nombre_o_cuerpo_responde_422(): void
+    {
+        $this->conPermisos(['crear']);
+        // Como formulario (no JSON): json_encode no admite bytes inválidos.
+        $enviarFormulario = fn (array $datos) => $this->withHeaders($this->crmHeaders() + ['Accept' => 'application/json'])
+            ->post(self::URL, $datos);
+
+        $enviarFormulario(['nombre' => 'Válida', 'cuerpo' => "Hola \xFF {{nombre}}"])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('cuerpo');
+        $enviarFormulario(['nombre' => "Mala \xC3", 'cuerpo' => 'Hola {{nombre}}'])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('nombre');
+
+        $this->assertDatabaseCount('crm_plantillas_whatsapp', 0);
+    }
 }

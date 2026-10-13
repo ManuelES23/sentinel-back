@@ -430,6 +430,20 @@ class WhatsAppControllerTest extends TestCase
         ])->assertNotFound();
     }
 
+    public function test_una_plantilla_guardada_con_utf8_invalido_responde_422_sin_mensaje_null(): void
+    {
+        // Dato que entró sin pasar por la validación (BD a mano o carga antigua).
+        $id = \Illuminate\Support\Facades\DB::table('crm_plantillas_whatsapp')->insertGetId([
+            'empresa_id' => $this->enterprise->id, 'nombre' => 'Rota', 'cuerpo' => "Hola \xFF {{nombre}}",
+            'activo' => true, 'orden' => 0, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+
+        $this->renderizar(['plantilla_id' => $id, 'entidad_tipo' => 'cliente', 'entidad_id' => $this->cliente->id])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('plantilla_id')
+            ->assertJsonMissingPath('data.mensaje');
+    }
+
     public function test_una_plantilla_inactiva_o_de_otra_empresa_responde_404(): void
     {
         $inactiva = $this->plantilla('Hola', ['activo' => false]);

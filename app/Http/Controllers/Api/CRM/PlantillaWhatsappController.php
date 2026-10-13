@@ -103,9 +103,17 @@ class PlantillaWhatsappController extends CrmBaseController
             $unico->ignore($plantilla->id);
         }
 
+        // UTF-8 inválido (posible en un formulario, no en JSON): 422 antes de
+        // medir el largo, consultar la unicidad o buscar variables.
+        $utf8 = function (string $atributo, mixed $valor, Closure $fallar) {
+            if (is_string($valor) && ! PlantillaWhatsappVariables::esTextoValido($valor)) {
+                $fallar(PlantillaWhatsappVariables::MENSAJE_TEXTO_INVALIDO);
+            }
+        };
+
         return [
-            'nombre' => [...$requerido, 'string', 'max:100', $unico],
-            'cuerpo' => [...$requerido, 'string', 'max:1000', function (string $atributo, mixed $valor, Closure $fallar) {
+            'nombre' => ['bail', ...$requerido, 'string', $utf8, 'max:100', $unico],
+            'cuerpo' => ['bail', ...$requerido, 'string', $utf8, 'max:1000', function (string $atributo, mixed $valor, Closure $fallar) {
                 $desconocidas = PlantillaWhatsappVariables::desconocidas((string) $valor);
                 if ($desconocidas !== []) {
                     $fallar(PlantillaWhatsappVariables::mensajeDesconocidas($desconocidas));

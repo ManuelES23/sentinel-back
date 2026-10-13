@@ -12,17 +12,36 @@ final class PlantillaWhatsappVariables
 {
     public const VARIABLES = ['nombre', 'entidad', 'vendedor', 'empresa', 'oportunidad', 'monto', 'folio', 'total'];
 
+    /** Mensaje de error para un texto que no es UTF-8 válido. */
+    public const MENSAJE_TEXTO_INVALIDO = 'El texto contiene caracteres no válidos. Vuelve a escribirlo o pégalo como texto simple.';
+
     private const PATRON = '/\{\{\s*([^{}]*?)\s*\}\}/u';
 
-    /** @return string[] nombres usados, en orden de aparición y sin repetir */
+    /** true si el texto es UTF-8 válido (las expresiones /u fallan si no lo es). */
+    public static function esTextoValido(string $texto): bool
+    {
+        return mb_check_encoding($texto, 'UTF-8');
+    }
+
+    /**
+     * @return string[] nombres usados, en orden de aparición y sin repetir
+     *
+     * @throws \InvalidArgumentException si el cuerpo no es UTF-8 válido
+     */
     public static function usadas(string $cuerpo): array
     {
-        preg_match_all(self::PATRON, $cuerpo, $coincidencias);
+        if (preg_match_all(self::PATRON, $cuerpo, $coincidencias) === false) {
+            throw new \InvalidArgumentException(self::MENSAJE_TEXTO_INVALIDO);
+        }
 
         return array_values(array_unique($coincidencias[1]));
     }
 
-    /** @return string[] usadas que no están en VARIABLES */
+    /**
+     * @return string[] usadas que no están en VARIABLES
+     *
+     * @throws \InvalidArgumentException si el cuerpo no es UTF-8 válido
+     */
     public static function desconocidas(string $cuerpo): array
     {
         return array_values(array_diff(self::usadas($cuerpo), self::VARIABLES));
@@ -46,9 +65,15 @@ final class PlantillaWhatsappVariables
      *
      * @param  array<string, string|null>  $valores
      * @return array{mensaje: string, variables_faltantes: string[]}
+     *
+     * @throws \InvalidArgumentException si el cuerpo no es UTF-8 válido (nunca devuelve mensaje null)
      */
     public static function sustituir(string $cuerpo, array $valores): array
     {
+        if (! self::esTextoValido($cuerpo)) {
+            throw new \InvalidArgumentException(self::MENSAJE_TEXTO_INVALIDO);
+        }
+
         $faltantes = [];
 
         $mensaje = preg_replace_callback(self::PATRON, function (array $coincidencia) use ($valores, &$faltantes) {
@@ -61,6 +86,10 @@ final class PlantillaWhatsappVariables
 
             return $valor;
         }, $cuerpo);
+
+        if ($mensaje === null) {
+            throw new \InvalidArgumentException(self::MENSAJE_TEXTO_INVALIDO);
+        }
 
         return ['mensaje' => $mensaje, 'variables_faltantes' => array_values(array_unique($faltantes))];
     }
