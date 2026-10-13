@@ -42,9 +42,17 @@ class PlantillaWhatsappController extends CrmBaseController
         $empresaId = $this->getEmpresaId();
         abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
 
+        // `search` solo cuenta si es texto (un arreglo se ignora). `%` y `_` se
+        // buscan literalmente: se escapan con `!` y ESCAPE, que vale en MySQL y SQLite.
+        $search = $request->query('search');
+        $search = is_string($search) ? trim($search) : '';
+
         $query = CrmPlantillaWhatsapp::query()
             ->where('empresa_id', $empresaId)
-            ->when($request->search, fn ($q, $search) => $q->where('nombre', 'like', "%{$search}%"))
+            ->when($search !== '', fn ($q) => $q->whereRaw(
+                "nombre LIKE ? ESCAPE '!'",
+                ['%'.str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $search).'%'],
+            ))
             ->orderBy('orden')
             ->orderBy('nombre');
 

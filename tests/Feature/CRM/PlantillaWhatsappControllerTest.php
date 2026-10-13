@@ -163,6 +163,50 @@ class PlantillaWhatsappControllerTest extends TestCase
         $this->assertDatabaseMissing('crm_plantillas_whatsapp', ['id' => $plantilla->id]);
     }
 
+    public function test_search_como_arreglo_se_ignora_sin_500(): void
+    {
+        $this->plantilla();
+
+        $this->withHeaders($this->crmHeaders())->getJson(self::URL.'?search[]=x&search[]=y')
+            ->assertOk()
+            ->assertJsonCount(1, 'data');
+    }
+
+    public function test_search_trata_por_ciento_y_guion_bajo_como_texto(): void
+    {
+        $this->plantilla(['nombre' => 'Descuento 10%']);
+        $this->plantilla(['nombre' => 'Con_guion']);
+        $this->plantilla(['nombre' => 'Sin guion']);
+
+        $this->enviar('GET', '?search='.urlencode('%'))
+            ->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('data.0.nombre', 'Descuento 10%');
+        $this->enviar('GET', '?search=_')
+            ->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('data.0.nombre', 'Con_guion');
+        $this->enviar('GET', '?search=guion')->assertOk()->assertJsonCount(2, 'data');
+    }
+
+    public function test_per_page_se_limita_a_100(): void
+    {
+        $this->plantilla();
+
+        $this->enviar('GET', '?per_page=500')->assertOk()->assertJsonPath('meta.per_page', 100);
+        $this->enviar('GET', '?per_page=0')->assertOk()->assertJsonPath('meta.per_page', 1);
+    }
+
+    public function test_el_cuerpo_admite_1000_caracteres_acentuados_y_rechaza_1001(): void
+    {
+        $this->conPermisos(['crear']);
+
+        $this->enviar('POST', '', ['nombre' => 'Larga', 'cuerpo' => str_repeat('á', 1000)])->assertCreated();
+        $this->enviar('POST', '', ['nombre' => 'Demasiado larga', 'cuerpo' => str_repeat('é', 1001)])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('cuerpo');
+        $this->enviar('POST', '', ['nombre' => str_repeat('ñ', 100), 'cuerpo' => 'Hola'])->assertCreated();
+        $this->enviar('POST', '', ['nombre' => str_repeat('ñ', 101), 'cuerpo' => 'Hola'])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('nombre');
+    }
+
     public function test_utf8_invalido_en_nombre_o_cuerpo_responde_422(): void
     {
         $this->conPermisos(['crear']);
