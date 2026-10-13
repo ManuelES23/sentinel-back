@@ -144,6 +144,8 @@ class WhatsAppController extends CrmBaseController
         $visible = $cotizacion !== null
             && $this->tienePermisoSubmodulo($empresaId, 'cotizaciones', 'cotizaciones', 'ver')
             && $cotizacion->oportunidad !== null
+            // Defensa en profundidad: una FK corrupta hacia otra empresa nunca aplica.
+            && (int) $cotizacion->oportunidad->empresa_id === $empresaId
             && $this->visibilidad->esVisible($cotizacion->oportunidad)
             && $this->mensajes->cotizacionEsDeLaEntidad($entidad, $cotizacion);
 

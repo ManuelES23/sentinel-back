@@ -323,6 +323,101 @@ class WhatsAppControllerTest extends TestCase
         ])->assertOk()->assertJsonPath('data.mensaje', 'COT-00022 $98,450.00');
     }
 
+    public function test_desde_el_cliente_la_cotizacion_de_otro_vendedor_responde_404_sin_equipo(): void
+    {
+        // Aquí la ÚNICA barrera es la visibilidad de la oportunidad de la
+        // cotización: el cliente es visible y la cotización sí es de ese cliente.
+        $this->otorgarPermisosCrm('oportunidades', 'oportunidades', ['ver']);
+        $this->otorgarPermisosCrm('cotizaciones', 'cotizaciones', ['ver']);
+        $ajena = $this->cotizacion($this->oportunidad($this->vendedor, ['nombre' => 'Del otro vendedor']), 'COT-00040', 55500);
+        $pedir = fn () => $this->renderizar([
+            'plantilla_id' => $this->plantilla('{{folio}} {{total}} {{oportunidad}}')->id,
+            'entidad_tipo' => 'cliente', 'entidad_id' => $this->cliente->id, 'cotizacion_id' => $ajena->id,
+        ]);
+
+        $pedir()->assertNotFound()
+            ->assertDontSee('COT-00040')
+            ->assertDontSee('55,500.00')
+            ->assertDontSee('Del otro vendedor');
+
+        $this->otorgarPermisosCrm('oportunidades', 'oportunidades', ['equipo']);
+
+        $pedir()->assertOk()->assertJsonPath('data.mensaje', 'COT-00040 $55,500.00 Del otro vendedor');
+    }
+
+    public function test_renderizar_con_una_oportunidad_de_otro_vendedor_responde_404(): void
+    {
+        $this->otorgarPermisosCrm('oportunidades', 'oportunidades', ['ver']);
+        $ajena = $this->oportunidad($this->vendedor, ['nombre' => 'Oportunidad ajena']);
+
+        $this->renderizar([
+            'plantilla_id' => $this->plantilla('{{oportunidad}} {{monto}}')->id,
+            'entidad_tipo' => 'oportunidad', 'entidad_id' => $ajena->id,
+        ])->assertNotFound()->assertDontSee('Oportunidad ajena')->assertDontSee('12,345.00');
+    }
+
+    public function test_cotizacion_cuya_oportunidad_es_de_otra_empresa_responde_404(): void
+    {
+        // FK corrupta: la cotización es de esta empresa pero su oportunidad es de
+        // otra, en la que el usuario sí ve al equipo y con el mismo cliente_id.
+        $otra = $this->crearOtraEmpresa();
+        $this->otorgarPermisosCrm('cotizaciones', 'cotizaciones', ['ver']);
+        $tipos = \App\Models\SubmodulePermissionType::whereIn('slug', ['ver', 'equipo'])
+            ->whereHas('submodule', fn ($q) => $q->where('slug', 'oportunidades')
+                ->whereHas('module.application', fn ($a) => $a->where('slug', 'crm')->where('enterprise_id', $otra->id)))
+            ->get();
+        $this->assertCount(2, $tipos);
+        foreach ($tipos as $tipo) {
+            UserSubmodulePermission::create([
+                'user_id' => $this->actingUser->id, 'submodule_id' => $tipo->submodule_id,
+                'permission_type_id' => $tipo->id, 'is_granted' => true,
+            ]);
+        }
+        $vendedorOtra = CrmVendedor::create(['empresa_id' => $otra->id, 'nombre' => 'Vendedor ajeno', 'activo' => true]);
+        $oportunidadOtra = CrmOportunidad::create([
+            'empresa_id' => $otra->id, 'vendedor_id' => $vendedorOtra->id,
+            'cliente_id' => $this->cliente->id, 'nombre' => 'De otra empresa',
+        ]);
+        $cotizacion = CrmCotizacion::create([
+            'empresa_id' => $this->enterprise->id, 'oportunidad_id' => $oportunidadOtra->id, 'folio' => 'COT-00050',
+            'estado' => 'enviado', 'fecha_emision' => now()->toDateString(), 'descuento_global_pct' => 0,
+            'subtotal' => 100, 'total' => 100,
+        ]);
+
+        $this->renderizar([
+            'plantilla_id' => $this->plantilla('{{folio}} {{oportunidad}}')->id,
+            'entidad_tipo' => 'cliente', 'entidad_id' => $this->cliente->id, 'cotizacion_id' => $cotizacion->id,
+        ])->assertNotFound()->assertDontSee('COT-00050')->assertDontSee('De otra empresa');
+    }
+
+    public function test_cotizacion_u_oportunidad_eliminadas_responden_404(): void
+    {
+        $this->otorgarPermisosCrm('oportunidades', 'oportunidades', ['ver']);
+        $this->otorgarPermisosCrm('cotizaciones', 'cotizaciones', ['ver']);
+        $plantilla = $this->plantilla('{{folio}}');
+        $oportunidad = $this->oportunidad();
+        $borrada = $this->cotizacion($oportunidad, 'COT-00060');
+        $borrada->delete();
+        $deOportunidadBorrada = $this->cotizacion($this->oportunidad(datos: ['nombre' => 'Se borrará']), 'COT-00061');
+        $deOportunidadBorrada->oportunidad->delete();
+
+        // Cotización eliminada.
+        $this->renderizar([
+            'plantilla_id' => $plantilla->id, 'entidad_tipo' => 'oportunidad',
+            'entidad_id' => $oportunidad->id, 'cotizacion_id' => $borrada->id,
+        ])->assertNotFound();
+        // Cotización viva cuya oportunidad se eliminó, pedida desde el cliente.
+        $this->renderizar([
+            'plantilla_id' => $plantilla->id, 'entidad_tipo' => 'cliente',
+            'entidad_id' => $this->cliente->id, 'cotizacion_id' => $deOportunidadBorrada->id,
+        ])->assertNotFound()->assertDontSee('COT-00061');
+        // La oportunidad eliminada como entidad.
+        $this->renderizar([
+            'plantilla_id' => $plantilla->id, 'entidad_tipo' => 'oportunidad',
+            'entidad_id' => $deOportunidadBorrada->oportunidad_id,
+        ])->assertNotFound();
+    }
+
     public function test_sin_permiso_de_ver_cotizaciones_la_cotizacion_responde_404(): void
     {
         $this->otorgarPermisosCrm('oportunidades', 'oportunidades', ['ver']);
