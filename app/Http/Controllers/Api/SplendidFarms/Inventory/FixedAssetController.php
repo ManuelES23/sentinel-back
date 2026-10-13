@@ -11,6 +11,7 @@ use App\Services\ActivosFijos\AlcanceActivos;
 use App\Services\ActivosFijos\CreadorActivo;
 use App\Services\ActivosFijos\GeneradorCodigoActivo;
 use App\Services\ActivosFijos\PermisosActivos;
+use App\Services\ActivosFijos\ResolutorDepreciacion;
 use App\Services\ActivosFijos\ValidadorRelacionesActivo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -24,8 +25,8 @@ class FixedAssetController extends Controller
     private const RELATIONS = [
         'enterprise:id,name,slug',
         'brand:id,name,code',
-        'category:id,name,code,parent_id,icon',
-        'subcategory:id,name,code,parent_id,icon',
+        'category:id,name,code,parent_id,icon,depreciation_rate,salvage_percent',
+        'subcategory:id,name,code,parent_id,icon,depreciation_rate,salvage_percent',
         'branch:id,name,code',
         'entity:id,name,code,entity_type_id',
         'entity.entityType:id,code,name,icon,color',
@@ -46,6 +47,7 @@ class FixedAssetController extends Controller
         private GeneradorCodigoActivo $codigos,
         private CreadorActivo $creador,
         private ValidadorRelacionesActivo $relaciones,
+        private ResolutorDepreciacion $depreciacion,
     ) {
     }
 
@@ -85,9 +87,12 @@ class FixedAssetController extends Controller
 
         $porPagina = min(max((int) $request->input('per_page', self::POR_PAGINA), 1), self::POR_PAGINA_MAX);
 
+        $pagina = $query->orderBy('name')->orderBy('id')->paginate($porPagina);
+        $pagina->getCollection()->each(fn (FixedAsset $activo) => $this->conDepreciacion($activo));
+
         return response()->json([
             'success' => true,
-            'data' => $query->orderBy('name')->orderBy('id')->paginate($porPagina),
+            'data' => $pagina,
         ]);
     }
 
@@ -119,6 +124,7 @@ class FixedAssetController extends Controller
         }
 
         $asset->load(self::RELATIONS);
+        $this->conDepreciacion($asset);
         $this->emitir('created', $asset);
 
         return response()->json([
@@ -135,7 +141,7 @@ class FixedAssetController extends Controller
 
         return response()->json([
             'success' => true,
-            'data' => $asset->load(self::RELATIONS),
+            'data' => $this->conDepreciacion($asset->load(self::RELATIONS)),
         ]);
     }
 
@@ -183,6 +189,7 @@ class FixedAssetController extends Controller
         }
 
         $asset = $asset->fresh(self::RELATIONS);
+        $this->conDepreciacion($asset);
         $this->emitir('updated', $asset);
 
         return response()->json([
@@ -267,6 +274,9 @@ class FixedAssetController extends Controller
             'purchase_date' => 'nullable|date',
             'invoice_number' => 'nullable|string|max:100',
             'purchase_value' => 'nullable|numeric|min:0',
+            'depreciation_start' => 'nullable|date',
+            'depreciation_rate' => 'nullable|numeric|gt:0|max:100',
+            'salvage_percent' => 'nullable|numeric|min:0|lt:100',
 
             'is_active' => 'boolean',
             'metadata' => 'nullable|array',
@@ -317,6 +327,20 @@ class FixedAssetController extends Controller
     private function debeSincronizar(Request $request): bool
     {
         return $request->has('characteristics') || $request->boolean('sync_characteristics');
+    }
+
+    /**
+     * Resumen de depreciación a la fecha de hoy; se agrega al JSON, no se guarda.
+     *
+     * ADVERTENCIA: `depreciacion` NO es una columna, solo un atributo en memoria. No llamar
+     * save()/update() sobre la instancia después de `conDepreciacion`: intentaría escribir
+     * una columna inexistente.
+     */
+    private function conDepreciacion(FixedAsset $activo): FixedAsset
+    {
+        $activo->setAttribute('depreciacion', $this->depreciacion->resumen($activo));
+
+        return $activo;
     }
 
     private function emitir(string $accion, FixedAsset $asset): void

@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\ActivosFijos\AltaPendienteController;
 use App\Http\Controllers\Api\ActivosFijos\AsignacionActivoController;
 use App\Http\Controllers\Api\ActivosFijos\ContextoActivosController;
+use App\Http\Controllers\Api\ActivosFijos\DepreciacionController;
 use App\Http\Controllers\Api\SplendidFarms\Inventory\AssetCategoryController;
 use App\Http\Controllers\Api\SplendidFarms\Inventory\FixedAssetController;
 use Illuminate\Support\Facades\Route;
@@ -45,4 +46,10 @@ Route::prefix('activos-fijos')->group(function () {
     Route::get('altas-pendientes', [AltaPendienteController::class, 'index']);
     Route::post('altas-pendientes/alta', [AltaPendienteController::class, 'alta']);
     Route::post('altas-pendientes/descartar', [AltaPendienteController::class, 'descartar']);
+
+    // Depreciación (fase 4)
+    Route::get('depreciacion', [DepreciacionController::class, 'index']);
+    Route::get('depreciacion/cierres', [DepreciacionController::class, 'cierres']);
+    Route::post('depreciacion/cierres', [DepreciacionController::class, 'cerrar']);
+    Route::delete('depreciacion/cierres/{cierre}', [DepreciacionController::class, 'reabrir']);
 });

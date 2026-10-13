@@ -2,6 +2,7 @@
 
 namespace App\Services\ActivosFijos;
 
+use App\Models\AssetCategory;
 use App\Models\AssetCharacteristicDefinition;
 use App\Models\Enterprise;
 use App\Models\FixedAsset;
@@ -26,6 +27,7 @@ class CreadorActivo
     {
         $datos['enterprise_id'] = $empresa->id;
         $datos['code'] = ($datos['code'] ?? null) ?: $this->codigos->siguiente($empresa);
+        $datos = $this->heredarDepreciacion($datos);
 
         $asset = FixedAsset::create($datos);
 
@@ -34,6 +36,33 @@ class CreadorActivo
         }
 
         return $asset;
+    }
+
+    /**
+     * La tasa y el residual que no vengan se copian del subtipo o, si no tiene, del tipo.
+     * Lo que captura el usuario siempre gana. El inicio de depreciación no se copia.
+     *
+     * @param  array<string, mixed>  $datos
+     * @return array<string, mixed>
+     */
+    private function heredarDepreciacion(array $datos): array
+    {
+        $ids = array_filter([$datos['subcategory_id'] ?? null, $datos['category_id'] ?? null]);
+        if (! $ids) {
+            return $datos;
+        }
+
+        $tipos = AssetCategory::whereIn('id', $ids)->get()->keyBy('id');
+        $subtipo = $tipos[$datos['subcategory_id'] ?? 0] ?? null;
+        $tipo = $tipos[$datos['category_id'] ?? 0] ?? null;
+
+        foreach (['depreciation_rate', 'salvage_percent'] as $campo) {
+            if (! isset($datos[$campo]) || $datos[$campo] === '') {
+                $datos[$campo] = $subtipo?->{$campo} ?? $tipo?->{$campo};
+            }
+        }
+
+        return $datos;
     }
 
     /**
