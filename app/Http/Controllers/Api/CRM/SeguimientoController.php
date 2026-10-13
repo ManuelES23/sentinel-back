@@ -9,6 +9,7 @@ use App\Services\CRM\VendedorActualService;
 use App\Services\CRM\VisibilidadOportunidades;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
+use Closure;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -36,13 +37,41 @@ class SeguimientoController extends CrmBaseController
             'entidad_id' => 'required|integer',
             'vendedor_id' => 'nullable|integer',
             'actividad' => 'nullable|array',
-            'actividad.tipo' => ['required_with:actividad', Rule::in(SeguimientoService::TIPOS_ACTIVIDAD)],
+            'actividad.tipo' => [
+                'required_with:actividad',
+                Rule::in(SeguimientoService::TIPOS_ACTIVIDAD),
+                // Lo registrado desde el botón de WhatsApp solo puede ser un whatsapp.
+                function (string $atributo, mixed $valor, Closure $fallar) use ($request) {
+                    if ($request->input('actividad.fuente') === SeguimientoService::FUENTE_WHATSAPP_ENLACE && $valor !== 'whatsapp') {
+                        $fallar('Una actividad registrada desde el botón de WhatsApp debe ser de tipo whatsapp.');
+                    }
+                },
+            ],
             'actividad.descripcion' => 'required_with:actividad|string|max:2000',
             'actividad.resultado' => 'nullable|string|max:2000',
-            'actividad.fecha_actividad' => 'required_with:actividad|date|before_or_equal:'.now()->addMinutes(5)->toDateTimeString(),
-        ], $this->seguimientos->reglasSiguiente('siguiente')), $this->seguimientos->mensajesSiguiente('siguiente'));
+            // Con whatsapp_enlace la fecha la pone el servidor (abajo): no se valida.
+            'actividad.fecha_actividad' => [
+                'exclude_if:actividad.fuente,'.SeguimientoService::FUENTE_WHATSAPP_ENLACE,
+                'required_with:actividad',
+                'date',
+                'before_or_equal:'.now()->addMinutes(5)->toDateTimeString(),
+            ],
+            'actividad.fuente' => ['nullable', Rule::in(SeguimientoService::FUENTES_REGISTRO)],
+        ], $this->seguimientos->reglasSiguiente('siguiente')), array_merge(
+            $this->seguimientos->mensajesSiguiente('siguiente'),
+            ['actividad.fuente.in' => 'La fuente de la actividad no es válida.'],
+        ));
 
         $actividad = $validated['actividad'] ?? null;
+
+        // WhatsApp (Fase 0): se registra cuando el vendedor confirma el envío, así
+        // que la hora es la del servidor. La del dispositivo puede venir de otro
+        // huso (CDMX va una hora adelante de Mazatlán) y se ignora siempre. Se
+        // sobrescribe a mano porque `$validated['actividad']` puede traer la
+        // fecha cruda aunque la regla la excluya.
+        if (! empty($actividad) && ($actividad['fuente'] ?? null) === SeguimientoService::FUENTE_WHATSAPP_ENLACE) {
+            $actividad['fecha_actividad'] = now();
+        }
         $siguiente = $validated['siguiente'] ?? null;
 
         if (empty($actividad) && empty($siguiente)) {
