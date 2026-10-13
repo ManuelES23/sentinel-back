@@ -9,6 +9,7 @@ use App\Services\CRM\VendedorActualService;
 use App\Services\CRM\VisibilidadOportunidades;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
+use Closure;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -36,7 +37,16 @@ class SeguimientoController extends CrmBaseController
             'entidad_id' => 'required|integer',
             'vendedor_id' => 'nullable|integer',
             'actividad' => 'nullable|array',
-            'actividad.tipo' => ['required_with:actividad', Rule::in(SeguimientoService::TIPOS_ACTIVIDAD)],
+            'actividad.tipo' => [
+                'required_with:actividad',
+                Rule::in(SeguimientoService::TIPOS_ACTIVIDAD),
+                // Lo registrado desde el botón de WhatsApp solo puede ser un whatsapp.
+                function (string $atributo, mixed $valor, Closure $fallar) use ($request) {
+                    if ($request->input('actividad.fuente') === SeguimientoService::FUENTE_WHATSAPP_ENLACE && $valor !== 'whatsapp') {
+                        $fallar('Una actividad registrada desde el botón de WhatsApp debe ser de tipo whatsapp.');
+                    }
+                },
+            ],
             'actividad.descripcion' => 'required_with:actividad|string|max:2000',
             'actividad.resultado' => 'nullable|string|max:2000',
             // Con whatsapp_enlace la fecha la pone el servidor (abajo): no se valida.

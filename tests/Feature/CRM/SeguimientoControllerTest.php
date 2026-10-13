@@ -251,4 +251,31 @@ class SeguimientoControllerTest extends TestCase
 
         $this->assertDatabaseHas('crm_actividades', ['tipo' => 'whatsapp', 'fuente' => 'manual']);
     }
+
+    public function test_whatsapp_enlace_solo_admite_el_tipo_whatsapp(): void
+    {
+        foreach (['llamada', 'visita', 'nota'] as $tipo) {
+            $this->enviar($this->payload([
+                'actividad' => ['tipo' => $tipo, 'descripcion' => 'Hola', 'fuente' => 'whatsapp_enlace'],
+                'siguiente' => null,
+            ]))->assertStatus(422)->assertJsonValidationErrors('actividad.tipo');
+        }
+
+        $this->assertDatabaseCount('crm_actividades', 0);
+    }
+
+    public function test_manual_admite_cualquier_tipo_como_antes(): void
+    {
+        foreach (['llamada', 'whatsapp', 'visita'] as $tipo) {
+            $this->enviar($this->payload([
+                'actividad' => [
+                    'tipo' => $tipo, 'descripcion' => 'Hecho',
+                    'fecha_actividad' => '2026-09-14 09:45:00', 'fuente' => 'manual',
+                ],
+                'siguiente' => null,
+            ]))->assertCreated();
+        }
+
+        $this->assertSame(3, \App\Models\CRM\CrmActividad::where('fuente', 'manual')->count());
+    }
 }
