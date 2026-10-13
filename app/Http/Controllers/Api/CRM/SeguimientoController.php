@@ -39,10 +39,29 @@ class SeguimientoController extends CrmBaseController
             'actividad.tipo' => ['required_with:actividad', Rule::in(SeguimientoService::TIPOS_ACTIVIDAD)],
             'actividad.descripcion' => 'required_with:actividad|string|max:2000',
             'actividad.resultado' => 'nullable|string|max:2000',
-            'actividad.fecha_actividad' => 'required_with:actividad|date|before_or_equal:'.now()->addMinutes(5)->toDateTimeString(),
-        ], $this->seguimientos->reglasSiguiente('siguiente')), $this->seguimientos->mensajesSiguiente('siguiente'));
+            // Con whatsapp_enlace la fecha la pone el servidor (abajo): no se valida.
+            'actividad.fecha_actividad' => [
+                'exclude_if:actividad.fuente,'.SeguimientoService::FUENTE_WHATSAPP_ENLACE,
+                'required_with:actividad',
+                'date',
+                'before_or_equal:'.now()->addMinutes(5)->toDateTimeString(),
+            ],
+            'actividad.fuente' => ['nullable', Rule::in(SeguimientoService::FUENTES_REGISTRO)],
+        ], $this->seguimientos->reglasSiguiente('siguiente')), array_merge(
+            $this->seguimientos->mensajesSiguiente('siguiente'),
+            ['actividad.fuente.in' => 'La fuente de la actividad no es válida.'],
+        ));
 
         $actividad = $validated['actividad'] ?? null;
+
+        // WhatsApp (Fase 0): se registra cuando el vendedor confirma el envío, así
+        // que la hora es la del servidor. La del dispositivo puede venir de otro
+        // huso (CDMX va una hora adelante de Mazatlán) y se ignora siempre. Se
+        // sobrescribe a mano porque `$validated['actividad']` puede traer la
+        // fecha cruda aunque la regla la excluya.
+        if (! empty($actividad) && ($actividad['fuente'] ?? null) === SeguimientoService::FUENTE_WHATSAPP_ENLACE) {
+            $actividad['fecha_actividad'] = now();
+        }
         $siguiente = $validated['siguiente'] ?? null;
 
         if (empty($actividad) && empty($siguiente)) {
