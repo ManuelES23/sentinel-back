@@ -19,6 +19,9 @@ use Illuminate\Validation\ValidationException;
  */
 class DepreciacionController extends Controller
 {
+    /** Mes AAAA-MM; el límite inferior evita años absurdos (0001-01). */
+    private const REGLA_MES = ['required', 'date_format:Y-m', 'after_or_equal:2000-01'];
+
     public function __construct(
         private AlcanceActivos $alcance,
         private PermisosActivos $permisos,
@@ -29,7 +32,7 @@ class DepreciacionController extends Controller
     public function index(Request $request): JsonResponse
     {
         $this->permisos->autorizar($request, 'depreciacion', 'view');
-        $datos = $request->validate(['month' => ['required', 'date_format:Y-m']]);
+        $datos = $request->validate(['month' => self::REGLA_MES]);
         $empresa = $this->empresa($request);
 
         return response()->json([
@@ -56,7 +59,7 @@ class DepreciacionController extends Controller
     public function cerrar(Request $request): JsonResponse
     {
         $this->permisos->autorizar($request, 'depreciacion', 'create');
-        $datos = $request->validate(['month' => ['required', 'date_format:Y-m']]);
+        $datos = $request->validate(['month' => self::REGLA_MES]);
         $empresa = $this->empresa($request);
 
         $cierre = $this->cierres->cerrar($empresa, $this->mes($datos['month']), $request->user());

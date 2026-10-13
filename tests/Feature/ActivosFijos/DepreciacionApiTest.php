@@ -59,6 +59,18 @@ class DepreciacionApiTest extends TestCase
         $this->getJson(self::URL_DEPRECIACION . '?month=mayo')->assertStatus(422)->assertJsonValidationErrors('month');
     }
 
+    public function test_el_mes_tiene_limite_inferior_en_2000_01(): void
+    {
+        Sanctum::actingAs($this->usuarioDepreciacion());
+
+        $this->getJson(self::URL_DEPRECIACION . '?month=1999-12')->assertStatus(422)->assertJsonValidationErrors('month');
+        $this->getJson(self::URL_DEPRECIACION . '?month=0001-01')->assertStatus(422)->assertJsonValidationErrors('month');
+        $this->postJson(self::URL_DEPRECIACION . '/cierres', ['month' => '1999-12'])
+            ->assertStatus(422)->assertJsonValidationErrors('month');
+
+        $this->getJson(self::URL_DEPRECIACION . '?month=2000-01')->assertOk();
+    }
+
     public function test_sin_el_permiso_de_cada_accion_es_403(): void
     {
         $cierre = $this->cerrarMayo();

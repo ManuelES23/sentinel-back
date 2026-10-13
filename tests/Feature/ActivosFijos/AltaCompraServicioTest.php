@@ -39,6 +39,9 @@ class AltaCompraServicioTest extends TestCase
 
     public function test_alta_crea_un_activo_por_unidad_con_los_datos_de_la_compra(): void
     {
+        // Tasa del subtipo y residual del tipo (el subtipo no lo trae): el alta copia ambos.
+        $this->tipoActivo->update(['depreciation_rate' => 10, 'salvage_percent' => 5]);
+        $this->subtipoActivo->update(['depreciation_rate' => 25]);
         $usuario = $this->usuarioActivos();
 
         $activos = $this->servicio()->alta(
@@ -63,6 +66,9 @@ class AltaCompraServicioTest extends TestCase
         $this->assertSame('SN-1', $primero->serial_number);
         $this->assertSame('Latitude', $primero->model);
         $this->assertNull($activos->last()->serial_number);
+        $this->assertEquals(25, (float) $primero->depreciation_rate);
+        $this->assertEquals(5, (float) $primero->salvage_percent);
+        $this->assertEquals(25, (float) $activos->last()->fresh()->depreciation_rate);
 
         $unidades = FixedAssetReceiptUnit::whereIn('id', $this->ids)->orderBy('unit_number')->get();
         $this->assertSame(['registered', 'registered', 'registered'], $unidades->pluck('status')->all());

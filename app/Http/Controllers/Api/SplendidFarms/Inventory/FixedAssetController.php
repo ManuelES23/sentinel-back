@@ -329,7 +329,13 @@ class FixedAssetController extends Controller
         return $request->has('characteristics') || $request->boolean('sync_characteristics');
     }
 
-    /** Resumen de depreciación a la fecha de hoy; se agrega al JSON, no se guarda. */
+    /**
+     * Resumen de depreciación a la fecha de hoy; se agrega al JSON, no se guarda.
+     *
+     * ADVERTENCIA: `depreciacion` NO es una columna, solo un atributo en memoria. No llamar
+     * save()/update() sobre la instancia después de `conDepreciacion`: intentaría escribir
+     * una columna inexistente.
+     */
     private function conDepreciacion(FixedAsset $activo): FixedAsset
     {
         $activo->setAttribute('depreciacion', $this->depreciacion->resumen($activo));
