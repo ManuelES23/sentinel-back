@@ -31,6 +31,15 @@ class SeguimientoService
 
     public const TIPOS_AGENDA = ['llamada', 'visita', 'reunion', 'tarea', 'correo'];
 
+    /**
+     * El vendedor declara que envió el mensaje desde el botón de WhatsApp
+     * (Fase 0). La futura captura por API usará otra (`whatsapp_api`).
+     */
+    public const FUENTE_WHATSAPP_ENLACE = 'whatsapp_enlace';
+
+    /** Fuentes que acepta POST crm/seguimientos. */
+    public const FUENTES_REGISTRO = ['manual', self::FUENTE_WHATSAPP_ENLACE];
+
     public const DURACION_POR_DEFECTO = 30;
 
     /** Reglas de validación de un siguiente paso anidado bajo $prefijo. */

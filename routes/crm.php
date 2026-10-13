@@ -58,6 +58,12 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
         App\Http\Controllers\Api\CRM\ConfiguracionComercialController::class, 'destroyImpuesto'
     ]);
 
+    // Plantillas de WhatsApp por empresa (WhatsApp Fase 0). Lectura abierta
+    // dentro del tenant; escribir exige catalogos.plantillas-whatsapp.
+    Route::apiResource('plantillas-whatsapp', App\Http\Controllers\Api\CRM\PlantillaWhatsappController::class)
+        ->parameters(['plantillas-whatsapp' => 'plantilla'])
+        ->except(['show']);
+
     // -------------------------------------------------
     // PROSPECTOS
     // CRUD + convertir-cliente + asignar-vendedor
@@ -184,6 +190,17 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
 
     Route::post('seguimientos', [
         App\Http\Controllers\Api\CRM\SeguimientoController::class, 'store'
+    ]);
+
+    // -------------------------------------------------
+    // WHATSAPP (Fase 0, sin API): destinatarios y mensaje prellenado.
+    // El registro de la actividad sigue siendo POST seguimientos.
+    // -------------------------------------------------
+    Route::get('whatsapp/destinatarios', [
+        App\Http\Controllers\Api\CRM\WhatsAppController::class, 'destinatarios'
+    ]);
+    Route::post('whatsapp/renderizar', [
+        App\Http\Controllers\Api\CRM\WhatsAppController::class, 'renderizar'
     ]);
 
     // -------------------------------------------------

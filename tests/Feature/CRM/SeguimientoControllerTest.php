@@ -155,4 +155,127 @@ class SeguimientoControllerTest extends TestCase
         $this->enviar($this->payload())->assertCreated();
         $this->assertDatabaseCount('crm_actividades', 1);
     }
+
+    public function test_whatsapp_enlace_sin_fecha_usa_la_hora_del_servidor(): void
+    {
+        $this->enviar($this->payload([
+            'actividad' => [
+                'tipo' => 'whatsapp',
+                'descripcion' => 'WhatsApp a Cliente A (662 123 4567): Hola',
+                'fuente' => 'whatsapp_enlace',
+            ],
+            'siguiente' => null,
+        ]))->assertCreated();
+
+        $this->assertDatabaseHas('crm_actividades', [
+            'entidad_type' => CrmCliente::class, 'entidad_id' => $this->cliente->id,
+            'vendedor_id' => $this->propio->id, 'tipo' => 'whatsapp', 'fuente' => 'whatsapp_enlace',
+            'fecha_actividad' => '2026-09-14 10:00:00',
+        ]);
+    }
+
+    public function test_whatsapp_enlace_ignora_una_fecha_futura_del_cliente(): void
+    {
+        // Un dispositivo en CDMX (una hora adelante de Mazatlán) manda su hora local.
+        $this->enviar($this->payload([
+            'actividad' => [
+                'tipo' => 'whatsapp', 'descripcion' => 'WhatsApp a Cliente A (662 123 4567): Hola',
+                'fecha_actividad' => '2026-09-14 11:00:00', 'fuente' => 'whatsapp_enlace',
+            ],
+            'siguiente' => null,
+        ]))->assertCreated();
+
+        $this->assertDatabaseHas('crm_actividades', ['fuente' => 'whatsapp_enlace', 'fecha_actividad' => '2026-09-14 10:00:00']);
+    }
+
+    public function test_whatsapp_enlace_ignora_tambien_una_fecha_pasada_o_invalida(): void
+    {
+        foreach (['2026-09-10 08:00:00', 'no es una fecha'] as $fecha) {
+            $this->enviar($this->payload([
+                'actividad' => [
+                    'tipo' => 'whatsapp', 'descripcion' => 'Hola',
+                    'fecha_actividad' => $fecha, 'fuente' => 'whatsapp_enlace',
+                ],
+                'siguiente' => null,
+            ]))->assertCreated();
+        }
+
+        $this->assertSame(2, \App\Models\CRM\CrmActividad::where('fuente', 'whatsapp_enlace')
+            ->where('fecha_actividad', '2026-09-14 10:00:00')->count());
+    }
+
+    public function test_rechaza_una_fuente_desconocida(): void
+    {
+        $this->enviar($this->payload([
+            'actividad' => [
+                'tipo' => 'whatsapp', 'descripcion' => 'Hola',
+                'fecha_actividad' => '2026-09-14 09:59:00', 'fuente' => 'whatsapp_api',
+            ],
+            'siguiente' => null,
+        ]))->assertStatus(422)->assertJsonValidationErrors('actividad.fuente');
+
+        $this->assertDatabaseCount('crm_actividades', 0);
+    }
+
+    public function test_manual_sigue_exigiendo_la_fecha_y_rechazando_una_futura(): void
+    {
+        foreach ([['fuente' => 'manual'], ['fuente' => 'manual', 'fecha_actividad' => '2026-09-14 11:00:00'], []] as $extra) {
+            $this->enviar($this->payload([
+                'actividad' => array_merge(['tipo' => 'llamada', 'descripcion' => 'Llamé'], $extra),
+                'siguiente' => null,
+            ]))->assertStatus(422)->assertJsonValidationErrors('actividad.fecha_actividad');
+        }
+
+        $this->assertDatabaseCount('crm_actividades', 0);
+    }
+
+    public function test_una_fuente_nula_queda_manual_con_la_fecha_del_cliente(): void
+    {
+        $this->enviar($this->payload([
+            'actividad' => [
+                'tipo' => 'llamada', 'descripcion' => 'Llamé',
+                'fecha_actividad' => '2026-09-14 09:45:00', 'fuente' => null,
+            ],
+            'siguiente' => null,
+        ]))->assertCreated();
+
+        $this->assertDatabaseHas('crm_actividades', ['tipo' => 'llamada', 'fuente' => 'manual', 'fecha_actividad' => '2026-09-14 09:45:00']);
+    }
+
+    public function test_post_actividades_sigue_forzando_la_fuente_manual(): void
+    {
+        $this->withHeaders($this->crmHeaders())->postJson('/api/crm/actividades', [
+            'entidad_tipo' => 'cliente', 'entidad_id' => $this->cliente->id, 'tipo' => 'whatsapp',
+            'descripcion' => 'Hola', 'fecha_actividad' => '2026-09-14 09:59:00', 'fuente' => 'whatsapp_enlace',
+        ])->assertCreated();
+
+        $this->assertDatabaseHas('crm_actividades', ['tipo' => 'whatsapp', 'fuente' => 'manual']);
+    }
+
+    public function test_whatsapp_enlace_solo_admite_el_tipo_whatsapp(): void
+    {
+        foreach (['llamada', 'visita', 'nota'] as $tipo) {
+            $this->enviar($this->payload([
+                'actividad' => ['tipo' => $tipo, 'descripcion' => 'Hola', 'fuente' => 'whatsapp_enlace'],
+                'siguiente' => null,
+            ]))->assertStatus(422)->assertJsonValidationErrors('actividad.tipo');
+        }
+
+        $this->assertDatabaseCount('crm_actividades', 0);
+    }
+
+    public function test_manual_admite_cualquier_tipo_como_antes(): void
+    {
+        foreach (['llamada', 'whatsapp', 'visita'] as $tipo) {
+            $this->enviar($this->payload([
+                'actividad' => [
+                    'tipo' => $tipo, 'descripcion' => 'Hecho',
+                    'fecha_actividad' => '2026-09-14 09:45:00', 'fuente' => 'manual',
+                ],
+                'siguiente' => null,
+            ]))->assertCreated();
+        }
+
+        $this->assertSame(3, \App\Models\CRM\CrmActividad::where('fuente', 'manual')->count());
+    }
 }

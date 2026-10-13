@@ -3,6 +3,7 @@
 
 namespace Tests\Feature\CRM;
 
+use App\Models\Application;
 use App\Models\Enterprise;
 use App\Models\Module;
 use App\Models\Submodule;
@@ -57,5 +58,28 @@ class CrmPermisosSeederTest extends TestCase
         $this->assertNotNull($submodulo);
         $slugs = SubmodulePermissionType::where('submodule_id', $submodulo->id)->pluck('slug')->sort()->values()->all();
         $this->assertSame(['editar', 'ver'], $slugs);
+    }
+
+    public function test_agrega_plantillas_de_whatsapp_dentro_de_catalogos(): void
+    {
+        $enterprise = Enterprise::create([
+            'name' => 'Empresa Seeder Test 3',
+            'slug' => 'empresa-seeder-test-3',
+            'description' => 'Prueba de seeder',
+            'is_active' => true,
+        ]);
+
+        (new CrmPermisosSeeder())->run();
+
+        $app = Application::where('enterprise_id', $enterprise->id)->where('slug', 'crm')->first();
+        $catalogos = Module::where('application_id', $app->id)->where('slug', 'catalogos')->first();
+        $submodulo = Submodule::where('module_id', $catalogos->id)->where('slug', 'plantillas-whatsapp')->first();
+
+        $this->assertNotNull($submodulo);
+        $this->assertSame('Plantillas de WhatsApp', $submodulo->name);
+        $this->assertSame('MessageCircle', $submodulo->icon);
+        $this->assertSame(7, (int) $submodulo->order);
+        $slugs = SubmodulePermissionType::where('submodule_id', $submodulo->id)->pluck('slug')->sort()->values()->all();
+        $this->assertSame(['crear', 'editar', 'eliminar', 'ver'], $slugs);
     }
 }

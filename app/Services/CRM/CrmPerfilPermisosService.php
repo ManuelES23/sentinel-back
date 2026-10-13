@@ -65,6 +65,7 @@ class CrmPerfilPermisosService
             'bodegas' => ['ver', 'crear', 'editar', 'eliminar'],
             'productos' => ['ver', 'crear', 'editar', 'eliminar'],
             'configuracion-comercial' => ['ver', 'editar'],
+            'plantillas-whatsapp' => ['ver', 'crear', 'editar', 'eliminar'],
         ],
         'integraciones' => [
             'dialpad' => ['ver', 'sync'],
