@@ -422,6 +422,35 @@ Módulo de Administración → Activos Fijos (SF y GE). La carpeta de controlado
   - `down()` de `2026_10_11_100000` borra TODOS los tipos y concesiones `equipo` de agenda. Las concesiones de `oportunidades.equipo` que hizo a los aprobadores se quedan, porque no se distinguen de las demás.
   - Si se revierte una migración sin revertir el código, la gerencia pierde la vista del equipo: hay que revertir primero el código, o no revertir la migración.
 
+## CRM · WhatsApp Fase 0 (sin API)
+
+- Botón «WhatsApp» en fichas, contactos, oportunidad, Mi día y cotizaciones. Abre el WhatsApp del propio vendedor con `https://wa.me/{numero}?text=…`. Si el vendedor confirma que envió el mensaje, el front registra una actividad `tipo = whatsapp`, `fuente = whatsapp_enlace` con `POST crm/seguimientos`. El CRM no envía nada ni sabe si el mensaje salió: el registro es declarado. Spec: `docs/superpowers/specs/2026-10-12-crm-whatsapp-fase0-design.md` (raíz de SENTINEL3.0).
+- `App\Support\CRM\TelefonoWhatsApp::normalizar()`: texto libre → dígitos con país (`PAIS_DEFECTO = '52'`). 10 dígitos → `52` + número; con `+` o `00` es internacional (8 a 15 dígitos); 12 dígitos que empiezan con `52` quedan igual; 13 que empiezan con `521` → `52` + los últimos 10. Extensiones o letras → `null` (no se adivina).
+- Plantillas por empresa en `crm_plantillas_whatsapp` (`CrmPlantillaWhatsapp`, sin SoftDeletes).
+  - Variables cerradas en `App\Support\CRM\PlantillaWhatsappVariables::VARIABLES`: `nombre`, `entidad`, `vendedor`, `empresa`, `oportunidad`, `monto`, `folio`, `total`. Una desconocida responde 422 en `cuerpo`.
+  - Las 4 predeterminadas están en `PlantillasWhatsappPredeterminadas` y se siembran solo si la empresa no tiene ninguna: la migración para las empresas existentes y `CrmPlantillasWhatsappSeeder` (en `DatabaseSeeder`) para las nuevas. `CrmPermisosSeeder` no siembra plantillas a propósito: lo corren casi todas las pruebas.
+- Endpoints:
+  - `GET crm/plantillas-whatsapp`: lectura abierta en el tenant. `?all=1` devuelve solo las activas, sin paginar. Sin `all`, paginado con `per_page` de 1 a 100.
+  - `POST`, `PUT` y `DELETE crm/plantillas-whatsapp/{id}` exigen `catalogos.plantillas-whatsapp` `crear`, `editar` o `eliminar`. Una de otra empresa responde 404. Sin evento de tiempo real.
+  - `GET crm/whatsapp/destinatarios` y `POST crm/whatsapp/renderizar` (`WhatsAppController` + `WhatsAppMensajeService`) exigen `actividades.crear`.
+    - Entidad de otra empresa u oportunidad no visible (`VisibilidadOportunidades::entidadVisible`) → 404.
+    - La oportunidad se resuelve a su cliente (o prospecto) para teléfono y contactos; la empresa externa solo lista contactos. Un cliente o prospecto de otra empresa (FK corrupta) se descarta en `WhatsAppMensajeService::titular()`: nunca salen teléfonos de otro tenant.
+    - `cotizacion_id` exige `cotizaciones.ver`, una oportunidad visible y que la cotización sea de esa entidad; si no, 404.
+    - Plantilla inactiva o ajena → 404. `destinatario_clave` (`entidad` o `contacto:{id}`) que no es del registro → 422.
+    - Las variables sin dato se sustituyen por cadena vacía y se listan en `variables_faltantes`. Dinero: `$12,345.00`. `{{nombre}}` es el primer nombre del contacto, o el nombre completo del cliente o prospecto.
+  - `POST crm/seguimientos` acepta `actividad.fuente` ∈ `SeguimientoService::FUENTES_REGISTRO` (`manual`, `whatsapp_enlace`); por defecto `manual`. Con `whatsapp_enlace` la fecha la pone el servidor (ver «Hora del registro»). `POST crm/actividades` sigue forzando `manual`.
+- Permisos: submódulo `catalogos.plantillas-whatsapp` («Plantillas de WhatsApp», orden 7) en `CrmPermisosSeeder` y en el perfil administración. La migración `2026_10_12_200100_add_crm_plantillas_whatsapp_submodule` lo crea en los CRM existentes. A quien ya tiene `catalogos.configuracion-comercial.editar` le concede ver/crear/editar/eliminar y el acceso al submódulo (sin acceso no ve el menú). No toca filas existentes ni revive revocadas. Su `down()` quita el submódulo con sus concesiones y accesos, pero no borra plantillas.
+- **Despliegue:** `php artisan migrate` (tabla, submódulo, permisos y plantillas). Va antes que el front: con el front nuevo y el back viejo el botón responde 404 en `destinatarios` y el modal muestra «Reintentar». Después, comprobar que el administrador ve «Plantillas de WhatsApp» en Catálogos.
+- **Pendiente manual:** probar en un celular real que `wa.me/52XXXXXXXXXX` abre el chat de un móvil mexicano.
+- **Adopción** por vendedor y semana:
+  ```sql
+  SELECT vendedor_id, YEAR(fecha_actividad) a, WEEK(fecha_actividad) s, COUNT(*) n
+  FROM crm_actividades WHERE fuente = 'whatsapp_enlace'
+  GROUP BY vendedor_id, a, s ORDER BY a DESC, s DESC;
+  ```
+  Se compara con las actividades `tipo = 'whatsapp'` y `fuente = 'manual'` de las semanas previas.
+- Hora del registro: con `fuente = whatsapp_enlace`, `actividad.fecha_actividad` es opcional y se ignora; el back guarda `now()` (zona de la app, `America/Mazatlan`), porque la actividad se registra en el momento en que el vendedor confirma. Así un dispositivo en otro huso (CDMX va una hora adelante) no recibe 422. Con `manual` sigue `required_with:actividad|date|before_or_equal:now+5min`, y ahí el riesgo del huso sigue abierto en «Registrar seguimiento» de Mi día.
+
 ## Acceso cruzado de entidades (cross-enterprise)
 Tabla pivot `enterprise_entity` (`enterprise_id`, `entity_id`, `access_level: read|write`) — permite que una empresa acceda a bodegas/plantas de otra. Ver `EntityAccessController` (Admin).
 
