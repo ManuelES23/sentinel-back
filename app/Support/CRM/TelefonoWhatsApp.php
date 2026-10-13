@@ -11,7 +11,9 @@ namespace App\Support\CRM;
  * Reglas: se quitan espacios, guiones, paréntesis y puntos. Con `+` o `00`
  * es internacional (8 a 15 dígitos). Si no: 10 dígitos → 52 + número;
  * 12 dígitos que empiezan con 52 → tal cual; 13 que empiezan con 521
- * (formato móvil antiguo de México) → 52 + los últimos 10.
+ * (formato móvil antiguo de México) → 52 + los últimos 10. Antes se quitan
+ * los caracteres invisibles de formato; un código de país que empieza con 0
+ * nunca es válido.
  */
 final class TelefonoWhatsApp
 {
@@ -20,8 +22,8 @@ final class TelefonoWhatsApp
 
     public static function normalizar(?string $telefono): ?string
     {
-        $texto = trim((string) $telefono);
-        if ($texto === '') {
+        $texto = self::limpiarFormato((string) $telefono);
+        if ($texto === null || $texto === '') {
             return null;
         }
 
@@ -59,10 +61,28 @@ final class TelefonoWhatsApp
         return null;
     }
 
+    /**
+     * Quita los caracteres invisibles de formato (\p{Cf}: marcas de dirección
+     * U+202A/U+202C, BOM, etc.) que llegan al copiar y pegar, y convierte el
+     * espacio duro (U+00A0) en espacio y los guiones tipográficos
+     * (U+2010 a U+2015) en guion. Devuelve null si el texto no es UTF-8 válido.
+     */
+    private static function limpiarFormato(string $texto): ?string
+    {
+        $limpio = preg_replace(
+            ['/\p{Cf}+/u', '/\x{00A0}/u', '/[\x{2010}-\x{2015}]/u'],
+            ['', ' ', '-'],
+            $texto,
+        );
+
+        return $limpio === null ? null : trim($limpio);
+    }
+
     private static function internacional(string $digitos): ?string
     {
         $largo = strlen($digitos);
-        if ($largo < 8 || $largo > 15) {
+        // Ningún código de país empieza con 0 (p. ej. "+0052" o "000052").
+        if ($largo < 8 || $largo > 15 || str_starts_with($digitos, '0')) {
             return null;
         }
 

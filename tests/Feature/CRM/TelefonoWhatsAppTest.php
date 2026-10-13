@@ -36,6 +36,16 @@ class TelefonoWhatsAppTest extends TestCase
             'con letras' => ['tel 6621234567', null],
             '11 dígitos nacionales' => ['66212345678', null],
             '+ en medio' => ['662+1234567', null],
+            // Ningún código de país empieza con 0.
+            '+0052 (doble prefijo)' => ['+0052 662 123 4567', null],
+            '000052 (doble prefijo)' => ['000052 6621234567', null],
+            'solo ceros' => ['0000000000', null],
+            // Caracteres invisibles y de formato que llegan al copiar y pegar.
+            'marcas de dirección U+202A/U+202C' => ["\u{202A}+52 662 123 4567\u{202C}", '526621234567'],
+            'BOM al inicio' => ["\u{FEFF}662 123 4567", '526621234567'],
+            'espacio duro U+00A0' => ["662\u{00A0}123\u{00A0}4567", '526621234567'],
+            'guiones tipográficos U+2010 a U+2015' => ["662\u{2010}123\u{2013}45\u{2015}67", '526621234567'],
+            'UTF-8 inválido' => ["\xFF662 123 4567", null],
         ];
     }
 
