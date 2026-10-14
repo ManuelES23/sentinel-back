@@ -500,6 +500,10 @@ Tabla pivot `enterprise_entity` (`enterprise_id`, `entity_id`, `access_level: re
 - Aprobar crea `attendance_records` con `status = vacation` (respeta los días con entrada); cancelar una aprobada futura los borra.
 - PIN del empleado (checador y portal): hasheado (cast `hashed`, unidireccional), fuera de `activity_logs`, bloqueo de 15 min tras 5 errores (`VerificadorPinEmpleado`). RH solo lo ve al generarlo o regenerarlo; regenerar también desbloquea. Las bitácoras anteriores pueden contener PINs en claro (pendiente de limpieza).
 - Hueco conocido: `GET vacaciones/balance` sigue devolviendo los contadores viejos por año (la vista usa `empleado/{id}/info`).
+- Portal del empleado (`/api/portal-vacaciones`, fuera de `auth:sanctum`): `Api\Portal\VacationPortalController`. Login con número + PIN (`VerificadorPinEmpleado`, mismo bloqueo que el checador) → token propio de 64 caracteres; en `vacation_portal_sessions` solo va su sha256. El middleware `portal.vacaciones` (`AuthenticatePortalSession`) lee `X-Portal-Token`, caduca a las 2 h o tras 15 min sin uso, exige empleado activo y deja el empleado en `$request->attributes->get('portal_employee')`; nunca consulta Sanctum ni `device_pairings` (un token del portal no abre rutas internas ni al revés).
+- Lo que sale del portal pasa por `App\Support\RH\PresentadorPortalVacaciones` (lista blanca: nombre, número, empresa, puesto, departamento, ingreso, saldo y solicitudes propias; de quien decidió, solo el nombre). Solicitud ajena o inexistente → 404 «Solicitud no encontrada.». Las reglas son las de `VacationRequestService` (`source = portal`, sin capturista).
+- Límites: login `throttle:10,1,portal-login` por IP; el resto, limitador `portal-vacaciones` de `AppServiceProvider` (60/min por sesión, no por IP: la oficina comparte IP).
+- Regenerar el PIN, dar de baja o borrar al empleado revoca sus sesiones del portal (`SesionPortalVacaciones::revocarTodas`). `vacaciones:limpiar-sesiones-portal` corre a diario (03:30) y borra las vencidas o revocadas hace más de 7 días.
 
 ## Comandos de desarrollo
 

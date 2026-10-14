@@ -42,3 +42,7 @@ Schedule::command('inventario:alertas-caducidad')->dailyAt('07:00');
 // el programador y no por la cola porque retry_after (90 s) relanzaría en
 // paralelo un volcado largo. Expira el candado a las 3 h por si el proceso muere.
 Schedule::command('respaldos:ejecutar')->everyMinute()->withoutOverlapping(180)->runInBackground();
+
+// Portal de vacaciones: borra las sesiones vencidas o revocadas hace más de 7
+// días (las vigentes duran 2 h como máximo, así que el volumen es pequeño).
+Schedule::command('vacaciones:limpiar-sesiones-portal')->dailyAt('03:30');
