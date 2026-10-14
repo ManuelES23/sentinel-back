@@ -30,6 +30,8 @@ class ApprovalFlowStep extends Model
         'is_active' => 'boolean',
     ];
 
+    public const TYPE_DIRECT_SUPERVISOR = 'direct_supervisor';
+
     // ===== Relaciones =====
 
     public function process()
@@ -91,6 +93,10 @@ class ApprovalFlowStep extends Model
      */
     public function getApproverDescriptionAttribute(): string
     {
+        if ($this->approver_type === self::TYPE_DIRECT_SUPERVISOR) {
+            return 'Jefe directo';
+        }
+
         if ($this->approver_type === 'position') {
             return $this->position ? $this->position->name : 'Puesto específico';
         }

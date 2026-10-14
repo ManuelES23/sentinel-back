@@ -4,7 +4,7 @@ namespace App\Http\Controllers\Api\GrupoEsplendido\RH;
 
 use App\Http\Controllers\Controller;
 use App\Models\DevicePairing;
-use App\Models\Employee;
+use App\Services\RH\VerificadorPinEmpleado;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -15,22 +15,19 @@ class DevicePairingController extends Controller
      * vez para autorizar su celular. De ahí en adelante el dispositivo usa el
      * token devuelto aquí — nunca vuelve a pedir número ni PIN.
      */
-    public function pairSelf(Request $request): JsonResponse
+    public function pairSelf(Request $request, VerificadorPinEmpleado $verificador): JsonResponse
     {
         $validated = $request->validate([
-            'employee_number' => 'required|string',
+            'employee_number' => 'required|string|max:20',
             'pin' => 'required|string|size:6',
         ]);
 
-        $employee = Employee::where('employee_number', $validated['employee_number'])
-            ->where('pin', $validated['pin'])
-            ->where('status', Employee::STATUS_ACTIVE)
-            ->first();
+        $employee = $verificador->verificar($validated['employee_number'], $validated['pin']);
 
         if (! $employee) {
             return response()->json([
                 'status' => 'error',
-                'message' => 'Número de empleado o PIN incorrecto, o empleado inactivo.',
+                'message' => VerificadorPinEmpleado::MENSAJE_ERROR,
             ], 422);
         }
 

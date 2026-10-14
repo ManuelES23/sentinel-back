@@ -75,22 +75,7 @@ class VacationBalance extends Model
      */
     public static function calculateEntitledDays(int $yearsOfService): int
     {
-        // Tabla de días según LFT México (reforma "Vacaciones Dignas" 2023)
-        return match(true) {
-            $yearsOfService < 1 => 0,
-            $yearsOfService === 1 => 12,
-            $yearsOfService === 2 => 14,
-            $yearsOfService === 3 => 16,
-            $yearsOfService === 4 => 18,
-            $yearsOfService === 5 => 20,
-            $yearsOfService >= 6 && $yearsOfService <= 10 => 22,
-            $yearsOfService >= 11 && $yearsOfService <= 15 => 24,
-            $yearsOfService >= 16 && $yearsOfService <= 20 => 26,
-            $yearsOfService >= 21 && $yearsOfService <= 25 => 28,
-            $yearsOfService >= 26 && $yearsOfService <= 30 => 30,
-            $yearsOfService >= 31 && $yearsOfService <= 35 => 32,
-            default => 32 + (int)(($yearsOfService - 35) / 5) * 2,
-        };
+        return \App\Services\VacationCalculatorService::calculateEntitledDays((int) $yearsOfService);
     }
 
     /**
@@ -200,9 +185,13 @@ class VacationBalance extends Model
      */
     public function applyAdjustment(int $days, string $reason, int $userId): self
     {
+        // Acumulativo: no pisa lo que ya había (p. ej. la conciliación al migrar).
+        // adjustment_reason es string(255).
+        $motivo = $this->adjustment_reason ? $this->adjustment_reason.' | '.$reason : $reason;
+
         $this->update([
-            'adjustment_days' => $days,
-            'adjustment_reason' => $reason,
+            'adjustment_days' => (int) ($this->adjustment_days ?? 0) + $days,
+            'adjustment_reason' => mb_substr($motivo, 0, 255),
             'adjusted_by' => $userId,
             'adjusted_at' => now(),
         ]);

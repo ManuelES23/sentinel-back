@@ -2,8 +2,7 @@
 
 namespace App\Traits\CRM;
 
-use App\Models\Submodule;
-use App\Models\UserSubmodulePermission;
+use App\Support\PermisoSubmodulo;
 use Illuminate\Support\Facades\Auth;
 
 /**
@@ -24,30 +23,9 @@ trait VerificaPermisoSubmodulo
         string $moduloSlug,
         string $submoduloSlug,
         string $permisoSlug,
+        string $aplicacionSlug = 'crm',
     ): bool {
-        $userId = Auth::id();
-        if (! $userId) {
-            return false;
-        }
-
-        $submodulo = Submodule::where('slug', $submoduloSlug)
-            ->whereHas('module', function ($q) use ($empresaId, $moduloSlug) {
-                $q->where('slug', $moduloSlug)
-                    ->whereHas('application', function ($aq) use ($empresaId) {
-                        $aq->where('enterprise_id', $empresaId)->where('slug', 'crm');
-                    });
-            })
-            ->first();
-
-        if (! $submodulo) {
-            return false;
-        }
-
-        return UserSubmodulePermission::where('user_id', $userId)
-            ->where('submodule_id', $submodulo->id)
-            ->where('is_granted', true)
-            ->whereHas('permissionType', fn ($q) => $q->where('slug', $permisoSlug))
-            ->exists();
+        return PermisoSubmodulo::tiene(Auth::id(), $empresaId, $aplicacionSlug, $moduloSlug, $submoduloSlug, $permisoSlug);
     }
 
     /**
@@ -61,10 +39,11 @@ trait VerificaPermisoSubmodulo
         string $submoduloSlug,
         string $permisoSlug,
         string $mensaje = 'No tienes permiso para realizar esta acción.',
+        string $aplicacionSlug = 'crm',
     ): void {
         abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
         abort_unless(
-            $this->tienePermisoSubmodulo($empresaId, $moduloSlug, $submoduloSlug, $permisoSlug),
+            $this->tienePermisoSubmodulo($empresaId, $moduloSlug, $submoduloSlug, $permisoSlug, $aplicacionSlug),
             403,
             $mensaje,
         );

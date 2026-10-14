@@ -6,6 +6,7 @@ use App\Traits\Loggable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class VacationRequest extends Model
@@ -25,6 +26,9 @@ class VacationRequest extends Model
         'approved_at',
         'vacation_year',
         'created_by',
+        'source',
+        'current_step',
+        'resolved_by_rh',
     ];
 
     protected $casts = [
@@ -33,7 +37,15 @@ class VacationRequest extends Model
         'approved_at' => 'datetime',
         'days_requested' => 'integer',
         'vacation_year' => 'integer',
+        'current_step' => 'integer',
+        'resolved_by_rh' => 'boolean',
     ];
+
+    public const SOURCE_PORTAL = 'portal';
+
+    public const SOURCE_RH = 'rh';
+
+    public const SOURCE_PERFIL = 'perfil';
 
     // ==================== RELACIONES ====================
 
@@ -55,6 +67,11 @@ class VacationRequest extends Model
     public function creator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+
+    public function approvals(): HasMany
+    {
+        return $this->hasMany(VacationRequestApproval::class)->orderBy('step_order');
     }
 
     // ==================== SCOPES ====================
@@ -113,71 +130,5 @@ class VacationRequest extends Model
             'cancelled' => 'gray',
             default => 'gray',
         };
-    }
-
-    // ==================== MÉTODOS ====================
-
-    public function approve(User $approver): bool
-    {
-        $this->update([
-            'status' => 'approved',
-            'approved_by' => $approver->id,
-            'approved_at' => now(),
-        ]);
-
-        // Actualizar balance de vacaciones
-        $this->updateVacationBalance();
-
-        return true;
-    }
-
-    public function reject(User $approver, string $reason): bool
-    {
-        return $this->update([
-            'status' => 'rejected',
-            'approved_by' => $approver->id,
-            'approved_at' => now(),
-            'rejection_reason' => $reason,
-        ]);
-    }
-
-    public function cancel(): bool
-    {
-        if ($this->status === 'approved') {
-            // Revertir balance si ya estaba aprobada
-            $this->revertVacationBalance();
-        }
-
-        return $this->update(['status' => 'cancelled']);
-    }
-
-    protected function updateVacationBalance(): void
-    {
-        $balance = VacationBalance::firstOrCreate(
-            [
-                'employee_id' => $this->employee_id,
-                'year' => $this->vacation_year,
-            ],
-            [
-                'entitled_days' => 0,
-                'used_days' => 0,
-                'pending_days' => 0,
-                'carried_over' => 0,
-            ]
-        );
-
-        $balance->increment('used_days', $this->days_requested);
-        $balance->decrement('pending_days', $this->days_requested);
-    }
-
-    protected function revertVacationBalance(): void
-    {
-        $balance = VacationBalance::where('employee_id', $this->employee_id)
-            ->where('year', $this->vacation_year)
-            ->first();
-
-        if ($balance) {
-            $balance->decrement('used_days', $this->days_requested);
-        }
     }
 }

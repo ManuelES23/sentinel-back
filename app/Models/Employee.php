@@ -60,12 +60,20 @@ class Employee extends Model
         'hire_date' => 'date',
         'termination_date' => 'date',
         'salary' => 'decimal:2',
+        'pin' => 'hashed',
+        'pin_failed_attempts' => 'integer',
+        'pin_locked_until' => 'datetime',
     ];
 
     protected $hidden = [
         'salary',
         'pin',
+        'pin_failed_attempts',
+        'pin_locked_until',
     ];
+
+    /** El PIN (aunque cifrado) y su bloqueo no van a activity_logs. */
+    protected $loggableExcept = ['pin', 'pin_failed_attempts', 'pin_locked_until'];
 
     protected $appends = ['full_name', 'photo_url'];
 
@@ -329,13 +337,14 @@ class Employee extends Model
         return $code;
     }
 
+    /**
+     * PIN nuevo de 6 dígitos EN CLARO, para mostrarlo una sola vez. Se guarda
+     * cifrado por el cast `hashed`. No necesita ser único: la búsqueda es por
+     * número de empleado.
+     */
     public static function generatePIN(): string
     {
-        do {
-            $pin = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
-        } while (self::where('pin', $pin)->exists());
-        
-        return $pin;
+        return str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
     }
 
     /**
@@ -362,16 +371,6 @@ class Employee extends Model
     public static function findByQRCode(string $qrCode): ?self
     {
         return self::where('qr_code', $qrCode)
-            ->where('status', self::STATUS_ACTIVE)
-            ->first();
-    }
-
-    /**
-     * Verificar PIN
-     */
-    public static function findByPIN(string $pin): ?self
-    {
-        return self::where('pin', $pin)
             ->where('status', self::STATUS_ACTIVE)
             ->first();
     }

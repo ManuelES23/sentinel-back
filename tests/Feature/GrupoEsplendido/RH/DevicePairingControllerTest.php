@@ -134,4 +134,21 @@ class DevicePairingControllerTest extends TestCase
         }
         $this->postJson('/api/checador/pair', [])->assertStatus(429);
     }
+
+    public function test_pair_comparte_el_bloqueo_del_pin_con_el_portal(): void
+    {
+        [, $enterprise] = $this->createAuthenticatedRhUser();
+        $employee = $this->createEmployee($enterprise->id, ['pin' => '135790']);
+        $verificador = app(\App\Services\RH\VerificadorPinEmpleado::class);
+        foreach (range(1, \App\Services\RH\VerificadorPinEmpleado::MAX_INTENTOS) as $_) {
+            $verificador->verificar($employee->employee_number, '000000');
+        }
+
+        $this->postJson('/api/checador/pair', [
+            'employee_number' => $employee->employee_number,
+            'pin' => '135790',
+        ])->assertStatus(422)->assertJsonPath('message', \App\Services\RH\VerificadorPinEmpleado::MENSAJE_ERROR);
+
+        $this->assertDatabaseCount('device_pairings', 0);
+    }
 }
