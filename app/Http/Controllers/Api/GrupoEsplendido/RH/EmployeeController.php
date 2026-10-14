@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\DevicePairing;
 use App\Models\Employee;
 use App\Models\EmployeeFaceTemplate;
+use App\Services\RH\VerificadorPinEmpleado;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -108,6 +109,7 @@ class EmployeeController extends Controller
         $validated['employee_number'] = Employee::generateEmployeeNumber($validated['enterprise_id']);
         $validated['qr_code'] = Employee::generateQRCode();
         $validated['pin'] = Employee::generatePIN();
+        $pinGenerado = $validated['pin'];
         $validated['status'] = Employee::STATUS_ACTIVE;
 
         // Manejar foto
@@ -122,6 +124,7 @@ class EmployeeController extends Controller
             'success' => true,
             'message' => 'Empleado creado exitosamente',
             'data' => $employee,
+            'pin' => $pinGenerado, // única vez que se ve en claro
         ], 201);
     }
 
@@ -255,19 +258,20 @@ class EmployeeController extends Controller
     }
 
     /**
-     * Regenerar PIN
+     * Regenerar PIN. Es la única vez que RH ve el PIN en claro; también
+     * desbloquea al empleado si se bloqueó por intentos fallidos.
      */
-    public function regeneratePIN(Employee $employee): JsonResponse
+    public function regeneratePIN(Employee $employee, VerificadorPinEmpleado $verificador): JsonResponse
     {
-        $employee->pin = Employee::generatePIN();
+        $pin = Employee::generatePIN();
+        $employee->pin = $pin;
         $employee->save();
+        $verificador->desbloquear($employee);
 
         return response()->json([
             'success' => true,
             'message' => 'PIN regenerado exitosamente',
-            'data' => [
-                'pin' => $employee->pin,
-            ],
+            'data' => ['pin' => $pin],
         ]);
     }
 
