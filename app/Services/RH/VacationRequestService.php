@@ -76,7 +76,7 @@ class VacationRequestService
 
         $excluirId = $opciones['excluir_id'] ?? null;
         $propia = $excluirId
-            ? (int) VacationRequest::whereKey($excluirId)->where('status', 'pending')->value('days_requested')
+            ? (int) VacationRequest::whereKey($excluirId)->where('employee_id', $empleado->id)->where('status', 'pending')->value('days_requested')
             : 0;
         $resultado['disponibles'] = VacationCalculatorService::diasDisponibles($empleado) + $propia;
         $resultado['disponibles_despues'] = $resultado['disponibles'] - $resultado['dias_descontables'];
@@ -125,7 +125,7 @@ class VacationRequestService
         return DB::transaction(function () use ($solicitud, $inicio, $fin, $motivo, $opciones) {
             $solicitud = $this->bloquearPendiente($solicitud);
             $empleado = Employee::whereKey($solicitud->employee_id)->lockForUpdate()->firstOrFail();
-            $calculo = $this->exigirSinErrores($this->calcular($empleado, $inicio, $fin, $opciones + ['excluir_id' => $solicitud->id]));
+            $calculo = $this->exigirSinErrores($this->calcular($empleado, $inicio, $fin, ['excluir_id' => $solicitud->id] + $opciones));
 
             $solicitud->update([
                 'start_date' => $inicio->format('Y-m-d'),

@@ -192,6 +192,22 @@ class VacationRequestServiceTest extends TestCase
         $this->esperarError('aún no empiezan', fn () => $this->servicio()->cancelar($solicitud, VacationRequestService::CANCELA_RH));
     }
 
+    public function test_excluir_id_de_otro_empleado_no_suma_sus_dias(): void
+    {
+        $empleado = $this->empleado($this->empresa, ['hire_date' => now()->subYear()->subDay()->toDateString()]); // 12 días
+        $otro = $this->empleado($this->empresa);
+        $ajena = $this->solicitud($otro, 'pending', 20);
+        $propia = $this->crear($empleado, 0, 2); // 3 días
+
+        $calculo = $this->servicio()->calcular($empleado, $this->dia(14), $this->dia(18), ['excluir_id' => $ajena->id]);
+        $this->assertSame(9, $calculo['disponibles']);
+
+        // Una solicitud de 15 días hábiles rebasa los 12 aunque se pase una excluir_id ajena en las opciones.
+        $this->esperarError('Disponibles: 12', fn () => $this->servicio()->reprogramar(
+            $propia, $this->dia(0), $this->dia(18), null, ['excluir_id' => $ajena->id]
+        ));
+    }
+
     public function test_reprogramar_recalcula_sin_chocar_consigo_misma(): void
     {
         $empleado = $this->empleado($this->empresa);
