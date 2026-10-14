@@ -125,9 +125,6 @@ class VacationRequest extends Model
             'approved_at' => now(),
         ]);
 
-        // Actualizar balance de vacaciones
-        $this->updateVacationBalance();
-
         return true;
     }
 
@@ -143,41 +140,6 @@ class VacationRequest extends Model
 
     public function cancel(): bool
     {
-        if ($this->status === 'approved') {
-            // Revertir balance si ya estaba aprobada
-            $this->revertVacationBalance();
-        }
-
         return $this->update(['status' => 'cancelled']);
-    }
-
-    protected function updateVacationBalance(): void
-    {
-        $balance = VacationBalance::firstOrCreate(
-            [
-                'employee_id' => $this->employee_id,
-                'year' => $this->vacation_year,
-            ],
-            [
-                'entitled_days' => 0,
-                'used_days' => 0,
-                'pending_days' => 0,
-                'carried_over' => 0,
-            ]
-        );
-
-        $balance->increment('used_days', $this->days_requested);
-        $balance->decrement('pending_days', $this->days_requested);
-    }
-
-    protected function revertVacationBalance(): void
-    {
-        $balance = VacationBalance::where('employee_id', $this->employee_id)
-            ->where('year', $this->vacation_year)
-            ->first();
-
-        if ($balance) {
-            $balance->decrement('used_days', $this->days_requested);
-        }
     }
 }

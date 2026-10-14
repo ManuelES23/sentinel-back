@@ -75,22 +75,7 @@ class VacationBalance extends Model
      */
     public static function calculateEntitledDays(int $yearsOfService): int
     {
-        // Tabla de días según LFT México (reforma "Vacaciones Dignas" 2023)
-        return match(true) {
-            $yearsOfService < 1 => 0,
-            $yearsOfService === 1 => 12,
-            $yearsOfService === 2 => 14,
-            $yearsOfService === 3 => 16,
-            $yearsOfService === 4 => 18,
-            $yearsOfService === 5 => 20,
-            $yearsOfService >= 6 && $yearsOfService <= 10 => 22,
-            $yearsOfService >= 11 && $yearsOfService <= 15 => 24,
-            $yearsOfService >= 16 && $yearsOfService <= 20 => 26,
-            $yearsOfService >= 21 && $yearsOfService <= 25 => 28,
-            $yearsOfService >= 26 && $yearsOfService <= 30 => 30,
-            $yearsOfService >= 31 && $yearsOfService <= 35 => 32,
-            default => 32 + (int)(($yearsOfService - 35) / 5) * 2,
-        };
+        return \App\Services\VacationCalculatorService::calculateEntitledDays((int) $yearsOfService);
     }
 
     /**

@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Employee;
 use App\Models\VacationBalance;
+use App\Models\VacationRequest;
 use Carbon\Carbon;
 
 /**
@@ -104,7 +105,7 @@ class VacationCalculatorService
     public static function calculateTotalAccumulatedDays(Carbon $hireDate, ?Carbon $referenceDate = null): array
     {
         $referenceDate = $referenceDate ?? now();
-        $yearsCompleted = $hireDate->diffInYears($referenceDate);
+        $yearsCompleted = max(0, (int) $hireDate->diffInYears($referenceDate));
         
         $accumulated = [];
         $totalDays = 0;
@@ -144,9 +145,9 @@ class VacationCalculatorService
 
         $hireDate = Carbon::parse($employee->hire_date);
         $now = now();
-        $yearsOfService = $hireDate->diffInYears($now);
-        $monthsOfService = $hireDate->diffInMonths($now) % 12;
-        $daysOfService = $hireDate->diffInDays($now);
+        $yearsOfService = max(0, (int) $hireDate->diffInYears($now));
+        $monthsOfService = max(0, (int) $hireDate->diffInMonths($now)) % 12;
+        $daysOfService = max(0, (int) $hireDate->diffInDays($now));
 
         // Calcular próximo aniversario
         $nextAnniversary = $hireDate->copy()->year($now->year);
@@ -165,11 +166,12 @@ class VacationCalculatorService
         // Días del próximo período (cuando cumpla otro año)
         $nextYearEntitledDays = self::calculateEntitledDays($yearsOfService + 1);
 
-        // Obtener todos los balances del empleado para calcular días usados totales
-        $allBalances = VacationBalance::where('employee_id', $employee->id)->get();
-        $totalUsedDays = $allBalances->sum('used_days');
-        $totalPendingDays = $allBalances->sum('pending_days');
-        $totalAdjustmentDays = $allBalances->sum('adjustment_days');
+        // Usados y pendientes salen de las solicitudes (fuente única); de
+        // vacation_balances solo cuentan los ajustes manuales de RH.
+        $totales = self::totalesDeSolicitudes($employee);
+        $totalUsedDays = $totales['usados'];
+        $totalPendingDays = $totales['pendientes'];
+        $totalAdjustmentDays = (int) VacationBalance::where('employee_id', $employee->id)->sum('adjustment_days');
 
         // Obtener balance del año actual
         $currentYear = $now->year;
@@ -224,8 +226,8 @@ class VacationCalculatorService
                 'adjustment_reason' => $currentBalance?->adjustment_reason,
                 'adjusted_by' => $currentBalance?->adjustedByUser?->name,
                 'adjusted_at' => $currentBalance?->adjusted_at?->toDateTimeString(),
-                'used_days' => $currentBalance?->used_days ?? 0,
-                'pending_days' => $currentBalance?->pending_days ?? 0,
+                'used_days' => $totalUsedDays,
+                'pending_days' => $totalPendingDays,
                 'available_days' => max(0, $availableDays), // Ahora muestra el total disponible
                 'total_days' => $totalAccumulatedDays + $totalAdjustmentDays,
             ],
@@ -236,6 +238,44 @@ class VacationCalculatorService
             // Tabla de referencia LFT
             'vacation_table' => self::getVacationTable(),
         ];
+    }
+
+    /**
+     * Usados = Σ días de solicitudes aprobadas; pendientes = Σ de las que
+     * siguen en revisión. Las borradas (soft delete) no cuentan.
+     *
+     * @return array{usados: int, pendientes: int}
+     */
+    public static function totalesDeSolicitudes(Employee $employee): array
+    {
+        $porEstado = VacationRequest::where('employee_id', $employee->id)
+            ->whereIn('status', ['approved', 'pending'])
+            ->selectRaw('status, SUM(days_requested) as dias')
+            ->groupBy('status')
+            ->pluck('dias', 'status');
+
+        return [
+            'usados' => (int) ($porEstado['approved'] ?? 0),
+            'pendientes' => (int) ($porEstado['pending'] ?? 0),
+        ];
+    }
+
+    /**
+     * Días disponibles = días LFT de todos los años cumplidos + ajustes −
+     * usados − pendientes. Sin recortar a cero (un ajuste de RH puede dejarlo
+     * negativo); las reglas de solicitud lo comparan tal cual.
+     */
+    public static function diasDisponibles(Employee $employee): int
+    {
+        if (! $employee->hire_date) {
+            return 0;
+        }
+
+        $acumulado = self::calculateTotalAccumulatedDays(Carbon::parse($employee->hire_date))['total_accumulated_days'];
+        $ajustes = (int) VacationBalance::where('employee_id', $employee->id)->sum('adjustment_days');
+        $totales = self::totalesDeSolicitudes($employee);
+
+        return $acumulado + $ajustes - $totales['usados'] - $totales['pendientes'];
     }
 
     /**
