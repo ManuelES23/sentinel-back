@@ -5,6 +5,7 @@ namespace App\Services\ActivosFijos;
 use App\Models\ActivityLog;
 use App\Models\Brand;
 use App\Models\DepreciationClose;
+use App\Models\DepreciationCloseLine;
 use App\Models\Enterprise;
 use App\Models\FixedAsset;
 use App\Models\FixedAssetAssignment;
@@ -134,6 +135,89 @@ class RegistradorSalidaActivo
 
             return $salida->refresh()->load('enterprise:id,name,slug');
         });
+    }
+
+    /**
+     * Marca la salida como revertida y restaura el estado previo del activo. No se puede si hay
+     * un cierre de depreciación posterior al mes de la salida (el cierre del mismo mes sí incluye
+     * al activo). En un traspaso, además, retira el activo recibido si todavía no se usó.
+     */
+    public function deshacer(FixedAssetDisposal $salida, string $motivo, User $por): FixedAssetDisposal
+    {
+        $motivo = trim($motivo);
+        if ($motivo === '') {
+            throw ValidationException::withMessages(['reason' => 'Indica el motivo para deshacer la salida.']);
+        }
+
+        return DB::transaction(function () use ($salida, $motivo, $por) {
+            // Mismo orden de bloqueo que registrar: primero el activo y luego la salida.
+            $activo = FixedAsset::withTrashed()->whereKey($salida->fixed_asset_id)->lockForUpdate()->firstOrFail();
+            $actual = FixedAssetDisposal::query()->whereKey($salida->getKey())->lockForUpdate()->firstOrFail();
+
+            if ($actual->reversed_at !== null) {
+                throw ValidationException::withMessages(['salida' => 'Esta salida ya fue deshecha.']);
+            }
+
+            $this->exigirSinCierresPosteriores($actual);
+            if ($actual->type === 'traspaso') {
+                $this->retirarActivoDestino($actual);
+            }
+
+            $actual->update([
+                'reversed_at' => now(),
+                'reversed_by' => $por->id,
+                'reversal_reason' => $motivo,
+            ]);
+            $activo->update(['status' => $actual->previous_status]);
+
+            ActivityLog::log(
+                action: 'reverse',
+                model: 'FixedAssetDisposal',
+                modelId: $actual->id,
+                oldValues: ['type' => $actual->type, 'disposal_date' => $actual->disposal_date->toDateString(), 'book_value' => $actual->book_value],
+                newValues: ['reason' => $motivo, 'reversed_by' => $por->id, 'status' => $actual->previous_status],
+            );
+
+            return $actual->refresh();
+        });
+    }
+
+    private function exigirSinCierresPosteriores(FixedAssetDisposal $salida): void
+    {
+        $mes = CarbonImmutable::parse($salida->disposal_date->toDateString())->startOfMonth();
+        $ultimo = DepreciationClose::where('enterprise_id', $salida->enterprise_id)
+            ->where('period', '>', $mes->toDateString())
+            ->max('period');
+
+        if ($ultimo) {
+            throw ValidationException::withMessages([
+                'salida' => 'Hay cierres de depreciación posteriores al mes de la salida (último: '.substr((string) $ultimo, 0, 7).'). Reábrelos antes de deshacerla.',
+            ]);
+        }
+    }
+
+    /** Borra (lógicamente) el activo recibido en un traspaso, solo si todavía no se usó. */
+    private function retirarActivoDestino(FixedAssetDisposal $salida): void
+    {
+        $destino = FixedAsset::withTrashed()->whereKey($salida->destination_asset_id)->lockForUpdate()->first();
+        if (! $destino || $destino->trashed()) {
+            return; // ya no existe: no hay nada que retirar
+        }
+
+        $motivo = match (true) {
+            $destino->status === 'baja' || $destino->salidas()->exists() => 'El activo recibido ya tiene una salida registrada.',
+            $destino->asignaciones()->exists() => 'El activo recibido ya tiene asignaciones.',
+            DepreciationCloseLine::where('fixed_asset_id', $destino->id)->exists() => 'El activo recibido ya forma parte de un cierre de depreciación.',
+            default => null,
+        };
+
+        if ($motivo) {
+            throw ValidationException::withMessages([
+                'salida' => "{$motivo} Corrígelo en la empresa receptora ({$destino->code}).",
+            ]);
+        }
+
+        $destino->delete();
     }
 
     /** @return array<string, mixed> Solo los campos propios del tipo; el resto se ignora. */
