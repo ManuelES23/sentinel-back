@@ -130,6 +130,18 @@ class FixedAsset extends Model
         return $this->hasOne(FixedAssetAssignment::class)->whereNull('returned_at');
     }
 
+    /** Historial de salidas (ventas, bajas, traspasos), de la más reciente a la más antigua. */
+    public function salidas(): HasMany
+    {
+        return $this->hasMany(FixedAssetDisposal::class)->orderByDesc('id');
+    }
+
+    /** Salida vigente (sin revertir). Como máximo una, la garantiza RegistradorSalidaActivo. */
+    public function salidaVigente(): HasOne
+    {
+        return $this->hasOne(FixedAssetDisposal::class)->whereNull('reversed_at');
+    }
+
     public function enterprise(): BelongsTo
     {
         return $this->belongsTo(Enterprise::class);

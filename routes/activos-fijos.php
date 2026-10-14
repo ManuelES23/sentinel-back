@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\ActivosFijos\AltaPendienteController;
 use App\Http\Controllers\Api\ActivosFijos\AsignacionActivoController;
 use App\Http\Controllers\Api\ActivosFijos\ContextoActivosController;
 use App\Http\Controllers\Api\ActivosFijos\DepreciacionController;
+use App\Http\Controllers\Api\ActivosFijos\SalidaActivoController;
 use App\Http\Controllers\Api\SplendidFarms\Inventory\AssetCategoryController;
 use App\Http\Controllers\Api\SplendidFarms\Inventory\FixedAssetController;
 use Illuminate\Support\Facades\Route;
@@ -52,4 +53,14 @@ Route::prefix('activos-fijos')->group(function () {
     Route::get('depreciacion/cierres', [DepreciacionController::class, 'cierres']);
     Route::post('depreciacion/cierres', [DepreciacionController::class, 'cerrar']);
     Route::delete('depreciacion/cierres/{cierre}', [DepreciacionController::class, 'reabrir']);
+
+    // Bajas, ventas y traspasos (fase 5). `previa` va antes de `{salida}`.
+    Route::get('salidas', [SalidaActivoController::class, 'index']);
+    Route::get('salidas/previa', [SalidaActivoController::class, 'previa']);
+    Route::post('salidas', [SalidaActivoController::class, 'store']);
+    Route::get('salidas/{salida}', [SalidaActivoController::class, 'show']);
+    Route::delete('salidas/{salida}', [SalidaActivoController::class, 'destroy']);
+    Route::get('salidas/{salida}/carta', [SalidaActivoController::class, 'carta']);
+    Route::post('salidas/{salida}/carta-firmada', [SalidaActivoController::class, 'subirCartaFirmada']);
+    Route::get('salidas/{salida}/carta-firmada', [SalidaActivoController::class, 'descargarCartaFirmada']);
 });

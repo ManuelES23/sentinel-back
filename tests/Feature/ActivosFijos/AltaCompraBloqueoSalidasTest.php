@@ -2,9 +2,12 @@
 
 namespace Tests\Feature\ActivosFijos;
 
+use App\Models\FixedAsset;
 use App\Models\FixedAssetReceiptUnit;
 use App\Models\InventoryMovement;
 use App\Models\InventoryStock;
+use App\Models\User;
+use App\Services\ActivosFijos\RegistradorSalidaActivo;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Validation\ValidationException;
 use Laravel\Sanctum\Sanctum;
@@ -184,5 +187,35 @@ class AltaCompraBloqueoSalidasTest extends TestCase
         // Ya no queda nada libre: ni siquiera 1 desde la fila SIN-LOTE.
         $this->expectException(ValidationException::class);
         InventoryStock::updateStock($this->insumo->id, $this->almacenA->id, null, -1, 0, 'SIN-LOTE');
+    }
+
+    public function test_registrar_una_salida_del_activo_libera_el_stock(): void
+    {
+        $rec = $this->recepcionConfirmada(1, 'L-100');
+        $unidad = FixedAssetReceiptUnit::where('purchase_receipt_id', $rec->id)->first();
+        $activo = FixedAsset::create([
+            'enterprise_id' => $this->empresa->id, 'code' => 'SF-AF-000901', 'name' => 'Equipo',
+            'category_id' => $this->tipoActivo->id, 'branch_id' => $this->sucursal->id, 'entity_id' => $this->almacenA->id,
+            'status' => 'en_uso', 'is_active' => true,
+        ]);
+        $unidad->update(['status' => 'registered', 'fixed_asset_id' => $activo->id]);
+
+        try {
+            InventoryStock::updateStock($this->insumo->id, $this->almacenA->id, null, -1, 0, 'L-100');
+            $this->fail('Con el activo vigente debió rechazar.');
+        } catch (ValidationException $e) {
+            $this->assertArrayHasKey('stock', $e->errors());
+        }
+
+        // La salida (no solo el cambio de estado) deja al activo en baja y libera la pieza.
+        app(RegistradorSalidaActivo::class)->registrar($activo, [
+            'type' => 'desecho', 'disposal_date' => now()->toDateString(),
+            'reason' => 'Obsoleto', 'authorized_by_name' => 'Dirección General',
+        ], User::factory()->create(['role' => 'user']));
+        $this->assertSame('baja', $activo->fresh()->status);
+
+        InventoryStock::updateStock($this->insumo->id, $this->almacenA->id, null, -1, 0, 'L-100');
+
+        $this->assertEquals(0, $this->stockDe('L-100'));
     }
 }

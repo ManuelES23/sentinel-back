@@ -6,6 +6,7 @@ use App\Http\Middleware\EnsureUserIsAdmin;
 use App\Models\Enterprise;
 use App\Models\FixedAsset;
 use App\Models\FixedAssetAssignment;
+use App\Models\FixedAssetDisposal;
 use App\Models\UserEnterpriseAccess;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
@@ -89,6 +90,12 @@ class AlcanceActivos
     public function autorizarAsignacion(FixedAssetAssignment $asignacion, Request $request): void
     {
         abort_unless(in_array($asignacion->enterprise_id, $this->idsVisibles($request), true), 404);
+    }
+
+    /** 404 y no 403, igual que con los activos y las asignaciones: no se revela que la salida existe. */
+    public function autorizarSalida(FixedAssetDisposal $salida, Request $request): void
+    {
+        abort_unless(in_array($salida->enterprise_id, $this->idsVisibles($request), true), 404);
     }
 
     /**

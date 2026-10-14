@@ -61,7 +61,15 @@ class ResolutorDepreciacion
         ];
 
         if ($activo->status === 'baja') {
-            return $vacio;
+            // Con salida vigente, las cifras se congelaron al registrarla; un baja antiguo no tiene cifras.
+            $salida = $activo->salidaVigente;
+
+            return $salida
+                ? array_merge($vacio, [
+                    'acumulado' => $salida->accumulated_depreciation,
+                    'valor_en_libros' => $salida->book_value,
+                ])
+                : $vacio;
         }
 
         ['datos' => $datos, 'motivo' => $motivo] = $this->resolver($activo);

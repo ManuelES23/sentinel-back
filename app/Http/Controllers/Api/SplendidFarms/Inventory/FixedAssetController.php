@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Models\AssetCharacteristicDefinition;
 use App\Models\Enterprise;
 use App\Models\FixedAsset;
+use App\Models\FixedAssetDisposal;
 use App\Services\ActivosFijos\AlcanceActivos;
 use App\Services\ActivosFijos\CreadorActivo;
 use App\Services\ActivosFijos\GeneradorCodigoActivo;
@@ -15,6 +16,7 @@ use App\Services\ActivosFijos\ResolutorDepreciacion;
 use App\Services\ActivosFijos\ValidadorRelacionesActivo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
@@ -34,6 +36,7 @@ class FixedAssetController extends Controller
         'performanceUnit:id,name,abbreviation',
         'characteristics',
         'asignacionActiva:id,fixed_asset_id,assignee_type,assignee_name,assigned_at,returned_at,signed_document_path',
+        'salidaVigente:id,fixed_asset_id,type,disposal_date,accumulated_depreciation,book_value,result_amount,reversed_at,signed_document_path',
         'supplier:id,business_name',
         'purchaseReceipt:id,receipt_number,supplier_document,status', // status: el modelo agrega status_label e is_editable
     ];
@@ -102,6 +105,9 @@ class FixedAssetController extends Controller
 
         $empresa = $this->alcance->empresaParaAlta($request);
         $validated = $this->validateData($request, $empresa);
+        if (($validated['status'] ?? null) === 'baja') {
+            throw ValidationException::withMessages(['status' => 'Para dar de baja un activo usa «Dar de baja o vender».']);
+        }
         $imagenNueva = $request->hasFile('image') ? $request->file('image')->store('fixed-assets', 'public') : null;
 
         try {
@@ -152,6 +158,7 @@ class FixedAssetController extends Controller
 
         $empresa = $asset->enterprise; // la empresa dueña no cambia al editar
         $validated = $this->validateData($request, $empresa, $asset);
+        $this->exigirEstadoEditable($asset, $validated);
         unset($validated['enterprise_id']);
         if (empty($validated['code'])) {
             unset($validated['code']); // vacío = conservar el código actual
@@ -211,9 +218,21 @@ class FixedAssetController extends Controller
             ]);
         }
 
+        if ($asset->salidas()->exists()) {
+            throw ValidationException::withMessages([
+                'asset' => 'El activo tiene historial de salidas (bajas, ventas o traspasos) y no se puede eliminar.',
+            ]);
+        }
+
+        if (FixedAssetDisposal::vigentes()->where('destination_asset_id', $asset->id)->exists()) {
+            throw ValidationException::withMessages([
+                'asset' => 'Este activo se recibió por un traspaso vigente. Deshaz el traspaso en «Bajas y ventas» para retirarlo.',
+            ]);
+        }
+
         if ($asset->status !== 'baja' && $asset->unidadCompra()->where('status', 'registered')->exists()) {
             throw ValidationException::withMessages([
-                'asset' => 'Este activo viene de una compra y respalda una entrada de inventario. Cambia su estado a «Baja» antes de eliminarlo.',
+                'asset' => 'Este activo viene de una compra y respalda una entrada de inventario, así que no se elimina. Si ya no se usa, regístrale su baja con «Dar de baja o vender».',
             ]);
         }
 
@@ -316,6 +335,89 @@ class FixedAssetController extends Controller
         }
 
         return $validated;
+    }
+
+    /** Campos que, con una salida vigente, congelan las cifras de la salida y del cierre de su mes. */
+    private const CAMPOS_CON_SALIDA = [
+        'status' => 'el estado',
+        'purchase_value' => 'el valor de compra',
+        'purchase_date' => 'la fecha de compra',
+        'depreciation_start' => 'el inicio de la depreciación',
+        'depreciation_rate' => 'la tasa de depreciación',
+        'salvage_percent' => 'el porcentaje residual',
+        'useful_life_years' => 'la vida útil',
+        'category_id' => 'el tipo de activo',
+        'subcategory_id' => 'el subtipo de activo',
+    ];
+
+    /**
+     * La baja se registra con «Dar de baja o vender» (salida con fecha, motivo y cifras). Mientras
+     * un activo tenga una salida vigente no se puede cambiar su estado ni los datos que alimentan
+     * la depreciación (valor, fechas, tasa, residual, vida útil y tipo): el cierre del mes de la
+     * salida debe seguir cuadrando con las cifras congeladas. Enviar el mismo valor no es un cambio;
+     * los datos descriptivos siguen editables. Un baja antiguo (sin salida) sí puede cambiar de estado.
+     */
+    private function exigirEstadoEditable(FixedAsset $asset, array $validated): void
+    {
+        if (array_key_exists('status', $validated) && $validated['status'] === 'baja' && $validated['status'] !== $asset->status) {
+            throw ValidationException::withMessages(['status' => 'Para dar de baja un activo usa «Dar de baja o vender».']);
+        }
+
+        if (! $asset->salidaVigente()->exists()) {
+            return;
+        }
+
+        $errores = [];
+        foreach (self::CAMPOS_CON_SALIDA as $campo => $etiqueta) {
+            if (array_key_exists($campo, $validated) && $this->cambiaElCampo($asset, $campo, $validated[$campo])) {
+                $errores[$campo] = "No se puede cambiar {$etiqueta} mientras el activo tiene una salida registrada; deshaz la salida primero.";
+            }
+        }
+
+        if ($errores) {
+            throw ValidationException::withMessages($errores);
+        }
+    }
+
+    /** ¿El valor pedido es distinto del que ya tiene el activo? Compara por valor (centavos, día, entero). */
+    private function cambiaElCampo(FixedAsset $asset, string $campo, mixed $nuevo): bool
+    {
+        $actual = $asset->{$campo};
+
+        return match ($campo) {
+            'purchase_value' => $this->centavos($actual) !== $this->centavos($nuevo),
+            'useful_life_years' => (int) $actual !== (int) $nuevo,
+            'depreciation_rate', 'salvage_percent' => $this->centavosONulo($actual) !== $this->centavosONulo($nuevo),
+            'purchase_date' => $this->fechaONula($actual) !== $this->fechaONula($nuevo),
+            'depreciation_start' => $this->fechaONula($actual, true) !== $this->fechaONula($nuevo, true),
+            'category_id', 'subcategory_id' => $this->enteroONulo($actual) !== $this->enteroONulo($nuevo),
+            default => $actual !== $nuevo,
+        };
+    }
+
+    private function centavos(mixed $valor): int
+    {
+        return (int) round(((float) $valor) * 100);
+    }
+
+    private function centavosONulo(mixed $valor): ?int
+    {
+        return $valor === null || $valor === '' ? null : $this->centavos($valor);
+    }
+
+    private function enteroONulo(mixed $valor): ?int
+    {
+        return $valor === null || $valor === '' ? null : (int) $valor;
+    }
+
+    private function fechaONula(mixed $valor, bool $primerDelMes = false): ?string
+    {
+        if ($valor === null || $valor === '') {
+            return null;
+        }
+        $fecha = Carbon::parse($valor);
+
+        return ($primerDelMes ? $fecha->startOfMonth() : $fecha)->toDateString();
     }
 
     /**

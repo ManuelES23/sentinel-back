@@ -5,6 +5,8 @@ namespace Tests\Feature\ActivosFijos;
 use App\Models\FixedAsset;
 use App\Models\FixedAssetReceiptUnit;
 use App\Models\InventoryMovement;
+use App\Models\User;
+use App\Services\ActivosFijos\RegistradorSalidaActivo;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Tests\Concerns\CreatesAltaCompraFixtures;
@@ -115,5 +117,23 @@ class AltaCompraBloqueoAnulacionTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data.supplier.business_name', $this->proveedor->business_name)
             ->assertJsonPath('data.purchase_receipt.receipt_number', $rec->receipt_number);
+    }
+
+    public function test_registrar_la_salida_del_activo_permite_anular_la_entrada(): void
+    {
+        [$rec, , $activo] = $this->activoDeCompra('en_uso');
+        Sanctum::actingAs($this->crearUsuarioDeCampo([$this->almacenA]));
+        $url = self::URL_MOVIMIENTOS . "/{$rec->inventory_movement_id}/cancel";
+
+        $this->postJson($url, ['reason' => 'Prueba'], $this->headersEmpresa())
+            ->assertStatus(422)->assertJsonValidationErrors('movement');
+
+        app(RegistradorSalidaActivo::class)->registrar($activo, [
+            'type' => 'desecho', 'disposal_date' => now()->toDateString(),
+            'reason' => 'Obsoleto', 'authorized_by_name' => 'Dirección General',
+        ], User::factory()->create(['role' => 'user']));
+
+        $this->postJson($url, ['reason' => 'Prueba'], $this->headersEmpresa())->assertOk();
+        $this->assertSame('cancelled', InventoryMovement::find($rec->inventory_movement_id)->status);
     }
 }
