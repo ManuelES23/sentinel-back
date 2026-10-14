@@ -42,6 +42,7 @@ class RegistradorSalidaActivo
     {
         $this->exigirSinSalidaVigente($activo);
         $this->validarFecha($activo, $fecha);
+        $activa = $this->asignacionActivaValida($activo, $fecha);
 
         $valores = $this->calculador->valores($activo, $fecha);
         $resultado = $tipo === 'venta' && $precio === null
@@ -54,7 +55,7 @@ class RegistradorSalidaActivo
             'book_value' => $valores['book_value'],
             'result_amount' => $resultado,
             'warnings' => $valores['warnings'],
-            'has_active_assignment' => $activo->asignacionActiva()->exists(),
+            'has_active_assignment' => $activa !== null,
         ];
     }
 

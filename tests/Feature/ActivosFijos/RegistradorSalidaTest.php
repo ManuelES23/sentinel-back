@@ -2,12 +2,15 @@
 
 namespace Tests\Feature\ActivosFijos;
 
+use App\Models\ActivityLog;
 use App\Models\FixedAsset;
+use App\Models\FixedAssetAssignment;
 use App\Models\FixedAssetDisposal;
 use App\Models\User;
 use App\Services\ActivosFijos\AsignadorActivos;
 use App\Services\ActivosFijos\CierreDepreciacion;
 use App\Services\ActivosFijos\RegistradorSalidaActivo;
+use App\Services\ActivosFijos\ResponsablesActivo;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Validation\ValidationException;
@@ -161,7 +164,7 @@ class RegistradorSalidaTest extends TestCase
     public function test_solo_puede_haber_una_salida_vigente_por_activo(): void
     {
         $activo = $this->crearActivoDepreciable();
-        $this->registrador->registrar($activo, $this->datos('desecho'), $this->usuario);
+        $primera = $this->registrador->registrar($activo, $this->datos('desecho'), $this->usuario);
 
         try {
             $this->registrador->registrar($activo, $this->datos('venta'), $this->usuario);
@@ -171,6 +174,9 @@ class RegistradorSalidaTest extends TestCase
         }
 
         $this->assertSame(1, FixedAssetDisposal::count());
+        $this->assertSame('baja', $activo->fresh()->status);
+        $this->assertSame('en_uso', $primera->fresh()->previous_status);
+        $this->assertSame(1, ActivityLog::where('action', 'dispose')->count());
     }
 
     public function test_la_asignacion_activa_se_devuelve_en_la_misma_operacion(): void
@@ -179,7 +185,7 @@ class RegistradorSalidaTest extends TestCase
         $empleado = $this->crearEmpleado($this->enterprise);
         $asignacion = app(AsignadorActivos::class)->asignar(
             $activo,
-            $this->datosAsignacion('employee', $empleado->id, ['assigned_at' => '2026-03-01']),
+            $this->datosAsignacion('employee', $empleado->id, ['assigned_at' => '2026-03-01', 'condition_out' => 'regular']),
             $this->usuario,
         );
 
@@ -188,7 +194,7 @@ class RegistradorSalidaTest extends TestCase
         $asignacion->refresh();
         $this->assertSame('2026-05-20', $asignacion->returned_at->toDateString());
         $this->assertSame('otro', $asignacion->return_reason);
-        $this->assertSame('bueno', $asignacion->condition_in);
+        $this->assertSame('regular', $asignacion->condition_in);
         $this->assertStringContainsString('baja del activo', $asignacion->return_notes);
         $this->assertSame('en_uso', $salida->previous_status);
         $this->assertSame('baja', $activo->fresh()->status);
@@ -242,5 +248,55 @@ class RegistradorSalidaTest extends TestCase
 
         $this->expectException(ValidationException::class);
         $this->registrador->previa($activo, 'desecho', CarbonImmutable::parse('2026-06-16'));
+    }
+
+    public function test_la_vista_previa_avisa_si_la_fecha_es_anterior_a_la_entrega_vigente(): void
+    {
+        $activo = $this->crearActivoDepreciable();
+        $empleado = $this->crearEmpleado($this->enterprise);
+        app(AsignadorActivos::class)->asignar(
+            $activo,
+            $this->datosAsignacion('employee', $empleado->id, ['assigned_at' => '2026-05-25']),
+            $this->usuario,
+        );
+
+        try {
+            $this->registrador->previa($activo, 'desecho', CarbonImmutable::parse('2026-05-20'));
+            $this->fail('La vista previa debió rechazar la fecha.');
+        } catch (ValidationException $e) {
+            $this->assertArrayHasKey('disposal_date', $e->errors());
+        }
+    }
+
+    public function test_si_falla_la_devolucion_de_la_asignacion_no_queda_salida_ni_cambios(): void
+    {
+        $activo = $this->crearActivoDepreciable();
+        $empleado = $this->crearEmpleado($this->enterprise);
+        $asignacion = app(AsignadorActivos::class)->asignar(
+            $activo,
+            $this->datosAsignacion('employee', $empleado->id, ['assigned_at' => '2026-03-01']),
+            $this->usuario,
+        );
+
+        // La salida ya insertó su fila cuando se devuelve la asignación: aquí se prueba el rollback.
+        $this->app->instance(AsignadorActivos::class, new class(app(ResponsablesActivo::class)) extends AsignadorActivos {
+            public function devolver(FixedAssetAssignment $asignacion, array $datos, User $por): FixedAssetAssignment
+            {
+                throw ValidationException::withMessages(['returned_at' => 'Falla simulada de la devolución.']);
+            }
+        });
+        $registrador = app(RegistradorSalidaActivo::class);
+
+        try {
+            $registrador->registrar($activo, $this->datos('desecho'), $this->usuario);
+            $this->fail('La salida debió fallar.');
+        } catch (ValidationException $e) {
+            $this->assertArrayHasKey('returned_at', $e->errors());
+        }
+
+        $this->assertSame(0, FixedAssetDisposal::count());
+        $this->assertSame('en_uso', $activo->fresh()->status);
+        $this->assertNull($asignacion->fresh()->returned_at);
+        $this->assertSame(0, ActivityLog::where('action', 'dispose')->count());
     }
 }
