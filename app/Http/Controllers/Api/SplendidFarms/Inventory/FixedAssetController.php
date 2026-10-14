@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Models\AssetCharacteristicDefinition;
 use App\Models\Enterprise;
 use App\Models\FixedAsset;
+use App\Models\FixedAssetDisposal;
 use App\Services\ActivosFijos\AlcanceActivos;
 use App\Services\ActivosFijos\CreadorActivo;
 use App\Services\ActivosFijos\GeneradorCodigoActivo;
@@ -34,6 +35,7 @@ class FixedAssetController extends Controller
         'performanceUnit:id,name,abbreviation',
         'characteristics',
         'asignacionActiva:id,fixed_asset_id,assignee_type,assignee_name,assigned_at,returned_at,signed_document_path',
+        'salidaVigente:id,fixed_asset_id,type,disposal_date,accumulated_depreciation,book_value,result_amount,reversed_at,signed_document_path',
         'supplier:id,business_name',
         'purchaseReceipt:id,receipt_number,supplier_document,status', // status: el modelo agrega status_label e is_editable
     ];
@@ -152,6 +154,7 @@ class FixedAssetController extends Controller
 
         $empresa = $asset->enterprise; // la empresa dueña no cambia al editar
         $validated = $this->validateData($request, $empresa, $asset);
+        $this->exigirEstadoEditable($asset, $validated);
         unset($validated['enterprise_id']);
         if (empty($validated['code'])) {
             unset($validated['code']); // vacío = conservar el código actual
@@ -208,6 +211,18 @@ class FixedAssetController extends Controller
         if ($asset->asignacionActiva()->exists()) {
             throw ValidationException::withMessages([
                 'asset' => 'El activo está asignado a alguien. Regístrale la devolución antes de eliminarlo.',
+            ]);
+        }
+
+        if ($asset->salidas()->exists()) {
+            throw ValidationException::withMessages([
+                'asset' => 'El activo tiene historial de salidas (bajas, ventas o traspasos) y no se puede eliminar.',
+            ]);
+        }
+
+        if (FixedAssetDisposal::vigentes()->where('destination_asset_id', $asset->id)->exists()) {
+            throw ValidationException::withMessages([
+                'asset' => 'Este activo se recibió por un traspaso vigente. Deshaz el traspaso en «Bajas y ventas» para retirarlo.',
             ]);
         }
 
@@ -316,6 +331,26 @@ class FixedAssetController extends Controller
         }
 
         return $validated;
+    }
+
+    /**
+     * La baja se registra con «Dar de baja o vender» (salida con fecha, motivo y cifras). Mientras
+     * un activo tenga una salida vigente, su estado no se puede cambiar por la edición normal.
+     * Un baja antiguo (sin salida) sí puede cambiar de estado.
+     */
+    private function exigirEstadoEditable(FixedAsset $asset, array $validated): void
+    {
+        if (! array_key_exists('status', $validated) || $validated['status'] === $asset->status) {
+            return;
+        }
+
+        if ($validated['status'] === 'baja') {
+            throw ValidationException::withMessages(['status' => 'Para dar de baja un activo usa «Dar de baja o vender».']);
+        }
+
+        if ($asset->salidaVigente()->exists()) {
+            throw ValidationException::withMessages(['status' => 'El activo tiene una salida registrada: deshazla antes de cambiar su estado.']);
+        }
     }
 
     /**
