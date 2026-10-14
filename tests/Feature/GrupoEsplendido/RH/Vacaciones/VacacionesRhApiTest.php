@@ -121,21 +121,60 @@ class VacacionesRhApiTest extends TestCase
         $this->postJson(self::BASE."/{$solicitud->id}/cancelar")->assertOk()->assertJsonPath('data.status', 'cancelled');
     }
 
+    private function acceso(User $usuario, \App\Models\Submodule $submodulo): void
+    {
+        UserSubmoduleAccess::create(['user_id' => $usuario->id, 'submodule_id' => $submodulo->id, 'is_active' => true, 'granted_at' => now()]);
+    }
+
+    private function tipo(\App\Models\Submodule $submodulo, string $slug): SubmodulePermissionType
+    {
+        return SubmodulePermissionType::where('submodule_id', $submodulo->id)->where('slug', $slug)->firstOrFail();
+    }
+
+    private function concedido(User $usuario, \App\Models\Submodule $submodulo, string $slug): bool
+    {
+        return (bool) UserSubmodulePermission::where('user_id', $usuario->id)
+            ->where('permission_type_id', $this->tipo($submodulo, $slug)->id)->value('is_granted');
+    }
+
     public function test_la_migracion_concede_los_permisos_a_quien_ya_entra(): void
     {
         $submodulo = $this->submoduloVacaciones();
         $conAcceso = User::factory()->create();
-        $conRevocado = User::factory()->create();
-        foreach ([$conAcceso, $conRevocado] as $usuario) {
-            UserSubmoduleAccess::create(['user_id' => $usuario->id, 'submodule_id' => $submodulo->id, 'is_active' => true, 'granted_at' => now()]);
+        $conViewRevocado = User::factory()->create();
+        $conAprobarRevocado = User::factory()->create();
+        foreach ([$conAcceso, $conViewRevocado, $conAprobarRevocado] as $usuario) {
+            $this->acceso($usuario, $submodulo);
         }
-        $aprobar = SubmodulePermissionType::where('submodule_id', $submodulo->id)->where('slug', 'aprobar')->first();
-        UserSubmodulePermission::create(['user_id' => $conRevocado->id, 'submodule_id' => $submodulo->id, 'permission_type_id' => $aprobar->id, 'is_granted' => false]);
+        // Valor por defecto del seeder: fila view con is_granted = 0 que la API nunca hacía valer.
+        UserSubmodulePermission::create(['user_id' => $conViewRevocado->id, 'submodule_id' => $submodulo->id, 'permission_type_id' => $this->tipo($submodulo, 'view')->id, 'is_granted' => false]);
+        UserSubmodulePermission::create(['user_id' => $conAprobarRevocado->id, 'submodule_id' => $submodulo->id, 'permission_type_id' => $this->tipo($submodulo, 'aprobar')->id, 'is_granted' => false]);
 
         (require database_path('migrations/2026_10_15_100500_add_rh_vacaciones_permissions.php'))->up();
 
-        $this->assertSame(4, UserSubmodulePermission::where('user_id', $conAcceso->id)->where('is_granted', true)->count());
-        $this->assertFalse((bool) UserSubmodulePermission::where('user_id', $conRevocado->id)->where('permission_type_id', $aprobar->id)->value('is_granted'));
-        $this->assertSame(3, UserSubmodulePermission::where('user_id', $conRevocado->id)->where('is_granted', true)->count());
+        foreach (['view', 'create', 'edit', 'aprobar'] as $slug) {
+            $this->assertTrue($this->concedido($conAcceso, $submodulo, $slug), "conAcceso $slug");
+            $this->assertTrue($this->concedido($conViewRevocado, $submodulo, $slug), "conViewRevocado $slug");
+        }
+
+        $this->assertFalse($this->concedido($conAprobarRevocado, $submodulo, 'aprobar'));
+        foreach (['view', 'create', 'edit'] as $slug) {
+            $this->assertTrue($this->concedido($conAprobarRevocado, $submodulo, $slug), "conAprobarRevocado $slug");
+        }
+    }
+
+    public function test_la_migracion_no_toca_vacaciones_de_otra_empresa(): void
+    {
+        $this->submoduloVacaciones();
+        $aplicacion = \App\Models\Application::create(['enterprise_id' => $this->empresa->id, 'slug' => 'rh', 'name' => 'RH', 'description' => 'RH', 'path' => '/splendidfarms/rh', 'is_active' => true]);
+        $modulo = \App\Models\Module::create(['application_id' => $aplicacion->id, 'slug' => 'gestion', 'name' => 'Gestión', 'order' => 4, 'is_active' => true]);
+        $ajeno = \App\Models\Submodule::create(['module_id' => $modulo->id, 'slug' => 'vacaciones', 'name' => 'Vacaciones', 'order' => 1, 'is_active' => true]);
+        $usuario = User::factory()->create();
+        $this->acceso($usuario, $ajeno);
+
+        (require database_path('migrations/2026_10_15_100500_add_rh_vacaciones_permissions.php'))->up();
+
+        $this->assertSame(0, SubmodulePermissionType::where('submodule_id', $ajeno->id)->count());
+        $this->assertSame(0, UserSubmodulePermission::where('submodule_id', $ajeno->id)->count());
     }
 }
