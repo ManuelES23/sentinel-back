@@ -84,4 +84,9 @@ class FixedAssetDisposal extends Model
     {
         return $this->belongsTo(FixedAsset::class, 'destination_asset_id')->withTrashed();
     }
+
+    public function reversedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'reversed_by');
+    }
 }

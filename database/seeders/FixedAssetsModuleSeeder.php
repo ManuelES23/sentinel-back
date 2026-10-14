@@ -24,7 +24,8 @@ use Illuminate\Database\Seeder;
  *           ├── Tipos de Activos Fijos (slug: tipos-activo) -> catálogo tipo/subtipo
  *           │     (solo activo en Grupo Espléndido; en el resto queda oculto)
  *           ├── Asignaciones          (slug: asignaciones)  -> entregas y carta responsiva
- *           └── Depreciación          (slug: depreciacion)   -> cierre mensual de depreciación
+ *           ├── Depreciación          (slug: depreciacion)   -> cierre mensual de depreciación
+ *           └── Bajas y ventas       (slug: salidas)        -> ventas, bajas y traspasos
  *
  * Es seguro volver a correr este seeder (todo es firstOrCreate). El traslado
  * desde Inventario lo hace la migración mover_activos_fijos_a_administracion.
@@ -76,7 +77,7 @@ class FixedAssetsModuleSeeder extends Seeder
                     ['is_active' => true, 'granted_at' => now()]
                 );
 
-                foreach ([$entry['activosSubmodule'], $entry['tiposSubmodule'], $entry['asignacionesSubmodule'], $entry['depreciacionSubmodule']] as $submodule) {
+                foreach ([$entry['activosSubmodule'], $entry['tiposSubmodule'], $entry['asignacionesSubmodule'], $entry['depreciacionSubmodule'], $entry['salidasSubmodule']] as $submodule) {
                     UserSubmoduleAccess::firstOrCreate(
                         ['user_id' => $user->id, 'submodule_id' => $submodule->id],
                         ['is_active' => true, 'granted_at' => now()]
@@ -154,7 +155,14 @@ class FixedAssetsModuleSeeder extends Seeder
             ['name' => 'Depreciación', 'icon' => 'TrendingDown', 'order' => 4, 'is_active' => true]
         );
         $this->ensurePermissionTypes($depreciacionSubmodule);
-        $this->command->info("  ✓ {$enterpriseSlug}/administration/activos-fijos/{activos,tipos-activo,asignaciones,depreciacion}");
+
+        // Submódulo "Bajas y ventas": salidas de activos (venta, desecho, siniestro, donación, traspaso)
+        $salidasSubmodule = Submodule::firstOrCreate(
+            ['slug' => 'salidas', 'module_id' => $module->id],
+            ['name' => 'Bajas y ventas', 'icon' => 'PackageMinus', 'order' => 5, 'is_active' => true]
+        );
+        $this->ensurePermissionTypes($salidasSubmodule);
+        $this->command->info("  ✓ {$enterpriseSlug}/administration/activos-fijos/{activos,tipos-activo,asignaciones,depreciacion,salidas}");
 
         if ($appIsNew) {
             $this->command->warn('    → Falta configurar Sucursales/Entidades/Áreas para esta empresa (Administración > Organización).');
@@ -168,6 +176,7 @@ class FixedAssetsModuleSeeder extends Seeder
             'tiposSubmodule' => $tiposSubmodule,
             'asignacionesSubmodule' => $asignacionesSubmodule,
             'depreciacionSubmodule' => $depreciacionSubmodule,
+            'salidasSubmodule' => $salidasSubmodule,
         ];
     }
 
