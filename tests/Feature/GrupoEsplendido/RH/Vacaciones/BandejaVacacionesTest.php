@@ -99,4 +99,28 @@ class BandejaVacacionesTest extends TestCase
 
         $this->assertSame(['Jefe directo', 'RH Grupo Espléndido'], array_column($detalle['approvals'], 'description'));
     }
+
+    public function test_la_solicitud_mas_antigua_no_se_pierde_entre_muchas_ajenas(): void
+    {
+        // La solicitud del jefe es la más antigua de todas.
+        $this->solicitud->forceFill(['created_at' => now()->subYears(3)])->saveQuietly();
+
+        // 205 pendientes de otro empleado, en un paso de RH que el jefe no puede decidir.
+        $otro = $this->empleado($this->empresa);
+        for ($i = 0; $i < 205; $i++) {
+            $ajena = $this->solicitud($otro, 'pending', 1, ['current_step' => 1]);
+            $ajena->approvals()->create([
+                'step_order' => 1, 'description' => 'RH Grupo Espléndido', 'rules' => [],
+                'is_rh_final' => true, 'decision' => 'waiting',
+            ]);
+        }
+
+        Sanctum::actingAs($this->jefe->user);
+
+        $resumen = $this->procesoVacaciones($this->getJson('/api/pending-approvals/summary')->assertOk()->json('data.processes'));
+        $this->assertSame(1, $resumen['pending_count']);
+
+        $lista = $this->procesoVacaciones($this->getJson('/api/pending-approvals?process=vacation_requests')->assertOk()->json('data.processes'));
+        $this->assertSame([$this->solicitud->id], array_column($lista['items'], 'id'));
+    }
 }

@@ -33,6 +33,9 @@ class PendingApprovalController extends Controller
 
     private ?CadenaAprobacionVacaciones $cadenaVac = null;
 
+    /** @var array<int, Collection> solicitudes de vacaciones decidibles, por id de usuario (el controlador vive una petición) */
+    private array $vacacionesPorUsuario = [];
+
     /**
      * Obtener resumen de pendientes por aprobar para el usuario autenticado
      */
@@ -408,18 +411,18 @@ class PendingApprovalController extends Controller
     /** Solicitudes cuyo paso ACTUAL puede decidir este usuario (spec §5.6). */
     private function vacacionesPara($user): Collection
     {
-        return VacationRequest::where('status', 'pending')
+        return $this->vacacionesPorUsuario[$user->id] ??= VacationRequest::where('status', 'pending')
             ->whereNotNull('current_step')
             ->where('employee_id', '!=', (int) $user->employee?->id)
             ->with(['employee.department:id,name', 'employee.enterprise:id,name', 'approvals'])
-            ->orderBy('created_at', 'desc')
-            ->limit(200)
-            ->get()
+            ->lazyById(100)
             ->filter(function (VacationRequest $solicitud) use ($user) {
                 $paso = $this->cadenaVac()->pasoActual($solicitud);
 
                 return $paso !== null && $this->aprobadorVac()->puedeDecidir($user, $solicitud, $paso);
             })
+            ->collect()
+            ->sortByDesc('created_at')
             ->values();
     }
 
