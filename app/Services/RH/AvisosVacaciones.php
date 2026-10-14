@@ -28,6 +28,38 @@ class AvisosVacaciones
         $this->emitir('cancelled', $solicitud);
     }
 
+    public function pasoAvanzado(VacationRequest $solicitud): void
+    {
+        $this->emitir('updated', $solicitud);
+        $this->avisarAprobadoresDelPasoActual($solicitud);
+    }
+
+    /** Aviso interno al empleado (si tiene usuario) de una solicitud aprobada o rechazada. */
+    public function resuelta(VacationRequest $solicitud): void
+    {
+        $this->emitir($solicitud->status, $solicitud);
+
+        $usuario = $solicitud->employee?->user;
+        if (! $usuario) {
+            return;
+        }
+
+        $periodo = "del {$solicitud->start_date->format('d/m/Y')} al {$solicitud->end_date->format('d/m/Y')}";
+
+        if ($solicitud->status === 'approved') {
+            NotificationService::toUser($usuario)
+                ->withAction('/profile', 'Ver mis vacaciones')
+                ->vacation('¡Vacaciones aprobadas!', "Tu solicitud de vacaciones {$periodo} ({$solicitud->days_requested} días) fue aprobada.");
+
+            return;
+        }
+
+        NotificationService::toUser($usuario)
+            ->high()
+            ->withAction('/profile', 'Ver detalles')
+            ->vacation('Solicitud de vacaciones rechazada', "Tu solicitud {$periodo} fue rechazada. Motivo: {$solicitud->rejection_reason}");
+    }
+
     protected function avisarAprobadoresDelPasoActual(VacationRequest $solicitud): void
     {
         $paso = $this->cadena->pasoActual($solicitud);

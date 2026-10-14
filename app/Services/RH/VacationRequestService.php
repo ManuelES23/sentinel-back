@@ -6,6 +6,7 @@ use App\Exceptions\RH\VacacionesException;
 use App\Models\Employee;
 use App\Models\User;
 use App\Models\VacationRequest;
+use App\Models\VacationRequestApproval;
 use App\Services\VacationCalculatorService;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -165,6 +166,118 @@ class VacationRequestService
         $this->avisos->cancelada($solicitud->fresh(['employee.enterprise']));
 
         return $solicitud->fresh(['employee', 'approvals']);
+    }
+
+    public function aprobarPaso(VacationRequest $solicitud, User $usuario): VacationRequest
+    {
+        [$solicitud, $terminada] = DB::transaction(function () use ($solicitud, $usuario) {
+            $solicitud = $this->bloquearPendiente($solicitud);
+            $paso = $this->pasoDecidible($solicitud, $usuario, 'aprobar');
+            $paso->update(['decision' => VacationRequestApproval::APPROVED, 'decided_by' => $usuario->id, 'decided_at' => now()]);
+
+            $siguiente = $this->cadena->avanzar($solicitud);
+            if ($siguiente === null) {
+                $this->marcarAprobada($solicitud, $usuario);
+            }
+
+            return [$solicitud, $siguiente === null];
+        });
+
+        $solicitud = $solicitud->fresh(['employee.user', 'employee.enterprise', 'approvals']);
+        $terminada ? $this->avisos->resuelta($solicitud) : $this->avisos->pasoAvanzado($solicitud);
+
+        return $solicitud;
+    }
+
+    public function rechazar(VacationRequest $solicitud, User $usuario, string $motivo): VacationRequest
+    {
+        $motivo = $this->exigirMotivo($motivo);
+
+        $solicitud = DB::transaction(function () use ($solicitud, $usuario, $motivo) {
+            $solicitud = $this->bloquearPendiente($solicitud);
+            $paso = $this->pasoDecidible($solicitud, $usuario, 'rechazar');
+            $paso->update(['decision' => VacationRequestApproval::REJECTED, 'decided_by' => $usuario->id, 'decided_at' => now(), 'comment' => $motivo]);
+            $this->cadena->cerrarPendientes($solicitud, 'Solicitud rechazada');
+            $this->marcarRechazada($solicitud, $usuario, $motivo);
+
+            return $solicitud;
+        });
+
+        $solicitud = $solicitud->fresh(['employee.user', 'employee.enterprise', 'approvals']);
+        $this->avisos->resuelta($solicitud);
+
+        return $solicitud;
+    }
+
+    /** RH (permiso `aprobar`) decide en cualquier paso; los pasos restantes se cierran. */
+    public function resolverComoRh(VacationRequest $solicitud, User $usuario, string $decision, ?string $motivo = null): VacationRequest
+    {
+        if (! in_array($decision, [VacationRequestApproval::APPROVED, VacationRequestApproval::REJECTED], true)) {
+            throw new VacacionesException('Decisión no válida.');
+        }
+        $motivo = $decision === VacationRequestApproval::REJECTED ? $this->exigirMotivo($motivo) : $motivo;
+
+        $solicitud = DB::transaction(function () use ($solicitud, $usuario, $decision, $motivo) {
+            $solicitud = $this->bloquearPendiente($solicitud);
+
+            if (! $this->aprobador->esRh($usuario) || (int) $usuario->employee?->id === (int) $solicitud->employee_id) {
+                throw new VacacionesException('No tiene permiso para resolver esta solicitud como RH.', 403);
+            }
+
+            $this->cadena->pasoActual($solicitud)?->update([
+                'decision' => $decision,
+                'decided_by' => $usuario->id,
+                'decided_at' => now(),
+                'comment' => 'Resuelto por RH'.($motivo ? ': '.$motivo : ''),
+            ]);
+            $this->cadena->cerrarPendientes($solicitud, 'Resuelto por RH');
+            $solicitud->update(['resolved_by_rh' => true]);
+
+            $decision === VacationRequestApproval::APPROVED
+                ? $this->marcarAprobada($solicitud, $usuario)
+                : $this->marcarRechazada($solicitud, $usuario, $motivo);
+
+            return $solicitud;
+        });
+
+        $solicitud = $solicitud->fresh(['employee.user', 'employee.enterprise', 'approvals']);
+        $this->avisos->resuelta($solicitud);
+
+        return $solicitud;
+    }
+
+    private function pasoDecidible(VacationRequest $solicitud, User $usuario, string $accion): VacationRequestApproval
+    {
+        $paso = $this->cadena->pasoActual($solicitud);
+        if (! $paso || ! $this->aprobador->puedeDecidir($usuario, $solicitud, $paso, $accion)) {
+            throw new VacacionesException('No puede '.($accion === 'rechazar' ? 'rechazar' : 'aprobar').' el paso actual de esta solicitud.', 403);
+        }
+
+        return $paso;
+    }
+
+    private function marcarAprobada(VacationRequest $solicitud, User $usuario): void
+    {
+        $solicitud->update(['status' => 'approved', 'approved_by' => $usuario->id, 'approved_at' => now(), 'current_step' => null]);
+        $this->asistencia->registrar($solicitud->fresh('employee'), $usuario);
+    }
+
+    private function marcarRechazada(VacationRequest $solicitud, User $usuario, string $motivo): void
+    {
+        $solicitud->update([
+            'status' => 'rejected', 'approved_by' => $usuario->id, 'approved_at' => now(),
+            'rejection_reason' => $motivo, 'current_step' => null,
+        ]);
+    }
+
+    private function exigirMotivo(?string $motivo): string
+    {
+        $motivo = trim((string) $motivo);
+        if ($motivo === '') {
+            throw new VacacionesException('El motivo del rechazo es obligatorio.');
+        }
+
+        return mb_substr($motivo, 0, 500);
     }
 
     protected function bloquearPendiente(VacationRequest $solicitud): VacationRequest
