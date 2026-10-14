@@ -104,7 +104,7 @@ class PresentadorPortalVacaciones
                 'decision' => $paso->decision,
                 'decidido_por' => $paso->decider?->name,
                 'decidido_el' => $paso->decided_at?->toIso8601String(),
-                'comentario' => $paso->comment,
+                'comentario' => $paso->decision === VacationRequestApproval::REJECTED ? $paso->comment : null,
                 'es_rh' => $paso->is_rh_final,
             ])->all(),
         ];

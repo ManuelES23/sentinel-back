@@ -168,6 +168,78 @@ class PortalVacacionesSolicitudesApiTest extends TestCase
         $this->assertStringNotContainsString($usuarioJefe->email, $respuesta->getContent());
     }
 
+    /** Regla de jefe directo (con usuario) + paso final de RH oculto; devuelve [encabezados, id, usuarioJefe]. */
+    private function solicitudConJefeYRh(): array
+    {
+        $jefe = $this->empleadoConUsuario($this->empresa);
+        $this->regla(1, ApprovalFlowStep::TYPE_DIRECT_SUPERVISOR);
+        $empleado = $this->empleado($this->empresa, ['reports_to' => $jefe->id]);
+        $encabezados = $this->entrar($empleado);
+        $id = $this->postJson(self::BASE.'/solicitudes', $this->semana(), $encabezados)->assertCreated()->json('data.id');
+
+        return [$encabezados, $id, User::findOrFail($jefe->user_id)];
+    }
+
+    public function test_cancelada_no_expone_comentarios_internos_ni_el_paso_final_de_rh(): void
+    {
+        [$encabezados, $id] = $this->solicitudConJefeYRh();
+
+        $this->postJson(self::BASE."/solicitudes/{$id}/cancelar", [], $encabezados)->assertOk();
+
+        $respuesta = $this->getJson(self::BASE."/solicitudes/{$id}", $encabezados)
+            ->assertOk()
+            ->assertJsonPath('data.estado', 'cancelled')
+            ->assertJsonPath('data.paso_actual', null)
+            ->assertJsonPath('data.total_pasos', 1)
+            ->assertJsonCount(1, 'data.pasos');
+
+        $this->assertTrue(VacationRequest::findOrFail($id)->approvals->contains(fn ($paso) => $paso->comment !== null), 'el escenario debe tener comentarios internos');
+        foreach ($respuesta->json('data.pasos') as $paso) {
+            $this->assertNull($paso['comentario']);
+            $this->assertFalse($paso['es_rh']);
+        }
+    }
+
+    public function test_rechazada_muestra_el_motivo_en_el_paso_rechazado(): void
+    {
+        [$encabezados, $id, $usuarioJefe] = $this->solicitudConJefeYRh();
+        app(VacationRequestService::class)->rechazar(VacationRequest::findOrFail($id), $usuarioJefe, 'Motivo X');
+
+        $respuesta = $this->getJson(self::BASE."/solicitudes/{$id}", $encabezados)
+            ->assertOk()
+            ->assertJsonPath('data.estado', 'rejected')
+            ->assertJsonPath('data.motivo_rechazo', 'Motivo X')
+            ->assertJsonPath('data.paso_actual', null)
+            ->assertJsonPath('data.pasos.0.decision', 'rejected')
+            ->assertJsonPath('data.pasos.0.comentario', 'Motivo X');
+
+        foreach (array_slice($respuesta->json('data.pasos'), 1) as $paso) {
+            $this->assertNull($paso['comentario']);
+        }
+    }
+
+    public function test_tras_aprobar_el_jefe_ningun_paso_expone_comentarios_internos(): void
+    {
+        [$encabezados, $id, $usuarioJefe] = $this->solicitudConJefeYRh();
+        app(VacationRequestService::class)->aprobarPaso(VacationRequest::findOrFail($id), $usuarioJefe);
+
+        $respuesta = $this->getJson(self::BASE."/solicitudes/{$id}", $encabezados)->assertOk();
+
+        $this->assertCount($respuesta->json('data.total_pasos'), $respuesta->json('data.pasos'));
+        foreach ($respuesta->json('data.pasos') as $paso) {
+            $this->assertNull($paso['comentario']);
+        }
+    }
+
+    public function test_un_id_desmesurado_responde_404_y_no_500(): void
+    {
+        $encabezados = $this->entrar($this->empleado($this->empresa));
+
+        $this->getJson(self::BASE.'/solicitudes/99999999999999999999', $encabezados)->assertNotFound();
+        $this->getJson(self::BASE.'/solicitudes/99999999999999999999/formato', $encabezados)->assertNotFound();
+        $this->postJson(self::BASE.'/solicitudes/99999999999999999999/cancelar', [], $encabezados)->assertNotFound();
+    }
+
     public function test_cancelar_solo_las_propias_que_siguen_en_revision(): void
     {
         $empleado = $this->empleado($this->empresa);
