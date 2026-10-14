@@ -463,4 +463,73 @@ class SalidaApiTest extends TestCase
         $this->getJson(self::URL_SALIDAS.'/1')->assertUnauthorized();
         $this->deleteJson(self::URL_SALIDAS.'/1', ['reason' => 'X'])->assertUnauthorized();
     }
+
+    public function test_el_domicilio_del_comprador_admite_500_caracteres_y_no_mas(): void
+    {
+        Sanctum::actingAs($this->usuarioSalidas());
+        $activo = $this->crearActivoDepreciable();
+        $domicilio = substr(str_repeat('Calle 5, Colonia Centro, ', 30), 0, 499).'Z'; // 500 caracteres, más de 255
+        $this->assertSame(500, strlen($domicilio));
+
+        $this->postJson(self::URL_SALIDAS, $this->payloadVenta($activo, ['buyer_address' => $domicilio.'X']))
+            ->assertStatus(422)->assertJsonValidationErrors('buyer_address');
+        $this->assertSame(0, FixedAssetDisposal::count());
+
+        $this->postJson(self::URL_SALIDAS, $this->payloadVenta($activo, ['buyer_address' => $domicilio]))
+            ->assertCreated()
+            ->assertJsonPath('data.buyer_address', $domicilio);
+
+        $this->assertSame($domicilio, FixedAssetDisposal::first()->buyer_address);
+    }
+
+    public function test_deshacer_valida_en_orden_alcance_permiso_motivo_y_retiro_del_destino(): void
+    {
+        $sbp = $this->crearEmpresaActivos('splendidbyporvenir', 'Splendid by Porvenir', 'SBP');
+        $salida = $this->traspasoASbp($this->crearActivoDepreciable(), $sbp);
+        $ajena = $this->crearSalidaDirecta($this->activoDe($sbp, 'SBP-AF-000050'));
+
+        // 404 (otra empresa) antes que 403 (sin permiso) antes que 422 (sin motivo).
+        Sanctum::actingAs($this->usuarioSalidas($this->enterprise, ['view']));
+        $this->deleteJson(self::URL_SALIDAS."/{$ajena->id}", [])->assertNotFound();
+        $this->deleteJson(self::URL_SALIDAS."/{$salida->id}", [])->assertForbidden();
+
+        // Con permiso: el motivo faltante (422 `reason`) se reporta antes que el retiro imposible (422 `salida`).
+        Sanctum::actingAs($this->usuarioSalidas($this->enterprise, ['view', 'delete']));
+        $this->deleteJson(self::URL_SALIDAS."/{$salida->id}", [])
+            ->assertStatus(422)->assertJsonValidationErrors('reason')->assertJsonMissingValidationErrors('salida');
+        $this->deleteJson(self::URL_SALIDAS."/{$salida->id}", ['reason' => 'Error'])
+            ->assertStatus(422)->assertJsonValidationErrors('salida');
+
+        $this->assertNull($salida->fresh()->reversed_at);
+    }
+
+    public function test_un_traspaso_ya_deshecho_cuyo_destino_sigue_vivo_responde_422_sin_tocar_el_destino(): void
+    {
+        $sbp = $this->crearEmpresaActivos('splendidbyporvenir', 'Splendid by Porvenir', 'SBP');
+        $salida = $this->traspasoASbp($this->crearActivoDepreciable(), $sbp);
+        $salida->update(['reversed_at' => now(), 'reversal_reason' => 'Ya se deshizo']);
+
+        $usuario = $this->usuarioSalidas($this->corporativo, ['view', 'delete']);
+        $this->otorgarActivos($usuario, $sbp, 'activos', ['delete']);
+        Sanctum::actingAs($usuario);
+
+        $respuesta = $this->deleteJson(self::URL_SALIDAS_GE."/{$salida->id}", ['reason' => 'Otra vez'])
+            ->assertStatus(422)->assertJsonValidationErrors('salida');
+
+        $this->assertStringContainsString('ya fue deshecha', $respuesta->json('errors.salida.0'));
+        $this->assertNull(FixedAsset::findOrFail($salida->destination_asset_id)->deleted_at);
+        $this->assertSame('Ya se deshizo', $salida->fresh()->reversal_reason);
+    }
+
+    public function test_el_destino_de_la_salida_sale_como_entero_en_el_json(): void
+    {
+        $sbp = $this->crearEmpresaActivos('splendidbyporvenir', 'Splendid by Porvenir', 'SBP');
+        $salida = $this->traspasoASbp($this->crearActivoDepreciable(), $sbp);
+        Sanctum::actingAs($this->usuarioSalidas($this->enterprise, ['view']));
+
+        $this->assertSame($sbp->id, $salida->fresh()->destination_enterprise_id);
+        $this->getJson(self::URL_SALIDAS."/{$salida->id}")
+            ->assertOk()
+            ->assertJsonPath('data.destination_enterprise_id', $sbp->id);
+    }
 }

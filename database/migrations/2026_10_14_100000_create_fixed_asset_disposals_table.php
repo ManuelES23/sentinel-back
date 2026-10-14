@@ -30,7 +30,7 @@ return new class extends Migration
 
             // Venta
             $table->string('buyer_name')->nullable();
-            $table->string('buyer_address')->nullable();
+            $table->string('buyer_address', 500)->nullable();
             $table->string('buyer_identification')->nullable();
             $table->string('payment_method', 100)->nullable();
             $table->string('place')->nullable()->comment('Lugar que lleva la carta de venta');
