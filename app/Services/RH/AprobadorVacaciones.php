@@ -54,6 +54,13 @@ class AprobadorVacaciones
             return false;
         }
 
+        // employees.user_id no es único (datos viejos pueden ligar varios empleados a un usuario):
+        // nadie decide la solicitud de un empleado ligado a su propio usuario.
+        $duenoDeLaSolicitud = $solicitud->employee?->user_id;
+        if ($duenoDeLaSolicitud !== null && (int) $duenoDeLaSolicitud === (int) $usuario->id) {
+            return false;
+        }
+
         // Consulta fresca: la relación en caché del User puede estar vacía si el empleado se ligó después.
         $aprobador = $usuario->employee()->first();
 

@@ -121,6 +121,23 @@ class AprobadorVacacionesTest extends TestCase
         $this->assertFalse($this->aprobador()->puedeDecidir($rh, $propia, $this->paso($propia, [], 1, true)));
     }
 
+    public function test_un_usuario_con_dos_empleados_no_decide_la_solicitud_de_ninguno(): void
+    {
+        $gerente = $this->puesto($this->empresa, 'Gerente', 2, true, 'enterprise');
+        $usuario = User::factory()->create();
+        $this->concederVacaciones($usuario, 'aprobar');
+        $this->empleado($this->empresa, ['position_id' => $gerente->id, 'user_id' => $usuario->id]);
+        $segundo = $this->empleado($this->empresa, ['user_id' => $usuario->id]);
+        $solicitud = $this->solicitud($segundo, 'pending', 3);
+
+        $regular = $this->paso($solicitud, [$this->regla(1, 'hierarchy_level', ['min_hierarchy_level' => 3])]);
+        $this->assertFalse($this->aprobador()->puedeDecidir($usuario, $solicitud, $regular));
+
+        $rh = $this->paso($solicitud, [], 2, true);
+        $this->assertFalse($this->aprobador()->puedeDecidir($usuario, $solicitud, $rh));
+        $this->assertTrue($this->aprobador()->elegiblesDelPaso($solicitud, $rh)->isEmpty());
+    }
+
     public function test_quien_ya_decidio_un_paso_no_decide_otro(): void
     {
         $gerente = $this->puesto($this->empresa, 'Gerente', 2, true, 'enterprise');
