@@ -157,10 +157,14 @@ class ApprovalConfigController extends Controller
      */
     public function addStep(Request $request, ApprovalProcess $process): JsonResponse
     {
+        if ($request->input('approver_type') === ApprovalFlowStep::TYPE_DIRECT_SUPERVISOR) {
+            $request->merge(['position_id' => null, 'min_hierarchy_level' => null]);
+        }
+
         $validated = $request->validate([
             'enterprise_id' => 'nullable|exists:enterprises,id',
             'step_order' => 'sometimes|integer|min:1',
-            'approver_type' => 'required|in:hierarchy_level,position',
+            'approver_type' => 'required|in:hierarchy_level,position,direct_supervisor',
             'min_hierarchy_level' => 'required_if:approver_type,hierarchy_level|nullable|integer|min:1|max:7',
             'position_id' => 'required_if:approver_type,position|nullable|exists:positions,id',
             'approval_scope' => 'sometimes|in:own_department,child_departments,enterprise',
@@ -198,10 +202,14 @@ class ApprovalConfigController extends Controller
             ], 404);
         }
 
+        if ($request->input('approver_type') === ApprovalFlowStep::TYPE_DIRECT_SUPERVISOR) {
+            $request->merge(['position_id' => null, 'min_hierarchy_level' => null]);
+        }
+
         $validated = $request->validate([
             'enterprise_id' => 'nullable|exists:enterprises,id',
             'step_order' => 'sometimes|integer|min:1',
-            'approver_type' => 'sometimes|in:hierarchy_level,position',
+            'approver_type' => 'sometimes|in:hierarchy_level,position,direct_supervisor',
             'min_hierarchy_level' => 'nullable|integer|min:1|max:7',
             'position_id' => 'nullable|exists:positions,id',
             'approval_scope' => 'sometimes|in:own_department,child_departments,enterprise',
