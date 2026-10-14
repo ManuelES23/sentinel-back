@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\DevicePairing;
 use App\Models\Employee;
 use App\Models\EmployeeFaceTemplate;
+use App\Services\RH\SesionPortalVacaciones;
 use App\Services\RH\VerificadorPinEmpleado;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -226,10 +227,11 @@ class EmployeeController extends Controller
     /**
      * Eliminar empleado
      */
-    public function destroy(Employee $employee): JsonResponse
+    public function destroy(Employee $employee, SesionPortalVacaciones $sesionesPortal): JsonResponse
     {
         $this->revokeActiveFaceTemplate($employee->id);
         $this->revokeActiveDevicePairings($employee->id);
+        $sesionesPortal->revocarTodas($employee->id);
 
         // Soft delete
         $employee->delete();
@@ -259,14 +261,16 @@ class EmployeeController extends Controller
 
     /**
      * Regenerar PIN. Es la única vez que RH ve el PIN en claro; también
-     * desbloquea al empleado si se bloqueó por intentos fallidos.
+     * desbloquea al empleado si se bloqueó por intentos fallidos y cierra sus
+     * sesiones del portal de vacaciones (el PIN anterior ya no debe dar acceso).
      */
-    public function regeneratePIN(Employee $employee, VerificadorPinEmpleado $verificador): JsonResponse
+    public function regeneratePIN(Employee $employee, VerificadorPinEmpleado $verificador, SesionPortalVacaciones $sesionesPortal): JsonResponse
     {
         $pin = Employee::generatePIN();
         $employee->pin = $pin;
         $employee->save();
         $verificador->desbloquear($employee);
+        $sesionesPortal->revocarTodas($employee->id);
 
         return response()->json([
             'success' => true,
@@ -297,7 +301,7 @@ class EmployeeController extends Controller
     /**
      * Dar de baja empleado
      */
-    public function terminate(Request $request, Employee $employee): JsonResponse
+    public function terminate(Request $request, Employee $employee, SesionPortalVacaciones $sesionesPortal): JsonResponse
     {
         $validated = $request->validate([
             'termination_date' => 'required|date',
@@ -306,6 +310,7 @@ class EmployeeController extends Controller
 
         $this->revokeActiveFaceTemplate($employee->id);
         $this->revokeActiveDevicePairings($employee->id);
+        $sesionesPortal->revocarTodas($employee->id);
 
         $employee->update([
             'status' => Employee::STATUS_TERMINATED,
