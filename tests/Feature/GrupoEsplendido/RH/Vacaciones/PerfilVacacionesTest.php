@@ -78,4 +78,17 @@ class PerfilVacacionesTest extends TestCase
         $this->assertSame(2, $saldo['pending_days']);
         $this->assertSame(42, $saldo['accumulated_days']);
     }
+
+    public function test_el_perfil_lista_solicitudes_del_anio_siguiente_pero_no_las_de_anios_pasados(): void
+    {
+        $empleado = $this->empleadoConUsuario($this->empresa);
+        $siguiente = $this->solicitud($empleado, 'pending', 3, ['vacation_year' => today()->year + 1]);
+        $pasada = $this->solicitud($empleado, 'cancelled', 3, ['vacation_year' => today()->year - 1]);
+        Sanctum::actingAs($empleado->user);
+
+        $ids = collect($this->getJson('/api/profile')->assertOk()->json('data.vacation.requests'))->pluck('id');
+
+        $this->assertTrue($ids->contains($siguiente->id));
+        $this->assertFalse($ids->contains($pasada->id));
+    }
 }

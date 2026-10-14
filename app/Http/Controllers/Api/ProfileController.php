@@ -47,9 +47,9 @@ class ProfileController extends Controller
             $acumulado = $info['accumulated'] ?? [];
             $yearsOfService = (int) ($info['years_of_service'] ?? 0);
             
-            // Solicitudes de vacaciones del año actual
+            // Solicitudes del año actual y posteriores (una de diciembre puede ser de enero)
             $vacationRequests = VacationRequest::where('employee_id', $employee->id)
-                ->where('vacation_year', $currentYear)
+                ->where('vacation_year', '>=', $currentYear)
                 ->orderBy('created_at', 'desc')
                 ->limit(10)
                 ->get();
