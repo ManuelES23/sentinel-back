@@ -336,6 +336,125 @@ class SalidaApiTest extends TestCase
         $this->assertSame(0, FixedAssetDisposal::count());
     }
 
+    /** Traspaso hecho por el servicio hacia SBP (la API solo traspasa desde GE; aquí interesa deshacerlo). */
+    private function traspasoASbp(FixedAsset $origen, Enterprise $sbp): FixedAssetDisposal
+    {
+        [$sucursal, $entidad] = $this->crearUbicacion($sbp, 'SBP');
+
+        return app(RegistradorSalidaActivo::class)->registrar($origen, [
+            'type' => 'traspaso', 'reason' => 'Pasa a SBP',
+            'authorized_by_name' => 'Dirección General', 'disposal_date' => '2026-05-20',
+            'destination_enterprise_id' => $sbp->id,
+            'destination_branch_id' => $sucursal->id, 'destination_entity_id' => $entidad->id,
+        ], User::factory()->create(['name' => 'Ana']), [$sbp->id]);
+    }
+
+    private function activoDe(Enterprise $empresa, string $codigo): FixedAsset
+    {
+        return FixedAsset::create($this->validFixedAssetPayload(['enterprise_id' => $empresa->id, 'code' => $codigo]));
+    }
+
+    public function test_deshacer_un_traspaso_exige_poder_retirar_el_activo_recibido(): void
+    {
+        $sbp = $this->crearEmpresaActivos('splendidbyporvenir', 'Splendid by Porvenir', 'SBP');
+        $salida = $this->traspasoASbp($this->crearActivoDepreciable(), $sbp);
+        $recibido = FixedAsset::findOrFail($salida->destination_asset_id);
+
+        // Usuario de SF con salidas.delete solo en SF: no ve ni tiene permisos en SBP.
+        Sanctum::actingAs($this->usuarioSalidas($this->enterprise, ['view', 'delete']));
+        $respuesta = $this->deleteJson(self::URL_SALIDAS."/{$salida->id}", ['reason' => 'Error'])
+            ->assertStatus(422)->assertJsonValidationErrors('salida');
+
+        $this->assertStringNotContainsString($recibido->code, $respuesta->getContent());
+        $this->assertNull($salida->fresh()->reversed_at);
+        $this->assertNull($recibido->fresh()->deleted_at);
+    }
+
+    public function test_grupo_esplendido_con_permiso_en_la_receptora_deshace_el_traspaso(): void
+    {
+        $sbp = $this->crearEmpresaActivos('splendidbyporvenir', 'Splendid by Porvenir', 'SBP');
+        $salida = $this->traspasoASbp($this->crearActivoDepreciable(), $sbp);
+
+        $usuario = $this->usuarioSalidas($this->corporativo, ['view', 'delete']);
+        $this->otorgarActivos($usuario, $sbp, 'activos', ['delete']);
+        Sanctum::actingAs($usuario);
+
+        $this->deleteJson(self::URL_SALIDAS_GE."/{$salida->id}", ['reason' => 'Error'])->assertOk();
+
+        $this->assertNotNull($salida->fresh()->reversed_at);
+        $this->assertSoftDeleted('fixed_assets', ['id' => $salida->destination_asset_id]);
+    }
+
+    public function test_deshacer_un_traspaso_con_destino_visible_pero_sin_activos_delete_se_rechaza(): void
+    {
+        $sbp = $this->crearEmpresaActivos('splendidbyporvenir', 'Splendid by Porvenir', 'SBP');
+        $salida = $this->traspasoASbp($this->crearActivoDepreciable(), $sbp);
+
+        // GE ve SBP, pero el usuario no tiene activos.delete ahí.
+        Sanctum::actingAs($this->usuarioSalidas($this->corporativo, ['view', 'delete']));
+        $this->deleteJson(self::URL_SALIDAS_GE."/{$salida->id}", ['reason' => 'Error'])
+            ->assertStatus(422)->assertJsonValidationErrors('salida');
+
+        $this->assertNull($salida->fresh()->reversed_at);
+        $this->assertNull(FixedAsset::findOrFail($salida->destination_asset_id)->deleted_at);
+    }
+
+    public function test_el_precio_absurdo_se_rechaza_en_la_previa(): void
+    {
+        $activo = $this->crearActivoDepreciable();
+        Sanctum::actingAs($this->usuarioSalidas());
+
+        $this->getJson(self::URL_SALIDAS."/previa?fixed_asset_id={$activo->id}&date=2026-05-20&type=venta&sale_price=99999999999999.99")
+            ->assertStatus(422)->assertJsonValidationErrors('sale_price');
+    }
+
+    public function test_una_salida_de_otra_empresa_responde_404_antes_que_403(): void
+    {
+        $sbp = $this->crearEmpresaActivos('splendidbyporvenir', 'Splendid by Porvenir', 'SBP');
+        $ajena = $this->crearSalidaDirecta($this->activoDe($sbp, 'SBP-AF-000001'));
+
+        Sanctum::actingAs($this->usuarioSalidas($this->enterprise, ['view', 'create'])); // sin delete
+        $this->deleteJson(self::URL_SALIDAS."/{$ajena->id}", ['reason' => 'X'])->assertNotFound();
+
+        Sanctum::actingAs($this->usuarioSalidas($this->enterprise, ['create', 'delete'])); // sin view
+        $this->getJson(self::URL_SALIDAS."/{$ajena->id}")->assertNotFound();
+    }
+
+    public function test_el_listado_de_una_empresa_excluye_las_ajenas_aunque_se_pida_su_id(): void
+    {
+        $propia = $this->crearSalidaDirecta($this->crearActivoDepreciable());
+        $sbp = $this->crearEmpresaActivos('splendidbyporvenir', 'Splendid by Porvenir', 'SBP');
+        $this->crearSalidaDirecta($this->activoDe($sbp, 'SBP-AF-000001'));
+        Sanctum::actingAs($this->usuarioSalidas($this->enterprise, ['view']));
+
+        $this->getJson(self::URL_SALIDAS)->assertOk()->assertJsonCount(1, 'data.data')->assertJsonPath('totals.count', 1);
+        $this->getJson(self::URL_SALIDAS.'?enterprise_id='.$sbp->id)
+            ->assertOk()->assertJsonCount(1, 'data.data')
+            ->assertJsonPath('data.data.0.id', $propia->id)
+            ->assertJsonPath('totals.count', 1);
+    }
+
+    public function test_la_previa_de_un_activo_de_otra_empresa_responde_404(): void
+    {
+        $sbp = $this->crearEmpresaActivos('splendidbyporvenir', 'Splendid by Porvenir', 'SBP');
+        $ajeno = $this->activoDe($sbp, 'SBP-AF-000001');
+        Sanctum::actingAs($this->usuarioSalidas());
+
+        $this->getJson(self::URL_SALIDAS."/previa?fixed_asset_id={$ajeno->id}&date=2026-05-20&type=desecho")->assertNotFound();
+    }
+
+    public function test_el_detalle_exige_view_y_la_previa_exige_create(): void
+    {
+        $salida = $this->crearSalidaDirecta($this->crearActivoDepreciable());
+        $activo = $this->crearActivoDepreciable();
+
+        Sanctum::actingAs($this->usuarioSalidas($this->enterprise, ['create']));
+        $this->getJson(self::URL_SALIDAS."/{$salida->id}")->assertForbidden();
+
+        Sanctum::actingAs($this->usuarioSalidas($this->enterprise, ['delete']));
+        $this->getJson(self::URL_SALIDAS."/previa?fixed_asset_id={$activo->id}&date=2026-05-20&type=desecho")->assertForbidden();
+    }
+
     public function test_sin_autenticar_responde_401(): void
     {
         $this->getJson(self::URL_SALIDAS)->assertUnauthorized();

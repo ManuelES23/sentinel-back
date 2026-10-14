@@ -15,6 +15,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 /**
  * Bajas, ventas y traspasos de activos fijos. El alcance sale de la URL (AlcanceActivos): un
@@ -105,7 +106,7 @@ class SalidaActivoController extends Controller
             'fixed_asset_id' => ['required', 'integer'],
             'date' => ['required', 'date_format:Y-m-d'],
             'type' => ['required', Rule::in(FixedAssetDisposal::TIPOS)],
-            'sale_price' => ['nullable', 'numeric', 'decimal:0,2', 'min:0'],
+            'sale_price' => ['nullable', 'numeric', 'decimal:0,2', 'min:0', 'max:9999999999999.99'],
         ]);
         $activo = $this->activo((int) $datos['fixed_asset_id'], $request);
         $precio = isset($datos['sale_price']) ? number_format((float) $datos['sale_price'], 2, '.', '') : null;
@@ -123,13 +124,13 @@ class SalidaActivoController extends Controller
         $datos = $request->validate($this->reglas((string) $request->input('type')));
         $activo = $this->activo((int) $datos['fixed_asset_id'], $request);
 
-        $salida = $this->registrador->registrar($activo, $datos, $request->user(), $this->destinosPermitidos($request, $activo));
+        $salida = $this->detalle($this->registrador->registrar($activo, $datos, $request->user(), $this->destinosPermitidos($request, $activo)));
         $this->emitir($salida);
 
         return response()->json([
             'success' => true,
             'message' => 'Salida registrada correctamente',
-            'data' => $this->detalle($salida),
+            'data' => $salida,
         ], 201);
     }
 
@@ -139,11 +140,34 @@ class SalidaActivoController extends Controller
         $this->alcance->autorizarSalida($salida, $request);
         $this->permisos->autorizar($request, self::SUBMODULO, 'delete');
         $datos = $request->validate(['reason' => ['required', 'string', 'max:500']]);
+        $this->exigirPoderRetirarDestino($salida, $request);
 
-        $deshecha = $this->registrador->deshacer($salida, $datos['reason'], $request->user());
+        $deshecha = $this->detalle($this->registrador->deshacer($salida, $datos['reason'], $request->user()));
         $this->emitir($deshecha);
 
-        return response()->json(['success' => true, 'message' => 'Salida deshecha correctamente', 'data' => $this->detalle($deshecha)]);
+        return response()->json(['success' => true, 'message' => 'Salida deshecha correctamente', 'data' => $deshecha]);
+    }
+
+    /**
+     * Deshacer un traspaso borra el activo que se dio de alta en la empresa receptora. Por simetría con el
+     * registro (que exige `activos.create` allá), hay que ver esa empresa y tener `activos.delete` en ella.
+     * El mensaje no revela datos del activo recibido.
+     */
+    private function exigirPoderRetirarDestino(FixedAssetDisposal $salida, Request $request): void
+    {
+        if ($salida->type !== 'traspaso' || ! $salida->destination_asset_id) {
+            return;
+        }
+
+        $destino = in_array($salida->destination_enterprise_id, $this->alcance->idsVisibles($request), true)
+            ? $this->alcance->empresasVisibles($request)->firstWhere('id', $salida->destination_enterprise_id)
+            : null;
+
+        if (! $destino || ! $this->permisos->puede($request->user(), $destino, 'activos', 'delete')) {
+            throw ValidationException::withMessages([
+                'salida' => 'Este traspaso dio de alta un activo en otra empresa en la que no tienes permiso para retirarlo. Deshazlo desde Grupo Espléndido o pídelo a quien administre esa empresa.',
+            ]);
+        }
     }
 
     /** @return array<string, array<int, mixed>> */
@@ -229,8 +253,8 @@ class SalidaActivoController extends Controller
     private function emitir(FixedAssetDisposal $salida): void
     {
         $slugs = array_filter([
-            $salida->enterprise?->slug ?? $salida->enterprise()->value('slug'),
-            $salida->destination_enterprise_id ? ($salida->destinationEnterprise?->slug ?? $salida->destinationEnterprise()->value('slug')) : null,
+            $salida->enterprise?->slug,
+            $salida->destinationEnterprise?->slug,
         ]);
 
         try {

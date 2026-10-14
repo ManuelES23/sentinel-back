@@ -51,12 +51,13 @@ class SembradoSalidasTest extends TestCase
         $this->sembrar();
 
         $this->assertSame(3, Submodule::where('slug', 'salidas')->count());
-        $submodulo = Submodule::where('slug', 'salidas')->first();
 
-        foreach ([$admin, $demo] as $usuario) {
-            $filas = UserSubmodulePermission::where('user_id', $usuario->id)->where('submodule_id', $submodulo->id)->get();
-            $this->assertCount(4, $filas);
-            $this->assertTrue($filas->every(fn ($fila) => $fila->is_granted === false));
+        foreach (Submodule::where('slug', 'salidas')->get() as $submodulo) {
+            foreach ([$admin, $demo] as $usuario) {
+                $filas = UserSubmodulePermission::where('user_id', $usuario->id)->where('submodule_id', $submodulo->id)->get();
+                $this->assertCount(4, $filas);
+                $this->assertTrue($filas->every(fn ($fila) => $fila->is_granted === false));
+            }
         }
     }
 }
