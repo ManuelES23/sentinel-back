@@ -469,8 +469,21 @@ Módulo de Administración → Activos Fijos (SF y GE). La carpeta de controlado
 ## Acceso cruzado de entidades (cross-enterprise)
 Tabla pivot `enterprise_entity` (`enterprise_id`, `entity_id`, `access_level: read|write`) — permite que una empresa acceda a bodegas/plantas de otra. Ver `EntityAccessController` (Admin).
 
-## Vacaciones LFT México
-Tabla acumulativa por antigüedad: año 1 = 12 días, +2 días por año hasta el 4to, luego +2 cada 5 años. Ver `VacationCalculatorService`.
+## Vacaciones (RH Grupo Espléndido)
+
+- Reglas en `App\Services\RH\VacationRequestService` (crear, calcular, reprogramar, cancelar, aprobarPaso, rechazar, resolverComoRh). Lo usan `VacationController` (RH), `ProfileController` y `PendingApprovalController`; ningún controlador repite reglas. Las fallas lanzan `App\Exceptions\RH\VacacionesException` (se responde sola: 422 o 403).
+- Saldo **acumulado sin vencimiento** (`VacationCalculatorService::diasDisponibles`): días LFT de todos los años cumplidos («Vacaciones Dignas 2023»: 12, 14, 16, 18, 20, 22 de 6 a 10 años, +2 por quinquenio) + `vacation_balances.adjustment_days` − aprobadas − pendientes. Usados y pendientes salen de `vacation_requests`; los contadores `used_days`/`pending_days` de `vacation_balances` ya no se leen (la migración `2026_10_15_100100` los concilió y dejó la diferencia como ajuste).
+- Días que se descuentan: `WorkingDaysCalculator` (horario del empleado → predeterminado de su empresa en `enterprise_work_schedule.is_default` → lunes a viernes) menos festivos (`holidays`, fechas concretas; `enterprise_id` nulo = todas). `php artisan vacaciones:festivos {año}` carga los del art. 74 LFT.
+- Reglas: antigüedad ≥ 1 año (RH puede omitirla), no pasar del saldo, sin empalmes con pendientes/aprobadas, rango ≤ 60 días naturales, al menos 1 día descontable; RH puede capturar fechas pasadas. `cancelar` bloquea solo la fila de la solicitud (no al empleado): únicamente libera días. `excluir_id` (reprogramar) se limita al empleado y el llamador no puede sobrescribirlo.
+- Aprobación en cadena (solo vacaciones): `approval_flow_steps` del proceso `vacation_requests`; mismo `step_order` = alternativas, distinto = en serie; tipo nuevo `direct_supervisor` (`employees.reports_to`). La cadena se congela en `vacation_request_approvals` al crear. `AprobadorVacaciones` decide quién puede (patrón de `AprobadorOrdenCompra`: corporativo solo por regla de puesto; nadie aprueba lo suyo ni dos pasos). Un paso sin elegibles con usuario se salta; si ninguno aprobó, la solicitud espera en el paso final de RH. Quien tiene `aprobar` puede resolver como RH en cualquier paso.
+- Solicitud propia: `AprobadorVacaciones::esSolicitante(User, VacationRequest)` es verdadero si el `user_id` del empleado de la solicitud es el usuario, o si el empleado del usuario (consultado en fresco) es el solicitante (`employees.user_id` no es único). Lo usan `puedeDecidir` y `resolverComoRh`.
+- Bandeja de pendientes: `vacacionesPara` revisa todas las solicitudes pendientes con `current_step` (sin tope de 200) y memoiza por usuario dentro de la instancia del controlador. Los usuarios de RH sin empleado ligado resuelven desde la pantalla de Vacaciones de RH, no desde la bandeja.
+- El perfil lista solicitudes con `vacation_year` ≥ año actual.
+- Permisos de RH → Gestión → Vacaciones: `view`, `create`, `edit`, `aprobar` (`App\Support\PermisoSubmodulo`, que también usa el trait `VerificaPermisoSubmodulo` del CRM con la aplicación como parámetro). `PermisoSubmodulo` solo cuenta un permiso concedido cuyo tipo pertenezca al mismo submódulo (aplica también al CRM).
+- Migración de permisos `2026_10_15_100500`: solo la empresa corporativa, RH → Gestión → Vacaciones. A los usuarios con acceso activo les fuerza `view/create/edit` como concedidos (los valores por defecto del seeder esta API nunca los aplicó) y les crea `aprobar` concedido salvo que ya exista una fila.
+- Aprobar crea `attendance_records` con `status = vacation` (respeta los días con entrada); cancelar una aprobada futura los borra.
+- PIN del empleado (checador y portal): cifrado con el cast `hashed`, fuera de `activity_logs`, bloqueo de 15 min tras 5 errores (`VerificadorPinEmpleado`). RH solo lo ve al generarlo o regenerarlo; regenerar también desbloquea. Las bitácoras anteriores pueden contener PINs en claro (pendiente de limpieza).
+- Hueco conocido: `GET vacaciones/balance` sigue devolviendo los contadores viejos por año (la vista usa `empleado/{id}/info`).
 
 ## Comandos de desarrollo
 
