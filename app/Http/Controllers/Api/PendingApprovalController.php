@@ -2,7 +2,6 @@
 
 namespace App\Http\Controllers\Api;
 
-use App\Events\VacationRequestUpdated;
 use App\Http\Controllers\Controller;
 use App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController;
 use App\Models\ApprovalProcess;
@@ -14,18 +13,25 @@ use App\Models\PurchaseOrder;
 use App\Models\Recipe;
 use App\Models\SfFieldCheck;
 use App\Models\TimeClockCheck;
-use App\Models\VacationBalance;
 use App\Models\VacationRequest;
 use App\Services\Compras\AprobadorOrdenCompra;
 use App\Services\NotificationService;
+use App\Services\RH\AprobadorVacaciones;
+use App\Services\RH\CadenaAprobacionVacaciones;
+use App\Services\RH\VacationRequestService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 class PendingApprovalController extends Controller
 {
     private ?AprobadorOrdenCompra $aprobadorOc = null;
+
+    private ?AprobadorVacaciones $aprobadorVac = null;
+
+    private ?CadenaAprobacionVacaciones $cadenaVac = null;
 
     /**
      * Obtener resumen de pendientes por aprobar para el usuario autenticado
@@ -399,35 +405,38 @@ class PendingApprovalController extends Controller
 
     // ===== Vacaciones =====
 
-    private function getVacationQuery(Employee $employee, string $scope)
+    /** Solicitudes cuyo paso ACTUAL puede decidir este usuario (spec §5.6). */
+    private function vacacionesPara($user): Collection
     {
-        $query = VacationRequest::where('status', 'pending')
-            ->where('employee_id', '!=', $employee->id) // No sus propias solicitudes
-            ->whereHas('employee', function ($q) use ($employee) {
-                $q->where('enterprise_id', $employee->enterprise_id);
-            });
+        return VacationRequest::where('status', 'pending')
+            ->whereNotNull('current_step')
+            ->where('employee_id', '!=', (int) $user->employee?->id)
+            ->with(['employee.department:id,name', 'employee.enterprise:id,name', 'approvals'])
+            ->orderBy('created_at', 'desc')
+            ->limit(200)
+            ->get()
+            ->filter(function (VacationRequest $solicitud) use ($user) {
+                $paso = $this->cadenaVac()->pasoActual($solicitud);
 
-        $this->applyScopeFilter($query, $employee, $scope);
-
-        return $query;
+                return $paso !== null && $this->aprobadorVac()->puedeDecidir($user, $solicitud, $paso);
+            })
+            ->values();
     }
 
     private function countPendingVacations(Employee $employee, string $scope): int
     {
-        return $this->getVacationQuery($employee, $scope)->count();
+        return $employee->user ? $this->vacacionesPara($employee->user)->count() : 0;
     }
 
     private function getPendingVacations(Employee $employee, string $scope): array
     {
-        return $this->getVacationQuery($employee, $scope)
-            ->with([
-                'employee:id,first_name,last_name,employee_number,department_id,photo',
-                'employee.department:id,name',
-            ])
-            ->orderBy('created_at', 'desc')
-            ->limit(50)
-            ->get()
-            ->map(fn ($item) => [
+        if (! $employee->user) {
+            return [];
+        }
+
+        return $this->vacacionesPara($employee->user)
+            ->take(50)
+            ->map(fn (VacationRequest $item) => [
                 'id' => $item->id,
                 'type' => 'vacation_request',
                 'title' => ($item->employee->first_name ?? '').' '.($item->employee->last_name ?? ''),
@@ -436,12 +445,16 @@ class PendingApprovalController extends Controller
                     optional($item->start_date)->format('d/m/Y').' al '.
                     optional($item->end_date)->format('d/m/Y'),
                 'department' => $item->employee->department->name ?? null,
+                'enterprise' => $item->employee->enterprise->name ?? null,
                 'photo' => $item->employee->photo_url ?? null,
                 'date' => $item->created_at?->toISOString(),
                 'reason' => $item->reason,
                 'days' => $item->days_requested,
                 'start_date' => $item->start_date?->format('Y-m-d'),
                 'end_date' => $item->end_date?->format('Y-m-d'),
+                'step' => $item->current_step,
+                'steps_total' => $item->approvals->count(),
+                'step_description' => $item->approvals->firstWhere('step_order', $item->current_step)?->description,
             ])
             ->toArray();
     }
@@ -783,6 +796,7 @@ class PendingApprovalController extends Controller
                 'employee:id,first_name,last_name,employee_number,department_id,position_id,photo,hire_date',
                 'employee.department:id,name',
                 'employee.position:id,name',
+                'approvals.decider:id,name',
             ])->find($id),
             'incident' => EmployeeIncident::with([
                 'employee:id,first_name,last_name,employee_number,department_id,position_id,photo',
@@ -931,96 +945,34 @@ class PendingApprovalController extends Controller
 
     private function approveVacation(int $id, $user): JsonResponse
     {
-        $vacation = VacationRequest::with(['employee.enterprise', 'employee.position', 'employee.user'])->find($id);
-
+        $vacation = VacationRequest::find($id);
         if (! $vacation) {
             return response()->json(['success' => false, 'message' => 'Solicitud no encontrada'], 404);
         }
 
-        if ($vacation->status !== 'pending') {
-            return response()->json(['success' => false, 'message' => 'Solo se pueden aprobar solicitudes pendientes'], 422);
-        }
-
-        $vacation->approve($user);
-        $vacation->load(['approver']);
+        $vacation = app(VacationRequestService::class)->aprobarPaso($vacation, $user);
         $vacation->append(['status_label', 'status_color']);
-
-        // Notificar al empleado
-        if ($vacation->employee->user) {
-            NotificationService::toUser($vacation->employee->user)
-                ->withAction('/profile', 'Ver mis vacaciones')
-                ->vacation(
-                    '¡Vacaciones aprobadas!',
-                    "Tu solicitud de vacaciones del {$vacation->start_date->format('d/m/Y')} al {$vacation->end_date->format('d/m/Y')} ({$vacation->days_requested} días) ha sido aprobada."
-                );
-        }
-
-        // Broadcast
-        broadcast(new VacationRequestUpdated(
-            'approved',
-            $vacation->toArray(),
-            $vacation->employee->enterprise?->slug ?? 'grupoesplendido',
-            'administration',
-            'rh'
-        ))->toOthers();
 
         return response()->json([
             'success' => true,
-            'message' => 'Solicitud aprobada exitosamente',
+            'message' => $vacation->status === 'approved'
+                ? 'Solicitud aprobada exitosamente'
+                : 'Aprobaste tu paso; la solicitud pasó al siguiente aprobador',
             'data' => $vacation,
         ]);
     }
 
     private function rejectVacation(int $id, $user, string $reason): JsonResponse
     {
-        $vacation = VacationRequest::with(['employee.enterprise', 'employee.position', 'employee.user'])->find($id);
-
+        $vacation = VacationRequest::find($id);
         if (! $vacation) {
             return response()->json(['success' => false, 'message' => 'Solicitud no encontrada'], 404);
         }
 
-        if ($vacation->status !== 'pending') {
-            return response()->json(['success' => false, 'message' => 'Solo se pueden rechazar solicitudes pendientes'], 422);
-        }
-
-        // Revertir días pendientes
-        $balance = VacationBalance::where('employee_id', $vacation->employee_id)
-            ->where('year', $vacation->vacation_year)
-            ->first();
-
-        if ($balance) {
-            $balance->decrement('pending_days', $vacation->days_requested);
-        }
-
-        $vacation->reject($user, $reason);
-        $vacation->load(['approver']);
+        $vacation = app(VacationRequestService::class)->rechazar($vacation, $user, $reason);
         $vacation->append(['status_label', 'status_color']);
 
-        // Notificar al empleado
-        if ($vacation->employee->user) {
-            NotificationService::toUser($vacation->employee->user)
-                ->high()
-                ->withAction('/profile', 'Ver detalles')
-                ->vacation(
-                    'Solicitud de vacaciones rechazada',
-                    "Tu solicitud del {$vacation->start_date->format('d/m/Y')} al {$vacation->end_date->format('d/m/Y')} fue rechazada. Motivo: {$reason}"
-                );
-        }
-
-        // Broadcast
-        broadcast(new VacationRequestUpdated(
-            'rejected',
-            $vacation->toArray(),
-            $vacation->employee->enterprise?->slug ?? 'grupoesplendido',
-            'administration',
-            'rh'
-        ))->toOthers();
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Solicitud rechazada',
-            'data' => $vacation,
-        ]);
+        return response()->json(['success' => true, 'message' => 'Solicitud rechazada', 'data' => $vacation]);
     }
 
     private function approveIncident(int $id, $user): JsonResponse
@@ -1210,6 +1162,14 @@ class PendingApprovalController extends Controller
                 ['label' => 'Motivo', 'value' => $item->reason ?: 'No especificado'],
                 ['label' => 'Fecha de solicitud', 'value' => $item->created_at?->format('d/m/Y H:i')],
             ],
+            'approvals' => $item->approvals->map(fn ($paso) => [
+                'step_order' => $paso->step_order,
+                'description' => $paso->description,
+                'decision' => $paso->decision,
+                'decided_by' => $paso->decider?->name,
+                'comment' => $paso->comment,
+                'decided_at' => $paso->decided_at?->toISOString(),
+            ])->values()->all(),
             'rejection_reason' => $item->rejection_reason,
             'created_at' => $item->created_at?->toISOString(),
         ];
@@ -1347,12 +1307,30 @@ class PendingApprovalController extends Controller
             return $this->aprobadorOc()->empresasQuePuedeAprobar($employee) !== [];
         }
 
+        // Vacaciones: cadena por paso (jefe directo, corporativos y paso de RH).
+        if ($process->code === ApprovalProcess::VACATION_REQUESTS) {
+            return $process->canBeApprovedBy($employee, $enterpriseId)
+                || $employee->subordinates()->where('status', Employee::STATUS_ACTIVE)->exists()
+                || $this->aprobadorVac()->esRh($user)
+                || $this->vacacionesPara($user)->isNotEmpty();
+        }
+
         return $process->canBeApprovedBy($employee, $enterpriseId);
     }
 
     private function aprobadorOc(): AprobadorOrdenCompra
     {
         return $this->aprobadorOc ??= app(AprobadorOrdenCompra::class);
+    }
+
+    private function aprobadorVac(): AprobadorVacaciones
+    {
+        return $this->aprobadorVac ??= app(AprobadorVacaciones::class);
+    }
+
+    private function cadenaVac(): CadenaAprobacionVacaciones
+    {
+        return $this->cadenaVac ??= app(CadenaAprobacionVacaciones::class);
     }
 
     private function canApproveInventoryMovement(Request $request, $user, ?Employee $employee): bool

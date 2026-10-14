@@ -131,32 +131,4 @@ class VacationRequest extends Model
             default => 'gray',
         };
     }
-
-    // ==================== MÉTODOS ====================
-
-    public function approve(User $approver): bool
-    {
-        $this->update([
-            'status' => 'approved',
-            'approved_by' => $approver->id,
-            'approved_at' => now(),
-        ]);
-
-        return true;
-    }
-
-    public function reject(User $approver, string $reason): bool
-    {
-        return $this->update([
-            'status' => 'rejected',
-            'approved_by' => $approver->id,
-            'approved_at' => now(),
-            'rejection_reason' => $reason,
-        ]);
-    }
-
-    public function cancel(): bool
-    {
-        return $this->update(['status' => 'cancelled']);
-    }
 }
