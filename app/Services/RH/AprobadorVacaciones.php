@@ -54,19 +54,12 @@ class AprobadorVacaciones
             return false;
         }
 
-        // employees.user_id no es único (datos viejos pueden ligar varios empleados a un usuario):
-        // nadie decide la solicitud de un empleado ligado a su propio usuario.
-        $duenoDeLaSolicitud = $solicitud->employee?->user_id;
-        if ($duenoDeLaSolicitud !== null && (int) $duenoDeLaSolicitud === (int) $usuario->id) {
+        if ($this->esSolicitante($usuario, $solicitud)) {
             return false;
         }
 
         // Consulta fresca: la relación en caché del User puede estar vacía si el empleado se ligó después.
         $aprobador = $usuario->employee()->first();
-
-        if ($aprobador && (int) $aprobador->id === (int) $solicitud->employee_id) {
-            return false;
-        }
 
         if ($paso->is_rh_final) {
             return $this->esRh($usuario);
@@ -111,6 +104,22 @@ class AprobadorVacaciones
             ->values();
     }
 
+    /**
+     * ¿La solicitud es del propio usuario? employees.user_id no es único (datos viejos pueden
+     * ligar varios empleados a un usuario), así que se mira tanto el usuario del empleado
+     * solicitante como el empleado propio del usuario (consulta fresca, no la relación en caché).
+     */
+    public function esSolicitante(User $usuario, VacationRequest $solicitud): bool
+    {
+        $duenoDeLaSolicitud = $solicitud->employee?->user_id;
+        if ($duenoDeLaSolicitud !== null && (int) $duenoDeLaSolicitud === (int) $usuario->id) {
+            return true;
+        }
+
+        $propio = $usuario->employee()->first();
+
+        return $propio !== null && (int) $propio->id === (int) $solicitud->employee_id;
+    }
     public function esRh(User $usuario): bool
     {
         $corporativo = $this->corporativoId();

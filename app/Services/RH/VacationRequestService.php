@@ -220,7 +220,7 @@ class VacationRequestService
         $solicitud = DB::transaction(function () use ($solicitud, $usuario, $decision, $motivo) {
             $solicitud = $this->bloquearPendiente($solicitud);
 
-            if (! $this->aprobador->esRh($usuario) || (int) $usuario->employee?->id === (int) $solicitud->employee_id) {
+            if (! $this->aprobador->esRh($usuario) || $this->aprobador->esSolicitante($usuario, $solicitud)) {
                 throw new VacacionesException('No tiene permiso para resolver esta solicitud como RH.', 403);
             }
 

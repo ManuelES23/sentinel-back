@@ -178,4 +178,16 @@ class DecisionesVacacionesTest extends TestCase
         $this->assertSame('present', AttendanceRecord::where('employee_id', $this->solicitante->id)->whereDate('date', $this->lunes->toDateString())->value('status'));
         $this->assertSame('vacation', AttendanceRecord::where('employee_id', $this->solicitante->id)->whereDate('date', $this->lunes->copy()->addDay()->toDateString())->value('status'));
     }
+    public function test_rh_ligado_a_dos_empleados_no_resuelve_la_solicitud_del_segundo(): void
+    {
+        $rh = User::factory()->create();
+        $this->concederVacaciones($rh, 'aprobar');
+        // Dato viejo: dos empleados ligados al mismo usuario; hasOne devuelve el primero.
+        $this->empleado($this->corporativo, ['user_id' => $rh->id]);
+        $segundo = $this->empleado($this->empresa, ['user_id' => $rh->id]);
+        $solicitud = $this->servicio()->crear($segundo, $this->lunes, $this->lunes->copy()->addDays(4), null, VacationRequest::SOURCE_PORTAL);
+
+        $this->assertNotSame($segundo->id, $rh->employee?->id);
+        $this->esperar(403, 'como RH', fn () => $this->servicio()->resolverComoRh($solicitud, $rh, 'approved'));
+    }
 }
