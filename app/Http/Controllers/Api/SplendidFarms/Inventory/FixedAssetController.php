@@ -228,7 +228,7 @@ class FixedAssetController extends Controller
 
         if ($asset->status !== 'baja' && $asset->unidadCompra()->where('status', 'registered')->exists()) {
             throw ValidationException::withMessages([
-                'asset' => 'Este activo viene de una compra y respalda una entrada de inventario. Cambia su estado a «Baja» antes de eliminarlo.',
+                'asset' => 'Este activo viene de una compra y respalda una entrada de inventario, así que no se elimina. Si ya no se usa, regístrale su baja con «Dar de baja o vender».',
             ]);
         }
 

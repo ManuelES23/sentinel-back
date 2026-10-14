@@ -4,6 +4,7 @@ namespace Tests\Feature\ActivosFijos;
 
 use App\Models\FixedAsset;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Laravel\Sanctum\Sanctum;
 use Tests\Concerns\CreatesAssetFixtures;
 use Tests\Concerns\CreatesDepreciacionFixtures;
@@ -120,5 +121,46 @@ class SalidaActivoEstadoTest extends TestCase
         $this->getJson(self::URL_ACTIVOS)
             ->assertOk()
             ->assertJsonPath('data.data.0.salida_vigente.type', 'desecho');
+    }
+
+    public function test_el_listado_trae_solo_las_columnas_de_la_salida_vigente_sin_n_mas_1(): void
+    {
+        $activo = $this->crearActivoDepreciable();
+        $activo->update(['status' => 'baja']);
+        $this->crearSalidaDirecta($activo, [
+            'type' => 'venta',
+            'buyer_name' => 'Comprador Ejemplo',
+            'reason' => 'Venta de ejemplo',
+            'signed_document_path' => 'fixed-asset-disposals/1/carta.pdf',
+        ]);
+
+        $respuesta = $this->getJson(self::URL_ACTIVOS)->assertOk();
+        $respuesta->assertJsonPath('data.data.0.salida_vigente.tiene_carta_firmada', true)
+            ->assertJsonPath('data.data.0.salida_vigente.vigente', true)
+            ->assertJsonMissingPath('data.data.0.salida_vigente.signed_document_path')
+            ->assertJsonMissingPath('data.data.0.salida_vigente.buyer_name')
+            ->assertJsonMissingPath('data.data.0.salida_vigente.asset_snapshot')
+            ->assertJsonMissingPath('data.data.0.salida_vigente.reason');
+
+        $consultasDeSalidas = function (): int {
+            DB::flushQueryLog();
+            DB::enableQueryLog();
+            $this->getJson(self::URL_ACTIVOS)->assertOk();
+            $consultas = collect(DB::getQueryLog())->filter(fn ($q) => str_contains($q['query'], 'fixed_asset_disposals'))->count();
+            DB::disableQueryLog();
+
+            return $consultas;
+        };
+
+        $conUno = $consultasDeSalidas();
+
+        foreach (range(1, 3) as $_) {
+            $otro = $this->crearActivoDepreciable();
+            $otro->update(['status' => 'baja']);
+            $this->crearSalidaDirecta($otro);
+        }
+
+        $this->assertSame(1, $conUno);
+        $this->assertSame($conUno, $consultasDeSalidas());
     }
 }
