@@ -185,9 +185,13 @@ class VacationBalance extends Model
      */
     public function applyAdjustment(int $days, string $reason, int $userId): self
     {
+        // Acumulativo: no pisa lo que ya había (p. ej. la conciliación al migrar).
+        // adjustment_reason es string(255).
+        $motivo = $this->adjustment_reason ? $this->adjustment_reason.' | '.$reason : $reason;
+
         $this->update([
-            'adjustment_days' => $days,
-            'adjustment_reason' => $reason,
+            'adjustment_days' => (int) ($this->adjustment_days ?? 0) + $days,
+            'adjustment_reason' => mb_substr($motivo, 0, 255),
             'adjusted_by' => $userId,
             'adjusted_at' => now(),
         ]);

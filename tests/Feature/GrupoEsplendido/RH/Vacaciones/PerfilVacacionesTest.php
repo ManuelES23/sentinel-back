@@ -91,4 +91,15 @@ class PerfilVacacionesTest extends TestCase
         $this->assertTrue($ids->contains($siguiente->id));
         $this->assertFalse($ids->contains($pasada->id));
     }
+
+    public function test_el_perfil_no_muestra_saldo_negativo(): void
+    {
+        $empleado = $this->empleadoConUsuario($this->empresa);
+        \App\Models\VacationBalance::create(['employee_id' => $empleado->id, 'year' => now()->year, 'entitled_days' => 16, 'used_days' => 0, 'pending_days' => 0, 'carried_over' => 0, 'adjustment_days' => -60]);
+        Sanctum::actingAs($empleado->user);
+
+        $saldo = $this->getJson('/api/profile')->assertOk()->json('data.vacation.balance');
+
+        $this->assertSame(0, $saldo['available_days']);
+    }
 }

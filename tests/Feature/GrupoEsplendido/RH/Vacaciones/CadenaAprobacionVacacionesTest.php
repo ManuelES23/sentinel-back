@@ -167,4 +167,19 @@ class CadenaAprobacionVacacionesTest extends TestCase
         $this->assertSame(0, $solicitud->approvals()->where('decision', VacationRequestApproval::WAITING)->count());
         $this->assertSame('Solicitud cancelada', $solicitud->approvals()->first()->comment);
     }
+
+    public function test_la_descripcion_de_un_paso_con_muchas_alternativas_cabe_en_la_columna(): void
+    {
+        for ($i = 1; $i <= 8; $i++) {
+            $puesto = $this->puesto($this->empresa, 'Puesto alternativo '.$i.' '.str_repeat('x', 40));
+            $this->regla(1, 'position', ['position_id' => $puesto->id]);
+        }
+        $solicitud = $this->solicitud($this->empleado($this->empresa), 'pending', 3);
+
+        $this->cadena()->construir($solicitud);
+
+        $descripcion = $solicitud->approvals()->where('step_order', 1)->value('description');
+        $this->assertGreaterThan(200, mb_strlen($descripcion));
+        $this->assertLessThanOrEqual(255, mb_strlen($descripcion));
+    }
 }

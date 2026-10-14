@@ -14,7 +14,13 @@ class AsistenciaVacaciones
 
     public function registrar(VacationRequest $solicitud, User $aprobador): void
     {
-        $fechas = $this->dias->calcular($solicitud->employee, $solicitud->start_date, $solicitud->end_date)['descontables'];
+        // El empleado pudo darse de baja (borrado lógico) con la solicitud pendiente.
+        $empleado = $solicitud->employee()->withTrashed()->first();
+        if (! $empleado) {
+            return;
+        }
+
+        $fechas = $this->dias->calcular($empleado, $solicitud->start_date, $solicitud->end_date)['descontables'];
 
         foreach ($fechas as $fecha) {
             $registro = AttendanceRecord::where('employee_id', $solicitud->employee_id)->whereDate('date', $fecha)->first();

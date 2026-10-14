@@ -33,34 +33,37 @@ return new class extends Migration
             $pendientes = (int) $solicitudes()->where('employee_id', $empleadoId)->where('status', 'pending')->sum('days_requested');
             $diferencia = $contadores - ($usados + $pendientes);
 
-            DB::table('vacation_balances')->where('employee_id', $empleadoId)->update(['used_days' => 0, 'pending_days' => 0]);
+            // MySQL no envuelve las migraciones: sin transacción, una falla a medias dejaría los contadores en 0.
+            DB::transaction(function () use ($empleadoId, $anio, &$ajustados, $usados, $pendientes, $diferencia) {
+                DB::table('vacation_balances')->where('employee_id', $empleadoId)->update(['used_days' => 0, 'pending_days' => 0]);
 
-            $balance = DB::table('vacation_balances')->where('employee_id', $empleadoId)->where('year', $anio)->first();
-            if (! $balance) {
-                $id = DB::table('vacation_balances')->insertGetId([
-                    'employee_id' => $empleadoId, 'year' => $anio, 'entitled_days' => 0, 'used_days' => 0,
-                    'pending_days' => 0, 'carried_over' => 0, 'adjustment_days' => 0,
-                    'created_at' => now(), 'updated_at' => now(),
-                ]);
-                $balance = DB::table('vacation_balances')->find($id);
-            }
+                $balance = DB::table('vacation_balances')->where('employee_id', $empleadoId)->where('year', $anio)->first();
+                if (! $balance) {
+                    $id = DB::table('vacation_balances')->insertGetId([
+                        'employee_id' => $empleadoId, 'year' => $anio, 'entitled_days' => 0, 'used_days' => 0,
+                        'pending_days' => 0, 'carried_over' => 0, 'adjustment_days' => 0,
+                        'created_at' => now(), 'updated_at' => now(),
+                    ]);
+                    $balance = DB::table('vacation_balances')->find($id);
+                }
 
-            $cambios = ['used_days' => $usados, 'pending_days' => $pendientes, 'updated_at' => now()];
+                $cambios = ['used_days' => $usados, 'pending_days' => $pendientes, 'updated_at' => now()];
 
-            if ($diferencia !== 0) {
-                $ajuste = -$diferencia;
-                $cambios['adjustment_days'] = (int) ($balance->adjustment_days ?? 0) + $ajuste;
-                // adjustment_reason es string(255).
-                $cambios['adjustment_reason'] = mb_substr(
-                    ($balance->adjustment_reason ? $balance->adjustment_reason.' | ' : '').self::MOTIVO.' ('.($ajuste > 0 ? '+' : '').$ajuste.')',
-                    0,
-                    255,
-                );
-                $cambios['adjusted_at'] = now();
-                $ajustados[] = ['employee_id' => (int) $empleadoId, 'ajuste' => $ajuste];
-            }
+                if ($diferencia !== 0) {
+                    $ajuste = -$diferencia;
+                    $cambios['adjustment_days'] = (int) ($balance->adjustment_days ?? 0) + $ajuste;
+                    // adjustment_reason es string(255).
+                    $cambios['adjustment_reason'] = mb_substr(
+                        ($balance->adjustment_reason ? $balance->adjustment_reason.' | ' : '').self::MOTIVO.' ('.($ajuste > 0 ? '+' : '').$ajuste.')',
+                        0,
+                        255,
+                    );
+                    $cambios['adjusted_at'] = now();
+                    $ajustados[] = ['employee_id' => (int) $empleadoId, 'ajuste' => $ajuste];
+                }
 
-            DB::table('vacation_balances')->where('id', $balance->id)->update($cambios);
+                DB::table('vacation_balances')->where('id', $balance->id)->update($cambios);
+            });
         }
 
         Log::info('Conciliación de saldos de vacaciones', [

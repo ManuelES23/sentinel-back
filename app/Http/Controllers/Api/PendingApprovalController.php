@@ -1315,7 +1315,12 @@ class PendingApprovalController extends Controller
             return $process->canBeApprovedBy($employee, $enterpriseId)
                 || $employee->subordinates()->where('status', Employee::STATUS_ACTIVE)->exists()
                 || $this->aprobadorVac()->esRh($user)
-                || $this->vacacionesPara($user)->isNotEmpty();
+                // Un corporativo puede aprobar por una regla de puesto de cualquier empresa (comprobación barata, sin recorrer solicitudes).
+                || ($employee->position_id !== null
+                    && $process->activeSteps()
+                        ->where('approver_type', 'position')
+                        ->where('position_id', $employee->position_id)
+                        ->exists());
         }
 
         return $process->canBeApprovedBy($employee, $enterpriseId);

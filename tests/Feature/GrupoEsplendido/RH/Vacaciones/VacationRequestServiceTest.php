@@ -219,4 +219,45 @@ class VacationRequestServiceTest extends TestCase
         $this->assertSame('Ajuste', $reprogramada->reason);
         $this->assertSame(38, VacationCalculatorService::diasDisponibles($empleado));
     }
+
+    /** Cadena de 2 pasos: jefe directo (1) y coordinador de RH del corporativo (2). */
+    private function cadenaDeDosPasos(): array
+    {
+        $jefe = $this->empleadoConUsuario($this->empresa);
+        $this->regla(1, ApprovalFlowStep::TYPE_DIRECT_SUPERVISOR);
+        $puesto = $this->puesto($this->corporativo, 'Coordinador de RH', 3, true, 'enterprise');
+        $this->regla(2, 'position', ['position_id' => $puesto->id]);
+        $this->empleadoConUsuario($this->corporativo, ['position_id' => $puesto->id]);
+
+        return [$jefe, $this->empleado($this->empresa, ['reports_to' => $jefe->id])];
+    }
+
+    public function test_reprogramar_con_un_paso_ya_aprobado_reconstruye_la_cadena(): void
+    {
+        [$jefe, $empleado] = $this->cadenaDeDosPasos();
+        $solicitud = $this->crear($empleado, 0, 4);
+        $solicitud = $this->servicio()->aprobarPaso($solicitud, $jefe->user);
+        $this->assertSame(2, $solicitud->current_step);
+        $idsAntes = $solicitud->approvals->pluck('id')->all();
+
+        $reprogramada = $this->servicio()->reprogramar($solicitud, $this->dia(7), $this->dia(10), null);
+
+        $this->assertSame(1, $reprogramada->current_step);
+        $this->assertCount(3, $reprogramada->approvals);
+        $this->assertFalse($reprogramada->approvals->contains('decision', VacationRequestApproval::APPROVED));
+        $this->assertSame([], array_intersect($idsAntes, $reprogramada->approvals->pluck('id')->all()));
+        $this->assertSame('pending', $reprogramada->status);
+    }
+
+    public function test_reprogramar_sin_pasos_aprobados_conserva_la_cadena(): void
+    {
+        [, $empleado] = $this->cadenaDeDosPasos();
+        $solicitud = $this->crear($empleado, 0, 4);
+        $idsAntes = $solicitud->approvals->pluck('id')->sort()->values()->all();
+
+        $reprogramada = $this->servicio()->reprogramar($solicitud, $this->dia(7), $this->dia(10), null);
+
+        $this->assertSame($idsAntes, $reprogramada->approvals->pluck('id')->sort()->values()->all());
+        $this->assertSame(1, $reprogramada->current_step);
+    }
 }

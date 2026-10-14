@@ -95,7 +95,7 @@ class ProfileController extends Controller
                     'accumulated_days' => ($acumulado['total_accumulated_days'] ?? 0) + ($acumulado['total_adjustment_days'] ?? 0),
                     'raw_accumulated_days' => $acumulado['total_accumulated_days'] ?? 0,
                     'entitled_days' => $info['entitled_days'] ?? 0,
-                    'available_days' => VacationCalculatorService::diasDisponibles($employee),
+                    'available_days' => max(0, VacationCalculatorService::diasDisponibles($employee)),
                     'used_days' => $acumulado['total_used_days'] ?? 0,
                     'pending_days' => $acumulado['total_pending_days'] ?? 0,
                     'carried_over' => 0,

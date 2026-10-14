@@ -31,7 +31,8 @@ class CadenaAprobacionVacaciones
             $orden++;
             $solicitud->approvals()->create([
                 'step_order' => $orden,
-                'description' => $reglas->map(fn (ApprovalFlowStep $regla) => $regla->approver_description)->unique()->implode(' o '),
+                // description es string(255): muchas reglas en el mismo paso pueden exceder la columna.
+                'description' => mb_substr($reglas->map(fn (ApprovalFlowStep $regla) => $regla->approver_description)->unique()->implode(' o '), 0, 255),
                 'rules' => $reglas->pluck('id')->map(fn ($id) => (int) $id)->values()->all(),
                 'is_rh_final' => false,
                 'decision' => VacationRequestApproval::WAITING,

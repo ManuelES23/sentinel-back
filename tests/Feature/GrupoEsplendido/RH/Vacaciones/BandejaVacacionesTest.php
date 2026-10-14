@@ -123,4 +123,30 @@ class BandejaVacacionesTest extends TestCase
         $lista = $this->procesoVacaciones($this->getJson('/api/pending-approvals?process=vacation_requests')->assertOk()->json('data.processes'));
         $this->assertSame([$this->solicitud->id], array_column($lista['items'], 'id'));
     }
+
+    public function test_un_empleado_sin_regla_ni_subordinados_ni_rh_no_dispara_el_recorrido_de_solicitudes(): void
+    {
+        $puesto = $this->puesto($this->empresa, 'Auxiliar');
+        Sanctum::actingAs($this->empleadoConUsuario($this->empresa, ['position_id' => $puesto->id])->user);
+
+        \Illuminate\Support\Facades\DB::flushQueryLog();
+        \Illuminate\Support\Facades\DB::enableQueryLog();
+        $procesos = $this->getJson('/api/pending-approvals/summary')->assertOk()->json('data.processes');
+        $consultas = collect(\Illuminate\Support\Facades\DB::getQueryLog())->pluck('query');
+
+        $this->assertNull($this->procesoVacaciones($procesos));
+        $this->assertFalse($consultas->contains(fn ($sql) => str_contains($sql, 'from "vacation_requests"')), 'No debía consultar vacation_requests.');
+    }
+
+    public function test_quien_tiene_una_regla_de_puesto_en_otra_empresa_si_ve_el_proceso(): void
+    {
+        $puesto = $this->puesto($this->corporativo, 'Coordinador de RH', 3, true, 'enterprise');
+        $this->regla(1, 'position', ['position_id' => $puesto->id, 'enterprise_id' => $this->empresa->id]);
+        $coordinador = $this->empleadoConUsuario($this->corporativo, ['position_id' => $puesto->id]);
+        Sanctum::actingAs($coordinador->user);
+
+        $procesos = $this->getJson('/api/pending-approvals/summary')->assertOk()->json('data.processes');
+
+        $this->assertNotNull($this->procesoVacaciones($procesos));
+    }
 }

@@ -190,4 +190,17 @@ class DecisionesVacacionesTest extends TestCase
         $this->assertNotSame($segundo->id, $rh->employee?->id);
         $this->esperar(403, 'como RH', fn () => $this->servicio()->resolverComoRh($solicitud, $rh, 'approved'));
     }
+
+    public function test_rh_aprueba_aunque_el_empleado_se_haya_dado_de_baja_con_borrado_logico(): void
+    {
+        $rh = User::factory()->create();
+        $this->concederVacaciones($rh, 'aprobar');
+        $solicitud = $this->nueva();
+        $this->solicitante->delete();
+
+        $resuelta = $this->servicio()->resolverComoRh($solicitud->fresh(), $rh, 'approved');
+
+        $this->assertSame('approved', $resuelta->status);
+        $this->assertSame(5, AttendanceRecord::where('employee_id', $this->solicitante->id)->where('status', 'vacation')->count());
+    }
 }

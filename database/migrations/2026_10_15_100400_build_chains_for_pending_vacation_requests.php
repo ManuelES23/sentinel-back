@@ -22,7 +22,7 @@ return new class extends Migration
             ->orderBy('id')
             ->chunkById(100, function ($solicitudes) use ($cadena) {
                 foreach ($solicitudes as $solicitud) {
-                    $cadena->construir($solicitud);
+                    DB::transaction(fn () => $cadena->construir($solicitud));
                 }
             });
     }
