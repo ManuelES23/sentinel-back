@@ -3,11 +3,13 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Events\VacationRequestUpdated;
-use App\Models\VacationRequest;
+use App\Exceptions\RH\VacacionesException;
 use App\Models\VacationBalance;
-use App\Services\ApprovalNotificationService;
+use App\Models\VacationRequest;
+use App\Services\RH\VacationRequestService;
+use App\Services\VacationCalculatorService;
 use App\Support\PasswordPolicy;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Hash;
@@ -40,18 +42,10 @@ class ProfileController extends Controller
         if ($employee) {
             $currentYear = date('Y');
             
-            // Calcular años de servicio completos
-            $yearsOfService = $employee->hire_date 
-                ? (int)$employee->hire_date->diffInYears(now()) 
-                : 0;
-            
-            // Días acumulados según LFT (suma de todos los años: 12+14+16=42 para 3 años)
-            $accumulatedDays = VacationBalance::calculateAccumulatedDays($yearsOfService);
-            
-            // Obtener balance de vacaciones del año actual (configurado en RH)
-            $balance = VacationBalance::where('employee_id', $employee->id)
-                ->where('year', $currentYear)
-                ->first();
+            // Saldo con la misma fuente que RH y el portal.
+            $info = VacationCalculatorService::getEmployeeVacationInfo($employee);
+            $acumulado = $info['accumulated'] ?? [];
+            $yearsOfService = (int) ($info['years_of_service'] ?? 0);
             
             // Solicitudes de vacaciones del año actual
             $vacationRequests = VacationRequest::where('employee_id', $employee->id)
@@ -80,7 +74,7 @@ class ProfileController extends Controller
             
             // Formatear antigüedad como texto
             $months = $employee->hire_date 
-                ? (int)($employee->hire_date->diffInMonths(now()) % 12)
+                ? (int) ($employee->hire_date->diffInMonths(now()) % 12)
                 : 0;
             $seniority = $yearsOfService > 0 
                 ? "{$yearsOfService} año(s), {$months} mes(es)"
@@ -96,28 +90,16 @@ class ProfileController extends Controller
                 $nextAnniversary = $anniversary->format('Y-m-d');
             }
             
-            // Calcular días acumulados con ajuste (misma lógica que RH)
-            $adjustmentDays = $balance?->adjustment_days ?? 0;
-            $usedDays = $balance?->used_days ?? 0;
-            $pendingDays = $balance?->pending_days ?? 0;
-            $carriedOver = $balance?->carried_over ?? 0;
-            
-            // Total acumulado con ajustes = días LFT + carried_over + ajuste
-            $totalAccumulated = $accumulatedDays + $carriedOver + $adjustmentDays;
-            
-            // Días disponibles = total acumulado - usados - pendientes
-            $availableDays = $totalAccumulated - $usedDays - $pendingDays;
-            
             $vacationData = [
                 'balance' => [
-                    'accumulated_days' => $totalAccumulated, // Total acumulado con ajustes (ej: 33)
-                    'raw_accumulated_days' => $accumulatedDays, // Sin ajustes (ej: 42)
-                    'entitled_days' => $balance?->entitled_days ?? VacationBalance::calculateEntitledDays($yearsOfService), // Días este año
-                    'available_days' => $availableDays, // Días disponibles calculados correctamente
-                    'used_days' => $usedDays,
-                    'pending_days' => $pendingDays,
-                    'carried_over' => $carriedOver,
-                    'adjustment_days' => $adjustmentDays,
+                    'accumulated_days' => ($acumulado['total_accumulated_days'] ?? 0) + ($acumulado['total_adjustment_days'] ?? 0),
+                    'raw_accumulated_days' => $acumulado['total_accumulated_days'] ?? 0,
+                    'entitled_days' => $info['entitled_days'] ?? 0,
+                    'available_days' => VacationCalculatorService::diasDisponibles($employee),
+                    'used_days' => $acumulado['total_used_days'] ?? 0,
+                    'pending_days' => $acumulado['total_pending_days'] ?? 0,
+                    'carried_over' => 0,
+                    'adjustment_days' => $acumulado['total_adjustment_days'] ?? 0,
                     'years_of_service' => $yearsOfService,
                     'seniority' => $seniority,
                     'hire_date' => $employee->hire_date?->format('Y-m-d'),
@@ -256,14 +238,14 @@ class ProfileController extends Controller
     }
 
     /**
-     * Solicitar vacaciones desde el perfil
+     * Solicitar vacaciones desde el perfil (usuario con empleado ligado).
      */
-    public function requestVacation(Request $request): JsonResponse
+    public function requestVacation(Request $request, VacationRequestService $vacaciones): JsonResponse
     {
         $user = $request->user();
         $employee = $user->employee;
 
-        if (!$employee) {
+        if (! $employee) {
             return response()->json([
                 'status' => 'error',
                 'message' => 'No tienes un empleado vinculado para solicitar vacaciones',
@@ -271,119 +253,23 @@ class ProfileController extends Controller
         }
 
         $validated = $request->validate([
-            'start_date' => 'required|date|after_or_equal:today',
-            'end_date' => 'required|date|after_or_equal:start_date',
+            'start_date' => 'required|date',
+            'end_date' => 'required|date',
             'reason' => 'nullable|string|max:500',
         ]);
 
-        // Calcular días solicitados (excluyendo fines de semana)
-        $startDate = \Carbon\Carbon::parse($validated['start_date']);
-        $endDate = \Carbon\Carbon::parse($validated['end_date']);
-        $daysRequested = 0;
-        
-        for ($date = $startDate->copy(); $date->lte($endDate); $date->addDay()) {
-            if (!$date->isWeekend()) {
-                $daysRequested++;
-            }
+        try {
+            $vacationRequest = $vacaciones->crear(
+                $employee,
+                Carbon::parse($validated['start_date']),
+                Carbon::parse($validated['end_date']),
+                $validated['reason'] ?? null,
+                VacationRequest::SOURCE_PERFIL,
+                $user,
+            );
+        } catch (VacacionesException $e) {
+            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 400);
         }
-
-        // Verificar balance disponible
-        $currentYear = date('Y');
-        $balance = VacationBalance::where('employee_id', $employee->id)
-            ->where('year', $currentYear)
-            ->first();
-
-        // Calcular días disponibles con la misma lógica que el perfil
-        $yearsOfService = $employee->hire_date 
-            ? (int)$employee->hire_date->diffInYears(now()) 
-            : 0;
-        $accumulatedDays = VacationBalance::calculateAccumulatedDays($yearsOfService);
-        
-        $adjustmentDays = $balance?->adjustment_days ?? 0;
-        $usedDays = $balance?->used_days ?? 0;
-        $pendingDays = $balance?->pending_days ?? 0;
-        $carriedOver = $balance?->carried_over ?? 0;
-        
-        $totalAccumulated = $accumulatedDays + $carriedOver + $adjustmentDays;
-        $availableDays = $totalAccumulated - $usedDays - $pendingDays;
-
-        if ($availableDays < $daysRequested) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'No tienes suficientes días de vacaciones disponibles. Disponibles: ' . 
-                    $availableDays . ', Solicitados: ' . $daysRequested,
-            ], 400);
-        }
-
-        // Verificar que no haya solicitudes pendientes o aprobadas que se traslapen
-        $overlapping = VacationRequest::where('employee_id', $employee->id)
-            ->whereIn('status', ['pending', 'approved'])
-            ->where(function ($query) use ($validated) {
-                $query->whereBetween('start_date', [$validated['start_date'], $validated['end_date']])
-                    ->orWhereBetween('end_date', [$validated['start_date'], $validated['end_date']])
-                    ->orWhere(function ($q) use ($validated) {
-                        $q->where('start_date', '<=', $validated['start_date'])
-                            ->where('end_date', '>=', $validated['end_date']);
-                    });
-            })
-            ->exists();
-
-        if ($overlapping) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'Ya tienes una solicitud de vacaciones que se traslapa con estas fechas',
-            ], 400);
-        }
-
-        // Crear solicitud
-        $vacationRequest = VacationRequest::create([
-            'employee_id' => $employee->id,
-            'enterprise_id' => $employee->enterprise_id,
-            'start_date' => $validated['start_date'],
-            'end_date' => $validated['end_date'],
-            'days_requested' => $daysRequested,
-            'status' => 'pending',
-            'reason' => $validated['reason'] ?? null,
-            'vacation_year' => $currentYear,
-            'created_by' => $user->id,
-        ]);
-
-        // Actualizar días pendientes en el balance (crear si no existe)
-        if ($balance) {
-            $balance->increment('pending_days', $daysRequested);
-        } else {
-            // Crear balance si no existe
-            VacationBalance::create([
-                'employee_id' => $employee->id,
-                'year' => $currentYear,
-                'entitled_days' => VacationBalance::calculateEntitledDays($yearsOfService),
-                'used_days' => 0,
-                'pending_days' => $daysRequested,
-                'carried_over' => 0,
-            ]);
-        }
-
-        // Broadcast para tiempo real en RH
-        $vacationRequest->load('employee:id,first_name,last_name,employee_number');
-        broadcast(new VacationRequestUpdated(
-            'created',
-            $vacationRequest->toArray(),
-            $employee->enterprise?->slug ?? 'grupoesplendido',
-            'administration',
-            'rh'
-        ))->toOthers();
-
-        // Notificar a los aprobadores del departamento correspondiente
-        $employee->load('position', 'department');
-        ApprovalNotificationService::notifyApprovers(
-            'vacation_requests',
-            $employee,
-            'Nueva solicitud de vacaciones',
-            $employee->full_name . ' ha solicitado ' . $daysRequested . ' día(s) de vacaciones del ' .
-                $startDate->format('d/m/Y') . ' al ' . $endDate->format('d/m/Y'),
-            '/profile?tab=approvals',
-            'vacation'
-        );
 
         return response()->json([
             'status' => 'success',
@@ -393,46 +279,24 @@ class ProfileController extends Controller
     }
 
     /**
-     * Cancelar solicitud de vacaciones
+     * Cancelar una solicitud propia que sigue en revisión.
      */
-    public function cancelVacationRequest(Request $request, VacationRequest $vacationRequest): JsonResponse
+    public function cancelVacationRequest(Request $request, VacationRequest $vacationRequest, VacationRequestService $vacaciones): JsonResponse
     {
-        $user = $request->user();
-        $employee = $user->employee;
+        $employee = $request->user()->employee;
 
-        if (!$employee || $vacationRequest->employee_id !== $employee->id) {
+        if (! $employee || $vacationRequest->employee_id !== $employee->id) {
             return response()->json([
                 'status' => 'error',
                 'message' => 'No tienes permiso para cancelar esta solicitud',
             ], 403);
         }
 
-        if ($vacationRequest->status !== 'pending') {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'Solo puedes cancelar solicitudes pendientes',
-            ], 400);
+        try {
+            $vacaciones->cancelar($vacationRequest, VacationRequestService::CANCELA_EMPLEADO);
+        } catch (VacacionesException $e) {
+            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 400);
         }
-
-        // Restaurar días pendientes en el balance
-        $balance = VacationBalance::where('employee_id', $employee->id)
-            ->where('year', $vacationRequest->vacation_year)
-            ->first();
-
-        if ($balance) {
-            $balance->decrement('pending_days', $vacationRequest->days_requested);
-        }
-
-        $vacationRequest->update(['status' => 'cancelled']);
-
-        // Broadcast para tiempo real en RH
-        broadcast(new VacationRequestUpdated(
-            'cancelled',
-            $vacationRequest->load('employee:id,first_name,last_name,employee_number')->toArray(),
-            $employee->enterprise?->slug ?? 'grupoesplendido',
-            'administration',
-            'rh'
-        ))->toOthers();
 
         return response()->json([
             'status' => 'success',
@@ -456,7 +320,7 @@ class ProfileController extends Controller
         }
 
         $requests = VacationRequest::where('employee_id', $employee->id)
-            ->with(['approver:id,name'])
+            ->with(['approver:id,name', 'approvals'])
             ->orderBy('created_at', 'desc')
             ->paginate(20);
 
