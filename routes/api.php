@@ -1185,6 +1185,24 @@ Route::prefix('checador')->middleware('throttle:30,1')->group(function () {
 });
 
 // =====================================================
+// PORTAL DE VACACIONES (público, sin usuario del sistema)
+// El empleado entra con número + PIN y recibe un token propio (X-Portal-Token,
+// ver AuthenticatePortalSession). No usa Sanctum ni el emparejamiento del
+// checador: un token del portal no abre rutas internas ni al revés.
+// 'portal-vacaciones' limita por sesión (AppServiceProvider); el tercer
+// segmento de 'throttle:10,1,portal-login' le da al login su propia clave por IP.
+// =====================================================
+Route::prefix('portal-vacaciones')->middleware('throttle:portal-vacaciones')->group(function () {
+    Route::post('login', [App\Http\Controllers\Api\Portal\VacationPortalController::class, 'login'])
+        ->middleware('throttle:10,1,portal-login');
+
+    Route::middleware('portal.vacaciones')->group(function () {
+        Route::post('logout', [App\Http\Controllers\Api\Portal\VacationPortalController::class, 'logout']);
+        Route::get('yo', [App\Http\Controllers\Api\Portal\VacationPortalController::class, 'yo']);
+    });
+});
+
+// =====================================================
 // MÓDULO CRM COMERCIAL
 // =====================================================
 

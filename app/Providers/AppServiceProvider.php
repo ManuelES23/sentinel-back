@@ -82,6 +82,20 @@ class AppServiceProvider extends ServiceProvider
             ];
         });
 
+        // Portal de vacaciones: 60/min por sesión y no por IP, porque varios
+        // empleados entran desde la misma IP de la oficina. Sin token, por IP.
+        // El login tiene además su propio throttle por IP (routes/api.php).
+        RateLimiter::for('portal-vacaciones', function (Request $request) {
+            $token = (string) $request->header('X-Portal-Token');
+            $clave = $token !== '' ? 'portal:'.hash('sha256', $token) : 'portal-ip:'.$request->ip();
+
+            return Limit::perMinute(60)->by($clave)->response(fn (Request $request, array $headers) => response()->json([
+                'success' => false,
+                'message' => 'Demasiadas peticiones. Intenta de nuevo en '.($headers['Retry-After'] ?? 60).' segundos.',
+                'retry_after' => (int) ($headers['Retry-After'] ?? 60),
+            ], 429, $headers));
+        });
+
         // SMTP configurado desde /admin/settings (si está activado). Se omite bajo
         // config:cache/optimize: si no, la contraseña SMTP desencriptada quedaría
         // en texto plano en bootstrap/cache/config.php, y un "desactivar SMTP"
