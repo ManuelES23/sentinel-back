@@ -3,12 +3,15 @@
 namespace App\Services\ActivosFijos;
 
 use App\Models\ActivityLog;
+use App\Models\Brand;
 use App\Models\DepreciationClose;
+use App\Models\Enterprise;
 use App\Models\FixedAsset;
 use App\Models\FixedAssetAssignment;
 use App\Models\FixedAssetDisposal;
 use App\Models\User;
 use Carbon\CarbonImmutable;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -24,6 +27,8 @@ class RegistradorSalidaActivo
     public function __construct(
         private CalculadorSalida $calculador,
         private AsignadorActivos $asignador,
+        private CreadorActivo $creador,
+        private ValidadorRelacionesActivo $validador,
     ) {
     }
 
@@ -53,10 +58,14 @@ class RegistradorSalidaActivo
         ];
     }
 
-    public function registrar(FixedAsset $asset, array $datos, User $por): FixedAssetDisposal
+    /**
+     * @param  array<int, int>  $destinosPermitidos  Ids de empresa que el controlador ya filtró para un traspaso
+     *                                               (visibles para el usuario, distintas del origen y con `activos.create`).
+     */
+    public function registrar(FixedAsset $asset, array $datos, User $por, array $destinosPermitidos = []): FixedAssetDisposal
     {
         $tipo = $datos['type'] ?? null;
-        if (! in_array($tipo, FixedAssetDisposal::TIPOS, true) || $tipo === 'traspaso') {
+        if (! in_array($tipo, FixedAssetDisposal::TIPOS, true)) {
             throw ValidationException::withMessages(['type' => 'Tipo de salida no válido.']);
         }
         if ($tipo === 'venta' && ! isset($datos['sale_price'])) {
@@ -64,12 +73,13 @@ class RegistradorSalidaActivo
         }
         $fecha = CarbonImmutable::createFromFormat('!Y-m-d', $datos['disposal_date']);
 
-        return DB::transaction(function () use ($asset, $datos, $por, $tipo, $fecha) {
+        return DB::transaction(function () use ($asset, $datos, $por, $tipo, $fecha, $destinosPermitidos) {
             $activo = FixedAsset::query()->whereKey($asset->getKey())->lockForUpdate()->firstOrFail();
 
             $this->exigirSinSalidaVigente($activo);
             $this->validarFecha($activo, $fecha);
             $activa = $this->asignacionActivaValida($activo, $fecha);
+            $destino = $tipo === 'traspaso' ? $this->destinoValido($activo, $datos, $destinosPermitidos) : null;
 
             $valores = $this->calculador->valores($activo, $fecha);
             $precio = $tipo === 'venta' ? number_format((float) $datos['sale_price'], 2, '.', '') : null;
@@ -89,6 +99,7 @@ class RegistradorSalidaActivo
                 'book_value' => $valores['book_value'],
                 'sale_price' => $precio,
                 'result_amount' => $this->calculador->resultado($tipo, $valores['book_value'], $precio),
+                'destination_enterprise_id' => $destino?->id,
                 'created_by' => $por->id,
                 'created_by_name' => $por->name,
             ], $this->camposDelTipo($tipo, $datos)));
@@ -101,6 +112,11 @@ class RegistradorSalidaActivo
             $activo->refresh();
             $activo->update(['status' => 'baja']);
 
+            if ($destino) {
+                $nuevo = $this->crearActivoDestino($activo, $salida, $destino, $datos, $fecha);
+                $salida->update(['destination_asset_id' => $nuevo->id]);
+            }
+
             ActivityLog::log(
                 action: 'dispose',
                 model: 'FixedAssetDisposal',
@@ -111,6 +127,7 @@ class RegistradorSalidaActivo
                     'disposal_date' => $fecha->toDateString(),
                     'book_value' => $valores['book_value'],
                     'result_amount' => $salida->result_amount,
+                    'destination_asset_id' => $salida->destination_asset_id,
                 ],
             );
 
@@ -180,6 +197,77 @@ class RegistradorSalidaActivo
             'return_reason' => 'otro',
             'return_notes' => "Devuelta por baja del activo (salida #{$salida->id}).",
         ], $por);
+    }
+
+    /** La empresa destino debe estar entre las permitidas; sucursal, entidad y área, ser de esa empresa. */
+    private function destinoValido(FixedAsset $origen, array $datos, array $destinosPermitidos): Enterprise
+    {
+        $destinoId = (int) ($datos['destination_enterprise_id'] ?? 0);
+        $destino = $destinoId !== $origen->enterprise_id && in_array($destinoId, $destinosPermitidos, true)
+            ? Enterprise::find($destinoId)
+            : null;
+
+        if (! $destino) {
+            throw ValidationException::withMessages([
+                'destination_enterprise_id' => 'Elige una empresa destino distinta de la del activo y en la que puedas dar de alta activos.',
+            ]);
+        }
+
+        $errores = [];
+        foreach (['destination_branch_id' => 'sucursal', 'destination_entity_id' => 'entidad'] as $campo => $nombre) {
+            if (empty($datos[$campo])) {
+                $errores[$campo] = "Indica la {$nombre} de la empresa que recibe el activo.";
+            }
+        }
+
+        $relaciones = $this->validador->errores($destino, [
+            'branch_id' => $datos['destination_branch_id'] ?? null,
+            'entity_id' => $datos['destination_entity_id'] ?? null,
+            'area_id' => $datos['destination_area_id'] ?? null,
+        ]);
+        foreach ($relaciones as $campo => $mensaje) {
+            $errores['destination_'.$campo] = $mensaje;
+        }
+
+        if ($errores) {
+            throw ValidationException::withMessages($errores);
+        }
+
+        return $destino;
+    }
+
+    /**
+     * Activo nuevo en la receptora: valor de compra = valor en libros, depreciación desde el mes
+     * siguiente, tasa y residual del origen. La marca solo se copia si existe en la receptora.
+     */
+    private function crearActivoDestino(FixedAsset $origen, FixedAssetDisposal $salida, Enterprise $destino, array $datos, CarbonImmutable $fecha): FixedAsset
+    {
+        [$tasa, $residual] = $this->calculador->tasaYResidual($origen);
+        $origen->loadMissing('enterprise:id,name');
+
+        $marcaId = $origen->brand_id && Brand::whereKey($origen->brand_id)->forEnterprise($destino->id)->exists()
+            ? $origen->brand_id
+            : null;
+
+        return $this->creador->crear($destino, array_merge(
+            Arr::only($origen->getAttributes(), [
+                'name', 'category_id', 'subcategory_id', 'model', 'serial_number', 'year', 'description', 'useful_life_years',
+            ]),
+            [
+                'brand_id' => $marcaId,
+                'branch_id' => $datos['destination_branch_id'],
+                'entity_id' => $datos['destination_entity_id'],
+                'area_id' => $datos['destination_area_id'] ?? null,
+                'status' => 'disponible',
+                'is_active' => true,
+                'purchase_date' => $fecha->toDateString(),
+                'purchase_value' => $salida->book_value,
+                'depreciation_start' => $fecha->addMonthNoOverflow()->startOfMonth()->toDateString(),
+                'depreciation_rate' => $tasa,
+                'salvage_percent' => $residual,
+                'observations' => "Traspaso desde {$origen->code} ({$origen->enterprise->name}) el {$fecha->format('d/m/Y')}.",
+            ],
+        ));
     }
 
     /** Copia del activo al registrar la salida: la carta se reimprime idéntica aunque el activo cambie. */
