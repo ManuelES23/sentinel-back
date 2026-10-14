@@ -3,7 +3,10 @@
 namespace App\Support\RH;
 
 use App\Models\Employee;
+use App\Models\VacationRequest;
+use App\Models\VacationRequestApproval;
 use App\Services\VacationCalculatorService;
+use Illuminate\Support\Collection;
 
 /**
  * Lo único que devuelve el portal de vacaciones (spec §3.5). Lista blanca
@@ -53,5 +56,100 @@ class PresentadorPortalVacaciones
             'dias_proximo_periodo' => (int) $info['next_year_entitled_days'],
             'sin_fecha_ingreso' => false,
         ];
+    }
+
+    /** Vista previa de calcular() sin la lista de días descontables (el portal solo muestra los excluidos). */
+    public static function calculo(array $calculo): array
+    {
+        return [
+            'dias_naturales' => $calculo['dias_naturales'],
+            'dias_descontables' => $calculo['dias_descontables'],
+            'excluidos' => $calculo['excluidos'],
+            'disponibles' => $calculo['disponibles'],
+            'disponibles_despues' => $calculo['disponibles_despues'],
+            'errores' => $calculo['errores'],
+        ];
+    }
+
+    public static function resumen(VacationRequest $solicitud): array
+    {
+        $pasos = self::pasosVisibles($solicitud);
+        $actual = $solicitud->status === 'pending' && $solicitud->current_step !== null
+            ? $pasos->search(fn (VacationRequestApproval $paso) => $paso->step_order === $solicitud->current_step)
+            : false;
+
+        return [
+            'id' => $solicitud->id,
+            'folio' => self::folio($solicitud),
+            'fecha_inicio' => $solicitud->start_date->format('Y-m-d'),
+            'fecha_fin' => $solicitud->end_date->format('Y-m-d'),
+            'dias' => (int) $solicitud->days_requested,
+            'motivo' => $solicitud->reason,
+            'estado' => $solicitud->status,
+            'motivo_rechazo' => $solicitud->status === 'rejected' ? $solicitud->rejection_reason : null,
+            'solicitada_el' => $solicitud->created_at?->toIso8601String(),
+            'paso_actual' => $actual === false ? null : $actual + 1,
+            'total_pasos' => $pasos->count(),
+            'revisor_actual' => $actual === false ? null : $pasos[$actual]->description,
+        ];
+    }
+
+    /** Resumen + línea de tiempo. De quien decidió solo sale el nombre (spec §6.1). */
+    public static function detalle(VacationRequest $solicitud): array
+    {
+        return self::resumen($solicitud) + [
+            'pasos' => self::pasosVisibles($solicitud)->map(fn (VacationRequestApproval $paso) => [
+                'orden' => $paso->step_order,
+                'descripcion' => $paso->description,
+                'decision' => $paso->decision,
+                'decidido_por' => $paso->decider?->name,
+                'decidido_el' => $paso->decided_at?->toIso8601String(),
+                'comentario' => $paso->comment,
+                'es_rh' => $paso->is_rh_final,
+            ])->all(),
+        ];
+    }
+
+    public static function formato(VacationRequest $solicitud): array
+    {
+        $empleado = $solicitud->employee;
+        $empleado->loadMissing('enterprise');
+
+        return [
+            'folio' => self::folio($solicitud),
+            'empresa' => [
+                'nombre' => $empleado->enterprise?->name,
+                'logo_url' => $empleado->enterprise?->logo_url,
+            ],
+            'empleado' => self::empleado($empleado),
+            'solicitud' => [
+                'solicitada_el' => $solicitud->created_at?->format('Y-m-d'),
+                'anio_vacacional' => $solicitud->vacation_year,
+                'fecha_inicio' => $solicitud->start_date->format('Y-m-d'),
+                'fecha_fin' => $solicitud->end_date->format('Y-m-d'),
+                'dias' => (int) $solicitud->days_requested,
+                'motivo' => $solicitud->reason,
+            ],
+            'aprobado_por' => $solicitud->approver?->name,
+            'aprobado_el' => $solicitud->approved_at?->format('Y-m-d'),
+        ];
+    }
+
+    /**
+     * El paso final de RH solo se activa si todos los anteriores se saltan
+     * (spec §5.4): se muestra únicamente si decidió o si es el que espera.
+     */
+    private static function pasosVisibles(VacationRequest $solicitud): Collection
+    {
+        return $solicitud->approvals
+            ->reject(fn (VacationRequestApproval $paso) => $paso->is_rh_final
+                && ! in_array($paso->decision, [VacationRequestApproval::APPROVED, VacationRequestApproval::REJECTED], true)
+                && ! ($solicitud->status === 'pending' && $paso->step_order === $solicitud->current_step))
+            ->values();
+    }
+
+    private static function folio(VacationRequest $solicitud): string
+    {
+        return 'VAC-'.str_pad((string) $solicitud->id, 6, '0', STR_PAD_LEFT);
     }
 }

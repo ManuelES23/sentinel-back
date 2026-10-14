@@ -1199,6 +1199,12 @@ Route::prefix('portal-vacaciones')->middleware('throttle:portal-vacaciones')->gr
     Route::middleware('portal.vacaciones')->group(function () {
         Route::post('logout', [App\Http\Controllers\Api\Portal\VacationPortalController::class, 'logout']);
         Route::get('yo', [App\Http\Controllers\Api\Portal\VacationPortalController::class, 'yo']);
+        Route::post('calcular', [App\Http\Controllers\Api\Portal\VacationPortalController::class, 'calcular']);
+        Route::get('solicitudes', [App\Http\Controllers\Api\Portal\VacationPortalController::class, 'solicitudes']);
+        Route::post('solicitudes', [App\Http\Controllers\Api\Portal\VacationPortalController::class, 'crear']);
+        Route::get('solicitudes/{id}', [App\Http\Controllers\Api\Portal\VacationPortalController::class, 'detalle'])->whereNumber('id');
+        Route::post('solicitudes/{id}/cancelar', [App\Http\Controllers\Api\Portal\VacationPortalController::class, 'cancelar'])->whereNumber('id');
+        Route::get('solicitudes/{id}/formato', [App\Http\Controllers\Api\Portal\VacationPortalController::class, 'formato'])->whereNumber('id');
     });
 });
 
