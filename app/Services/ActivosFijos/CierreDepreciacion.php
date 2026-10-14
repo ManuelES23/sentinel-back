@@ -27,8 +27,10 @@ class CierreDepreciacion
     }
 
     /**
-     * Cálculo vivo del mes. Entran los activos de la empresa que no están en baja ni borrados.
-     * «Por iniciar» no genera línea ni cuenta como excluido; «sin depreciar» va a `excluded`.
+     * Cálculo vivo del mes. Entran los activos de la empresa que no están en baja ni borrados,
+     * y los que tienen una salida vigente en un mes igual o posterior (se deprecian hasta el mes
+     * de la salida inclusive). «Por iniciar» no genera línea ni cuenta como excluido; «sin
+     * depreciar» va a `excluded`. Un baja antiguo (sin salida) no entra.
      *
      * @return array{lines: list<array<string, mixed>>, excluded: list<array<string, mixed>>}
      */
@@ -40,7 +42,10 @@ class CierreDepreciacion
 
         $activos = FixedAsset::query()
             ->where('enterprise_id', $empresa->id)
-            ->where('status', '!=', 'baja')
+            ->where(function ($q) use ($mes) {
+                $q->where('status', '!=', 'baja')
+                    ->orWhereHas('salidaVigente', fn ($s) => $s->whereDate('disposal_date', '>=', $mes->toDateString()));
+            })
             ->with(['category:id,name,depreciation_rate,salvage_percent', 'subcategory:id,name,depreciation_rate,salvage_percent'])
             ->orderBy('code')
             ->orderBy('id')
