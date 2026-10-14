@@ -14,6 +14,8 @@ use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
@@ -168,6 +170,105 @@ class SalidaActivoController extends Controller
                 'salida' => 'Este traspaso dio de alta un activo en otra empresa en la que no tienes permiso para retirarlo. Deshazlo desde Grupo Espléndido o pídelo a quien administre esa empresa.',
             ]);
         }
+    }
+
+    /** Datos para imprimir la carta de venta (el front dibuja el PDF). El activo sale de la copia guardada. */
+    public function carta(Request $request, FixedAssetDisposal $salida): JsonResponse
+    {
+        $this->alcance->autorizarSalida($salida, $request);
+        $this->permisos->autorizar($request, self::SUBMODULO, 'view');
+        abort_unless($salida->type === 'venta', 404, 'Solo las ventas tienen carta de venta.');
+
+        $salida->load('enterprise');
+        $empresa = $salida->enterprise;
+        $copia = $salida->asset_snapshot ?? [];
+
+        // Número de venta del activo: cuántas ventas suyas hay hasta esta (inclusive).
+        $numero = FixedAssetDisposal::query()
+            ->where('fixed_asset_id', $salida->fixed_asset_id)
+            ->where('type', 'venta')
+            ->where('id', '<=', $salida->id)
+            ->count();
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'folio' => sprintf('%s-V%02d', $copia['code'] ?? 'SIN-CODIGO', $numero),
+                'empresa' => [
+                    'nombre' => $empresa->name,
+                    'razon_social' => $empresa->razon_social,
+                    'rfc' => $empresa->rfc,
+                    'direccion' => $empresa->direccion,
+                    'ciudad' => $empresa->ciudad,
+                    'telefono' => $empresa->telefono,
+                    'logo' => $empresa->logo,
+                ],
+                'activo' => $copia,
+                'venta' => [
+                    'fecha' => $salida->disposal_date->toDateString(),
+                    'lugar' => $salida->place,
+                    'precio' => $salida->sale_price,
+                    'forma_pago' => $salida->payment_method,
+                    'comprador' => [
+                        'nombre' => $salida->buyer_name,
+                        'domicilio' => $salida->buyer_address,
+                        'identificacion' => $salida->buyer_identification,
+                    ],
+                    'autoriza' => $salida->authorized_by_name,
+                    'registrado_por' => $salida->created_by_name,
+                    'revertida' => ! $salida->vigente,
+                ],
+            ],
+        ]);
+    }
+
+    /** Sube o reemplaza la carta firmada. Disco privado: se sirve solo con descargarCartaFirmada. */
+    public function subirCartaFirmada(Request $request, FixedAssetDisposal $salida): JsonResponse
+    {
+        $this->alcance->autorizarSalida($salida, $request);
+        $this->permisos->autorizar($request, self::SUBMODULO, 'create');
+        $request->validate(['file' => ['required', 'file', 'mimes:pdf,jpg,jpeg,png', 'max:10240']]);
+
+        if ($salida->type !== 'venta' || ! $salida->vigente) {
+            throw ValidationException::withMessages(['salida' => 'Solo una venta vigente lleva carta firmada.']);
+        }
+
+        $anterior = $salida->signed_document_path;
+        $nueva = $request->file('file')->store("fixed-asset-disposals/{$salida->id}", 'local');
+
+        try {
+            DB::transaction(fn () => $salida->update([
+                'signed_document_path' => $nueva,
+                'signed_uploaded_at' => now(),
+                'signed_uploaded_by' => $request->user()->id,
+            ]));
+        } catch (\Throwable $e) {
+            Storage::disk('local')->delete($nueva);
+            throw $e;
+        }
+
+        // El archivo viejo se borra solo cuando el cambio ya quedó guardado.
+        if ($anterior) {
+            Storage::disk('local')->delete($anterior);
+        }
+        $this->emitir($salida);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Carta firmada guardada exitosamente',
+            'data' => $this->detalle($salida->refresh()),
+        ]);
+    }
+
+    public function descargarCartaFirmada(Request $request, FixedAssetDisposal $salida)
+    {
+        $this->alcance->autorizarSalida($salida, $request);
+        $this->permisos->autorizar($request, self::SUBMODULO, 'view');
+
+        $ruta = $salida->signed_document_path;
+        abort_unless($ruta && Storage::disk('local')->exists($ruta), 404, 'Esta venta no tiene carta firmada.');
+
+        return Storage::disk('local')->response($ruta);
     }
 
     /** @return array<string, array<int, mixed>> */

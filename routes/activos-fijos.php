@@ -60,4 +60,7 @@ Route::prefix('activos-fijos')->group(function () {
     Route::post('salidas', [SalidaActivoController::class, 'store']);
     Route::get('salidas/{salida}', [SalidaActivoController::class, 'show']);
     Route::delete('salidas/{salida}', [SalidaActivoController::class, 'destroy']);
+    Route::get('salidas/{salida}/carta', [SalidaActivoController::class, 'carta']);
+    Route::post('salidas/{salida}/carta-firmada', [SalidaActivoController::class, 'subirCartaFirmada']);
+    Route::get('salidas/{salida}/carta-firmada', [SalidaActivoController::class, 'descargarCartaFirmada']);
 });
