@@ -30,6 +30,7 @@ class FixedAssetDisposal extends Model
     protected $casts = [
         'enterprise_id' => 'integer',
         'fixed_asset_id' => 'integer',
+        'destination_enterprise_id' => 'integer',
         'disposal_date' => 'date:Y-m-d',
         'asset_snapshot' => 'array',
         'purchase_value' => 'decimal:2',

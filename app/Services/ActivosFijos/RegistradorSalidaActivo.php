@@ -93,8 +93,9 @@ class RegistradorSalidaActivo
                 'disposal_date' => $fecha->toDateString(),
                 'reason' => $datos['reason'] ?? null,
                 'authorized_by_name' => $datos['authorized_by_name'],
-                // Un baja antiguo (sin salida) no sabe a qué estado volver: disponible.
-                'previous_status' => $activo->status === 'baja' ? 'disponible' : $activo->status,
+                // Un baja antiguo (sin salida) conserva `baja`: sigue fuera de los cierres de depreciación
+                // (no se le carga un acumulado que nunca apareció) y deshacer lo regresa a baja.
+                'previous_status' => $activo->status,
                 'asset_snapshot' => $this->copiaDelActivo($activo),
                 'purchase_value' => $valores['purchase_value'],
                 'accumulated_depreciation' => $valores['accumulated_depreciation'],
@@ -208,6 +209,8 @@ class RegistradorSalidaActivo
             $destino->status === 'baja' || $destino->salidas()->exists() => 'El activo recibido ya tiene una salida registrada.',
             $destino->asignaciones()->exists() => 'El activo recibido ya tiene asignaciones.',
             DepreciationCloseLine::where('fixed_asset_id', $destino->id)->exists() => 'El activo recibido ya forma parte de un cierre de depreciación.',
+            // Se recibió `disponible`: cualquier otro estado indica que ya se usó o se editó.
+            $destino->status !== 'disponible' => 'El activo recibido ya cambió de estado.',
             default => null,
         };
 

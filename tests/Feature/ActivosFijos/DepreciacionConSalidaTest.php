@@ -3,6 +3,7 @@
 namespace Tests\Feature\ActivosFijos;
 
 use App\Services\ActivosFijos\CierreDepreciacion;
+use App\Services\ActivosFijos\RegistradorSalidaActivo;
 use App\Services\ActivosFijos\ResolutorDepreciacion;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -132,5 +133,52 @@ class DepreciacionConSalidaTest extends TestCase
         $this->assertSame('baja', $resumen['estado']);
         $this->assertNull($resumen['acumulado']);
         $this->assertNull($resumen['valor_en_libros']);
+    }
+
+    public function test_la_salida_de_un_baja_antiguo_no_lo_mete_a_la_previa_ni_al_cierre(): void
+    {
+        $activo = $this->crearActivoDepreciable(['status' => 'baja']);
+        $usuario = $this->usuarioDepreciacion();
+
+        $salida = app(RegistradorSalidaActivo::class)->registrar($activo, [
+            'type' => 'desecho', 'disposal_date' => '2026-06-10', 'reason' => 'Regularización',
+            'authorized_by_name' => 'Dirección General',
+        ], $usuario);
+
+        // La salida sigue calculando su valor en libros (6 meses: enero a junio).
+        $this->assertSame('baja', $salida->previous_status);
+        $this->assertSame('1080.00', $salida->accumulated_depreciation);
+        $this->assertSame('10920.00', $salida->book_value);
+        $this->assertSame('baja', $activo->fresh()->status);
+
+        $previa = $this->cierres->calcular($this->enterprise, $this->mes('2026-06'));
+        $this->assertSame([], $previa['lines']);
+        $this->assertSame([], $previa['excluded']);
+
+        $cierre = $this->cierres->cerrar($this->enterprise, $this->mes('2026-06'), $usuario);
+        $this->assertSame(0, $cierre->assets_count);
+        $this->assertSame('0.00', $cierre->month_total);
+        $this->assertSame('0.00', $cierre->accumulated_total);
+        $this->assertSame(0, $cierre->lines()->count());
+
+        $resumen = app(ResolutorDepreciacion::class)->resumen($activo->fresh());
+        $this->assertSame('baja', $resumen['estado']);
+        $this->assertSame('10920.00', $resumen['valor_en_libros']);
+    }
+
+    public function test_una_salida_de_un_activo_vivo_si_sigue_entrando_al_cierre_de_su_mes(): void
+    {
+        $activo = $this->crearActivoDepreciable();
+        $usuario = $this->usuarioDepreciacion();
+
+        app(RegistradorSalidaActivo::class)->registrar($activo, [
+            'type' => 'desecho', 'disposal_date' => '2026-06-10', 'reason' => 'Obsoleto',
+            'authorized_by_name' => 'Dirección General',
+        ], $usuario);
+
+        $cierre = $this->cierres->cerrar($this->enterprise, $this->mes('2026-06'), $usuario);
+
+        $this->assertSame(1, $cierre->assets_count);
+        $this->assertSame('1080.00', $cierre->accumulated_total);
     }
 }

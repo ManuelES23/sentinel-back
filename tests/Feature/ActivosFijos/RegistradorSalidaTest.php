@@ -214,13 +214,13 @@ class RegistradorSalidaTest extends TestCase
         $this->assertNull($asignacion->fresh()->returned_at);
     }
 
-    public function test_un_baja_antiguo_sin_salida_guarda_disponible_como_estado_previo(): void
+    public function test_un_baja_antiguo_sin_salida_conserva_baja_como_estado_previo(): void
     {
         $activo = $this->crearActivoDepreciable(['status' => 'baja']);
 
         $salida = $this->registrador->registrar($activo, $this->datos('desecho'), $this->usuario);
 
-        $this->assertSame('disponible', $salida->previous_status);
+        $this->assertSame('baja', $salida->previous_status);
         $this->assertSame('baja', $activo->fresh()->status);
     }
 
@@ -298,5 +298,83 @@ class RegistradorSalidaTest extends TestCase
         $this->assertSame('en_uso', $activo->fresh()->status);
         $this->assertNull($asignacion->fresh()->returned_at);
         $this->assertSame(0, ActivityLog::where('action', 'dispose')->count());
+    }
+
+    public function test_el_primer_y_el_ultimo_dia_del_mes_dan_las_mismas_cifras_de_mes_completo(): void
+    {
+        $cierres = app(CierreDepreciacion::class);
+        $cifras = [];
+
+        foreach (['2026-05-01', '2026-05-31'] as $dia) {
+            $activo = $this->crearActivoDepreciable();
+            $salida = $this->registrador->registrar($activo, $this->datos('desecho', ['disposal_date' => $dia]), $this->usuario);
+            $cifras[$dia] = [$salida->accumulated_depreciation, $salida->book_value];
+        }
+
+        // Enero a mayo = 5 meses completos de 180.00 sin importar el día.
+        $this->assertSame(['900.00', '11100.00'], $cifras['2026-05-01']);
+        $this->assertSame($cifras['2026-05-01'], $cifras['2026-05-31']);
+
+        // Ambos activos siguen en el cierre de mayo y salen del de junio.
+        $this->assertCount(2, $cierres->calcular($this->enterprise, CarbonImmutable::createFromFormat('!Y-m', '2026-05'))['lines']);
+        $this->assertCount(0, $cierres->calcular($this->enterprise, CarbonImmutable::createFromFormat('!Y-m', '2026-06'))['lines']);
+    }
+
+    public function test_el_primer_dia_del_mes_siguiente_suma_un_mes_mas(): void
+    {
+        $activo = $this->crearActivoDepreciable();
+
+        $salida = $this->registrador->registrar($activo, $this->datos('desecho', ['disposal_date' => '2026-06-01']), $this->usuario);
+
+        $this->assertSame('1080.00', $salida->accumulated_depreciation);
+        $this->assertSame('10920.00', $salida->book_value);
+    }
+
+    public function test_la_salida_vigente_de_un_activo_de_otra_empresa_no_estorba_y_tampoco_se_puede_duplicar(): void
+    {
+        $sbp = $this->crearEmpresaActivos('splendidbyporvenir', 'Splendid by Porvenir', 'SBP');
+        $ajeno = FixedAsset::create($this->validFixedAssetPayload([
+            'enterprise_id' => $sbp->id, 'code' => 'SBP-AF-000001', 'status' => 'en_uso',
+            'purchase_date' => '2026-01-15', 'purchase_value' => 12000, 'depreciation_rate' => 20, 'salvage_percent' => 10,
+        ]));
+        $this->registrador->registrar($ajeno, $this->datos('desecho'), $this->usuario);
+        $propio = $this->crearActivoDepreciable();
+
+        // La salida vigente del activo de SBP no impide la de uno de Splendid Farms…
+        $salida = $this->registrador->registrar($propio, $this->datos('desecho'), $this->usuario);
+        $this->assertSame($this->enterprise->id, $salida->enterprise_id);
+
+        // …pero el activo de SBP no admite una segunda salida vigente.
+        try {
+            $this->registrador->registrar($ajeno, $this->datos('venta'), $this->usuario);
+            $this->fail('La segunda salida del activo ajeno debió rechazarse.');
+        } catch (ValidationException $e) {
+            $this->assertArrayHasKey('asset', $e->errors());
+        }
+        $this->assertSame(1, FixedAssetDisposal::where('fixed_asset_id', $ajeno->id)->count());
+        $this->assertSame($sbp->id, FixedAssetDisposal::where('fixed_asset_id', $ajeno->id)->value('enterprise_id'));
+    }
+
+    public function test_los_datos_de_destino_se_ignoran_en_los_tipos_que_no_son_traspaso(): void
+    {
+        [$sucursal, $entidad] = $this->crearUbicacion($this->corporativo, 'GE');
+
+        foreach (['desecho', 'venta', 'siniestro', 'donacion'] as $tipo) {
+            $activo = $this->crearActivoDepreciable();
+
+            $salida = $this->registrador->registrar($activo, $this->datos($tipo, [
+                'destination_enterprise_id' => $this->corporativo->id,
+                'destination_branch_id' => $sucursal->id,
+                'destination_entity_id' => $entidad->id,
+                'destination_area_id' => 12345,
+            ]), $this->usuario, [$this->corporativo->id]);
+
+            $this->assertNull($salida->destination_enterprise_id, $tipo);
+            $this->assertNull($salida->destination_asset_id, $tipo);
+            $this->assertSame('baja', $activo->fresh()->status, $tipo);
+        }
+
+        // Ningún tipo creó un activo en la receptora.
+        $this->assertSame(0, FixedAsset::where('enterprise_id', $this->corporativo->id)->count());
     }
 }

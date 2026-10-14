@@ -44,7 +44,9 @@ class CierreDepreciacion
             ->where('enterprise_id', $empresa->id)
             ->where(function ($q) use ($mes) {
                 $q->where('status', '!=', 'baja')
-                    ->orWhereHas('salidaVigente', fn ($s) => $s->whereDate('disposal_date', '>=', $mes->toDateString()));
+                    // Una salida sobre un baja antiguo (previous_status = baja) no lo mete a los cierres.
+                    ->orWhereHas('salidaVigente', fn ($s) => $s->whereDate('disposal_date', '>=', $mes->toDateString())
+                        ->where('previous_status', '!=', 'baja'));
             })
             ->with(['category:id,name,depreciation_rate,salvage_percent', 'subcategory:id,name,depreciation_rate,salvage_percent'])
             ->orderBy('code')

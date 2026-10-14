@@ -268,7 +268,7 @@ class SalidaActivoController extends Controller
         $ruta = $salida->signed_document_path;
         abort_unless($ruta && Storage::disk('local')->exists($ruta), 404, 'Esta venta no tiene carta firmada.');
 
-        return Storage::disk('local')->response($ruta);
+        return Storage::disk('local')->response($ruta, null, ['X-Content-Type-Options' => 'nosniff']);
     }
 
     /** @return array<string, array<int, mixed>> */

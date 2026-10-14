@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\ActivosFijos;
 
+use App\Models\ActivityLog;
 use App\Models\FixedAsset;
 use App\Models\FixedAssetDisposal;
 use App\Models\User;
@@ -76,7 +77,15 @@ class DeshacerSalidaTest extends TestCase
         $this->assertFalse($deshecha->vigente);
         $this->assertSame('en_uso', $activo->fresh()->status);
         $this->assertNull($activo->fresh()->salidaVigente);
-        $this->assertDatabaseHas('activity_logs', ['action' => 'reverse', 'model' => 'FixedAssetDisposal', 'model_id' => $salida->id]);
+        $this->assertTrue($deshecha->reversed_at->equalTo(now()));
+
+        $log = ActivityLog::where('action', 'reverse')->where('model', 'FixedAssetDisposal')->where('model_id', $salida->id)->firstOrFail();
+        $this->assertSame('desecho', $log->old_values['type']);
+        $this->assertSame('2026-05-20', $log->old_values['disposal_date']);
+        $this->assertSame('11100.00', $log->old_values['book_value']);
+        $this->assertSame('Se registró por error', $log->new_values['reason']);
+        $this->assertSame($this->usuario->id, $log->new_values['reversed_by']);
+        $this->assertSame('en_uso', $log->new_values['status']);
 
         // Se puede volver a dar de baja y el historial conserva las dos filas.
         $otra = $this->registrador->registrar($activo, $this->datos(['type' => 'venta', 'sale_price' => '12000.00', 'buyer_name' => 'Comprador']), $this->usuario);
@@ -114,14 +123,15 @@ class DeshacerSalidaTest extends TestCase
         }
     }
 
-    public function test_un_baja_antiguo_vuelve_a_disponible(): void
+    public function test_un_baja_antiguo_vuelve_a_baja_al_deshacer(): void
     {
         $activo = $this->crearActivoDepreciable(['status' => 'baja']);
         $salida = $this->registrador->registrar($activo, $this->datos(), $this->usuario);
 
         $this->registrador->deshacer($salida, 'Error', $this->usuario);
 
-        $this->assertSame('disponible', $activo->fresh()->status);
+        $this->assertSame('baja', $activo->fresh()->status);
+        $this->assertNull($activo->fresh()->salidaVigente);
     }
 
     public function test_no_se_vuelve_a_crear_la_asignacion_devuelta(): void
@@ -213,5 +223,85 @@ class DeshacerSalidaTest extends TestCase
         );
 
         $this->assertNoSePuedeDeshacer($salida, 'salida');
+    }
+
+    /** Traspaso del activo `$origen` a Grupo Espléndido (fecha 20 de mayo), con la sucursal y entidad de GE. */
+    private function traspasar(FixedAsset $origen): FixedAssetDisposal
+    {
+        [$sucursal, $entidad] = $this->crearUbicacion($this->corporativo, 'GE');
+
+        return $this->registrador->registrar($origen, $this->datos([
+            'type' => 'traspaso',
+            'destination_enterprise_id' => $this->corporativo->id,
+            'destination_branch_id' => $sucursal->id,
+            'destination_entity_id' => $entidad->id,
+        ]), $this->usuario, [$this->corporativo->id]);
+    }
+
+    public function test_deshacer_un_traspaso_se_rechaza_si_el_activo_recibido_ya_forma_parte_de_un_cierre(): void
+    {
+        $salida = $this->traspasar($this->crearActivoDepreciable());
+        $destino = FixedAsset::findOrFail($salida->destination_asset_id);
+
+        // El activo recibido arranca en junio: el cierre de junio de la receptora le crea una línea.
+        $cierre = app(CierreDepreciacion::class)->cerrar($this->corporativo, $this->mes('2026-06'), $this->usuario);
+        $this->assertSame(1, $cierre->assets_count);
+        $this->assertSame('disponible', $destino->fresh()->status);
+
+        try {
+            $this->registrador->deshacer($salida, 'Corrección', $this->usuario);
+            $this->fail('Deshacer debió rechazarse.');
+        } catch (ValidationException $e) {
+            $this->assertArrayHasKey('salida', $e->errors());
+            $this->assertStringContainsString('cierre de depreciación', $e->errors()['salida'][0]);
+        }
+
+        $this->assertNull($salida->fresh()->reversed_at);
+        $this->assertNull($destino->fresh()->deleted_at);
+        $this->assertSame('baja', FixedAsset::findOrFail($salida->fixed_asset_id)->status);
+    }
+
+    public function test_deshacer_un_traspaso_se_rechaza_si_el_activo_recibido_ya_no_esta_disponible(): void
+    {
+        $salida = $this->traspasar($this->crearActivoDepreciable());
+        $destino = FixedAsset::findOrFail($salida->destination_asset_id);
+        $destino->update(['status' => 'en_mantenimiento']);
+
+        try {
+            $this->registrador->deshacer($salida, 'Corrección', $this->usuario);
+            $this->fail('Deshacer debió rechazarse.');
+        } catch (ValidationException $e) {
+            $this->assertArrayHasKey('salida', $e->errors());
+            $this->assertStringContainsString('cambió de estado', $e->errors()['salida'][0]);
+        }
+
+        $this->assertNull($salida->fresh()->reversed_at);
+        $this->assertNull($destino->fresh()->deleted_at);
+    }
+
+    public function test_deshacer_un_traspaso_cuyo_activo_recibido_ya_se_borro_no_falla(): void
+    {
+        $origen = $this->crearActivoDepreciable();
+        $salida = $this->traspasar($origen);
+        FixedAsset::findOrFail($salida->destination_asset_id)->delete();
+
+        $deshecha = $this->registrador->deshacer($salida, 'Corrección', $this->usuario);
+
+        $this->assertNotNull($deshecha->reversed_at);
+        $this->assertSame('en_uso', $origen->fresh()->status);
+    }
+
+    public function test_deshacer_la_salida_de_un_baja_antiguo_lo_regresa_a_baja_y_fuera_de_los_cierres(): void
+    {
+        $activo = $this->crearActivoDepreciable(['status' => 'baja']);
+        $salida = $this->registrador->registrar($activo, $this->datos(['disposal_date' => '2026-06-10']), $this->usuario);
+        $this->assertSame('baja', $salida->previous_status);
+        $cierres = app(CierreDepreciacion::class);
+
+        $this->registrador->deshacer($salida, 'Error', $this->usuario);
+
+        $this->assertSame('baja', $activo->fresh()->status);
+        $this->assertSame([], $cierres->calcular($this->enterprise, $this->mes('2026-06'))['lines']);
+        $this->assertSame([], $cierres->calcular($this->enterprise, $this->mes('2026-07'))['lines']);
     }
 }
