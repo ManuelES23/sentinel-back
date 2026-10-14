@@ -4,8 +4,10 @@ namespace App\Http\Controllers\Api\SplendidFarms\Inventory;
 
 use App\Events\FixedAssetUpdated;
 use App\Http\Controllers\Controller;
+use App\Models\AssetCategory;
 use App\Models\AssetCharacteristicDefinition;
 use App\Models\Enterprise;
+use App\Models\Entity;
 use App\Models\FixedAsset;
 use App\Models\FixedAssetDisposal;
 use App\Services\ActivosFijos\AlcanceActivos;
@@ -83,6 +85,93 @@ class FixedAssetController extends Controller
             'success' => true,
             'data' => $pagina,
         ]);
+    }
+
+    /** Conteos para la columna de filtros del catálogo (ver el spec §3.2). */
+    public function resumen(Request $request): JsonResponse
+    {
+        $this->permisos->autorizar($request, 'activos', 'view');
+
+        $base = fn (array $omitir = []) => $this->aplicarFiltros(
+            $this->alcance->aplicar(FixedAsset::query(), $request),
+            $request,
+            $omitir,
+        );
+
+        $porEstado = $base(['status'])->selectRaw('status, COUNT(*) as total')->groupBy('status')->pluck('total', 'status');
+        $estados = collect(array_keys(FixedAsset::STATUSES))
+            ->map(fn ($estado) => ['value' => $estado, 'count' => (int) ($porEstado[$estado] ?? 0)])
+            ->all();
+
+        $sinFiltroResponsable = $base(['assigned']);
+        $conResponsable = (clone $sinFiltroResponsable)->whereHas('asignacionActiva')->count();
+        $totalResponsable = (clone $sinFiltroResponsable)->count();
+
+        $sinFiltroValor = $base(['has_value']);
+        $conValor = (clone $sinFiltroValor)->whereNotNull('purchase_value')->count();
+        $totalValor = (clone $sinFiltroValor)->count();
+
+        $anios = [];
+        foreach (array_keys(self::RANGOS_ANIO) as $clave) {
+            $consulta = $base(['year']);
+            $this->aplicarRangosAnio($consulta, [$clave]);
+            $anios[] = ['value' => $clave, 'count' => $consulta->count()];
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'total' => $base()->count(),
+                'status' => $estados,
+                'category' => $this->conteoPorRelacion($base(['category']), 'category_id', AssetCategory::class, $this->lista($request, 'category_id')),
+                'entity' => $this->conteoPorRelacion($base(['entity']), 'entity_id', Entity::class, $this->lista($request, 'entity_id')),
+                'assigned' => [
+                    ['value' => 'si', 'count' => $conResponsable],
+                    ['value' => 'no', 'count' => $totalResponsable - $conResponsable],
+                ],
+                'has_value' => [
+                    ['value' => 'si', 'count' => $conValor],
+                    ['value' => 'no', 'count' => $totalValor - $conValor],
+                ],
+                'year' => $anios,
+                'without_date' => $base(['year'])->whereNull('purchase_date')->count(),
+            ],
+        ]);
+    }
+
+    /**
+     * Conteo por una relación (tipo, ubicación) con su nombre, ordenado por nombre.
+     * Los ids seleccionados que no tienen activos salen con conteo 0 para que su
+     * casilla y su chip sigan existiendo.
+     *
+     * @param  class-string<\Illuminate\Database\Eloquent\Model>  $modelo
+     * @param  array<int, string>  $seleccionados
+     * @return array<int, array{value: string, label: string, count: int}>
+     */
+    private function conteoPorRelacion(Builder $query, string $columna, string $modelo, array $seleccionados): array
+    {
+        $conteos = $query->whereNotNull($columna)
+            ->selectRaw("{$columna}, COUNT(*) as total")
+            ->groupBy($columna)
+            ->pluck('total', $columna);
+
+        $ids = $conteos->keys()->merge($seleccionados)->unique()->values();
+        if ($ids->isEmpty()) {
+            return [];
+        }
+
+        $nombres = $modelo::whereIn('id', $ids)->pluck('name', 'id');
+
+        return $ids
+            ->filter(fn ($id) => $nombres->has($id))
+            ->map(fn ($id) => [
+                'value' => (string) $id,
+                'label' => $nombres[$id],
+                'count' => (int) ($conteos[$id] ?? 0),
+            ])
+            ->sortBy('label', SORT_NATURAL | SORT_FLAG_CASE)
+            ->values()
+            ->all();
     }
 
     public function store(Request $request): JsonResponse
