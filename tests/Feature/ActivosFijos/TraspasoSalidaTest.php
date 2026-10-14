@@ -2,16 +2,20 @@
 
 namespace Tests\Feature\ActivosFijos;
 
+use App\Models\Area;
 use App\Models\Branch;
 use App\Models\Enterprise;
 use App\Models\Entity;
 use App\Models\FixedAsset;
 use App\Models\FixedAssetDisposal;
 use App\Models\User;
+use App\Services\ActivosFijos\AsignadorActivos;
 use App\Services\ActivosFijos\RegistradorSalidaActivo;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Tests\Concerns\CreatesAssetFixtures;
+use Tests\Concerns\CreatesAssignmentFixtures;
 use Tests\Concerns\CreatesDepreciacionFixtures;
 use Tests\Concerns\CreatesSalidaFixtures;
 use Tests\TestCase;
@@ -20,6 +24,7 @@ class TraspasoSalidaTest extends TestCase
 {
     use RefreshDatabase;
     use CreatesAssetFixtures;
+    use CreatesAssignmentFixtures;
     use CreatesDepreciacionFixtures;
     use CreatesSalidaFixtures;
 
@@ -158,5 +163,82 @@ class TraspasoSalidaTest extends TestCase
             'destination_branch_id' => $sucursal->id,
             'destination_entity_id' => $entidad->id,
         ]), 'code', [$sinPrefijo->id]);
+    }
+
+    public function test_el_area_destino_se_copia_si_pertenece_a_la_entidad_receptora(): void
+    {
+        $area = Area::create(['code' => 'ARE-GE', 'name' => 'Sistemas', 'slug' => 'sistemas-ge', 'is_active' => true]);
+        DB::table('entity_area')->insert([
+            'entity_id' => $this->entidadGe->id, 'area_id' => $area->id, 'is_active' => true,
+            'allows_inventory' => true, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $origen = $this->crearActivoDepreciable();
+
+        $salida = $this->registrador->registrar($origen, $this->datosTraspaso(['destination_area_id' => $area->id]), $this->usuario, [$this->corporativo->id]);
+
+        $this->assertSame($area->id, FixedAsset::findOrFail($salida->destination_asset_id)->area_id);
+    }
+
+    public function test_un_area_que_no_es_de_la_entidad_receptora_se_rechaza(): void
+    {
+        $ajena = Area::create(['code' => 'ARE-X', 'name' => 'Sin entidad', 'slug' => 'sin-entidad', 'is_active' => true]);
+        $origen = $this->crearActivoDepreciable();
+
+        $this->assertTraspasoRechazado($origen, $this->datosTraspaso(['destination_area_id' => $ajena->id]), 'destination_area_id');
+    }
+
+    public function test_el_traspaso_de_un_activo_asignado_devuelve_la_asignacion_y_el_recibido_llega_libre(): void
+    {
+        $origen = $this->crearActivoDepreciable();
+        $empleado = $this->crearEmpleado($this->enterprise);
+        $asignacion = app(AsignadorActivos::class)->asignar(
+            $origen,
+            $this->datosAsignacion('employee', $empleado->id, ['assigned_at' => '2026-03-01']),
+            $this->usuario,
+        );
+        $this->assertSame('en_uso', $origen->fresh()->status);
+
+        $salida = $this->registrador->registrar($origen, $this->datosTraspaso(), $this->usuario, [$this->corporativo->id]);
+
+        $asignacion->refresh();
+        $this->assertSame('2026-05-20', $asignacion->returned_at->toDateString());
+        $this->assertSame('en_uso', $salida->previous_status);
+        $this->assertSame('baja', $origen->fresh()->status);
+
+        $destino = FixedAsset::findOrFail($salida->destination_asset_id);
+        $this->assertSame('disponible', $destino->status);
+        $this->assertSame(0, $destino->asignaciones()->count());
+        $this->assertNull($destino->asignacionActiva);
+    }
+
+    public function test_si_falla_el_alta_en_la_receptora_el_consecutivo_no_avanza(): void
+    {
+        $primero = $this->registrador->registrar($this->crearActivoDepreciable(), $this->datosTraspaso(), $this->usuario, [$this->corporativo->id]);
+        $this->assertSame('GE-AF-000001', FixedAsset::findOrFail($primero->destination_asset_id)->code);
+        $origen = $this->crearActivoDepreciable();
+
+        // El código ya se tomó cuando se crea el activo: se hace fallar justo ahí.
+        $falla = true;
+        FixedAsset::creating(function () use (&$falla) {
+            if ($falla) {
+                throw new \RuntimeException('Falla simulada del alta.');
+            }
+        });
+
+        try {
+            $this->registrador->registrar($origen, $this->datosTraspaso(), $this->usuario, [$this->corporativo->id]);
+            $this->fail('El traspaso debió fallar.');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('Falla simulada del alta.', $e->getMessage());
+        }
+
+        $this->assertSame(1, (int) DB::table('fixed_asset_sequences')->where('enterprise_id', $this->corporativo->id)->value('last_number'));
+        $this->assertSame('en_uso', $origen->fresh()->status);
+        $this->assertSame(1, FixedAssetDisposal::count());
+
+        // El siguiente traspaso exitoso toma el número 2, sin hueco.
+        $falla = false;
+        $segundo = $this->registrador->registrar($origen, $this->datosTraspaso(), $this->usuario, [$this->corporativo->id]);
+        $this->assertSame('GE-AF-000002', FixedAsset::findOrFail($segundo->destination_asset_id)->code);
     }
 }

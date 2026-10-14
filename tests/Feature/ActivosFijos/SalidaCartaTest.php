@@ -7,6 +7,7 @@ use App\Models\FixedAsset;
 use App\Models\FixedAssetDisposal;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\Sanctum;
 use Tests\Concerns\CreatesAssetFixtures;
@@ -180,10 +181,123 @@ class SalidaCartaTest extends TestCase
 
         $filas = ActivityLog::where('model', 'FixedAssetDisposal')->get();
         $this->assertNotEmpty($filas);
+        $this->assertTrue(
+            $filas->contains(fn ($fila) => $fila->action === 'update' && array_key_exists('signed_uploaded_at', $fila->new_values ?? [])),
+            'Debe existir una fila update de la bitácora con signed_uploaded_at.',
+        );
         foreach ($filas as $fila) {
             $contenido = json_encode($fila->old_values).json_encode($fila->new_values);
             $this->assertStringNotContainsString('fixed-asset-disposals/', $contenido);
             $this->assertStringNotContainsString($ruta, $contenido);
         }
+    }
+
+    public function test_la_subida_de_la_carta_firmada_deja_una_fila_update_en_la_bitacora(): void
+    {
+        Sanctum::actingAs($this->usuarioSalidas($this->enterprise, ['view', 'create']));
+
+        $this->postJson(self::URL_SALIDAS."/{$this->venta->id}/carta-firmada", ['file' => $this->pdf()])->assertOk();
+
+        $actualizaciones = ActivityLog::where('model', 'FixedAssetDisposal')
+            ->where('model_id', $this->venta->id)->where('action', 'update')->get();
+        $this->assertCount(1, $actualizaciones);
+        $nuevos = $actualizaciones->first()->new_values;
+        $this->assertArrayHasKey('signed_uploaded_at', $nuevos);
+        $this->assertArrayHasKey('signed_uploaded_by', $nuevos);
+        $this->assertArrayNotHasKey('signed_document_path', $nuevos);
+        $this->assertArrayNotHasKey('signed_document_path', $actualizaciones->first()->old_values);
+    }
+
+    public function test_una_salida_ajena_responde_404_antes_que_403_en_la_carta_y_la_carta_firmada(): void
+    {
+        $sbp = $this->crearEmpresaActivos('splendidbyporvenir', 'Splendid by Porvenir', 'SBP');
+        $ajena = $this->crearSalidaDirecta(
+            FixedAsset::create($this->validFixedAssetPayload(['enterprise_id' => $sbp->id, 'code' => 'SBP-AF-000001'])),
+            ['type' => 'venta', 'sale_price' => '1.00', 'buyer_name' => 'X'],
+        );
+
+        // Sin `view`: el 404 de la empresa ajena va antes que el 403 del permiso.
+        Sanctum::actingAs($this->usuarioSalidas($this->enterprise, ['create']));
+        $this->getJson(self::URL_SALIDAS."/{$ajena->id}/carta")->assertNotFound();
+        $this->getJson(self::URL_SALIDAS."/{$ajena->id}/carta-firmada")->assertNotFound();
+
+        // Sin `create`: igual al subir.
+        Sanctum::actingAs($this->usuarioSalidas($this->enterprise, ['view']));
+        $this->postJson(self::URL_SALIDAS."/{$ajena->id}/carta-firmada", ['file' => $this->pdf()])->assertNotFound();
+
+        Storage::disk('local')->assertDirectoryEmpty('/');
+    }
+
+    public function test_un_archivo_invalido_no_deja_huerfanos_ni_pisa_la_carta_anterior(): void
+    {
+        Sanctum::actingAs($this->usuarioSalidas($this->enterprise, ['view', 'create']));
+        $url = self::URL_SALIDAS."/{$this->venta->id}/carta-firmada";
+
+        $this->postJson($url, ['file' => UploadedFile::fake()->create('virus.exe', 10)])->assertStatus(422);
+        $this->postJson($url, ['file' => $this->pdf('grande.pdf', 11000)])->assertStatus(422);
+        $this->assertSame([], Storage::disk('local')->allFiles());
+
+        $this->postJson($url, ['file' => $this->pdf()])->assertOk();
+        $vigente = $this->venta->fresh()->signed_document_path;
+
+        $this->postJson($url, ['file' => UploadedFile::fake()->create('virus.exe', 10)])->assertStatus(422);
+
+        $this->assertSame([$vigente], Storage::disk('local')->allFiles());
+        $this->assertSame($vigente, $this->venta->fresh()->signed_document_path);
+    }
+
+    public function test_si_falla_el_guardado_se_borra_el_archivo_nuevo_y_se_conserva_el_anterior(): void
+    {
+        Sanctum::actingAs($this->usuarioSalidas($this->enterprise, ['view', 'create']));
+        $url = self::URL_SALIDAS."/{$this->venta->id}/carta-firmada";
+        $this->postJson($url, ['file' => $this->pdf()])->assertOk();
+        $vigente = $this->venta->fresh()->signed_document_path;
+
+        FixedAssetDisposal::updating(function () {
+            throw new \RuntimeException('Falla simulada del guardado.');
+        });
+        $this->withoutExceptionHandling();
+
+        try {
+            $this->postJson($url, ['file' => $this->pdf('nueva.pdf')]);
+            $this->fail('El guardado debió fallar.');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('Falla simulada del guardado.', $e->getMessage());
+        } finally {
+            FixedAssetDisposal::flushEventListeners();
+        }
+
+        $this->assertSame([$vigente], Storage::disk('local')->allFiles());
+        $this->assertSame($vigente, $this->venta->fresh()->signed_document_path);
+    }
+
+    public function test_la_descarga_de_la_carta_firmada_trae_su_tipo_y_nosniff(): void
+    {
+        Sanctum::actingAs($this->usuarioSalidas($this->enterprise, ['view', 'create']));
+        $this->postJson(self::URL_SALIDAS."/{$this->venta->id}/carta-firmada", ['file' => $this->pdf()])->assertOk();
+
+        $respuesta = $this->get(self::URL_SALIDAS."/{$this->venta->id}/carta-firmada")->assertOk();
+
+        $this->assertStringContainsString('application/pdf', $respuesta->headers->get('Content-Type'));
+        $respuesta->assertHeader('X-Content-Type-Options', 'nosniff');
+    }
+
+    public function test_la_carta_de_una_salida_sin_copia_del_activo_no_falla(): void
+    {
+        Sanctum::actingAs($this->usuarioSalidas($this->enterprise, ['view']));
+
+        // Sin llaves en la copia (arreglo vacío) y con el literal JSON `null`.
+        $this->venta->update(['asset_snapshot' => []]);
+        $this->getJson(self::URL_SALIDAS."/{$this->venta->id}/carta")
+            ->assertOk()
+            ->assertJsonPath('data.folio', 'SIN-CODIGO-V01')
+            ->assertJsonPath('data.activo', [])
+            ->assertJsonPath('data.venta.comprador.nombre', 'Comercial Rivera S.A.');
+
+        DB::table('fixed_asset_disposals')->where('id', $this->venta->id)->update(['asset_snapshot' => 'null']);
+        $this->getJson(self::URL_SALIDAS."/{$this->venta->id}/carta")
+            ->assertOk()
+            ->assertJsonPath('data.folio', 'SIN-CODIGO-V01')
+            ->assertJsonPath('data.activo', []);
     }
 }
