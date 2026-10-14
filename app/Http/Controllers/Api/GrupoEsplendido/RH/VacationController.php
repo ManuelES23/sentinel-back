@@ -3,416 +3,182 @@
 namespace App\Http\Controllers\Api\GrupoEsplendido\RH;
 
 use App\Http\Controllers\Controller;
-use App\Events\VacationRequestUpdated;
-use App\Models\VacationRequest;
-use App\Models\VacationBalance;
 use App\Models\Employee;
+use App\Models\Enterprise;
+use App\Models\VacationBalance;
+use App\Models\VacationRequest;
+use App\Models\VacationRequestApproval;
+use App\Services\RH\AprobadorVacaciones;
+use App\Services\RH\VacationRequestService;
 use App\Services\VacationCalculatorService;
-use App\Services\NotificationService;
-use App\Services\ApprovalNotificationService;
+use App\Traits\CRM\VerificaPermisoSubmodulo;
+use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\DB;
 
+/**
+ * Vacaciones desde RH de Grupo Espléndido. Las reglas viven en
+ * VacationRequestService; aquí solo se validan la entrada y los permisos
+ * del submódulo RH → Gestión → Vacaciones (view/create/edit/aprobar).
+ */
 class VacationController extends Controller
 {
-    /**
-     * Listar solicitudes de vacaciones
-     */
+    use VerificaPermisoSubmodulo;
+
+    private const RELACIONES = ['employee.enterprise', 'employee.position', 'approver', 'approvals.decider:id,name'];
+
+    public function __construct(private VacationRequestService $vacaciones) {}
+
     public function index(Request $request): JsonResponse
     {
-        $query = VacationRequest::with(['employee.enterprise', 'employee.position', 'approver']);
+        $this->exigir('view');
 
-        // Filtrar por empresa
-        if ($request->has('enterprise_id')) {
-            $query->where('enterprise_id', $request->enterprise_id);
-        }
+        $vacations = VacationRequest::with(self::RELACIONES)
+            ->when($request->has('enterprise_id'), fn ($q) => $q->where('enterprise_id', $request->enterprise_id))
+            ->when($request->has('employee_id'), fn ($q) => $q->where('employee_id', $request->employee_id))
+            ->when($request->has('status'), fn ($q) => $q->where('status', $request->status))
+            ->when($request->has('year'), fn ($q) => $q->forYear((int) $request->year))
+            ->when($request->has('start_date') && $request->has('end_date'), fn ($q) => $q
+                ->whereDate('start_date', '<=', $request->end_date)
+                ->whereDate('end_date', '>=', $request->start_date))
+            ->orderBy('created_at', 'desc')
+            ->get()
+            ->each->append(['status_label', 'status_color']);
 
-        // Filtrar por empleado
-        if ($request->has('employee_id')) {
-            $query->where('employee_id', $request->employee_id);
-        }
-
-        // Filtrar por estado
-        if ($request->has('status')) {
-            $query->where('status', $request->status);
-        }
-
-        // Filtrar por año
-        if ($request->has('year')) {
-            $query->forYear($request->year);
-        }
-
-        // Filtrar por rango de fechas
-        if ($request->has('start_date') && $request->has('end_date')) {
-            $query->inDateRange($request->start_date, $request->end_date);
-        }
-
-        $query->orderBy('created_at', 'desc');
-
-        $vacations = $query->get();
-
-        // Agregar accessors
-        $vacations->each(function ($vacation) {
-            $vacation->append(['status_label', 'status_color']);
-        });
-
-        return response()->json([
-            'success' => true,
-            'data' => $vacations,
-        ]);
+        return response()->json(['success' => true, 'data' => $vacations]);
     }
 
-    /**
-     * Crear solicitud de vacaciones
-     */
     public function store(Request $request): JsonResponse
     {
+        $this->exigir('create');
+
         $validated = $request->validate([
             'employee_id' => 'required|exists:employees,id',
-            'start_date' => 'required|date|after_or_equal:today',
-            'end_date' => 'required|date|after_or_equal:start_date',
+            'start_date' => 'required|date',
+            'end_date' => 'required|date',
             'reason' => 'nullable|string|max:500',
-            'vacation_year' => 'nullable|integer|min:2020|max:2100',
+            'omitir_antiguedad' => 'sometimes|boolean',
         ]);
 
-        $employee = Employee::findOrFail($validated['employee_id']);
-
-        // Calcular días solicitados (excluyendo fines de semana)
-        $startDate = \Carbon\Carbon::parse($validated['start_date']);
-        $endDate = \Carbon\Carbon::parse($validated['end_date']);
-        $daysRequested = $this->calculateBusinessDays($startDate, $endDate);
-
-        // Año del período vacacional
-        $vacationYear = $validated['vacation_year'] ?? now()->year;
-
-        // Obtener información de vacaciones usando el servicio (cálculo acumulado)
-        $vacationInfo = VacationCalculatorService::getEmployeeVacationInfo($employee);
-        
-        // Días disponibles totales (acumulados de todos los años)
-        $availableDays = $vacationInfo['accumulated']['total_available_days'] ?? 0;
-
-        // También crear/actualizar el balance del año para tracking
-        $balance = VacationBalance::firstOrCreate(
-            [
-                'employee_id' => $employee->id,
-                'year' => $vacationYear,
-            ],
-            [
-                'entitled_days' => VacationBalance::calculateEntitledDays(
-                    $employee->hire_date ? $employee->hire_date->diffInYears(now()) : 0
-                ),
-                'used_days' => 0,
-                'pending_days' => 0,
-                'carried_over' => 0,
-            ]
+        $vacation = $this->vacaciones->crear(
+            Employee::findOrFail($validated['employee_id']),
+            Carbon::parse($validated['start_date']),
+            Carbon::parse($validated['end_date']),
+            $validated['reason'] ?? null,
+            VacationRequest::SOURCE_RH,
+            Auth::user(),
+            ['permitir_pasado' => true, 'omitir_antiguedad' => (bool) ($validated['omitir_antiguedad'] ?? false)],
         );
-
-        if ($daysRequested > $availableDays) {
-            return response()->json([
-                'success' => false,
-                'message' => "No tiene suficientes días disponibles. Disponibles: {$availableDays}, Solicitados: {$daysRequested}",
-            ], 422);
-        }
-
-        // Verificar que no se traslape con otras solicitudes
-        $overlapping = VacationRequest::where('employee_id', $employee->id)
-            ->whereIn('status', ['pending', 'approved'])
-            ->inDateRange($validated['start_date'], $validated['end_date'])
-            ->exists();
-
-        if ($overlapping) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Ya existe una solicitud de vacaciones en ese período',
-            ], 422);
-        }
-
-        DB::beginTransaction();
-        try {
-            $vacation = VacationRequest::create([
-                'employee_id' => $employee->id,
-                'enterprise_id' => $employee->enterprise_id,
-                'start_date' => $validated['start_date'],
-                'end_date' => $validated['end_date'],
-                'days_requested' => $daysRequested,
-                'reason' => $validated['reason'] ?? null,
-                'vacation_year' => $vacationYear,
-                'status' => 'pending',
-                'created_by' => Auth::id(),
-            ]);
-
-            // Actualizar días pendientes en el balance
-            $balance->increment('pending_days', $daysRequested);
-
-            DB::commit();
-
-            $vacation->load(['employee.enterprise', 'employee.position']);
-            $vacation->append(['status_label', 'status_color']);
-
-            // Notificar a los aprobadores del departamento correspondiente
-            $employee->load('position', 'department');
-            ApprovalNotificationService::notifyApprovers(
-                'vacation_requests',
-                $employee,
-                'Nueva solicitud de vacaciones',
-                $employee->full_name . ' ha solicitado ' . $daysRequested . ' día(s) de vacaciones del ' .
-                    $startDate->format('d/m/Y') . ' al ' . $endDate->format('d/m/Y'),
-                '/profile?tab=approvals',
-                'vacation'
-            );
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Solicitud de vacaciones creada exitosamente',
-                'data' => $vacation,
-            ], 201);
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json([
-                'success' => false,
-                'message' => 'Error al crear la solicitud: ' . $e->getMessage(),
-            ], 500);
-        }
-    }
-
-    /**
-     * Mostrar solicitud
-     */
-    public function show(VacationRequest $vacation): JsonResponse
-    {
-        $vacation->load(['employee.enterprise', 'employee.position', 'approver', 'creator']);
-        $vacation->append(['status_label', 'status_color']);
 
         return response()->json([
             'success' => true,
-            'data' => $vacation,
-        ]);
+            'message' => 'Solicitud de vacaciones creada exitosamente',
+            'data' => $this->presentar($vacation),
+        ], 201);
     }
 
-    /**
-     * Actualizar solicitud (solo si está pendiente)
-     */
+    public function show(VacationRequest $vacation): JsonResponse
+    {
+        $this->exigir('view');
+
+        return response()->json(['success' => true, 'data' => $this->presentar($vacation->load('creator'))]);
+    }
+
     public function update(Request $request, VacationRequest $vacation): JsonResponse
     {
-        if ($vacation->status !== 'pending') {
-            return response()->json([
-                'success' => false,
-                'message' => 'Solo se pueden modificar solicitudes pendientes',
-            ], 422);
-        }
+        $this->exigir('edit');
 
         $validated = $request->validate([
-            'start_date' => 'sometimes|required|date|after_or_equal:today',
-            'end_date' => 'sometimes|required|date|after_or_equal:start_date',
+            'start_date' => 'sometimes|required|date',
+            'end_date' => 'sometimes|required|date',
             'reason' => 'nullable|string|max:500',
         ]);
 
-        // Si cambian las fechas, recalcular días
-        if (isset($validated['start_date']) || isset($validated['end_date'])) {
-            $startDate = \Carbon\Carbon::parse($validated['start_date'] ?? $vacation->start_date);
-            $endDate = \Carbon\Carbon::parse($validated['end_date'] ?? $vacation->end_date);
-            $newDays = $this->calculateBusinessDays($startDate, $endDate);
-
-            // Obtener días disponibles usando cálculo acumulado
-            $employee = $vacation->employee;
-            $vacationInfo = VacationCalculatorService::getEmployeeVacationInfo($employee);
-            $availableDays = $vacationInfo['accumulated']['total_available_days'] ?? 0;
-            
-            // Ajustar: sumar los días de esta solicitud que ya están pendientes
-            $availableDays += $vacation->days_requested;
-
-            $diff = $newDays - $vacation->days_requested;
-            
-            if ($newDays > $availableDays) {
-                return response()->json([
-                    'success' => false,
-                    'message' => "No tiene suficientes días disponibles. Disponibles: {$availableDays}, Solicitados: {$newDays}",
-                ], 422);
-            }
-
-            // Ajustar balance de días pendientes
-            $balance = VacationBalance::where('employee_id', $vacation->employee_id)
-                ->where('year', $vacation->vacation_year)
-                ->first();
-
-            if ($balance) {
-                $balance->increment('pending_days', $diff);
-            }
-
-            $validated['days_requested'] = $newDays;
-        }
-
-        $vacation->update($validated);
-        $vacation->load(['employee.enterprise', 'employee.position']);
-        $vacation->append(['status_label', 'status_color']);
+        $vacation = $this->vacaciones->reprogramar(
+            $vacation,
+            Carbon::parse($validated['start_date'] ?? $vacation->start_date),
+            Carbon::parse($validated['end_date'] ?? $vacation->end_date),
+            $validated['reason'] ?? null,
+            ['permitir_pasado' => true, 'omitir_antiguedad' => true],
+        );
 
         return response()->json([
             'success' => true,
             'message' => 'Solicitud actualizada exitosamente',
-            'data' => $vacation,
+            'data' => $this->presentar($vacation),
         ]);
     }
 
-    /**
-     * Eliminar solicitud (solo si está pendiente)
-     */
     public function destroy(VacationRequest $vacation): JsonResponse
     {
+        $this->exigir('edit');
+
         if ($vacation->status !== 'pending') {
-            return response()->json([
-                'success' => false,
-                'message' => 'Solo se pueden eliminar solicitudes pendientes',
-            ], 422);
-        }
-
-        // Revertir días pendientes
-        $balance = VacationBalance::where('employee_id', $vacation->employee_id)
-            ->where('year', $vacation->vacation_year)
-            ->first();
-
-        if ($balance) {
-            $balance->decrement('pending_days', $vacation->days_requested);
+            return response()->json(['success' => false, 'message' => 'Solo se pueden eliminar solicitudes pendientes'], 422);
         }
 
         $vacation->delete();
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Solicitud eliminada exitosamente',
-        ]);
+        return response()->json(['success' => true, 'message' => 'Solicitud eliminada exitosamente']);
     }
 
-    /**
-     * Aprobar solicitud
-     */
+    /** Aprobar desde RH = resolver como RH en el paso que vaya. */
     public function approve(VacationRequest $vacation): JsonResponse
     {
-        if ($vacation->status !== 'pending') {
-            return response()->json([
-                'success' => false,
-                'message' => 'Solo se pueden aprobar solicitudes pendientes',
-            ], 422);
-        }
+        $this->exigir('aprobar');
 
-        $vacation->approve(Auth::user());
-        $vacation->load(['employee.enterprise', 'employee.position', 'approver', 'employee.user']);
-        $vacation->append(['status_label', 'status_color']);
-
-        // Notificar al empleado si tiene usuario asociado
-        if ($vacation->employee->user) {
-            NotificationService::toUser($vacation->employee->user)
-                ->withAction('/profile', 'Ver mis vacaciones')
-                ->vacation(
-                    '¡Vacaciones aprobadas!',
-                    "Tu solicitud de vacaciones del {$vacation->start_date->format('d/m/Y')} al {$vacation->end_date->format('d/m/Y')} ({$vacation->days_requested} días) ha sido aprobada."
-                );
-        }
-
-        // Broadcast para tiempo real
-        broadcast(new VacationRequestUpdated(
-            'approved',
-            $vacation->toArray(),
-            $vacation->employee->enterprise?->slug ?? 'grupoesplendido',
-            'administration',
-            'rh'
-        ))->toOthers();
+        $vacation = $this->vacaciones->resolverComoRh($vacation, Auth::user(), VacationRequestApproval::APPROVED);
 
         return response()->json([
             'success' => true,
             'message' => 'Solicitud aprobada exitosamente',
-            'data' => $vacation,
+            'data' => $this->presentar($vacation),
         ]);
     }
 
-    /**
-     * Rechazar solicitud
-     */
     public function reject(Request $request, VacationRequest $vacation): JsonResponse
     {
-        if ($vacation->status !== 'pending') {
-            return response()->json([
-                'success' => false,
-                'message' => 'Solo se pueden rechazar solicitudes pendientes',
-            ], 422);
-        }
+        $this->exigir('aprobar');
 
-        $validated = $request->validate([
-            'rejection_reason' => 'required|string|max:500',
-        ]);
-
-        // Revertir días pendientes
-        $balance = VacationBalance::where('employee_id', $vacation->employee_id)
-            ->where('year', $vacation->vacation_year)
-            ->first();
-
-        if ($balance) {
-            $balance->decrement('pending_days', $vacation->days_requested);
-        }
-
-        $vacation->reject(Auth::user(), $validated['rejection_reason']);
-        $vacation->load(['employee.enterprise', 'employee.position', 'approver', 'employee.user']);
-        $vacation->append(['status_label', 'status_color']);
-
-        // Notificar al empleado si tiene usuario asociado
-        if ($vacation->employee->user) {
-            NotificationService::toUser($vacation->employee->user)
-                ->high()
-                ->withAction('/profile', 'Ver detalles')
-                ->vacation(
-                    'Solicitud de vacaciones rechazada',
-                    "Tu solicitud del {$vacation->start_date->format('d/m/Y')} al {$vacation->end_date->format('d/m/Y')} fue rechazada. Motivo: {$validated['rejection_reason']}"
-                );
-        }
-
-        // Broadcast para tiempo real
-        broadcast(new VacationRequestUpdated(
-            'rejected',
-            $vacation->toArray(),
-            $vacation->employee->enterprise?->slug ?? 'grupoesplendido',
-            'administration',
-            'rh'
-        ))->toOthers();
+        $validated = $request->validate(['rejection_reason' => 'required|string|max:500']);
+        $vacation = $this->vacaciones->resolverComoRh($vacation, Auth::user(), VacationRequestApproval::REJECTED, $validated['rejection_reason']);
 
         return response()->json([
             'success' => true,
             'message' => 'Solicitud rechazada',
-            'data' => $vacation,
+            'data' => $this->presentar($vacation),
         ]);
     }
 
-    /**
-     * Cancelar solicitud
-     */
     public function cancel(VacationRequest $vacation): JsonResponse
     {
-        if (!in_array($vacation->status, ['pending', 'approved'])) {
-            return response()->json([
-                'success' => false,
-                'message' => 'No se puede cancelar esta solicitud',
-            ], 422);
-        }
+        $this->exigir('edit');
 
-        $vacation->load('employee.enterprise');
-        $vacation->cancel();
-        $vacation->append(['status_label', 'status_color']);
-
-        // Broadcast para tiempo real
-        broadcast(new VacationRequestUpdated(
-            'cancelled',
-            $vacation->toArray(),
-            $vacation->employee->enterprise?->slug ?? 'grupoesplendido',
-            'administration',
-            'rh'
-        ))->toOthers();
+        $vacation = $this->vacaciones->cancelar($vacation, VacationRequestService::CANCELA_RH);
 
         return response()->json([
             'success' => true,
             'message' => 'Solicitud cancelada',
-            'data' => $vacation,
+            'data' => $this->presentar($vacation),
         ]);
+    }
+
+    private function presentar(VacationRequest $vacation): VacationRequest
+    {
+        return $vacation->load(self::RELACIONES)->append(['status_label', 'status_color']);
+    }
+
+    private function exigir(string $permiso): void
+    {
+        $this->exigirPermisoSubmodulo(
+            (int) Enterprise::where('slug', AprobadorVacaciones::EMPRESA_CORPORATIVA)->value('id') ?: null,
+            'gestion',
+            'vacaciones',
+            $permiso,
+            'No tienes permiso para realizar esta acción en Vacaciones.',
+            'rh',
+        );
     }
 
     /**
@@ -420,6 +186,8 @@ class VacationController extends Controller
      */
     public function getBalance(Request $request): JsonResponse
     {
+        $this->exigir('view');
+
         $validated = $request->validate([
             'employee_id' => 'required|exists:employees,id',
             'year' => 'nullable|integer',
@@ -458,29 +226,12 @@ class VacationController extends Controller
     }
 
     /**
-     * Calcular días hábiles entre dos fechas
-     */
-    private function calculateBusinessDays(\Carbon\Carbon $startDate, \Carbon\Carbon $endDate): int
-    {
-        $days = 0;
-        $current = $startDate->copy();
-
-        while ($current <= $endDate) {
-            // Excluir sábados (6) y domingos (0)
-            if (!$current->isWeekend()) {
-                $days++;
-            }
-            $current->addDay();
-        }
-
-        return $days;
-    }
-
-    /**
      * Obtener información completa de vacaciones de un empleado según LFT México
      */
     public function getEmployeeVacationInfo(Employee $employee): JsonResponse
     {
+        $this->exigir('view');
+
         $info = VacationCalculatorService::getEmployeeVacationInfo($employee);
 
         return response()->json([
@@ -494,6 +245,8 @@ class VacationController extends Controller
      */
     public function getVacationTable(): JsonResponse
     {
+        $this->exigir('view');
+
         return response()->json([
             'success' => true,
             'data' => [
@@ -510,6 +263,8 @@ class VacationController extends Controller
      */
     public function calculateDays(Request $request): JsonResponse
     {
+        $this->exigir('view');
+
         $validated = $request->validate([
             'years_of_service' => 'required|integer|min:0|max:100',
         ]);
@@ -532,6 +287,8 @@ class VacationController extends Controller
      */
     public function initializeBalances(Request $request): JsonResponse
     {
+        $this->exigir('edit');
+
         $validated = $request->validate([
             'year' => 'nullable|integer|min:2020|max:2100',
         ]);
@@ -556,6 +313,8 @@ class VacationController extends Controller
      */
     public function recalculateBalance(Request $request, Employee $employee): JsonResponse
     {
+        $this->exigir('edit');
+
         $validated = $request->validate([
             'year' => 'nullable|integer|min:2020|max:2100',
         ]);
@@ -580,6 +339,8 @@ class VacationController extends Controller
      */
     public function applyAdjustment(Request $request, Employee $employee): JsonResponse
     {
+        $this->exigir('edit');
+
         $validated = $request->validate([
             'year' => 'nullable|integer|min:2020|max:2100',
             'adjustment_days' => 'required|integer|min:-365|max:365',
@@ -629,6 +390,8 @@ class VacationController extends Controller
      */
     public function getBalanceHistory(Employee $employee): JsonResponse
     {
+        $this->exigir('view');
+
         $balances = VacationBalance::where('employee_id', $employee->id)
             ->with('adjustedByUser')
             ->orderBy('year', 'desc')
