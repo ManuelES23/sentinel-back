@@ -118,6 +118,11 @@ class VacationController extends Controller
             return response()->json(['success' => false, 'message' => 'Solo se pueden eliminar solicitudes pendientes'], 422);
         }
 
+        // Las del portal o del perfil las pidió el empleado: se cancelan (con aviso), no se borran en silencio.
+        if ($vacation->source !== VacationRequest::SOURCE_RH) {
+            return response()->json(['success' => false, 'message' => 'Solo se pueden eliminar solicitudes capturadas por RH; cancela esta para avisar al empleado.'], 422);
+        }
+
         $vacation->delete();
 
         return response()->json(['success' => true, 'message' => 'Solicitud eliminada exitosamente']);

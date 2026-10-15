@@ -78,7 +78,7 @@ final class TextosVacaciones
             VacationNotification::EVENTO_APROBADA => "tu solicitud de vacaciones {$periodo} ({$dias}) fue APROBADA. ¡Disfruta tu descanso!",
             VacationNotification::EVENTO_RECHAZADA => "tu solicitud de vacaciones {$periodo} fue RECHAZADA. Motivo: "
                 .($solicitud->rejection_reason ?: 'sin motivo registrado').'. Si tienes dudas, acércate a Recursos Humanos.',
-            VacationNotification::EVENTO_CANCELADA_POR_RH => "tu solicitud de vacaciones {$periodo} fue CANCELADA por Recursos Humanos. Si tienes dudas, acércate a Recursos Humanos.",
+            VacationNotification::EVENTO_CANCELADA_POR_RH => "tu solicitud de vacaciones {$periodo} fue CANCELADA. Si tienes dudas, acércate a Recursos Humanos.",
             default => "recibimos tu solicitud de vacaciones {$periodo} ({$dias}). Te avisaremos cuando tenga respuesta. Puedes revisar el estado en ".config('vacaciones.portal_url'),
         };
 

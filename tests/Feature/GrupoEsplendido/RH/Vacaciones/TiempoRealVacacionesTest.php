@@ -51,6 +51,22 @@ class TiempoRealVacacionesTest extends TestCase
             && $e->module === 'gestion');
     }
 
+    public function test_el_evento_solo_lleva_los_campos_minimos_y_no_datos_personales_del_empleado(): void
+    {
+        Event::fake([VacationRequestUpdated::class]);
+        $lunes = today()->next(Carbon::MONDAY)->addWeeks(2);
+
+        app(VacationRequestService::class)->crear(
+            $this->empleado($this->empresa), $lunes, $lunes->copy()->addDays(4), null, VacationRequest::SOURCE_PORTAL,
+        );
+
+        Event::assertDispatched(VacationRequestUpdated::class, function (VacationRequestUpdated $e) {
+            $this->assertSame(['id', 'employee_id', 'status', 'current_step'], array_keys($e->data));
+
+            return true;
+        });
+    }
+
     public function test_un_usuario_de_rh_con_acceso_puede_unirse_al_canal_y_el_canal_anterior_no_existe(): void
     {
         $modulo = $this->submoduloVacaciones()->module;

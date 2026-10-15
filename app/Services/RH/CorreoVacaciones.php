@@ -20,20 +20,24 @@ class CorreoVacaciones
     /** Se llama después de confirmar la transacción de la solicitud. Nunca lanza. */
     public function avisar(VacationRequest $solicitud, string $evento): void
     {
-        $solicitud->loadMissing('employee');
-        if ($this->direccion($solicitud) === null) {
-            return;
-        }
-
-        DB::afterCommit(function () use ($solicitud, $evento) {
-            try {
-                config('vacaciones.correo_en_cola')
-                    ? EnviarCorreoVacacionesJob::dispatch($solicitud->id, $evento)
-                    : $this->enviar($solicitud, $evento);
-            } catch (Throwable $e) {
-                Log::warning('No se pudo despachar el correo de vacaciones', ['solicitud' => $solicitud->id, 'evento' => $evento, 'error' => $e->getMessage()]);
+        try {
+            $solicitud->loadMissing('employee');
+            if ($this->direccion($solicitud) === null) {
+                return;
             }
-        });
+
+            DB::afterCommit(function () use ($solicitud, $evento) {
+                try {
+                    config('vacaciones.correo_en_cola')
+                        ? EnviarCorreoVacacionesJob::dispatch($solicitud->id, $evento)
+                        : $this->enviar($solicitud, $evento);
+                } catch (Throwable $e) {
+                    Log::warning('No se pudo despachar el correo de vacaciones', ['solicitud' => $solicitud->id, 'evento' => $evento, 'error' => $e->getMessage()]);
+                }
+            });
+        } catch (Throwable $e) {
+            Log::warning('No se pudo preparar el correo de vacaciones', ['solicitud' => $solicitud->id, 'evento' => $evento, 'error' => $e->getMessage()]);
+        }
     }
 
     /** Envía y deja constancia en vacation_notifications (con el error, si hubo). */

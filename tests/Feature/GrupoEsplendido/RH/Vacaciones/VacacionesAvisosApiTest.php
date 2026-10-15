@@ -66,7 +66,7 @@ class VacacionesAvisosApiTest extends TestCase
         $this->getJson(self::RH."/{$rechazada->id}/whatsapp-mensaje")->assertJsonPath('data.evento', 'rechazada')
             ->assertJsonPath('data.texto', fn ($t) => str_contains($t, 'RECHAZADA') && str_contains($t, 'Sin cobertura'));
         $this->getJson(self::RH."/{$cancelada->id}/whatsapp-mensaje")->assertJsonPath('data.evento', 'cancelada_por_rh')
-            ->assertJsonPath('data.texto', fn ($t) => str_contains($t, 'CANCELADA'));
+            ->assertJsonPath('data.texto', fn ($t) => str_contains($t, 'CANCELADA') && ! str_contains($t, 'por Recursos Humanos'));
         $this->getJson(self::RH."/{$pendiente->id}/whatsapp-mensaje")->assertJsonPath('data.evento', 'recibida')
             ->assertJsonPath('data.texto', fn ($t) => str_contains($t, config('vacaciones.portal_url')));
     }
@@ -81,6 +81,19 @@ class VacacionesAvisosApiTest extends TestCase
         $this->getJson(self::BANDEJA."/{$solicitud->id}/whatsapp-mensaje")->assertForbidden();
         $this->postJson(self::BANDEJA."/{$solicitud->id}/avisos/whatsapp", ['evento' => 'aprobada'])->assertForbidden();
         $this->getJson(self::RH."/{$solicitud->id}/avisos")->assertForbidden();
+    }
+
+    public function test_con_solo_view_puede_ver_la_bitacora_pero_no_armar_ni_registrar_avisos_de_whatsapp(): void
+    {
+        $solicitud = $this->solicitud($this->empleado($this->empresa, ['mobile' => '6671234567']), 'approved', 3);
+        $soloVer = User::factory()->create();
+        $this->concederVacaciones($soloVer, 'view');
+        Sanctum::actingAs($soloVer);
+
+        $this->getJson(self::RH."/{$solicitud->id}/whatsapp-mensaje")->assertForbidden();
+        $this->postJson(self::RH."/{$solicitud->id}/avisos/whatsapp", ['evento' => 'aprobada'])->assertForbidden();
+        $this->assertDatabaseCount('vacation_notifications', 0);
+        $this->getJson(self::RH."/{$solicitud->id}/avisos")->assertOk();
     }
 
     public function test_quien_decidio_un_paso_puede_avisar_desde_la_bandeja_y_otro_no(): void

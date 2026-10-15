@@ -95,6 +95,8 @@ class FestivosApiTest extends TestCase
         $this->concederFestivos($this->rh, 'create');
 
         $this->postJson(self::BASE, ['date' => '25/12/2026', 'name' => 'Navidad'])->assertStatus(422)->assertJsonValidationErrors('date');
+        $this->postJson(self::BASE, ['date' => '1999-12-31', 'name' => 'Muy antiguo'])->assertStatus(422)->assertJsonValidationErrors('date');
+        $this->postJson(self::BASE, ['date' => '2101-01-01', 'name' => 'Muy lejano'])->assertStatus(422)->assertJsonValidationErrors('date');
         $this->postJson(self::BASE, ['date' => '2026-12-25', 'name' => ''])->assertStatus(422)->assertJsonValidationErrors('name');
         $this->postJson(self::BASE, ['date' => '2026-12-25', 'name' => 'X', 'enterprise_id' => 99999])->assertStatus(422)->assertJsonValidationErrors('enterprise_id');
     }

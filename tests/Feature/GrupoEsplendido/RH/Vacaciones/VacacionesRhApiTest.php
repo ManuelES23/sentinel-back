@@ -48,6 +48,22 @@ class VacacionesRhApiTest extends TestCase
         $this->getJson(self::BASE)->assertOk()->assertJsonPath('data.0.id', $solicitud->id);
     }
 
+    public function test_solo_se_eliminan_pendientes_capturadas_por_rh(): void
+    {
+        $this->concederVacaciones($this->rh, 'edit');
+        $empleado = $this->empleado($this->empresa);
+        $delPortal = $this->solicitud($empleado, 'pending', 3, ['source' => VacationRequest::SOURCE_PORTAL]);
+        $deRh = $this->solicitud($empleado, 'pending', 3, ['source' => VacationRequest::SOURCE_RH]);
+
+        $this->deleteJson(self::BASE."/{$delPortal->id}")
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Solo se pueden eliminar solicitudes capturadas por RH; cancela esta para avisar al empleado.');
+        $this->assertNotSoftDeleted('vacation_requests', ['id' => $delPortal->id]);
+
+        $this->deleteJson(self::BASE."/{$deRh->id}")->assertOk();
+        $this->assertSoftDeleted('vacation_requests', ['id' => $deRh->id]);
+    }
+
     public function test_rh_captura_fechas_pasadas_con_origen_rh(): void
     {
         $this->concederVacaciones($this->rh, 'create');

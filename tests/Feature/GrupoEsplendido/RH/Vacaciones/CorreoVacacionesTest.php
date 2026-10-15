@@ -10,6 +10,9 @@ use App\Models\SystemNotification;
 use App\Models\User;
 use App\Models\VacationNotification;
 use App\Models\VacationRequest;
+use App\Services\RH\AprobadorVacaciones;
+use App\Services\RH\AvisosVacaciones;
+use App\Services\RH\CadenaAprobacionVacaciones;
 use App\Services\RH\CorreoVacaciones;
 use App\Services\RH\VacationRequestService;
 use Carbon\Carbon;
@@ -127,6 +130,30 @@ class CorreoVacacionesTest extends TestCase
         $this->assertSame('email', $aviso->channel);
         $this->assertSame('recibida', $aviso->event);
         $this->assertStringContainsString('SMTP caído', $aviso->error);
+    }
+
+    public function test_si_el_tiempo_real_o_el_aviso_interno_fallan_la_operacion_sigue_y_el_correo_sale(): void
+    {
+        Mail::fake();
+        // Subclase registrada en el contenedor cuyo tiempo real y aviso interno lanzan. (Con
+        // BROADCAST_CONNECTION=null un listener de eventos no se invoca al emitir, por eso no se usa Event::listen.)
+        $this->app->bind(AvisosVacaciones::class, fn ($app) => new class($app->make(AprobadorVacaciones::class), $app->make(CadenaAprobacionVacaciones::class), $app->make(CorreoVacaciones::class)) extends AvisosVacaciones {
+            protected function emitir(string $accion, VacationRequest $solicitud): void
+            {
+                throw new \RuntimeException('Reverb caído');
+            }
+
+            protected function avisarAprobadoresDelPasoActual(VacationRequest $solicitud): void
+            {
+                throw new \RuntimeException('NotificationService caído');
+            }
+        });
+
+        $solicitud = $this->nueva($this->empleado($this->empresa, ['email' => 'ana@ejemplo.com']));
+
+        $this->assertSame('pending', $solicitud->fresh()->status);
+        Mail::assertSent(VacationStatusMail::class, fn ($m) => $m->hasTo('ana@ejemplo.com') && $m->evento === 'recibida');
+        $this->assertDatabaseHas('vacation_notifications', ['vacation_request_id' => $solicitud->id, 'event' => 'recibida', 'error' => null]);
     }
 
     public function test_con_la_cola_activa_despacha_el_trabajo_y_el_trabajo_envia(): void

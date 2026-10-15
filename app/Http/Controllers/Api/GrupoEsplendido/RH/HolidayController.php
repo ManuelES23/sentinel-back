@@ -109,7 +109,7 @@ class HolidayController extends Controller
     private function validar(Request $request): array
     {
         return $request->validate([
-            'date' => 'required|date_format:Y-m-d',
+            'date' => 'required|date_format:Y-m-d|after_or_equal:2000-01-01|before_or_equal:2100-12-31',
             'name' => 'required|string|max:100',
             'enterprise_id' => 'nullable|integer|exists:enterprises,id',
         ]);
