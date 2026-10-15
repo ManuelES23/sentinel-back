@@ -4,6 +4,7 @@ namespace App\Services\RH;
 
 use App\Models\ApprovalFlowStep;
 use App\Models\ApprovalProcess;
+use App\Models\Department;
 use App\Models\Employee;
 use App\Models\Enterprise;
 use App\Models\User;
@@ -17,14 +18,16 @@ use Illuminate\Support\Collection;
  * Quién puede decidir cada paso de la cadena de vacaciones (spec §5.3),
  * con el patrón de AprobadorOrdenCompra:
  * - Jefe directo: el reports_to del solicitante.
+ * - Jefe del departamento: el manager_id del departamento del solicitante.
+ * - Usuario específico: el user_id de la regla; no necesita ser empleado (si lo es, debe estar activo).
  * - Aprobador de la misma empresa: su regla (puesto o nivel) y su alcance por
  *   departamento (un solicitante sin departamento solo entra con alcance
  *   'enterprise').
  * - Corporativo (Grupo Espléndido) en otra empresa: solo por una regla de
  *   PUESTO para todas las empresas o para esa; el alcance es toda la empresa.
  * - Paso final de RH: quien tiene `aprobar` en RH → Gestión → Vacaciones.
- * Siempre: tener usuario y empleado activo, no ser el solicitante y no haber
- * decidido otro paso de la misma solicitud.
+ * Siempre: tener usuario y empleado activo (salvo el usuario específico sin
+ * empleado), no ser el solicitante y no haber decidido otro paso de la misma solicitud.
  */
 class AprobadorVacaciones
 {
@@ -41,7 +44,7 @@ class AprobadorVacaciones
         }
 
         return $proceso->activeSteps()
-            ->with('position:id,name')
+            ->with(['position:id,name', 'user:id,name'])
             ->where(fn ($q) => $q->whereNull('enterprise_id')->orWhere('enterprise_id', $empresaId))
             ->get()
             ->groupBy('step_order')
@@ -70,7 +73,7 @@ class AprobadorVacaciones
         }
 
         $solicitante = $solicitud->employee;
-        if (! $aprobador || $aprobador->status !== Employee::STATUS_ACTIVE || ! $solicitante) {
+        if (! $solicitante) {
             return false;
         }
 
@@ -78,7 +81,7 @@ class AprobadorVacaciones
 
         return $this->reglasDelPaso($paso)
             ->filter(fn (ApprovalFlowStep $regla) => (bool) $regla->{$bandera})
-            ->contains(fn (ApprovalFlowStep $regla) => $this->cumpleRegla($aprobador, $solicitante, $regla));
+            ->contains(fn (ApprovalFlowStep $regla) => $this->cumpleRegla($usuario, $aprobador, $solicitante, $regla));
     }
 
     /** @return Collection<int, User> usuarios que hoy podrían aprobar el paso */
@@ -98,9 +101,7 @@ class AprobadorVacaciones
         return $this->reglasDelPaso($paso)
             ->flatMap(fn (ApprovalFlowStep $regla) => $this->candidatosDeRegla($regla, $solicitante))
             ->unique('id')
-            ->filter(fn (Employee $empleado) => $empleado->user && $this->puedeDecidir($empleado->user, $solicitud, $paso))
-            ->map(fn (Employee $empleado) => $empleado->user)
-            ->unique('id')
+            ->filter(fn (User $usuario) => $this->puedeDecidir($usuario, $solicitud, $paso))
             ->values();
     }
 
@@ -141,10 +142,27 @@ class AprobadorVacaciones
             ->get();
     }
 
-    private function cumpleRegla(Employee $aprobador, Employee $solicitante, ApprovalFlowStep $regla): bool
+    private function cumpleRegla(User $usuario, ?Employee $aprobador, Employee $solicitante, ApprovalFlowStep $regla): bool
     {
+        // El usuario específico puede no ser empleado; si lo es, no puede estar dado de baja.
+        if ($regla->approver_type === ApprovalFlowStep::TYPE_USER) {
+            return $regla->user_id !== null
+                && (int) $regla->user_id === (int) $usuario->id
+                && ($aprobador === null || $aprobador->status === Employee::STATUS_ACTIVE);
+        }
+
+        if (! $aprobador || $aprobador->status !== Employee::STATUS_ACTIVE) {
+            return false;
+        }
+
         if ($regla->approver_type === ApprovalFlowStep::TYPE_DIRECT_SUPERVISOR) {
             return $solicitante->reports_to !== null && (int) $solicitante->reports_to === (int) $aprobador->id;
+        }
+
+        if ($regla->approver_type === ApprovalFlowStep::TYPE_DEPARTMENT_MANAGER) {
+            $jefe = $this->jefeDelDepartamento($solicitante);
+
+            return $jefe !== null && $jefe === (int) $aprobador->id;
         }
 
         if ((int) $aprobador->enterprise_id !== (int) $solicitante->enterprise_id) {
@@ -176,16 +194,41 @@ class AprobadorVacaciones
         return (int) $aprobador->department_id === (int) $solicitante->department_id;
     }
 
-    /** @return Collection<int, Employee> */
+    /**
+     * manager_id del departamento del solicitante. Las listas cargan el departamento con pocas
+     * columnas (`department:id,name`), así que si manager_id no vino se consulta en vez de tomarlo por nulo.
+     */
+    private function jefeDelDepartamento(Employee $solicitante): ?int
+    {
+        if ($solicitante->department_id === null) {
+            return null;
+        }
+
+        $departamento = $solicitante->relationLoaded('department') ? $solicitante->department : null;
+        $jefe = $departamento && array_key_exists('manager_id', $departamento->getAttributes())
+            ? $departamento->manager_id
+            : Department::whereKey($solicitante->department_id)->value('manager_id');
+
+        return $jefe === null ? null : (int) $jefe;
+    }
+
+    /** @return Collection<int, User> usuarios que la regla podría admitir (la decisión final es puedeDecidir) */
     private function candidatosDeRegla(ApprovalFlowStep $regla, Employee $solicitante): Collection
     {
+        if ($regla->approver_type === ApprovalFlowStep::TYPE_USER) {
+            return $regla->user_id ? User::whereKey($regla->user_id)->get() : collect();
+        }
+
         $base = Employee::with(['user', 'position'])
             ->where('status', Employee::STATUS_ACTIVE)
             ->whereNotNull('user_id');
 
-        return match ($regla->approver_type) {
+        $empleados = match ($regla->approver_type) {
             ApprovalFlowStep::TYPE_DIRECT_SUPERVISOR => $solicitante->reports_to
                 ? $base->whereKey($solicitante->reports_to)->get()
+                : collect(),
+            ApprovalFlowStep::TYPE_DEPARTMENT_MANAGER => $this->jefeDelDepartamento($solicitante)
+                ? $base->whereKey($this->jefeDelDepartamento($solicitante))->get()
                 : collect(),
             'position' => $base->where('position_id', $regla->position_id)
                 ->whereIn('enterprise_id', array_values(array_filter([(int) $solicitante->enterprise_id, $this->corporativoId()])))
@@ -195,6 +238,8 @@ class AprobadorVacaciones
                 ->get(),
             default => collect(),
         };
+
+        return $empleados->map(fn (Employee $empleado) => $empleado->user)->filter()->values();
     }
 
     private function decidioOtroPaso(User $usuario, VacationRequest $solicitud, VacationRequestApproval $paso): bool
