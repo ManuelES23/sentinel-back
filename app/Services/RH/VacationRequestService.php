@@ -123,9 +123,7 @@ class VacationRequestService
 
     public function reprogramar(VacationRequest $solicitud, Carbon $inicio, Carbon $fin, ?string $motivo, array $opciones = []): VacationRequest
     {
-        $cadenaReiniciada = false;
-
-        $solicitud = DB::transaction(function () use ($solicitud, $inicio, $fin, $motivo, $opciones, &$cadenaReiniciada) {
+        $solicitud = DB::transaction(function () use ($solicitud, $inicio, $fin, $motivo, $opciones) {
             $solicitud = $this->bloquearPendiente($solicitud);
             $empleado = Employee::whereKey($solicitud->employee_id)->lockForUpdate()->firstOrFail();
             $calculo = $this->exigirSinErrores($this->calcular($empleado, $inicio, $fin, ['excluir_id' => $solicitud->id] + $opciones));
@@ -142,15 +140,13 @@ class VacationRequestService
             if ($solicitud->approvals()->where('decision', VacationRequestApproval::APPROVED)->exists()) {
                 $solicitud->approvals()->delete();
                 $this->cadena->construir($solicitud);
-                $cadenaReiniciada = true;
             }
 
             return $solicitud->fresh(['employee', 'approvals']);
         });
 
-        if ($cadenaReiniciada) {
-            $this->avisos->pasoAvanzado($solicitud->fresh(['employee.user', 'employee.enterprise', 'approvals']));
-        }
+        // Los aprobadores del paso actual vuelven a enterarse con las fechas nuevas (también si la cadena no se reinició).
+        $this->avisos->pasoAvanzado($solicitud->fresh(['employee.user', 'employee.enterprise', 'approvals']));
 
         return $solicitud;
     }
@@ -178,7 +174,7 @@ class VacationRequestService
             return $solicitud;
         });
 
-        $this->avisos->cancelada($solicitud->fresh(['employee.enterprise']));
+        $this->avisos->cancelada($solicitud->fresh(['employee.enterprise']), $quien);
 
         return $solicitud->fresh(['employee', 'approvals']);
     }

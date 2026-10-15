@@ -247,6 +247,19 @@ class MasterStructureSeeder extends Seeder
             ['name' => 'Incidencias', 'icon' => 'AlertTriangle', 'order' => 2, 'is_active' => true]
         );
         $this->command->info("    → Gestión: Incidencias");
+
+        Submodule::firstOrCreate(
+            ['slug' => 'festivos', 'module_id' => $rhGestion->id],
+            ['name' => 'Festivos', 'icon' => 'CalendarX', 'order' => 3, 'is_active' => true]
+        );
+        $this->command->info("    → Gestión: Festivos");
+
+        $this->ensureSubmodulePermissionTypes($rhGestion, 'festivos', [
+            ['slug' => 'view', 'name' => 'Ver', 'description' => 'Permite ver el catálogo de días festivos'],
+            ['slug' => 'create', 'name' => 'Crear', 'description' => 'Permite agregar festivos y cargar los oficiales del año'],
+            ['slug' => 'edit', 'name' => 'Editar', 'description' => 'Permite cambiar fecha, nombre o empresa de un festivo'],
+            ['slug' => 'delete', 'name' => 'Eliminar', 'description' => 'Permite eliminar festivos'],
+        ]);
     }
 
     /**

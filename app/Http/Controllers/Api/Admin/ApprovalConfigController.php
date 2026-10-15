@@ -161,6 +161,10 @@ class ApprovalConfigController extends Controller
             $request->merge(['position_id' => null, 'min_hierarchy_level' => null]);
         }
 
+        if ($request->input('approver_type') === ApprovalFlowStep::TYPE_DIRECT_SUPERVISOR && $process->code !== ApprovalProcess::VACATION_REQUESTS) {
+            return $this->soloVacaciones();
+        }
+
         $validated = $request->validate([
             'enterprise_id' => 'nullable|exists:enterprises,id',
             'step_order' => 'sometimes|integer|min:1',
@@ -206,6 +210,11 @@ class ApprovalConfigController extends Controller
             $request->merge(['position_id' => null, 'min_hierarchy_level' => null]);
         }
 
+        $tipo = $request->input('approver_type', $step->approver_type);
+        if ($tipo === ApprovalFlowStep::TYPE_DIRECT_SUPERVISOR && $process->code !== ApprovalProcess::VACATION_REQUESTS) {
+            return $this->soloVacaciones();
+        }
+
         $validated = $request->validate([
             'enterprise_id' => 'nullable|exists:enterprises,id',
             'step_order' => 'sometimes|integer|min:1',
@@ -246,6 +255,14 @@ class ApprovalConfigController extends Controller
             'success' => true,
             'message' => 'Regla eliminada exitosamente',
         ]);
+    }
+
+    private function soloVacaciones(): JsonResponse
+    {
+        return response()->json([
+            'success' => false,
+            'message' => '«Jefe directo» solo se puede usar en el proceso de vacaciones.',
+        ], 422);
     }
 
     // ===== DATOS AUXILIARES =====
