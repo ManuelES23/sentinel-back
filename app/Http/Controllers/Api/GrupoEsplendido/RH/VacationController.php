@@ -26,7 +26,7 @@ class VacationController extends Controller
 {
     use VerificaPermisoSubmodulo;
 
-    private const RELACIONES = ['employee.enterprise', 'employee.position', 'approver', 'approvals.decider:id,name'];
+    private const RELACIONES = ['employee.enterprise', 'employee.position', 'employee.department', 'approver', 'approvals.decider:id,name'];
 
     public function __construct(private VacationRequestService $vacaciones) {}
 
@@ -118,6 +118,11 @@ class VacationController extends Controller
             return response()->json(['success' => false, 'message' => 'Solo se pueden eliminar solicitudes pendientes'], 422);
         }
 
+        // Las del portal o del perfil las pidió el empleado: se cancelan (con aviso), no se borran en silencio.
+        if ($vacation->source !== VacationRequest::SOURCE_RH) {
+            return response()->json(['success' => false, 'message' => 'Solo se pueden eliminar solicitudes capturadas por RH; cancela esta para avisar al empleado.'], 422);
+        }
+
         $vacation->delete();
 
         return response()->json(['success' => true, 'message' => 'Solicitud eliminada exitosamente']);
@@ -167,6 +172,19 @@ class VacationController extends Controller
     private function presentar(VacationRequest $vacation): VacationRequest
     {
         return $vacation->load(self::RELACIONES)->append(['status_label', 'status_color']);
+    }
+
+    /** Qué puede hacer el usuario en Vacaciones; el front oculta lo demás (la API sigue respondiendo 403). */
+    public function misPermisos(): JsonResponse
+    {
+        $empresaId = (int) Enterprise::where('slug', AprobadorVacaciones::EMPRESA_CORPORATIVA)->value('id');
+
+        return response()->json([
+            'success' => true,
+            'data' => collect(['view', 'create', 'edit', 'aprobar'])->mapWithKeys(fn (string $permiso) => [
+                $permiso => $empresaId && $this->tienePermisoSubmodulo($empresaId, 'gestion', 'vacaciones', $permiso, 'rh'),
+            ]),
+        ]);
     }
 
     private function exigir(string $permiso): void

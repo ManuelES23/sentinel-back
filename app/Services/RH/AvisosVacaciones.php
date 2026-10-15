@@ -3,42 +3,59 @@
 namespace App\Services\RH;
 
 use App\Events\VacationRequestUpdated;
+use App\Models\VacationNotification;
 use App\Models\VacationRequest;
 use App\Services\NotificationService;
+use Illuminate\Support\Facades\Log;
+use App\Support\RH\TextosVacaciones;
+use Throwable;
 
 /**
- * Avisos internos y tiempo real de vacaciones. Se llaman DESPUÉS de confirmar
- * la transacción. Correo y WhatsApp al empleado llegan en el plan 3.
+ * Avisos de vacaciones: internos (aprobadores y empleado con usuario), tiempo real y
+ * correo al empleado. Se llaman DESPUÉS de confirmar la transacción. El WhatsApp es
+ * manual: lo arma VacationAvisoController.
  */
 class AvisosVacaciones
 {
     public function __construct(
         private AprobadorVacaciones $aprobador,
         private CadenaAprobacionVacaciones $cadena,
+        private CorreoVacaciones $correo,
     ) {}
 
     public function solicitudCreada(VacationRequest $solicitud): void
     {
-        $this->emitir('created', $solicitud);
-        $this->avisarAprobadoresDelPasoActual($solicitud);
+        $this->aislado('emitir (creada)', fn () => $this->emitir('created', $solicitud));
+        $this->aislado('aprobadores (creada)', fn () => $this->avisarAprobadoresDelPasoActual($solicitud));
+        $this->aislado('correo (recibida)', fn () => $this->correo->avisar($solicitud, VacationNotification::EVENTO_RECIBIDA));
     }
 
-    public function cancelada(VacationRequest $solicitud): void
+    /** Al empleado solo se le avisa si la canceló RH; si la canceló él mismo ya lo sabe. */
+    public function cancelada(VacationRequest $solicitud, string $quien): void
     {
-        $this->emitir('cancelled', $solicitud);
+        $this->aislado('emitir (cancelada)', fn () => $this->emitir('cancelled', $solicitud));
+
+        if ($quien === VacationRequestService::CANCELA_RH) {
+            $this->aislado('correo (cancelada por RH)', fn () => $this->correo->avisar($solicitud, VacationNotification::EVENTO_CANCELADA_POR_RH));
+        }
     }
 
     public function pasoAvanzado(VacationRequest $solicitud): void
     {
-        $this->emitir('updated', $solicitud);
-        $this->avisarAprobadoresDelPasoActual($solicitud);
+        $this->aislado('emitir (paso avanzado)', fn () => $this->emitir('updated', $solicitud));
+        $this->aislado('aprobadores (paso avanzado)', fn () => $this->avisarAprobadoresDelPasoActual($solicitud));
     }
 
     /** Aviso interno al empleado (si tiene usuario) de una solicitud aprobada o rechazada. */
     public function resuelta(VacationRequest $solicitud): void
     {
-        $this->emitir($solicitud->status, $solicitud);
+        $this->aislado('emitir (resuelta)', fn () => $this->emitir($solicitud->status, $solicitud));
+        $this->aislado('correo (resuelta)', fn () => $this->correo->avisar($solicitud, TextosVacaciones::eventoDeEstado($solicitud->status)));
+        $this->aislado('aviso interno al empleado', fn () => $this->avisarAlEmpleadoResuelta($solicitud));
+    }
 
+    private function avisarAlEmpleadoResuelta(VacationRequest $solicitud): void
+    {
         $usuario = $solicitud->employee?->user;
         if (! $usuario) {
             return;
@@ -80,14 +97,32 @@ class AvisosVacaciones
         }
     }
 
+    /** Un aviso que falla (Reverb, notificaciones, correo) no debe romper la operación ya confirmada ni los demás avisos. */
+    private function aislado(string $que, callable $fn): void
+    {
+        try {
+            $fn();
+        } catch (Throwable $e) {
+            Log::warning("Aviso de vacaciones falló: {$que}", ['error' => $e->getMessage()]);
+        }
+    }
+
     protected function emitir(string $accion, VacationRequest $solicitud): void
     {
+        // RH corporativo atiende a todas las empresas: siempre se emite a su módulo, sin importar la empresa del empleado.
         broadcast(new VacationRequestUpdated(
             $accion,
-            $solicitud->toArray(),
-            $solicitud->employee?->enterprise?->slug ?? AprobadorVacaciones::EMPRESA_CORPORATIVA,
-            'administration',
-            'rh'
+            // Solo lo mínimo: el canal lo alcanza cualquiera con acceso al módulo, así que nada de datos personales.
+            // employee_id es necesario: broadcastOn lo usa para el canal employee.{id}.vacations.
+            [
+                'id' => $solicitud->id,
+                'employee_id' => $solicitud->employee_id,
+                'status' => $solicitud->status,
+                'current_step' => $solicitud->current_step,
+            ],
+            AprobadorVacaciones::EMPRESA_CORPORATIVA,
+            'rh',
+            'gestion'
         ))->toOthers();
     }
 }

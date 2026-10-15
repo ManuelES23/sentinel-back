@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\DB;
 
 class VacationBalance extends Model
 {
@@ -181,21 +182,30 @@ class VacationBalance extends Model
     }
 
     /**
-     * Aplicar un ajuste manual al balance
+     * Aplicar un ajuste manual al balance. Acumulativo y con bloqueo: se vuelve a leer la fila
+     * antes de sumar, así dos ajustes simultáneos (o una instancia vieja) no pisan al otro.
      */
     public function applyAdjustment(int $days, string $reason, int $userId): self
     {
-        // Acumulativo: no pisa lo que ya había (p. ej. la conciliación al migrar).
-        // adjustment_reason es string(255).
-        $motivo = $this->adjustment_reason ? $this->adjustment_reason.' | '.$reason : $reason;
+        DB::transaction(function () use ($days, $reason, $userId) {
+            $actual = static::whereKey($this->id)->lockForUpdate()->firstOrFail();
 
-        $this->update([
-            'adjustment_days' => (int) ($this->adjustment_days ?? 0) + $days,
-            'adjustment_reason' => mb_substr($motivo, 0, 255),
-            'adjusted_by' => $userId,
-            'adjusted_at' => now(),
-        ]);
+            // adjustment_reason es string(255): se conserva el motivo nuevo completo y se recorta el anterior.
+            $nuevo = mb_substr($reason, 0, 255);
+            $previo = (string) $actual->adjustment_reason;
+            $sufijo = ' | '.$nuevo;
+            $motivo = ($previo === '' || mb_strlen($sufijo) >= 255)
+                ? $nuevo
+                : mb_substr($previo, 0, 255 - mb_strlen($sufijo)).$sufijo;
 
-        return $this->fresh();
+            $actual->update([
+                'adjustment_days' => (int) ($actual->adjustment_days ?? 0) + $days,
+                'adjustment_reason' => $motivo,
+                'adjusted_by' => $userId,
+                'adjusted_at' => now(),
+            ]);
+        });
+
+        return $this->refresh();
     }
 }

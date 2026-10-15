@@ -74,6 +74,11 @@ class VacationRequest extends Model
         return $this->hasMany(VacationRequestApproval::class)->orderBy('step_order');
     }
 
+    public function notifications(): HasMany
+    {
+        return $this->hasMany(VacationNotification::class)->orderByDesc('sent_at')->orderByDesc('id');
+    }
+
     // ==================== SCOPES ====================
 
     public function scopePending($query)
