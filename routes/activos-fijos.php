@@ -28,6 +28,7 @@ Route::prefix('activos-fijos')->group(function () {
 
     // Activos
     Route::get('activos/next-code', [FixedAssetController::class, 'nextCodeEndpoint']);
+    Route::get('activos/resumen', [FixedAssetController::class, 'resumen']);
     Route::apiResource('activos', FixedAssetController::class)
         ->parameters(['activos' => 'asset']);
 

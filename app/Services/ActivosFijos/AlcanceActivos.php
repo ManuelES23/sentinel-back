@@ -26,6 +26,8 @@ class AlcanceActivos
 
     private const ATRIBUTO = 'activos_fijos.empresa';
 
+    private const ATRIBUTO_VISIBLES = 'activos_fijos.empresas_visibles';
+
     public function empresaActual(Request $request): Enterprise
     {
         if ($request->attributes->has(self::ATRIBUTO)) {
@@ -56,17 +58,24 @@ class AlcanceActivos
     /** @return Collection<int, Enterprise> */
     public function empresasVisibles(Request $request): Collection
     {
-        $actual = $this->empresaActual($request);
-
-        if (! $this->esCorporativo($request)) {
-            return collect([$actual]);
+        // Se calcula una vez por petición (el resumen llama a `aplicar` una docena de veces).
+        if ($request->attributes->has(self::ATRIBUTO_VISIBLES)) {
+            return $request->attributes->get(self::ATRIBUTO_VISIBLES);
         }
 
-        return Enterprise::query()
-            ->whereHas('applications', fn ($a) => $a->where('slug', 'administration')
-                ->whereHas('modules', fn ($m) => $m->where('slug', 'activos-fijos')))
-            ->orderBy('name')
-            ->get();
+        $actual = $this->empresaActual($request);
+
+        $visibles = ! $this->esCorporativo($request)
+            ? collect([$actual])
+            : Enterprise::query()
+                ->whereHas('applications', fn ($a) => $a->where('slug', 'administration')
+                    ->whereHas('modules', fn ($m) => $m->where('slug', 'activos-fijos')))
+                ->orderBy('name')
+                ->get();
+
+        $request->attributes->set(self::ATRIBUTO_VISIBLES, $visibles);
+
+        return $visibles;
     }
 
     /** @return array<int> */

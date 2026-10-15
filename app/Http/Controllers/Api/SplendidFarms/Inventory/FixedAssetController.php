@@ -4,8 +4,10 @@ namespace App\Http\Controllers\Api\SplendidFarms\Inventory;
 
 use App\Events\FixedAssetUpdated;
 use App\Http\Controllers\Controller;
+use App\Models\AssetCategory;
 use App\Models\AssetCharacteristicDefinition;
 use App\Models\Enterprise;
+use App\Models\Entity;
 use App\Models\FixedAsset;
 use App\Models\FixedAssetDisposal;
 use App\Services\ActivosFijos\AlcanceActivos;
@@ -14,11 +16,13 @@ use App\Services\ActivosFijos\GeneradorCodigoActivo;
 use App\Services\ActivosFijos\PermisosActivos;
 use App\Services\ActivosFijos\ResolutorDepreciacion;
 use App\Services\ActivosFijos\ValidadorRelacionesActivo;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
@@ -44,6 +48,15 @@ class FixedAssetController extends Controller
     private const POR_PAGINA = 25;
     private const POR_PAGINA_MAX = 100;
 
+    private const ORDENES = ['name', 'code', 'purchase_date', 'purchase_value', 'status'];
+
+    /** Rangos de «Año de compra» del catálogo: [desde, hasta], null = abierto. */
+    private const RANGOS_ANIO = [
+        'a' => [null, '2020-12-31'],
+        'b' => ['2021-01-01', '2023-12-31'],
+        'c' => ['2024-01-01', null],
+    ];
+
     public function __construct(
         private AlcanceActivos $alcance,
         private PermisosActivos $permisos,
@@ -58,45 +71,118 @@ class FixedAssetController extends Controller
     {
         $this->permisos->autorizar($request, 'activos', 'view');
 
-        $query = $this->alcance->aplicar(FixedAsset::with(self::RELATIONS), $request);
-
-        if ($request->boolean('active_only')) {
-            $query->active();
-        }
-
-        foreach (['enterprise_id', 'branch_id', 'entity_id', 'area_id', 'category_id', 'subcategory_id', 'status'] as $filtro) {
-            if ($request->filled($filtro)) {
-                $query->where($filtro, $request->input($filtro));
-            }
-        }
-
-        // Filtro por ubicación (Campo/Empaque/Oficina) vía tipo de entidad
-        if ($request->filled('entity_type')) {
-            $entityTypes = array_filter(explode(',', $request->input('entity_type')));
-            if (! empty($entityTypes)) {
-                $query->whereHas('entity.entityType', fn ($q) => $q->whereIn('code', $entityTypes));
-            }
-        }
-
-        if ($request->filled('search')) {
-            // '!' como carácter de escape: funciona igual en MySQL y SQLite.
-            $term = '%'.str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $request->input('search')).'%';
-            $query->where(function ($q) use ($term) {
-                foreach (['name', 'code', 'serial_number', 'model'] as $columna) {
-                    $q->orWhereRaw("{$columna} LIKE ? ESCAPE '!'", [$term]);
-                }
-            });
-        }
+        $query = $this->aplicarFiltros(
+            $this->alcance->aplicar(FixedAsset::with(self::RELATIONS), $request),
+            $request,
+        );
 
         $porPagina = min(max((int) $request->input('per_page', self::POR_PAGINA), 1), self::POR_PAGINA_MAX);
 
-        $pagina = $query->orderBy('name')->orderBy('id')->paginate($porPagina);
+        $this->ordenar($query, $request);
+        $pagina = $query->paginate($porPagina);
         $pagina->getCollection()->each(fn (FixedAsset $activo) => $this->conDepreciacion($activo));
 
         return response()->json([
             'success' => true,
             'data' => $pagina,
         ]);
+    }
+
+    /** Conteos para la columna de filtros del catálogo (ver el spec §3.2). */
+    public function resumen(Request $request): JsonResponse
+    {
+        $this->permisos->autorizar($request, 'activos', 'view');
+
+        $base = fn (array $omitir = []) => $this->aplicarFiltros(
+            $this->alcance->aplicar(FixedAsset::query(), $request),
+            $request,
+            $omitir,
+        );
+
+        // Universo de tipos y ubicaciones: todo lo que tiene al menos un activo en el alcance
+        // del usuario (y en la empresa elegida, en GE), sin los demás filtros.
+        $universo = fn () => $this->alcance->aplicar(FixedAsset::query(), $request)
+            ->when($request->filled('enterprise_id'), fn ($q) => $q->where('enterprise_id', $request->input('enterprise_id')));
+
+        $porEstado = $base(['status'])->selectRaw('status, COUNT(*) as total')->groupBy('status')->pluck('total', 'status');
+        $estados = collect(array_keys(FixedAsset::STATUSES))
+            ->map(fn ($estado) => ['value' => $estado, 'count' => (int) ($porEstado[$estado] ?? 0)])
+            ->all();
+
+        $sinFiltroResponsable = $base(['assigned']);
+        $conResponsable = (clone $sinFiltroResponsable)->whereHas('asignacionActiva')->count();
+        $totalResponsable = (clone $sinFiltroResponsable)->count();
+
+        $sinFiltroValor = $base(['has_value']);
+        $conValor = (clone $sinFiltroValor)->where('purchase_value', '>', 0)->count();
+        $totalValor = (clone $sinFiltroValor)->count();
+
+        $anios = [];
+        foreach (array_keys(self::RANGOS_ANIO) as $clave) {
+            $consulta = $base(['year']);
+            $this->aplicarRangosAnio($consulta, [$clave]);
+            $anios[] = ['value' => $clave, 'count' => $consulta->count()];
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'total' => $base()->count(),
+                'status' => $estados,
+                'category' => $this->conteoPorRelacion($base(['category']), $universo(), 'category_id', AssetCategory::class),
+                'entity' => $this->conteoPorRelacion($base(['entity']), $universo(), 'entity_id', Entity::class),
+                'assigned' => [
+                    ['value' => 'si', 'count' => $conResponsable],
+                    ['value' => 'no', 'count' => $totalResponsable - $conResponsable],
+                ],
+                'has_value' => [
+                    ['value' => 'si', 'count' => $conValor],
+                    ['value' => 'no', 'count' => $totalValor - $conValor],
+                ],
+                'year' => $anios,
+                'without_date' => $base(['year'])->whereNull('purchase_date')->count(),
+            ],
+        ]);
+    }
+
+    /**
+     * Opciones de un grupo de relación (tipo, ubicación) con su nombre, ordenadas por
+     * nombre sin acentos. La lista sale del UNIVERSO (ids con al menos un activo en el
+     * alcance del usuario), no de los demás filtros: una opción que no aparece bajo los
+     * filtros actuales sigue en la lista con conteo 0 (el front la deshabilita). Los ids
+     * seleccionados que no están en el universo se ignoran, así no se filtran nombres
+     * de otras empresas.
+     *
+     * @param  Builder  $conteos  activos con todos los filtros menos los del grupo
+     * @param  Builder  $universo  activos del alcance sin ningún otro filtro
+     * @param  class-string<\Illuminate\Database\Eloquent\Model>  $modelo
+     * @return array<int, array{value: string, label: string, count: int}>
+     */
+    private function conteoPorRelacion(Builder $conteos, Builder $universo, string $columna, string $modelo): array
+    {
+        $ids = $universo->whereNotNull($columna)->distinct()->pluck($columna);
+        if ($ids->isEmpty()) {
+            return [];
+        }
+
+        $porId = $conteos->whereNotNull($columna)
+            ->selectRaw("{$columna}, COUNT(*) as total")
+            ->groupBy($columna)
+            ->pluck('total', $columna);
+
+        $nombres = $modelo::whereIn('id', $ids)->pluck('name', 'id');
+
+        return $ids
+            ->filter(fn ($id) => $nombres->has($id))
+            ->map(fn ($id) => [
+                'value' => (string) $id,
+                'label' => $nombres[$id],
+                'count' => (int) ($porId[$id] ?? 0),
+            ])
+            // Sin acentos para que «Área» vaya con la A y «Ñ» con la N, como en MySQL unicode_ci.
+            ->sortBy(fn ($fila) => Str::ascii($fila['label']), SORT_NATURAL | SORT_FLAG_CASE)
+            ->values()
+            ->all();
     }
 
     public function store(Request $request): JsonResponse
@@ -429,6 +515,142 @@ class FixedAssetController extends Controller
     private function debeSincronizar(Request $request): bool
     {
         return $request->has('characteristics') || $request->boolean('sync_characteristics');
+    }
+
+    /**
+     * Filtros compartidos por `index` y `resumen`. `$omitir` lista los grupos que
+     * no se aplican (`status`, `category`, `entity`, `assigned`, `has_value`,
+     * `year`): los conteos de `resumen` omiten el grupo propio para que marcar una
+     * opción no ponga en cero a las demás del mismo grupo.
+     *
+     * @param  array<int, string>  $omitir
+     */
+    private function aplicarFiltros(Builder $query, Request $request, array $omitir = []): Builder
+    {
+        if ($request->boolean('active_only')) {
+            $query->active();
+        }
+
+        foreach (['enterprise_id', 'branch_id', 'area_id', 'subcategory_id'] as $filtro) {
+            if ($request->filled($filtro)) {
+                $query->where($filtro, $request->input($filtro));
+            }
+        }
+
+        foreach (['status' => 'status', 'category' => 'category_id', 'entity' => 'entity_id'] as $grupo => $columna) {
+            if (in_array($grupo, $omitir, true)) {
+                continue;
+            }
+            $valores = $this->lista($request, $columna);
+            if ($valores !== []) {
+                $query->whereIn($columna, $valores);
+            }
+        }
+
+        if (! in_array('assigned', $omitir, true)) {
+            match ($request->input('assigned')) {
+                'si' => $query->whereHas('asignacionActiva'),
+                'no' => $query->whereDoesntHave('asignacionActiva'),
+                default => null,
+            };
+        }
+
+        if (! in_array('has_value', $omitir, true)) {
+            match ($request->input('has_value')) {
+                // Un valor de 0 cuenta como «sin valor», igual que la depreciación.
+                'si' => $query->where('purchase_value', '>', 0),
+                'no' => $query->where(fn ($q) => $q->whereNull('purchase_value')->orWhere('purchase_value', '<=', 0)),
+                default => null,
+            };
+        }
+
+        if (! in_array('year', $omitir, true)) {
+            $rangos = array_values(array_intersect($this->lista($request, 'year'), array_keys(self::RANGOS_ANIO)));
+            if ($rangos !== []) {
+                $this->aplicarRangosAnio($query, $rangos);
+            }
+        }
+
+        // Filtro por ubicación (Campo/Empaque/Oficina) vía tipo de entidad
+        if (is_string($request->input('entity_type')) && $request->filled('entity_type')) {
+            $entityTypes = array_filter(explode(',', $request->input('entity_type')));
+            if (! empty($entityTypes)) {
+                $query->whereHas('entity.entityType', fn ($q) => $q->whereIn('code', $entityTypes));
+            }
+        }
+
+        // Un `search` que no es texto (search[]=x) se ignora.
+        if (is_string($request->input('search')) && trim($request->input('search')) !== '') {
+            // '!' como carácter de escape: funciona igual en MySQL y SQLite.
+            $term = '%'.str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $request->input('search')).'%';
+            $query->where(function ($q) use ($term) {
+                foreach (['name', 'code', 'serial_number', 'model'] as $columna) {
+                    $q->orWhereRaw("{$columna} LIKE ? ESCAPE '!'", [$term]);
+                }
+                foreach (['brand', 'category', 'subcategory'] as $relacion) {
+                    $q->orWhereHas($relacion, fn ($r) => $r->whereRaw("name LIKE ? ESCAPE '!'", [$term]));
+                }
+                $q->orWhereHas('asignacionActiva', fn ($r) => $r->whereRaw("assignee_name LIKE ? ESCAPE '!'", [$term]));
+            });
+        }
+
+        return $query;
+    }
+
+    /** @param  array<int, string>  $rangos  claves de RANGOS_ANIO */
+    private function aplicarRangosAnio(Builder $query, array $rangos): void
+    {
+        $query->where(function ($q) use ($rangos) {
+            foreach ($rangos as $clave) {
+                [$desde, $hasta] = self::RANGOS_ANIO[$clave];
+                $q->orWhere(function ($r) use ($desde, $hasta) {
+                    $r->whereNotNull('purchase_date');
+                    if ($desde) {
+                        $r->whereDate('purchase_date', '>=', $desde);
+                    }
+                    if ($hasta) {
+                        $r->whereDate('purchase_date', '<=', $hasta);
+                    }
+                });
+            }
+        });
+    }
+
+    /** Valores separados por coma de un parámetro; en las columnas `*_id` solo se aceptan enteros. */
+    private function lista(Request $request, string $clave): array
+    {
+        $crudo = $request->input($clave);
+        // Solo escalares: status[a][]=x o category_id[][]=1 se descartan en vez de romper.
+        if (is_array($crudo)) {
+            $crudo = implode(',', array_filter($crudo, 'is_scalar'));
+        } elseif (! is_scalar($crudo)) {
+            $crudo = '';
+        }
+
+        $valores = array_filter(array_map('trim', explode(',', (string) $crudo)), fn ($v) => $v !== '');
+        if (str_ends_with($clave, '_id')) {
+            $valores = array_filter($valores, 'ctype_digit');
+        }
+
+        return array_values(array_unique($valores));
+    }
+
+    private function ordenar(Builder $query, Request $request): void
+    {
+        $sort = $request->input('sort');
+        $campo = is_string($sort) && in_array($sort, self::ORDENES, true) ? $sort : 'name';
+        $dirPedida = $request->input('dir');
+        $dir = is_string($dirPedida) && strtolower($dirPedida) === 'desc' ? 'desc' : 'asc';
+
+        // Los nulos (sin fecha o sin valor) van siempre al final, en ascendente y descendente.
+        if (in_array($campo, ['purchase_date', 'purchase_value'], true)) {
+            $query->orderByRaw("{$campo} IS NULL");
+        }
+        $query->orderBy($campo, $dir);
+        if ($campo !== 'name') {
+            $query->orderBy('name');
+        }
+        $query->orderBy('id');
     }
 
     /**
