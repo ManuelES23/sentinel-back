@@ -3,29 +3,39 @@
 namespace App\Services\RH;
 
 use App\Events\VacationRequestUpdated;
+use App\Models\VacationNotification;
 use App\Models\VacationRequest;
 use App\Services\NotificationService;
+use App\Support\RH\TextosVacaciones;
 
 /**
- * Avisos internos y tiempo real de vacaciones. Se llaman DESPUÉS de confirmar
- * la transacción. Correo y WhatsApp al empleado llegan en el plan 3.
+ * Avisos de vacaciones: internos (aprobadores y empleado con usuario), tiempo real y
+ * correo al empleado. Se llaman DESPUÉS de confirmar la transacción. El WhatsApp es
+ * manual: lo arma VacationAvisoController.
  */
 class AvisosVacaciones
 {
     public function __construct(
         private AprobadorVacaciones $aprobador,
         private CadenaAprobacionVacaciones $cadena,
+        private CorreoVacaciones $correo,
     ) {}
 
     public function solicitudCreada(VacationRequest $solicitud): void
     {
         $this->emitir('created', $solicitud);
         $this->avisarAprobadoresDelPasoActual($solicitud);
+        $this->correo->avisar($solicitud, VacationNotification::EVENTO_RECIBIDA);
     }
 
-    public function cancelada(VacationRequest $solicitud): void
+    /** Al empleado solo se le avisa si la canceló RH; si la canceló él mismo ya lo sabe. */
+    public function cancelada(VacationRequest $solicitud, string $quien): void
     {
         $this->emitir('cancelled', $solicitud);
+
+        if ($quien === VacationRequestService::CANCELA_RH) {
+            $this->correo->avisar($solicitud, VacationNotification::EVENTO_CANCELADA_POR_RH);
+        }
     }
 
     public function pasoAvanzado(VacationRequest $solicitud): void
@@ -38,6 +48,7 @@ class AvisosVacaciones
     public function resuelta(VacationRequest $solicitud): void
     {
         $this->emitir($solicitud->status, $solicitud);
+        $this->correo->avisar($solicitud, TextosVacaciones::eventoDeEstado($solicitud->status));
 
         $usuario = $solicitud->employee?->user;
         if (! $usuario) {
