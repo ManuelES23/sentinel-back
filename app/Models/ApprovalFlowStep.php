@@ -16,6 +16,7 @@ class ApprovalFlowStep extends Model
         'approver_type',
         'min_hierarchy_level',
         'position_id',
+        'user_id',
         'approval_scope',
         'can_approve',
         'can_reject',
@@ -32,6 +33,12 @@ class ApprovalFlowStep extends Model
 
     public const TYPE_DIRECT_SUPERVISOR = 'direct_supervisor';
 
+    /** El jefe asignado al departamento del solicitante (departments.manager_id). */
+    public const TYPE_DEPARTMENT_MANAGER = 'department_manager';
+
+    /** Un usuario de Sentinel elegido a mano (approval_flow_steps.user_id). */
+    public const TYPE_USER = 'user';
+
     // ===== Relaciones =====
 
     public function process()
@@ -47,6 +54,11 @@ class ApprovalFlowStep extends Model
     public function position()
     {
         return $this->belongsTo(Position::class);
+    }
+
+    public function user()
+    {
+        return $this->belongsTo(User::class);
     }
 
     // ===== Scopes =====
@@ -95,6 +107,14 @@ class ApprovalFlowStep extends Model
     {
         if ($this->approver_type === self::TYPE_DIRECT_SUPERVISOR) {
             return 'Jefe directo';
+        }
+
+        if ($this->approver_type === self::TYPE_DEPARTMENT_MANAGER) {
+            return 'Jefe del departamento';
+        }
+
+        if ($this->approver_type === self::TYPE_USER) {
+            return $this->user ? 'Usuario: '.$this->user->name : 'Usuario específico';
         }
 
         if ($this->approver_type === 'position') {
