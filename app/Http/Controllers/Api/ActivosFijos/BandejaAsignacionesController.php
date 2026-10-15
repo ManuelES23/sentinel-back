@@ -37,4 +37,11 @@ class BandejaAsignacionesController extends Controller
 
         return response()->json(['success' => true, 'data' => $this->bandeja->cartasPendientes($request)]);
     }
+
+    public function movimientos(Request $request): JsonResponse
+    {
+        $this->permisos->autorizar($request, self::SUBMODULO, 'view');
+
+        return response()->json(['success' => true, 'data' => $this->bandeja->movimientos($request)]);
+    }
 }

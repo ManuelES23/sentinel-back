@@ -38,6 +38,7 @@ Route::prefix('activos-fijos')->group(function () {
     // Bandeja (antes de las rutas con {asignacion} para que no se tomen como id)
     Route::get('asignaciones/resumen', [BandejaAsignacionesController::class, 'resumen']);
     Route::get('asignaciones/cartas-pendientes', [BandejaAsignacionesController::class, 'cartasPendientes']);
+    Route::get('asignaciones/movimientos', [BandejaAsignacionesController::class, 'movimientos']);
     Route::get('activos/{asset}/asignaciones', [AsignacionActivoController::class, 'historial']);
     Route::get('activos/{asset}/responsables', [AsignacionActivoController::class, 'responsables']);
     Route::post('activos/{asset}/asignaciones', [AsignacionActivoController::class, 'store']);
