@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\ActivosFijos\AltaPendienteController;
 use App\Http\Controllers\Api\ActivosFijos\AsignacionActivoController;
+use App\Http\Controllers\Api\ActivosFijos\BandejaAsignacionesController;
 use App\Http\Controllers\Api\ActivosFijos\ContextoActivosController;
 use App\Http\Controllers\Api\ActivosFijos\DepreciacionController;
 use App\Http\Controllers\Api\ActivosFijos\SalidaActivoController;
@@ -34,6 +35,9 @@ Route::prefix('activos-fijos')->group(function () {
 
     // Asignaciones (resguardo) y carta responsiva
     Route::get('asignaciones', [AsignacionActivoController::class, 'index']);
+    // Bandeja (antes de las rutas con {asignacion} para que no se tomen como id)
+    Route::get('asignaciones/resumen', [BandejaAsignacionesController::class, 'resumen']);
+    Route::get('asignaciones/cartas-pendientes', [BandejaAsignacionesController::class, 'cartasPendientes']);
     Route::get('activos/{asset}/asignaciones', [AsignacionActivoController::class, 'historial']);
     Route::get('activos/{asset}/responsables', [AsignacionActivoController::class, 'responsables']);
     Route::post('activos/{asset}/asignaciones', [AsignacionActivoController::class, 'store']);
