@@ -92,8 +92,10 @@ class BandejaAsignaciones
 
     /**
      * Bitácora: cada asignación da una entrega (`assigned_at`) y, si terminó, una
-     * devolución (`returned_at`). Más reciente primero; el mismo día la entrega va
-     * antes que la devolución (en una reasignación lo último que pasó es la entrega).
+     * devolución (`returned_at`). Más reciente primero: fecha desc y, el mismo día, la
+     * asignación más nueva (id desc) arriba; dentro de una misma asignación la devolución
+     * va sobre su entrega. Así una reasignación (la nueva asignación tiene id mayor) deja su
+     * entrega sobre la devolución anterior, y E1 → D1 → E2 → D2 se lee D2, E2, D1, E1.
      */
     public function movimientos(Request $request): array
     {
@@ -128,8 +130,8 @@ class BandejaAsignaciones
         $resultado = DB::query()
             ->fromSub($union, 'movimientos')
             ->orderByDesc('fecha')
-            ->orderByDesc('orden_dia')
             ->orderByDesc('asignacion_id')
+            ->orderBy('orden_dia')
             ->paginate($porPagina, ['*'], 'page', $pagina);
 
         $filas = collect($resultado->items());

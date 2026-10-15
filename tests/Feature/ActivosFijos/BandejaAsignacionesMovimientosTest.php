@@ -6,6 +6,7 @@ namespace Tests\Feature\ActivosFijos;
 use App\Models\Area;
 use App\Models\AssetCategory;
 use App\Models\Brand;
+use App\Models\FixedAsset;
 use App\Models\FixedAssetAssignment;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -43,15 +44,15 @@ class BandejaAsignacionesMovimientosTest extends TestCase
         $this->transporte = AssetCategory::create(['code' => 'TAC-003', 'name' => 'Transporte', 'icon' => 'Truck', 'is_active' => true]);
         $this->recepcion = Area::create(['code' => 'ARE-91', 'name' => 'Recepción', 'slug' => 'recepcion-91', 'is_active' => true]);
 
+        // L (primera, id menor): entregada en 2023 y devuelta el 9 de octubre (reasignación).
+        $this->l = $this->asignacion(['name' => 'Laptop Lenovo IdeaPad', 'category_id' => $this->transporte->id], [
+            'assigned_at' => '2023-05-15', 'returned_at' => '2026-10-09', 'assignee_name' => 'Jorge Salas',
+            'condition_in' => 'regular', 'return_reason' => 'reemplazo', 'signed_document_path' => 'l.pdf',
+        ]);
         // A: entregada el 9 de octubre, activa y sin carta.
         $this->a = $this->asignacion(['name' => 'Laptop HP Victus 15'], [
             'assigned_at' => '2026-10-09', 'assignee_name' => 'Ana Ruiz',
             'assignee_position' => 'Analista de costos', 'assignee_department' => 'Contabilidad',
-        ]);
-        // L: entregada en 2023 y devuelta el mismo 9 de octubre (reasignación).
-        $this->l = $this->asignacion(['name' => 'Laptop Lenovo IdeaPad', 'category_id' => $this->transporte->id], [
-            'assigned_at' => '2023-05-15', 'returned_at' => '2026-10-09', 'assignee_name' => 'Jorge Salas',
-            'condition_in' => 'regular', 'return_reason' => 'reemplazo', 'signed_document_path' => 'l.pdf',
         ]);
         // S: entregada en diciembre de 2025, activa, firmada, en Recepción y de marca HP.
         $this->s = $this->asignacion(['name' => 'Servidor 2', 'brand_id' => $hp->id], [
@@ -66,9 +67,9 @@ class BandejaAsignacionesMovimientosTest extends TestCase
         parent::tearDown();
     }
 
-    private function asignacion(array $activo, array $datos): FixedAssetAssignment
+    private function asignacion(array|FixedAsset $activo, array $datos): FixedAssetAssignment
     {
-        $activo = $this->crearActivo($activo);
+        $activo = $activo instanceof FixedAsset ? $activo : $this->crearActivo($activo);
 
         return FixedAssetAssignment::create(array_merge([
             'enterprise_id' => $activo->enterprise_id,
@@ -89,8 +90,9 @@ class BandejaAsignacionesMovimientosTest extends TestCase
             ->all();
     }
 
-    public function test_una_asignacion_devuelta_da_dos_movimientos_y_el_mismo_dia_la_entrega_va_primero(): void
+    public function test_una_asignacion_devuelta_da_dos_movimientos_y_en_una_reasignacion_la_entrega_nueva_va_sobre_la_devolucion(): void
     {
+        // El 9 de octubre: la entrega de A (id mayor) queda sobre la devolución de L.
         $this->assertSame([
             ['entrega', $this->a->id],
             ['devolucion', $this->l->id],
@@ -103,6 +105,39 @@ class BandejaAsignacionesMovimientosTest extends TestCase
             ->assertJsonPath('data.data.0.fecha', '2026-10-09')
             ->assertJsonPath('data.data.1.fecha', '2026-10-09')
             ->assertJsonPath('data.data.3.fecha', '2023-05-15');
+    }
+
+    public function test_la_misma_asignacion_entregada_y_devuelta_el_mismo_dia_pone_la_devolucion_arriba(): void
+    {
+        $x = $this->asignacion(['name' => 'Proyector'], [
+            'assigned_at' => '2026-10-12', 'returned_at' => '2026-10-12', 'assignee_name' => 'Rosa Mena',
+            'condition_in' => 'bueno', 'return_reason' => 'otro',
+        ]);
+
+        $this->assertSame([
+            ['devolucion', $x->id],
+            ['entrega', $x->id],
+            ['entrega', $this->a->id],
+            ['devolucion', $this->l->id],
+            ['entrega', $this->s->id],
+            ['entrega', $this->l->id],
+        ], $this->pares(self::BASE));
+    }
+
+    public function test_dos_reasignaciones_el_mismo_dia_se_leen_en_orden_inverso_de_lo_ocurrido(): void
+    {
+        $activo = $this->crearActivo(['name' => 'Camioneta']);
+        $devuelta = ['assigned_at' => '2026-10-13', 'returned_at' => '2026-10-13', 'condition_in' => 'bueno', 'return_reason' => 'otro'];
+        $primera = $this->asignacion($activo, $devuelta + ['assignee_name' => 'Primera Persona']);
+        $segunda = $this->asignacion($activo, $devuelta + ['assignee_name' => 'Segunda Persona']);
+
+        // Lo ocurrido: E1 -> D1 -> E2 -> D2; la bitácora, la más reciente primero.
+        $this->assertSame([
+            ['devolucion', $segunda->id],
+            ['entrega', $segunda->id],
+            ['devolucion', $primera->id],
+            ['entrega', $primera->id],
+        ], array_slice($this->pares(self::BASE), 0, 4));
     }
 
     public function test_cada_movimiento_trae_la_asignacion_con_sus_relaciones(): void
@@ -196,6 +231,34 @@ class BandejaAsignacionesMovimientosTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data.total', 1)
             ->assertJsonPath('data.data.0.asignacion.enterprise.name', 'Splendid by Porvenir');
+    }
+
+    public function test_la_busqueda_no_alcanza_asignaciones_de_otra_empresa(): void
+    {
+        $porvenir = $this->crearEmpresaActivos('splendidbyporvenir', 'Splendid by Porvenir', 'SP');
+        $this->asignacion(
+            ['enterprise_id' => $porvenir->id, 'code' => 'SP-AF-000001', 'name' => 'Laptop SP'],
+            ['assigned_at' => '2026-10-03', 'assignee_name' => 'Zacarías Porvenir'],
+        );
+
+        $this->getJson(self::BASE.'?search=zacarias')->assertOk()->assertJsonPath('data.total', 0)->assertJsonCount(0, 'data.data');
+        $this->getJson(self::BASE.'?search='.urlencode('Zacarías'))->assertOk()->assertJsonPath('data.total', 0);
+        $this->getJson(self::BASE_GE.'?search='.urlencode('Zacarías'))->assertOk()->assertJsonPath('data.total', 1);
+    }
+
+    public function test_un_usuario_con_solo_asignaciones_view_ve_la_bandeja_completa(): void
+    {
+        $soloVer = User::factory()->create(['role' => 'user']);
+        $this->otorgarActivos($soloVer, $this->enterprise, 'asignaciones', ['view']);
+        Sanctum::actingAs($soloVer);
+
+        $base = '/api/splendidfarms/administration/activos-fijos/asignaciones';
+        $this->getJson($base.'/cartas-pendientes')->assertOk()->assertJsonPath('data.total', 1);
+        $this->getJson(self::BASE)->assertOk()->assertJsonPath('data.total', 4);
+
+        $opciones = $this->getJson($base.'/resumen')->assertOk()->json('data.opciones');
+        $this->assertNotEmpty($opciones['areas']);
+        $this->assertNotEmpty($opciones['tipos']);
     }
 
     public function test_requiere_view(): void

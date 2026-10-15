@@ -4,6 +4,7 @@
 namespace Tests\Feature\ActivosFijos;
 
 use App\Models\Area;
+use App\Models\AssetCategory;
 use App\Models\FixedAssetAssignment;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -121,6 +122,26 @@ class BandejaAsignacionesResumenTest extends TestCase
         $nombres = collect($this->getJson(self::BASE_GE.'/resumen')->assertOk()->json('data.opciones.empresas'))->pluck('name');
         $this->assertTrue($nombres->contains('Splendid Farms'));
         $this->assertTrue($nombres->contains('Grupo Espléndido'));
+    }
+
+    public function test_las_opciones_de_sf_excluyen_areas_y_tipos_que_solo_estan_en_otra_empresa(): void
+    {
+        $porvenir = $this->crearEmpresaActivos('splendidbyporvenir', 'Splendid by Porvenir', 'SP');
+        $soloSp = Area::create(['code' => 'ARE-92', 'name' => 'Muelle SP', 'slug' => 'muelle-sp', 'is_active' => true]);
+        $tipoSp = AssetCategory::create(['code' => 'TAC-009', 'name' => 'Maquinaria SP', 'icon' => 'Truck', 'is_active' => true]);
+        $this->asignacion();
+        $this->asignacion([
+            'activo' => ['enterprise_id' => $porvenir->id, 'code' => 'SP-AF-000001', 'category_id' => $tipoSp->id],
+            'area_id' => $soloSp->id,
+        ]);
+
+        $sf = $this->getJson(self::BASE.'/resumen')->assertOk()->json('data.opciones');
+        $this->assertSame([], $sf['areas']);
+        $this->assertSame(['Equipos de cómputo'], collect($sf['tipos'])->pluck('name')->all());
+
+        $ge = $this->getJson(self::BASE_GE.'/resumen')->assertOk()->json('data.opciones');
+        $this->assertSame(['Muelle SP'], collect($ge['areas'])->pluck('name')->all());
+        $this->assertEqualsCanonicalizing(['Equipos de cómputo', 'Maquinaria SP'], collect($ge['tipos'])->pluck('name')->all());
     }
 
     public function test_cartas_pendientes_de_la_mas_antigua_con_dias_y_limite(): void
