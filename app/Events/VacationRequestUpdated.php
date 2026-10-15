@@ -5,8 +5,8 @@ namespace App\Events;
 use Illuminate\Broadcasting\PrivateChannel;
 
 /**
- * Evento para broadcasting de solicitudes de vacaciones
- * Se emite cuando se crea, actualiza o cancela una solicitud
+ * Evento para broadcasting de solicitudes de vacaciones.
+ * Se emite cuando se crea, avanza, se resuelve o se cancela una solicitud.
  */
 class VacationRequestUpdated extends ModelBroadcastEvent
 {
@@ -19,9 +19,10 @@ class VacationRequestUpdated extends ModelBroadcastEvent
     {
         $channels = [];
 
-        // Canal del módulo RH para que los administradores vean en tiempo real
-        if ($this->enterprise) {
-            $channels[] = new PrivateChannel("module.{$this->enterprise}.administration.rh");
+        // Módulo donde RH escucha. Tiene que ser un módulo que exista (empresa → aplicación →
+        // módulo): ModuleChannel solo autoriza esos, y quien tiene acceso al módulo puede entrar.
+        if ($this->enterprise && $this->application && $this->module) {
+            $channels[] = new PrivateChannel("module.{$this->enterprise}.{$this->application}.{$this->module}");
         }
 
         // Canal del empleado específico si viene en los datos

@@ -26,7 +26,7 @@ class VacationController extends Controller
 {
     use VerificaPermisoSubmodulo;
 
-    private const RELACIONES = ['employee.enterprise', 'employee.position', 'approver', 'approvals.decider:id,name'];
+    private const RELACIONES = ['employee.enterprise', 'employee.position', 'employee.department', 'approver', 'approvals.decider:id,name'];
 
     public function __construct(private VacationRequestService $vacaciones) {}
 

@@ -93,12 +93,13 @@ class AvisosVacaciones
 
     protected function emitir(string $accion, VacationRequest $solicitud): void
     {
+        // RH corporativo atiende a todas las empresas: siempre se emite a su módulo, sin importar la empresa del empleado.
         broadcast(new VacationRequestUpdated(
             $accion,
             $solicitud->toArray(),
-            $solicitud->employee?->enterprise?->slug ?? AprobadorVacaciones::EMPRESA_CORPORATIVA,
-            'administration',
-            'rh'
+            AprobadorVacaciones::EMPRESA_CORPORATIVA,
+            'rh',
+            'gestion'
         ))->toOthers();
     }
 }

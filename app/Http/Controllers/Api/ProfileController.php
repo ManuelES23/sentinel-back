@@ -9,9 +9,11 @@ use App\Models\VacationRequest;
 use App\Services\RH\VacationRequestService;
 use App\Services\VacationCalculatorService;
 use App\Support\PasswordPolicy;
+use App\Support\RH\PresentadorPortalVacaciones;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rules\Password;
@@ -50,10 +52,16 @@ class ProfileController extends Controller
             // Solicitudes del año actual y posteriores (una de diciembre puede ser de enero)
             $vacationRequests = VacationRequest::where('employee_id', $employee->id)
                 ->where('vacation_year', '>=', $currentYear)
+                ->with('approvals.decider:id,name')
                 ->orderBy('created_at', 'desc')
                 ->limit(10)
-                ->get();
-            
+                ->get()
+                // La misma revisión (paso actual y línea de tiempo) que ve el empleado en el portal.
+                ->each(fn (VacationRequest $solicitud) => $solicitud->setAttribute('revision', Arr::only(
+                    PresentadorPortalVacaciones::detalle($solicitud),
+                    ['paso_actual', 'total_pasos', 'revisor_actual', 'pasos'],
+                )));
+
             // Solicitudes pendientes
             $pendingRequests = VacationRequest::where('employee_id', $employee->id)
                 ->where('status', 'pending')
