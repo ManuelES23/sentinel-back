@@ -22,6 +22,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
@@ -98,6 +99,11 @@ class FixedAssetController extends Controller
             $omitir,
         );
 
+        // Universo de tipos y ubicaciones: todo lo que tiene al menos un activo en el alcance
+        // del usuario (y en la empresa elegida, en GE), sin los demás filtros.
+        $universo = fn () => $this->alcance->aplicar(FixedAsset::query(), $request)
+            ->when($request->filled('enterprise_id'), fn ($q) => $q->where('enterprise_id', $request->input('enterprise_id')));
+
         $porEstado = $base(['status'])->selectRaw('status, COUNT(*) as total')->groupBy('status')->pluck('total', 'status');
         $estados = collect(array_keys(FixedAsset::STATUSES))
             ->map(fn ($estado) => ['value' => $estado, 'count' => (int) ($porEstado[$estado] ?? 0)])
@@ -108,7 +114,7 @@ class FixedAssetController extends Controller
         $totalResponsable = (clone $sinFiltroResponsable)->count();
 
         $sinFiltroValor = $base(['has_value']);
-        $conValor = (clone $sinFiltroValor)->whereNotNull('purchase_value')->count();
+        $conValor = (clone $sinFiltroValor)->where('purchase_value', '>', 0)->count();
         $totalValor = (clone $sinFiltroValor)->count();
 
         $anios = [];
@@ -123,8 +129,8 @@ class FixedAssetController extends Controller
             'data' => [
                 'total' => $base()->count(),
                 'status' => $estados,
-                'category' => $this->conteoPorRelacion($base(['category']), 'category_id', AssetCategory::class, $this->lista($request, 'category_id')),
-                'entity' => $this->conteoPorRelacion($base(['entity']), 'entity_id', Entity::class, $this->lista($request, 'entity_id')),
+                'category' => $this->conteoPorRelacion($base(['category']), $universo(), 'category_id', AssetCategory::class),
+                'entity' => $this->conteoPorRelacion($base(['entity']), $universo(), 'entity_id', Entity::class),
                 'assigned' => [
                     ['value' => 'si', 'count' => $conResponsable],
                     ['value' => 'no', 'count' => $totalResponsable - $conResponsable],
@@ -140,25 +146,29 @@ class FixedAssetController extends Controller
     }
 
     /**
-     * Conteo por una relación (tipo, ubicación) con su nombre, ordenado por nombre.
-     * Los ids seleccionados que no tienen activos salen con conteo 0 para que su
-     * casilla y su chip sigan existiendo.
+     * Opciones de un grupo de relación (tipo, ubicación) con su nombre, ordenadas por
+     * nombre sin acentos. La lista sale del UNIVERSO (ids con al menos un activo en el
+     * alcance del usuario), no de los demás filtros: una opción que no aparece bajo los
+     * filtros actuales sigue en la lista con conteo 0 (el front la deshabilita). Los ids
+     * seleccionados que no están en el universo se ignoran, así no se filtran nombres
+     * de otras empresas.
      *
+     * @param  Builder  $conteos  activos con todos los filtros menos los del grupo
+     * @param  Builder  $universo  activos del alcance sin ningún otro filtro
      * @param  class-string<\Illuminate\Database\Eloquent\Model>  $modelo
-     * @param  array<int, string>  $seleccionados
      * @return array<int, array{value: string, label: string, count: int}>
      */
-    private function conteoPorRelacion(Builder $query, string $columna, string $modelo, array $seleccionados): array
+    private function conteoPorRelacion(Builder $conteos, Builder $universo, string $columna, string $modelo): array
     {
-        $conteos = $query->whereNotNull($columna)
-            ->selectRaw("{$columna}, COUNT(*) as total")
-            ->groupBy($columna)
-            ->pluck('total', $columna);
-
-        $ids = $conteos->keys()->merge($seleccionados)->unique()->values();
+        $ids = $universo->whereNotNull($columna)->distinct()->pluck($columna);
         if ($ids->isEmpty()) {
             return [];
         }
+
+        $porId = $conteos->whereNotNull($columna)
+            ->selectRaw("{$columna}, COUNT(*) as total")
+            ->groupBy($columna)
+            ->pluck('total', $columna);
 
         $nombres = $modelo::whereIn('id', $ids)->pluck('name', 'id');
 
@@ -167,9 +177,10 @@ class FixedAssetController extends Controller
             ->map(fn ($id) => [
                 'value' => (string) $id,
                 'label' => $nombres[$id],
-                'count' => (int) ($conteos[$id] ?? 0),
+                'count' => (int) ($porId[$id] ?? 0),
             ])
-            ->sortBy('label', SORT_NATURAL | SORT_FLAG_CASE)
+            // Sin acentos para que «Área» vaya con la A y «Ñ» con la N, como en MySQL unicode_ci.
+            ->sortBy(fn ($fila) => Str::ascii($fila['label']), SORT_NATURAL | SORT_FLAG_CASE)
             ->values()
             ->all();
     }
@@ -546,8 +557,9 @@ class FixedAssetController extends Controller
 
         if (! in_array('has_value', $omitir, true)) {
             match ($request->input('has_value')) {
-                'si' => $query->whereNotNull('purchase_value'),
-                'no' => $query->whereNull('purchase_value'),
+                // Un valor de 0 cuenta como «sin valor», igual que la depreciación.
+                'si' => $query->where('purchase_value', '>', 0),
+                'no' => $query->where(fn ($q) => $q->whereNull('purchase_value')->orWhere('purchase_value', '<=', 0)),
                 default => null,
             };
         }
@@ -560,14 +572,15 @@ class FixedAssetController extends Controller
         }
 
         // Filtro por ubicación (Campo/Empaque/Oficina) vía tipo de entidad
-        if ($request->filled('entity_type')) {
+        if (is_string($request->input('entity_type')) && $request->filled('entity_type')) {
             $entityTypes = array_filter(explode(',', $request->input('entity_type')));
             if (! empty($entityTypes)) {
                 $query->whereHas('entity.entityType', fn ($q) => $q->whereIn('code', $entityTypes));
             }
         }
 
-        if ($request->filled('search')) {
+        // Un `search` que no es texto (search[]=x) se ignora.
+        if (is_string($request->input('search')) && trim($request->input('search')) !== '') {
             // '!' como carácter de escape: funciona igual en MySQL y SQLite.
             $term = '%'.str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $request->input('search')).'%';
             $query->where(function ($q) use ($term) {
@@ -607,8 +620,11 @@ class FixedAssetController extends Controller
     private function lista(Request $request, string $clave): array
     {
         $crudo = $request->input($clave);
+        // Solo escalares: status[a][]=x o category_id[][]=1 se descartan en vez de romper.
         if (is_array($crudo)) {
-            $crudo = implode(',', $crudo);
+            $crudo = implode(',', array_filter($crudo, 'is_scalar'));
+        } elseif (! is_scalar($crudo)) {
+            $crudo = '';
         }
 
         $valores = array_filter(array_map('trim', explode(',', (string) $crudo)), fn ($v) => $v !== '');
@@ -621,9 +637,15 @@ class FixedAssetController extends Controller
 
     private function ordenar(Builder $query, Request $request): void
     {
-        $campo = in_array($request->input('sort'), self::ORDENES, true) ? $request->input('sort') : 'name';
-        $dir = strtolower((string) $request->input('dir')) === 'desc' ? 'desc' : 'asc';
+        $sort = $request->input('sort');
+        $campo = is_string($sort) && in_array($sort, self::ORDENES, true) ? $sort : 'name';
+        $dirPedida = $request->input('dir');
+        $dir = is_string($dirPedida) && strtolower($dirPedida) === 'desc' ? 'desc' : 'asc';
 
+        // Los nulos (sin fecha o sin valor) van siempre al final, en ascendente y descendente.
+        if (in_array($campo, ['purchase_date', 'purchase_value'], true)) {
+            $query->orderByRaw("{$campo} IS NULL");
+        }
         $query->orderBy($campo, $dir);
         if ($campo !== 'name') {
             $query->orderBy('name');

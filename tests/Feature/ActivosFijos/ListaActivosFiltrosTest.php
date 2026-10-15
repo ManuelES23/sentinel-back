@@ -183,6 +183,74 @@ class ListaActivosFiltrosTest extends TestCase
         $this->assertSame(['A', 'B', 'C'], $this->nombres('?sort=purchase_value&dir=asc'));
     }
 
+    public function test_los_nulos_van_al_final_al_ordenar_por_valor_o_fecha_de_compra(): void
+    {
+        $this->crearActivo(['name' => 'A', 'purchase_value' => 500, 'purchase_date' => '2020-01-01']);
+        $this->crearActivo(['name' => 'B']);
+        $this->crearActivo(['name' => 'C', 'purchase_value' => 0, 'purchase_date' => '2023-01-01']);
+
+        $this->assertSame(['C', 'A', 'B'], $this->nombres('?sort=purchase_value&dir=asc'));
+        $this->assertSame(['A', 'C', 'B'], $this->nombres('?sort=purchase_value&dir=desc'));
+        $this->assertSame(['A', 'C', 'B'], $this->nombres('?sort=purchase_date&dir=asc'));
+        $this->assertSame(['C', 'A', 'B'], $this->nombres('?sort=purchase_date&dir=desc'));
+    }
+
+    public function test_un_valor_de_compra_de_cero_cuenta_como_sin_valor(): void
+    {
+        $this->crearActivo(['name' => 'A', 'purchase_value' => 1500]);
+        $this->crearActivo(['name' => 'B', 'purchase_value' => 0]);
+        $this->crearActivo(['name' => 'C']);
+
+        $this->assertSame(['A'], $this->nombres('?has_value=si'));
+        $this->assertSame(['B', 'C'], $this->nombres('?has_value=no'));
+    }
+
+    public function test_los_parametros_no_escalares_se_ignoran_sin_dar_500(): void
+    {
+        $this->crearActivo(['name' => 'A', 'status' => 'en_uso']);
+        $this->crearActivo(['name' => 'B', 'status' => 'disponible']);
+
+        foreach ([
+            '?status[a][]=x', '?category_id[][]=1', '?entity_id[x][]=1', '?search[]=x', '?search[a][b]=x',
+            '?sort[]=code', '?dir[]=desc', '?entity_type[]=OFICINA', '?assigned[]=si', '?has_value[]=si', '?year[a][]=b',
+        ] as $query) {
+            $this->assertSame(['A', 'B'], $this->nombres($query), $query);
+        }
+    }
+
+    public function test_la_busqueda_no_cruza_empresas(): void
+    {
+        $this->crearActivo(['name' => 'Zafiro corporativo', 'enterprise_id' => $this->corporativo->id]);
+
+        $this->assertSame([], $this->nombres('?search=zafiro'));
+        $this->assertSame(['Zafiro corporativo'], $this->nombres('?search=zafiro', self::URL_GE));
+    }
+
+    public function test_un_responsable_que_ya_devolvio_el_activo_no_entra_a_la_busqueda(): void
+    {
+        $this->asignar($this->crearActivo(['name' => 'A']), 'Luis Gómez', '2026-02-01');
+
+        $this->assertSame([], $this->nombres('?search=luis'));
+    }
+
+    public function test_el_signo_de_exclamacion_en_la_busqueda_es_literal(): void
+    {
+        $this->crearActivo(['name' => 'Alerta!! roja']);
+        $this->crearActivo(['name' => 'Alerta roja']);
+
+        $this->assertSame(['Alerta!! roja'], $this->nombres('?search=a!!'));
+    }
+
+    public function test_un_solo_valor_en_status_tipo_y_ubicacion_sigue_funcionando(): void
+    {
+        $this->crearActivo(['name' => 'A', 'status' => 'en_uso']);
+        $this->crearActivo(['name' => 'B', 'status' => 'disponible', 'category_id' => $this->otraCategoria->id, 'entity_id' => $this->otraEntidad->id]);
+
+        $this->assertSame(['A'], $this->nombres('?status=en_uso'));
+        $this->assertSame(['B'], $this->nombres('?category_id='.$this->otraCategoria->id));
+        $this->assertSame(['B'], $this->nombres('?entity_id='.$this->otraEntidad->id));
+    }
+
     public function test_un_orden_desconocido_cae_al_orden_por_nombre(): void
     {
         $this->crearActivo(['name' => 'B']);

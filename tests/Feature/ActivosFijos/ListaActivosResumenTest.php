@@ -121,7 +121,138 @@ class ListaActivosResumenTest extends TestCase
         // pero los demás grupos solo cuentan lo de maquinaria (B)
         $this->assertSame(1, $this->conteos($r['status'])['en_uso']);
         $this->assertSame(0, $this->conteos($r['status'])['disponible']);
-        $this->assertSame([(string) $this->otraEntidad->id => 1], $this->conteos($r['entity']));
+        // la otra ubicación (Oficinas SF) sigue en la lista, deshabilitada con 0
+        $this->assertEquals(
+            [(string) $this->otraEntidad->id => 1, (string) $this->entity->id => 0],
+            $this->conteos($r['entity']),
+        );
+    }
+
+    public function test_la_opcion_sin_activos_bajo_los_filtros_actuales_permanece_con_cero(): void
+    {
+        // Maquinaria solo tiene un activo «en uso»; con Disponible marcado no desaparece.
+        $r = $this->resumen('?status=disponible');
+
+        $this->assertSame(1, $r['total']);
+        $this->assertEquals(
+            [(string) $this->assetCategory->id => 1, (string) $this->otraCategoria->id => 0],
+            $this->conteos($r['category']),
+        );
+        $this->assertEquals(
+            [(string) $this->entity->id => 1, (string) $this->otraEntidad->id => 0],
+            $this->conteos($r['entity']),
+        );
+    }
+
+    public function test_un_id_ajeno_seleccionado_no_filtra_su_nombre(): void
+    {
+        $sbp = $this->crearEmpresaActivos('splendidbyporvenir', 'Splendid by Porvenir', 'SP');
+        [$sucursal, $secreta] = $this->crearUbicacion($sbp, 'SBP');
+        $this->crearActivo([
+            'name' => 'Ajeno', 'enterprise_id' => $sbp->id, 'branch_id' => $sucursal->id, 'entity_id' => $secreta->id,
+        ]);
+
+        foreach (['?entity_id='.$secreta->id, '?entity_id='.$this->entity->id.','.$secreta->id.',99999'] as $query) {
+            $r = $this->resumen($query);
+            $this->assertNotContains('Oficinas SBP', array_column($r['entity'], 'label'), $query);
+            $this->assertNotContains((string) $secreta->id, array_column($r['entity'], 'value'), $query);
+        }
+        // La ubicación propia sigue visible con su nombre.
+        $this->assertContains('Oficinas SF', array_column($this->resumen('?entity_id='.$secreta->id)['entity'], 'label'));
+    }
+
+    public function test_ge_ve_el_universo_de_todas_las_empresas_y_con_enterprise_id_solo_el_de_la_elegida(): void
+    {
+        [$sucursalGe, $entidadGe] = $this->crearUbicacion($this->corporativo, 'GE');
+        $tipoGe = AssetCategory::create(['code' => 'TAC-011', 'name' => 'Mobiliario', 'icon' => 'Box', 'is_active' => true]);
+        $this->crearActivo([
+            'name' => 'GE-1', 'enterprise_id' => $this->corporativo->id, 'branch_id' => $sucursalGe->id,
+            'entity_id' => $entidadGe->id, 'category_id' => $tipoGe->id,
+        ]);
+
+        $todo = $this->resumen('', self::URL_GE);
+        $this->assertEqualsCanonicalizing(
+            [(string) $this->assetCategory->id, (string) $this->otraCategoria->id, (string) $tipoGe->id],
+            array_column($todo['category'], 'value'),
+        );
+        $this->assertContains((string) $entidadGe->id, array_column($todo['entity'], 'value'));
+
+        $solo = $this->resumen('?enterprise_id='.$this->corporativo->id, self::URL_GE);
+        $this->assertEquals([(string) $tipoGe->id => 1], $this->conteos($solo['category']));
+        $this->assertEquals([(string) $entidadGe->id => 1], $this->conteos($solo['entity']));
+    }
+
+    public function test_ordena_las_etiquetas_sin_considerar_acentos(): void
+    {
+        $area = Entity::create([
+            'branch_id' => $this->branch->id, 'entity_type_id' => $this->entity->entity_type_id,
+            'code' => 'OFC-A', 'name' => 'Área norte', 'slug' => 'area-norte', 'is_active' => true,
+        ]);
+        $nino = Entity::create([
+            'branch_id' => $this->branch->id, 'entity_type_id' => $this->entity->entity_type_id,
+            'code' => 'OFC-N', 'name' => 'Ñandú', 'slug' => 'nandu', 'is_active' => true,
+        ]);
+        $this->crearActivo(['name' => 'E', 'entity_id' => $area->id]);
+        $this->crearActivo(['name' => 'F', 'entity_id' => $nino->id]);
+
+        $this->assertSame(
+            ['Área norte', 'Empaque Charay', 'Ñandú', 'Oficinas SF'],
+            array_column($this->resumen()['entity'], 'label'),
+        );
+    }
+
+    public function test_un_valor_de_cero_cuenta_como_sin_valor(): void
+    {
+        $this->crearActivo(['name' => 'Cero', 'purchase_value' => 0]);
+
+        $r = $this->resumen();
+        $this->assertEquals(['si' => 1, 'no' => 4], $this->conteos($r['has_value']));
+        $this->assertSame(1, $this->resumen('?has_value=si')['total']);
+        $this->assertSame(4, $this->resumen('?has_value=no')['total']);
+    }
+
+    public function test_los_parametros_anidados_no_rompen_el_resumen(): void
+    {
+        foreach (['?status[a][]=x', '?category_id[][]=1', '?entity_id[x][]=1', '?search[]=x', '?year[a][]=b'] as $query) {
+            $this->assertSame(4, $this->resumen($query)['total'], $query);
+        }
+    }
+
+    public function test_la_busqueda_no_cruza_empresas(): void
+    {
+        $this->crearActivo(['name' => 'Zafiro corporativo', 'enterprise_id' => $this->corporativo->id]);
+
+        $this->assertSame(0, $this->resumen('?search=zafiro')['total']);
+        $this->assertSame(1, $this->resumen('?search=zafiro', self::URL_GE)['total']);
+    }
+
+    public function test_un_responsable_que_ya_devolvio_el_activo_no_entra_a_la_busqueda(): void
+    {
+        $c = FixedAsset::where('name', 'C')->first();
+        FixedAssetAssignment::create([
+            'enterprise_id' => $c->enterprise_id, 'fixed_asset_id' => $c->id, 'assignee_type' => 'user',
+            'assignee_id' => $this->actingUser->id, 'assignee_name' => 'Luis Gómez', 'assigned_at' => '2026-01-10',
+            'returned_at' => '2026-02-01', 'condition_out' => 'bueno', 'asset_snapshot' => [],
+        ]);
+
+        $this->assertSame(0, $this->resumen('?search=luis')['total']);
+        $this->assertSame(1, $this->resumen('?search=ana')['total']);
+    }
+
+    public function test_el_signo_de_exclamacion_en_la_busqueda_es_literal(): void
+    {
+        $this->crearActivo(['name' => 'Alerta!! roja']);
+        $this->crearActivo(['name' => 'Alerta roja']);
+
+        $this->assertSame(1, $this->resumen('?search=a!!')['total']);
+        $this->assertSame(1, $this->resumen('?search=!')['total']);
+    }
+
+    public function test_un_solo_valor_en_status_tipo_y_ubicacion_sigue_funcionando(): void
+    {
+        $r = $this->resumen('?status=en_uso&category_id='.$this->assetCategory->id.'&entity_id='.$this->entity->id);
+
+        $this->assertSame(1, $r['total']);
     }
 
     public function test_incluye_con_cero_los_ids_seleccionados_que_no_tienen_activos(): void
