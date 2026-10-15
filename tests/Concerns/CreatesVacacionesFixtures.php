@@ -148,4 +148,33 @@ trait CreatesVacacionesFixtures
             );
         }
     }
+
+    /** rh → gestion → festivos en el corporativo, con los tipos view/create/edit/delete. */
+    protected function submoduloFestivos(): Submodule
+    {
+        $aplicacion = Application::firstOrCreate(
+            ['enterprise_id' => $this->corporativo->id, 'slug' => 'rh'],
+            ['name' => 'Recursos Humanos', 'description' => 'RH', 'path' => '/grupoesplendido/rh', 'is_active' => true],
+        );
+        $modulo = Module::firstOrCreate(['application_id' => $aplicacion->id, 'slug' => 'gestion'], ['name' => 'Gestión', 'order' => 4, 'is_active' => true]);
+        $submodulo = Submodule::firstOrCreate(['module_id' => $modulo->id, 'slug' => 'festivos'], ['name' => 'Festivos', 'order' => 3, 'is_active' => true]);
+
+        foreach (['view' => 'Ver', 'create' => 'Crear', 'edit' => 'Editar', 'delete' => 'Eliminar'] as $slug => $nombre) {
+            SubmodulePermissionType::firstOrCreate(['submodule_id' => $submodulo->id, 'slug' => $slug], ['name' => $nombre, 'order' => 1, 'is_active' => true]);
+        }
+
+        return $submodulo;
+    }
+
+    protected function concederFestivos(User $usuario, string ...$permisos): void
+    {
+        $submodulo = $this->submoduloFestivos();
+        foreach ($permisos as $slug) {
+            $tipo = SubmodulePermissionType::where('submodule_id', $submodulo->id)->where('slug', $slug)->firstOrFail();
+            UserSubmodulePermission::updateOrCreate(
+                ['user_id' => $usuario->id, 'submodule_id' => $submodulo->id, 'permission_type_id' => $tipo->id],
+                ['is_granted' => true],
+            );
+        }
+    }
 }

@@ -1111,6 +1111,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::prefix('vacaciones')->group(function () {
                 // Rutas de cálculo según Ley Federal del Trabajo México
                 Route::get('tabla-lft', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationController::class, 'getVacationTable']);
+                Route::get('mis-permisos', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationController::class, 'misPermisos']);
                 Route::post('calcular-dias', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationController::class, 'calculateDays']);
                 Route::post('inicializar-balances', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationController::class, 'initializeBalances']);
                 Route::get('empleado/{employee}/info', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationController::class, 'getEmployeeVacationInfo']);
@@ -1131,6 +1132,15 @@ Route::middleware('auth:sanctum')->group(function () {
             });
             Route::apiResource('vacaciones', App\Http\Controllers\Api\GrupoEsplendido\RH\VacationController::class)
                 ->parameters(['vacaciones' => 'vacation']);
+
+            // Submódulo Festivos
+            Route::prefix('festivos')->group(function () {
+                Route::get('mis-permisos', [App\Http\Controllers\Api\GrupoEsplendido\RH\HolidayController::class, 'misPermisos']);
+                Route::post('cargar-oficiales', [App\Http\Controllers\Api\GrupoEsplendido\RH\HolidayController::class, 'cargarOficiales']);
+            });
+            Route::apiResource('festivos', App\Http\Controllers\Api\GrupoEsplendido\RH\HolidayController::class)
+                ->parameters(['festivos' => 'holiday'])
+                ->except(['show']);
 
             // Submódulo Incidencias
             Route::prefix('incidencias')->group(function () {

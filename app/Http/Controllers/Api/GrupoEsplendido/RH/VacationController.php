@@ -169,6 +169,19 @@ class VacationController extends Controller
         return $vacation->load(self::RELACIONES)->append(['status_label', 'status_color']);
     }
 
+    /** Qué puede hacer el usuario en Vacaciones; el front oculta lo demás (la API sigue respondiendo 403). */
+    public function misPermisos(): JsonResponse
+    {
+        $empresaId = (int) Enterprise::where('slug', AprobadorVacaciones::EMPRESA_CORPORATIVA)->value('id');
+
+        return response()->json([
+            'success' => true,
+            'data' => collect(['view', 'create', 'edit', 'aprobar'])->mapWithKeys(fn (string $permiso) => [
+                $permiso => $empresaId && $this->tienePermisoSubmodulo($empresaId, 'gestion', 'vacaciones', $permiso, 'rh'),
+            ]),
+        ]);
+    }
+
     private function exigir(string $permiso): void
     {
         $this->exigirPermisoSubmodulo(
