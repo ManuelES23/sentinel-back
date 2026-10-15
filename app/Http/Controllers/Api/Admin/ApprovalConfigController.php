@@ -6,17 +6,26 @@ use App\Http\Controllers\Controller;
 use App\Models\ApprovalProcess;
 use App\Models\ApprovalFlowStep;
 use App\Models\Position;
+use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 
 class ApprovalConfigController extends Controller
 {
+    /** Tipos de aprobador que solo existen en el proceso de vacaciones, con su nombre en pantalla. */
+    private const TIPOS_SOLO_VACACIONES = [
+        ApprovalFlowStep::TYPE_DIRECT_SUPERVISOR => 'Jefe directo',
+        ApprovalFlowStep::TYPE_DEPARTMENT_MANAGER => 'Jefe del departamento',
+        ApprovalFlowStep::TYPE_USER => 'Usuario específico',
+    ];
+
     /**
      * Listar todos los procesos de aprobación
      */
     public function index(Request $request): JsonResponse
     {
-        $query = ApprovalProcess::with(['steps.enterprise', 'steps.position']);
+        $query = ApprovalProcess::with(['steps.enterprise', 'steps.position', 'steps.user:id,name,email']);
 
         if ($request->has('module')) {
             $query->byModule($request->module);
@@ -39,7 +48,7 @@ class ApprovalConfigController extends Controller
      */
     public function show(ApprovalProcess $process): JsonResponse
     {
-        $process->load(['steps.enterprise', 'steps.position']);
+        $process->load(['steps.enterprise', 'steps.position', 'steps.user:id,name,email']);
 
         return response()->json([
             'success' => true,
@@ -87,7 +96,7 @@ class ApprovalConfigController extends Controller
         ]);
 
         $process->update($validated);
-        $process->load(['steps.enterprise', 'steps.position']);
+        $process->load(['steps.enterprise', 'steps.position', 'steps.user:id,name,email']);
 
         return response()->json([
             'success' => true,
@@ -142,7 +151,7 @@ class ApprovalConfigController extends Controller
     public function getSteps(ApprovalProcess $process): JsonResponse
     {
         $steps = $process->steps()
-            ->with(['enterprise', 'position'])
+            ->with(['enterprise', 'position', 'user:id,name,email'])
             ->orderBy('step_order')
             ->get();
 
@@ -157,20 +166,20 @@ class ApprovalConfigController extends Controller
      */
     public function addStep(Request $request, ApprovalProcess $process): JsonResponse
     {
-        if ($request->input('approver_type') === ApprovalFlowStep::TYPE_DIRECT_SUPERVISOR) {
-            $request->merge(['position_id' => null, 'min_hierarchy_level' => null]);
+        $tipo = $request->input('approver_type');
+        if (isset(self::TIPOS_SOLO_VACACIONES[$tipo]) && $process->code !== ApprovalProcess::VACATION_REQUESTS) {
+            return $this->soloVacaciones($tipo);
         }
 
-        if ($request->input('approver_type') === ApprovalFlowStep::TYPE_DIRECT_SUPERVISOR && $process->code !== ApprovalProcess::VACATION_REQUESTS) {
-            return $this->soloVacaciones();
-        }
+        $this->limpiarCamposAjenos($request, $tipo);
 
         $validated = $request->validate([
             'enterprise_id' => 'nullable|exists:enterprises,id',
             'step_order' => 'sometimes|integer|min:1',
-            'approver_type' => 'required|in:hierarchy_level,position,direct_supervisor',
+            'approver_type' => 'required|in:hierarchy_level,position,direct_supervisor,department_manager,user',
             'min_hierarchy_level' => 'required_if:approver_type,hierarchy_level|nullable|integer|min:1|max:7',
             'position_id' => 'required_if:approver_type,position|nullable|exists:positions,id',
+            'user_id' => 'required_if:approver_type,user|nullable|exists:users,id',
             'approval_scope' => 'sometimes|in:own_department,child_departments,enterprise',
             'can_approve' => 'sometimes|boolean',
             'can_reject' => 'sometimes|boolean',
@@ -185,7 +194,7 @@ class ApprovalConfigController extends Controller
         }
 
         $step = ApprovalFlowStep::create($validated);
-        $step->load(['enterprise', 'position']);
+        $step->load(['enterprise', 'position', 'user:id,name,email']);
 
         return response()->json([
             'success' => true,
@@ -206,29 +215,35 @@ class ApprovalConfigController extends Controller
             ], 404);
         }
 
-        if ($request->input('approver_type') === ApprovalFlowStep::TYPE_DIRECT_SUPERVISOR) {
-            $request->merge(['position_id' => null, 'min_hierarchy_level' => null]);
+        $tipo = $request->input('approver_type', $step->approver_type);
+        if (isset(self::TIPOS_SOLO_VACACIONES[$tipo]) && $process->code !== ApprovalProcess::VACATION_REQUESTS) {
+            return $this->soloVacaciones($tipo);
         }
 
-        $tipo = $request->input('approver_type', $step->approver_type);
-        if ($tipo === ApprovalFlowStep::TYPE_DIRECT_SUPERVISOR && $process->code !== ApprovalProcess::VACATION_REQUESTS) {
-            return $this->soloVacaciones();
+        if ($request->has('approver_type')) {
+            $this->limpiarCamposAjenos($request, $tipo);
         }
 
         $validated = $request->validate([
             'enterprise_id' => 'nullable|exists:enterprises,id',
             'step_order' => 'sometimes|integer|min:1',
-            'approver_type' => 'sometimes|in:hierarchy_level,position,direct_supervisor',
+            'approver_type' => 'sometimes|in:hierarchy_level,position,direct_supervisor,department_manager,user',
             'min_hierarchy_level' => 'nullable|integer|min:1|max:7',
             'position_id' => 'nullable|exists:positions,id',
+            'user_id' => 'nullable|exists:users,id',
             'approval_scope' => 'sometimes|in:own_department,child_departments,enterprise',
             'can_approve' => 'sometimes|boolean',
             'can_reject' => 'sometimes|boolean',
             'is_active' => 'sometimes|boolean',
         ]);
 
+        $usuarioFinal = array_key_exists('user_id', $validated) ? $validated['user_id'] : $step->user_id;
+        if ($tipo === ApprovalFlowStep::TYPE_USER && $usuarioFinal === null) {
+            throw ValidationException::withMessages(['user_id' => 'Elige el usuario que aprueba este paso.']);
+        }
+
         $step->update($validated);
-        $step->load(['enterprise', 'position']);
+        $step->load(['enterprise', 'position', 'user:id,name,email']);
 
         return response()->json([
             'success' => true,
@@ -257,12 +272,27 @@ class ApprovalConfigController extends Controller
         ]);
     }
 
-    private function soloVacaciones(): JsonResponse
+    private function soloVacaciones(string $tipo): JsonResponse
     {
         return response()->json([
             'success' => false,
-            'message' => '«Jefe directo» solo se puede usar en el proceso de vacaciones.',
+            'message' => '«'.self::TIPOS_SOLO_VACACIONES[$tipo].'» solo se puede usar en el proceso de vacaciones.',
         ], 422);
+    }
+
+    /** Un cambio de tipo deja en nulo lo que el nuevo tipo no usa (puesto, nivel o usuario). */
+    private function limpiarCamposAjenos(Request $request, ?string $tipo): void
+    {
+        $limpiar = match ($tipo) {
+            ApprovalFlowStep::TYPE_DIRECT_SUPERVISOR, ApprovalFlowStep::TYPE_DEPARTMENT_MANAGER => ['position_id', 'min_hierarchy_level', 'user_id'],
+            ApprovalFlowStep::TYPE_USER => ['position_id', 'min_hierarchy_level'],
+            'position', 'hierarchy_level' => ['user_id'],
+            default => [],
+        };
+
+        if ($limpiar !== []) {
+            $request->merge(array_fill_keys($limpiar, null));
+        }
     }
 
     // ===== DATOS AUXILIARES =====
@@ -288,6 +318,7 @@ class ApprovalConfigController extends Controller
             'data' => [
                 'hierarchy_levels' => $hierarchyLevels,
                 'approver_positions' => $positions,
+                'approver_users' => User::orderBy('name')->get(['id', 'name', 'email']),
                 'modules' => $modules,
                 'approval_scopes' => [
                     'own_department' => 'Solo su departamento',
