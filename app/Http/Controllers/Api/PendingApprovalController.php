@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController;
+use App\Models\ApprovalFlowStep;
 use App\Models\ApprovalProcess;
 use App\Models\Employee;
 use App\Models\EmployeeIncident;
@@ -58,6 +59,11 @@ class PendingApprovalController extends Controller
                 $totalPending += $timeClockReviewEntry['pending_count'];
             }
 
+            if ($vacacionesEntry = $this->entradaVacacionesSinEmpleado($user, false)) {
+                $processes[] = $vacacionesEntry;
+                $totalPending += $vacacionesEntry['pending_count'];
+            }
+
             return response()->json([
                 'success' => true,
                 'data' => [
@@ -91,6 +97,11 @@ class PendingApprovalController extends Controller
             if ($timeClockReviewEntry) {
                 $processes[] = $timeClockReviewEntry;
                 $totalPending += $timeClockReviewEntry['pending_count'];
+            }
+
+            if ($vacacionesEntry = $this->entradaVacacionesSinEmpleado($user, false)) {
+                $processes[] = $vacacionesEntry;
+                $totalPending += $vacacionesEntry['pending_count'];
             }
 
             return response()->json([
@@ -199,11 +210,13 @@ class PendingApprovalController extends Controller
         $hasTransferPermission = $this->hasTransferApprovalPermission($request, $user);
 
         if (! $employee && ! $hasTransferPermission) {
+            $vacacionesEntry = $this->entradaVacacionesSinEmpleado($user, true);
+
             return response()->json([
                 'success' => true,
                 'data' => [
-                    'total_pending' => 0,
-                    'processes' => [],
+                    'total_pending' => $vacacionesEntry['pending_count'] ?? 0,
+                    'processes' => $vacacionesEntry ? [$vacacionesEntry] : [],
                 ],
             ]);
         }
@@ -211,12 +224,13 @@ class PendingApprovalController extends Controller
         if (! $employee && $hasTransferPermission) {
             $process = $this->getInventoryApprovalProcess();
             $items = $this->getPendingTransferReceptionsByPermission($request, $user);
+            $vacacionesEntry = $this->entradaVacacionesSinEmpleado($user, true);
 
             return response()->json([
                 'success' => true,
                 'data' => [
-                    'total_pending' => count($items),
-                    'processes' => [[
+                    'total_pending' => count($items) + ($vacacionesEntry['pending_count'] ?? 0),
+                    'processes' => array_values(array_filter([[
                         'process_id' => $process?->id,
                         'code' => ApprovalProcess::INVENTORY_MOVEMENTS,
                         'name' => $process?->name ?? 'Movimientos de inventario',
@@ -226,7 +240,7 @@ class PendingApprovalController extends Controller
                         'items' => $items,
                         'scope' => 'enterprise',
                         'route' => $this->getProcessRoute(ApprovalProcess::INVENTORY_MOVEMENTS),
-                    ]],
+                    ], $vacacionesEntry])),
                 ],
             ]);
         }
@@ -414,7 +428,7 @@ class PendingApprovalController extends Controller
         return $this->vacacionesPorUsuario[$user->id] ??= VacationRequest::where('status', 'pending')
             ->whereNotNull('current_step')
             ->where('employee_id', '!=', (int) $user->employee?->id)
-            ->with(['employee.department:id,name', 'employee.enterprise:id,name', 'approvals'])
+            ->with(['employee.department:id,name,manager_id', 'employee.enterprise:id,name', 'approvals'])
             ->lazyById(100)
             ->filter(function (VacationRequest $solicitud) use ($user) {
                 $paso = $this->cadenaVac()->pasoActual($solicitud);
@@ -433,11 +447,45 @@ class PendingApprovalController extends Controller
 
     private function getPendingVacations(Employee $employee, string $scope): array
     {
-        if (! $employee->user) {
-            return [];
+        return $employee->user ? $this->itemsVacaciones($employee->user) : [];
+    }
+
+    /**
+     * Entrada de vacaciones para quien no tiene empleado ligado: solo si es «usuario específico»
+     * de algún paso (los de RH sin empleado resuelven desde la pantalla de Vacaciones de RH).
+     */
+    private function entradaVacacionesSinEmpleado($user, bool $conItems): ?array
+    {
+        $process = ApprovalProcess::active()->requiresApproval()->where('code', ApprovalProcess::VACATION_REQUESTS)->first();
+        if (! $process || ! $this->esUsuarioEspecificoDeVacaciones($process, $user)) {
+            return null;
         }
 
-        return $this->vacacionesPara($employee->user)
+        $entrada = [
+            'process_id' => $process->id,
+            'code' => $process->code,
+            'name' => $process->name,
+            'module' => $process->module,
+            'description' => $process->description,
+            'pending_count' => $this->vacacionesPara($user)->count(),
+            'scope' => 'enterprise',
+            'route' => $this->getProcessRoute($process->code),
+        ];
+
+        return $conItems ? $entrada + ['items' => $this->itemsVacaciones($user)] : $entrada;
+    }
+
+    private function esUsuarioEspecificoDeVacaciones(ApprovalProcess $process, $user): bool
+    {
+        return $process->activeSteps()
+            ->where('approver_type', ApprovalFlowStep::TYPE_USER)
+            ->where('user_id', $user->id)
+            ->exists();
+    }
+
+    private function itemsVacaciones($user): array
+    {
+        return $this->vacacionesPara($user)
             ->take(50)
             ->map(fn (VacationRequest $item) => [
                 'id' => $item->id,
@@ -751,7 +799,8 @@ class PendingApprovalController extends Controller
             return $this->approveInventoryMovement($id, $user);
         }
 
-        if (! $employee) {
+        // Vacaciones: un «usuario específico» de la cadena puede no ser empleado; el servicio valida si le toca el paso.
+        if (! $employee && $type !== 'vacation_request') {
             return response()->json(['success' => false, 'message' => 'No tiene empleado vinculado'], 403);
         }
 
@@ -772,7 +821,7 @@ class PendingApprovalController extends Controller
         $user = $request->user();
         $employee = $user->employee;
 
-        if (! $employee) {
+        if (! $employee && $type !== 'vacation_request') {
             return response()->json(['success' => false, 'message' => 'No tiene empleado vinculado'], 403);
         }
 
@@ -1310,10 +1359,12 @@ class PendingApprovalController extends Controller
             return $this->aprobadorOc()->empresasQuePuedeAprobar($employee) !== [];
         }
 
-        // Vacaciones: cadena por paso (jefe directo, corporativos y paso de RH).
+        // Vacaciones: cadena por paso (jefe directo, jefe de departamento, usuario específico, corporativos y paso de RH).
         if ($process->code === ApprovalProcess::VACATION_REQUESTS) {
             return $process->canBeApprovedBy($employee, $enterpriseId)
                 || $employee->subordinates()->where('status', Employee::STATUS_ACTIVE)->exists()
+                || $employee->managedDepartments()->exists()
+                || $this->esUsuarioEspecificoDeVacaciones($process, $user)
                 || $this->aprobadorVac()->esRh($user)
                 // Un corporativo puede aprobar por una regla de puesto de cualquier empresa (comprobación barata, sin recorrer solicitudes).
                 || ($employee->position_id !== null
