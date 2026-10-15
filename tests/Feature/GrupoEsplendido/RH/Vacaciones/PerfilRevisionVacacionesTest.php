@@ -31,7 +31,10 @@ class PerfilRevisionVacacionesTest extends TestCase
         app(VacationRequestService::class)->crear($empleado, $lunes, $lunes->copy()->addDays(4), null, VacationRequest::SOURCE_PERFIL);
         Sanctum::actingAs($empleado->user);
 
-        $revision = $this->getJson('/api/profile')->assertOk()->json('data.vacation.requests.0.revision');
+        $respuesta = $this->getJson('/api/profile')->assertOk()
+            // Solo la revisión presentada: la cadena cruda (reglas, comentarios, paso final de RH) no sale.
+            ->assertJsonMissingPath('data.vacation.requests.0.approvals');
+        $revision = $respuesta->json('data.vacation.requests.0.revision');
 
         $this->assertSame(1, $revision['paso_actual']);
         $this->assertSame(1, $revision['total_pasos']);

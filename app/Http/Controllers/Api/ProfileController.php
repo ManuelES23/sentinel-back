@@ -57,10 +57,14 @@ class ProfileController extends Controller
                 ->limit(10)
                 ->get()
                 // La misma revisión (paso actual y línea de tiempo) que ve el empleado en el portal.
-                ->each(fn (VacationRequest $solicitud) => $solicitud->setAttribute('revision', Arr::only(
-                    PresentadorPortalVacaciones::detalle($solicitud),
-                    ['paso_actual', 'total_pasos', 'revisor_actual', 'pasos'],
-                )));
+                ->each(function (VacationRequest $solicitud) {
+                    $solicitud->setAttribute('revision', Arr::only(
+                        PresentadorPortalVacaciones::detalle($solicitud),
+                        ['paso_actual', 'total_pasos', 'revisor_actual', 'pasos'],
+                    ));
+                    // La cadena cruda (reglas, comentarios, paso final de RH) no sale: solo la revisión presentada.
+                    $solicitud->unsetRelation('approvals');
+                });
 
             // Solicitudes pendientes
             $pendingRequests = VacationRequest::where('employee_id', $employee->id)
