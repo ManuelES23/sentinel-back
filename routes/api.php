@@ -61,6 +61,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/', [App\Http\Controllers\Api\PendingApprovalController::class, 'index']);
         Route::get('/summary', [App\Http\Controllers\Api\PendingApprovalController::class, 'summary']);
         Route::get('/history', [App\Http\Controllers\Api\PendingApprovalController::class, 'history']);
+        // Avisar al empleado por WhatsApp tras decidir un paso de vacaciones (autoriza el controlador)
+        Route::get('/vacation_request/{vacation}/whatsapp-mensaje', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationAvisoController::class, 'mensaje']);
+        Route::post('/vacation_request/{vacation}/avisos/whatsapp', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationAvisoController::class, 'registrar']);
         Route::get('/{type}/{id}', [App\Http\Controllers\Api\PendingApprovalController::class, 'show']);
         Route::post('/{type}/{id}/approve', [App\Http\Controllers\Api\PendingApprovalController::class, 'approve']);
         Route::post('/{type}/{id}/reject', [App\Http\Controllers\Api\PendingApprovalController::class, 'reject']);
@@ -1114,6 +1117,11 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::post('empleado/{employee}/recalcular', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationController::class, 'recalculateBalance']);
                 Route::post('empleado/{employee}/ajuste', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationController::class, 'applyAdjustment']);
                 Route::get('empleado/{employee}/historial', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationController::class, 'getBalanceHistory']);
+
+                // Avisos al empleado (WhatsApp manual e historial)
+                Route::get('{vacation}/whatsapp-mensaje', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationAvisoController::class, 'mensaje']);
+                Route::post('{vacation}/avisos/whatsapp', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationAvisoController::class, 'registrar']);
+                Route::get('{vacation}/avisos', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationAvisoController::class, 'avisos']);
 
                 // Rutas existentes
                 Route::get('balance', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationController::class, 'getBalance']);
