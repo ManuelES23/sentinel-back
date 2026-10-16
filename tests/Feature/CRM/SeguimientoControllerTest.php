@@ -217,9 +217,9 @@ class SeguimientoControllerTest extends TestCase
         $this->assertDatabaseCount('crm_actividades', 0);
     }
 
-    public function test_manual_sigue_exigiendo_la_fecha_y_rechazando_una_futura(): void
+    public function test_manual_sigue_rechazando_una_fecha_futura(): void
     {
-        foreach ([['fuente' => 'manual'], ['fuente' => 'manual', 'fecha_actividad' => '2026-09-14 11:00:00'], []] as $extra) {
+        foreach ([['fuente' => 'manual', 'fecha_actividad' => '2026-09-14 11:00:00'], ['fecha_actividad' => '2026-09-14 11:00:00']] as $extra) {
             $this->enviar($this->payload([
                 'actividad' => array_merge(['tipo' => 'llamada', 'descripcion' => 'Llamé'], $extra),
                 'siguiente' => null,
@@ -227,6 +227,53 @@ class SeguimientoControllerTest extends TestCase
         }
 
         $this->assertDatabaseCount('crm_actividades', 0);
+    }
+
+    public function test_manual_rechaza_una_fecha_que_no_es_fecha(): void
+    {
+        $this->enviar($this->payload([
+            'actividad' => ['tipo' => 'llamada', 'descripcion' => 'Llamé', 'fuente' => 'manual', 'fecha_actividad' => 'ayer por la tarde'],
+            'siguiente' => null,
+        ]))->assertStatus(422)->assertJsonValidationErrors('actividad.fecha_actividad');
+
+        $this->assertDatabaseCount('crm_actividades', 0);
+    }
+
+    public function test_manual_sin_fecha_registra_la_actividad_con_la_hora_del_servidor(): void
+    {
+        // Parche de huso: el front ya no manda la fecha mientras el usuario no la edite.
+        foreach ([
+            ['fuente' => 'manual'],
+            [],
+            ['fecha_actividad' => null],
+            ['fecha_actividad' => ''],
+        ] as $extra) {
+            $this->enviar($this->payload([
+                'actividad' => array_merge(['tipo' => 'llamada', 'descripcion' => 'Llamé'], $extra),
+                'siguiente' => null,
+            ]))->assertCreated();
+        }
+
+        $this->assertSame(4, \App\Models\CRM\CrmActividad::where('fuente', 'manual')
+            ->where('fecha_actividad', '2026-09-14 10:00:00')->count());
+    }
+
+    public function test_manual_con_fecha_pasada_la_respeta(): void
+    {
+        $this->enviar($this->payload([
+            'actividad' => ['tipo' => 'llamada', 'descripcion' => 'Llamé', 'fuente' => 'manual', 'fecha_actividad' => '2026-09-12 16:30:00'],
+            'siguiente' => null,
+        ]))->assertCreated();
+
+        $this->assertDatabaseHas('crm_actividades', ['fuente' => 'manual', 'fecha_actividad' => '2026-09-12 16:30:00']);
+    }
+
+    public function test_manual_con_fecha_dentro_de_la_tolerancia_de_cinco_minutos_se_acepta(): void
+    {
+        $this->enviar($this->payload([
+            'actividad' => ['tipo' => 'llamada', 'descripcion' => 'Llamé', 'fuente' => 'manual', 'fecha_actividad' => '2026-09-14 10:04:00'],
+            'siguiente' => null,
+        ]))->assertCreated();
     }
 
     public function test_una_fuente_nula_queda_manual_con_la_fecha_del_cliente(): void
