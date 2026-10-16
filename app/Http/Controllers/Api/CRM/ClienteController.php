@@ -50,7 +50,7 @@ class ClienteController extends CrmBaseController
             ->when($request->estatus, fn ($q, $e) => $q->where('estatus', $e))
             ->orderByDesc('created_at');
 
-        $perPage = (int) $request->query('per_page', 15);
+        $perPage = $this->perPage($request, 15);
         $paginated = $query->paginate($perPage);
 
         return $this->jsonPaginated($paginated);

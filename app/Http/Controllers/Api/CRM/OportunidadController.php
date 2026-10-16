@@ -42,7 +42,7 @@ class OportunidadController extends CrmBaseController
             ->when($request->prospecto_id, fn ($q, $id) => $q->where('prospecto_id', $id))
             ->orderByDesc('created_at');
 
-        $perPage = (int) $request->query('per_page', 100);
+        $perPage = $this->perPage($request, 100);
         $paginated = $query->paginate($perPage);
 
         return $this->jsonPaginated($paginated);

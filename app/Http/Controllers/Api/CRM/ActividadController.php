@@ -72,7 +72,7 @@ class ActividadController extends CrmBaseController
             'entidad_tipo', 'entidad_id', 'tipo', 'vendedor_id', 'search',
         ]));
 
-        $perPage = (int) $request->query('per_page', 50);
+        $perPage = $this->perPage($request, 50);
 
         return $this->respuestaPaginada($query->paginate($perPage));
     }

@@ -77,7 +77,7 @@ class ContactoController extends CrmBaseController
             ->orderByDesc('es_principal')
             ->orderBy('nombre');
 
-        $perPage = (int) $request->query('per_page', 50);
+        $perPage = $this->perPage($request, 50);
         $paginated = $query->paginate($perPage);
 
         // Añadir alias corto en cada registro para consumo del frontend.

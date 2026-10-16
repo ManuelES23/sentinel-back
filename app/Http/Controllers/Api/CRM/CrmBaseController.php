@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\CRM;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
 abstract class CrmBaseController extends Controller
@@ -36,6 +37,22 @@ abstract class CrmBaseController extends Controller
                 'last_page'    => $paginated->lastPage(),
             ],
         ]);
+    }
+
+    /**
+     * Tamaño de página pedido en `per_page`, acotado a 1..$max. Sin tope,
+     * `per_page=-1` o uno enorme devolvía la tabla completa de la empresa.
+     * Un valor ausente o no numérico cae al `$default`.
+     */
+    protected function perPage(Request $request, int $default, int $max = 200): int
+    {
+        $pedido = $request->query('per_page');
+
+        if (! is_numeric($pedido)) {
+            return min(max($default, 1), $max);
+        }
+
+        return min(max((int) $pedido, 1), $max);
     }
 
     /**
