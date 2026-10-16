@@ -10,6 +10,7 @@ use App\Models\CRM\CrmDialpadSyncEstado;
 use App\Models\CRM\CrmVendedor;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Tests\Concerns\CreatesCrmFixtures;
 use Tests\TestCase;
@@ -171,6 +172,60 @@ class SincronizarDialpadCommandTest extends TestCase
         $actividad->refresh();
         $this->assertEquals(10, $actividad->duracion_minutos);
         $this->assertStringContainsString('10 min', $actividad->descripcion);
+    }
+
+    public function test_resync_de_una_llamada_existente_no_busca_la_entidad_por_telefono(): void
+    {
+        CrmActividad::create([
+            'empresa_id' => $this->enterprise->id,
+            'tipo' => 'llamada',
+            'vendedor_id' => $this->vendedor->id,
+            'descripcion' => 'Llamada entrante de Dialpad (6621234567) — 4 min',
+            'fecha_actividad' => now()->subHour(),
+            'duracion_minutos' => 4,
+            'fuente' => 'dialpad',
+            'dialpad_call_id' => 'call-existente',
+        ]);
+
+        Http::fake([
+            'dialpad.test/api/v2/call*' => Http::response([
+                'items' => [$this->llamadaFake(['call_id' => 'call-existente'])],
+                'cursor' => null,
+            ], 200),
+        ]);
+
+        $consultas = [];
+        DB::listen(function ($q) use (&$consultas) {
+            if (preg_match('/from\s+"?(crm_clientes|crm_prospectos|crm_contactos)"?/i', $q->sql, $m)) {
+                $consultas[] = $m[1];
+            }
+        });
+
+        $this->artisan('crm:sincronizar-dialpad')->assertExitCode(0);
+
+        // La entidad solo se usa al crear: un re-sync no debe pagar 3 consultas por llamada.
+        $this->assertSame([], $consultas);
+    }
+
+    public function test_una_llamada_nueva_si_busca_la_entidad_por_telefono(): void
+    {
+        Http::fake([
+            'dialpad.test/api/v2/call*' => Http::response([
+                'items' => [$this->llamadaFake(['call_id' => 'call-nueva'])],
+                'cursor' => null,
+            ], 200),
+        ]);
+
+        $consultas = [];
+        DB::listen(function ($q) use (&$consultas) {
+            if (preg_match('/from\s+"?(crm_clientes|crm_prospectos|crm_contactos)"?/i', $q->sql, $m)) {
+                $consultas[] = $m[1];
+            }
+        });
+
+        $this->artisan('crm:sincronizar-dialpad')->assertExitCode(0);
+
+        $this->assertSame(['crm_clientes', 'crm_prospectos', 'crm_contactos'], $consultas);
     }
 
     public function test_llamadas_de_distintas_empresas_no_cruzan_el_match_de_telefono_aunque_el_numero_colisione(): void
