@@ -85,7 +85,7 @@ class CotizacionController extends CrmBaseController
             ->when($request->folio, fn ($q, $folio) => $q->where('folio', 'like', "%{$folio}%"))
             ->orderByDesc('created_at');
 
-        $perPage = (int) $request->query('per_page', 100);
+        $perPage = $this->perPage($request, 100);
         $paginated = $query->paginate($perPage);
 
         return $this->jsonPaginated($paginated);

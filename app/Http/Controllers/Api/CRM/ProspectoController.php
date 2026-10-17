@@ -67,7 +67,7 @@ class ProspectoController extends CrmBaseController
         // Solo prospectos activos (excluye descartados) si se pide
         $query->when($request->boolean('activos'), fn ($q) => $q->activos());
 
-        $paginated = $query->orderByDesc('created_at')->paginate($request->integer('per_page', 20));
+        $paginated = $query->orderByDesc('created_at')->paginate($this->perPage($request, 20));
 
         return $this->jsonPaginated($paginated);
     }

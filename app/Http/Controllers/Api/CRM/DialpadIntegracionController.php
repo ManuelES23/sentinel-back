@@ -74,7 +74,7 @@ class DialpadIntegracionController extends CrmBaseController
             ->when($validated['hasta'] ?? null, fn ($q, $hasta) => $q->where('fecha_actividad', '<=', $hasta))
             ->orderByDesc('fecha_actividad');
 
-        $perPage = (int) $request->query('per_page', 25);
+        $perPage = $this->perPage($request, 25);
         $paginated = $query->paginate($perPage);
 
         $items = collect($paginated->items())->map(function ($a) {

@@ -49,7 +49,7 @@ class ProductoController extends CrmBaseController
             );
         }
 
-        $perPage = (int) $request->query('per_page', 50);
+        $perPage = $this->perPage($request, 50);
 
         return $this->jsonPaginated($query->paginate($perPage));
     }

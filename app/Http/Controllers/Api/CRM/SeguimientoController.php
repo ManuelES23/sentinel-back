@@ -50,9 +50,12 @@ class SeguimientoController extends CrmBaseController
             'actividad.descripcion' => 'required_with:actividad|string|max:2000',
             'actividad.resultado' => 'nullable|string|max:2000',
             // Con whatsapp_enlace la fecha la pone el servidor (abajo): no se valida.
+            // Opcional: si no viene, `crearActividad` usa la hora del servidor (el front
+            // solo la manda cuando el usuario la edita, para no arrastrar el huso del
+            // dispositivo). Si viene, debe ser una fecha que no sea futura.
             'actividad.fecha_actividad' => [
                 'exclude_if:actividad.fuente,'.SeguimientoService::FUENTE_WHATSAPP_ENLACE,
-                'required_with:actividad',
+                'nullable',
                 'date',
                 'before_or_equal:'.now()->addMinutes(5)->toDateTimeString(),
             ],
@@ -112,7 +115,7 @@ class SeguimientoController extends CrmBaseController
         );
 
         if ($resultado['actividad']) {
-            $this->difundir(new ActividadUpdated('created', $resultado['actividad']->toArray()));
+            $this->difundir(new ActividadUpdated('created', $resultado['actividad']->load(ActividadController::RELACIONES)->toArray()));
         }
         if ($resultado['evento']) {
             $this->difundir(new AgendaUpdated('created', $resultado['evento']->load('vendedor:id,nombre')->toArray()));
