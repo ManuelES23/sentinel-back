@@ -115,7 +115,7 @@ class SeguimientoController extends CrmBaseController
         );
 
         if ($resultado['actividad']) {
-            $this->difundir(new ActividadUpdated('created', $resultado['actividad']->toArray()));
+            $this->difundir(new ActividadUpdated('created', $resultado['actividad']->load(ActividadController::RELACIONES)->toArray()));
         }
         if ($resultado['evento']) {
             $this->difundir(new AgendaUpdated('created', $resultado['evento']->load('vendedor:id,nombre')->toArray()));

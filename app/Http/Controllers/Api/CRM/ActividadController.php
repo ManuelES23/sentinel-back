@@ -50,7 +50,7 @@ class ActividadController extends CrmBaseController
      */
     protected const TIPOS_ACTIVIDAD = ['llamada', 'whatsapp', 'correo', 'visita', 'reunion', 'nota'];
 
-    protected const RELACIONES = ['vendedor:id,nombre,email'];
+    public const RELACIONES = ['vendedor:id,nombre,email'];
 
     public function __construct(private readonly VisibilidadOportunidades $visibilidad) {}
 

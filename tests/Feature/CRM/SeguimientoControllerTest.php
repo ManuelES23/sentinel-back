@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\CRM;
 
+use App\Events\CRM\ActividadUpdated;
 use App\Models\CRM\CrmCliente;
 use App\Models\CRM\CrmVendedor;
 use App\Models\UserSubmodulePermission;
@@ -9,6 +10,7 @@ use App\Services\CRM\SeguimientoService;
 use Illuminate\Contracts\Broadcasting\Factory as BroadcastFactory;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Event;
 use Laravel\Sanctum\Sanctum;
 use Tests\Concerns\CreatesCrmFixtures;
 use Tests\TestCase;
@@ -215,6 +217,19 @@ class SeguimientoControllerTest extends TestCase
         ]))->assertStatus(422)->assertJsonValidationErrors('actividad.fuente');
 
         $this->assertDatabaseCount('crm_actividades', 0);
+    }
+
+    public function test_el_evento_de_tiempo_real_de_la_actividad_trae_el_vendedor(): void
+    {
+        Event::fake([ActividadUpdated::class]);
+
+        $this->enviar($this->payload(['siguiente' => null]))->assertCreated();
+
+        Event::assertDispatched(ActividadUpdated::class, function (ActividadUpdated $e) {
+            return $e->action === 'created'
+                && ($e->data['vendedor']['id'] ?? null) === $this->propio->id
+                && ($e->data['vendedor']['nombre'] ?? null) === 'Vendedor propio';
+        });
     }
 
     public function test_manual_sigue_rechazando_una_fecha_futura(): void
