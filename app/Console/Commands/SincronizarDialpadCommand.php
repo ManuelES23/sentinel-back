@@ -191,8 +191,6 @@ class SincronizarDialpadCommand extends Command
         }
 
         $telefonoContacto = $llamada['contact']['phone'] ?? null;
-        [$entidadType, $entidadId] = $this->resolverEntidad((int) $vendedor->empresa_id, $telefonoContacto);
-
         $direccion = ($llamada['direction'] ?? null) === 'outbound' ? 'saliente' : 'entrante';
         $duracionMinutos = isset($llamada['duration']) ? (int) round(((float) $llamada['duration']) / 60000) : null;
         $fechaActividad = isset($llamada['date_started'])
@@ -216,6 +214,10 @@ class SincronizarDialpadCommand extends Command
 
             return true;
         }
+
+        // Solo se necesita al crear: en cada corrida (cada 15 min) casi todas las
+        // llamadas ya existen y la búsqueda son 3 consultas por llamada.
+        [$entidadType, $entidadId] = $this->resolverEntidad((int) $vendedor->empresa_id, $telefonoContacto);
 
         CrmActividad::create([
             'empresa_id' => $vendedor->empresa_id,

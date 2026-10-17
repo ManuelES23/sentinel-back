@@ -225,6 +225,13 @@ Módulo de Administración → Activos Fijos (SF y GE). La carpeta de controlado
 - **Presupuestos:** `montoEsperado` ya es lo ganado (Σ `monto_esperado` de `cerrado_ganado` por `fecha_cierre_real`), aunque su nombre diga «esperado».
 - **Despliegue:** `php artisan migrate` y, una sola vez, `php artisan crm:reconstruir-historial-etapas`. El back va antes que el front.
 
+## CRM · Tope de `per_page`
+
+- `CrmBaseController::perPage(Request, int $default, int $max = 200)` acota `per_page` a 1..200: negativo o cero → 1, mayor que 200 → 200, ausente o no numérico → el valor por defecto del listado. Antes `per_page=-1` o uno enorme devolvía la tabla completa de la empresa.
+- Lo usan los listados de actividades, bodegas, clientes, contactos, cotizaciones de la empresa (`indexEmpresa`), llamadas de Dialpad, empresas externas, oportunidades, productos, prospectos, regiones, vendedores y zonas. `PlantillaWhatsappController` conserva su propio tope (100). `CotizacionController::index` (por oportunidad) sigue devolviendo todo con `->get()`: está acotado por oportunidad.
+- El front pide como máximo 200 (`OportunidadFormModal`), así que ninguna pantalla existente cambia.
+- `SincronizarDialpadCommand` solo busca la entidad por teléfono (`resolverEntidad`, 3 consultas) al crear la actividad, no al re-sincronizar una llamada que ya existe.
+
 ## CRM · Visibilidad de oportunidades, agenda y cotizaciones
 
 ### Oportunidades
@@ -294,7 +301,7 @@ Módulo de Administración → Activos Fijos (SF y GE). La carpeta de controlado
 - `POST/PATCH crm/actividades` validan `vendedor_id` con `exists:crm_vendedores,id` sin filtrar por empresa.
 - Riesgos previos:
   - Resuelto en el plan 1 de vacaciones: `VerificaPermisoSubmodulo::tienePermisoSubmodulo` delega en `App\Support\PermisoSubmodulo::tiene`, que exige que el `submodule_id` del tipo de permiso coincida con el del submódulo. Una concesión cruzada ya no abre el permiso. **Comprobación de despliegue:** las concesiones cruzadas existentes con `is_granted = 1` dejan de honrarse; revisarlas antes de desplegar (lo que antes funcionaba por una concesión cruzada ahora dará 403).
-  - `GET crm/cotizaciones` acepta `per_page` sin tope.
+  - Resuelto: `per_page` ya tiene tope en todos los listados paginados del CRM (ver «Tope de `per_page`»).
   - `GET crm/actividades` (y el historial) no exigen `actividades.ver`. Solo se filtran por empresa y por la visibilidad de oportunidades.
 - Canales en tiempo real: `module.{empresa}.crm.oportunidades`, `…crm.cotizaciones`, `…crm.agenda` y `…crm.actividades` difunden el registro completo a todos los que tienen acceso al módulo. Aunque el front lo ignore, sigue visible en la pestaña Red del navegador. Es un riesgo residual aceptado hasta tener canales por vendedor o un payload recortado.
 
@@ -495,7 +502,7 @@ Módulo de Administración → Activos Fijos (SF y GE). La carpeta de controlado
   GROUP BY vendedor_id, a, s ORDER BY a DESC, s DESC;
   ```
   Se compara con las actividades `tipo = 'whatsapp'` y `fuente = 'manual'` de las semanas previas.
-- Hora del registro: con `fuente = whatsapp_enlace`, `actividad.fecha_actividad` es opcional y se ignora; el back guarda `now()` (zona de la app, `America/Mazatlan`), porque la actividad se registra en el momento en que el vendedor confirma. Así un dispositivo en otro huso (CDMX va una hora adelante) no recibe 422. Con `manual` sigue `required_with:actividad|date|before_or_equal:now+5min`, y ahí el riesgo del huso sigue abierto en «Registrar seguimiento» de Mi día.
+- Hora del registro: con `fuente = whatsapp_enlace`, `actividad.fecha_actividad` es opcional y se ignora; el back guarda `now()` (zona de la app, `America/Mazatlan`), porque la actividad se registra en el momento en que el vendedor confirma. Así un dispositivo en otro huso (CDMX va una hora adelante) no recibe 422. Con `manual` (y `fuente` nula) la fecha es **opcional**: `nullable|date|before_or_equal:now+5min`. Sin fecha (ausente, `null` o vacía) `SeguimientoService::crearActividad` guarda `now()`; con fecha pasada se respeta tal cual y con fecha futura (más de 5 minutos) responde 422 en `actividad.fecha_actividad`. Es el parche C del huso: el front ya no manda la fecha mientras el usuario no la edite, así que el valor por defecto lo pone el servidor en su zona. Si el usuario sí la edita, el riesgo del huso sigue abierto (Laravel guarda los dígitos recibidos sin convertir zonas); la solución completa (instantes absolutos) queda pendiente.
 
 ## Acceso cruzado de entidades (cross-enterprise)
 Tabla pivot `enterprise_entity` (`enterprise_id`, `entity_id`, `access_level: read|write`) — permite que una empresa acceda a bodegas/plantas de otra. Ver `EntityAccessController` (Admin).
