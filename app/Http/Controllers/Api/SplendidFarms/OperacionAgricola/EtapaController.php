@@ -191,6 +191,11 @@ class EtapaController extends Controller
                 $ciclo = ($etapa->fecha_siembra_estimada && $etapa->fecha_cosecha_estimada)
                     ? $etapa->fecha_siembra_estimada->diffInDays($etapa->fecha_cosecha_estimada)
                     : null;
+                // Carbon 3 da el ciclo con signo: una cosecha estimada anterior a la siembra
+                // estimada es un dato mal capturado y se trata como sin ciclo (igual que el front).
+                if ($ciclo !== null && $ciclo < 0) {
+                    $ciclo = null;
+                }
 
                 $etapa->update([
                     'fecha_siembra_real' => $fecha->toDateString(),

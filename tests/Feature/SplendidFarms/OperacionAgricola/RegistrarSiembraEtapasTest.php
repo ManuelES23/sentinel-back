@@ -150,6 +150,21 @@ class RegistrarSiembraEtapasTest extends TestCase
         $this->assertNull($fresca->fecha_cosecha_proyectada);
     }
 
+    public function test_ciclo_negativo_se_trata_como_sin_ciclo(): void
+    {
+        // Cosecha estimada antes de la siembra estimada (dato mal capturado).
+        $a = $this->crearEtapa($this->lote, [
+            'fecha_siembra_estimada' => '2026-04-06',
+            'fecha_cosecha_estimada' => '2026-03-30',
+        ]);
+
+        $this->postJson(self::URL, $this->payload([$a->id]))->assertOk();
+
+        $fresca = $a->fresh();
+        $this->assertSame('2026-04-15', $fresca->fecha_siembra_real->toDateString());
+        $this->assertNull($fresca->fecha_cosecha_proyectada);
+    }
+
     public function test_rechaza_fecha_futura(): void
     {
         $a = $this->crearEtapa($this->lote);
