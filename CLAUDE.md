@@ -534,6 +534,15 @@ Tabla pivot `enterprise_entity` (`enterprise_id`, `entity_id`, `access_level: re
 - `GET /api/profile` trae `vacation.requests[].revision` (`paso_actual`, `total_pasos`, `revisor_actual`, `pasos`) con el mismo presentador del portal. `GET vacaciones` de RH incluye `employee.department`.
 - Cierre de pendientes del plan 1: `reprogramar` avisa siempre al aprobador del paso actual; `VacationBalance::applyAdjustment` suma con bloqueo y conserva el motivo nuevo; «Jefe directo» solo se acepta en el proceso `vacation_requests` (422 en otros).
 
+## Agrícola · Plan de siembra
+
+- `POST /api/splendidfarms/operacion-agricola/agricola/etapas/registrar-siembra` (`EtapaController::registrarSiembra`) registra la siembra real de varias etapas a la vez. Cuerpo: `{ temporada_id, etapa_ids: int[], fecha_siembra_real: "Y-m-d" }`. Responde 200 `{ success, message: "N siembras registradas", data: Etapa[] }` con las mismas relaciones que el `index` de etapas (lote con productor y zona, variedad y tipo de variedad).
+- Reglas (422 con la clave del campo): `temporada_id` existente; `etapa_ids` de 1 a 100, enteros, sin repetir (el error cae en `etapa_ids.N`) y sin etapas borradas; `fecha_siembra_real` en `Y-m-d` y no futura (`before_or_equal:today`, la app corre en `America/Mazatlan`). Ya dentro de la transacción: todas las etapas deben pertenecer a un lote activo de la temporada («Alguna etapa no pertenece a la temporada.») y ninguna puede tener ya `fecha_siembra_real` («L1-E2 ya tiene siembra registrada.» / «L1-E2, L1-E3 ya tienen siembra registrada.», por `etapa_ids`).
+- Todo o nada: una sola `DB::transaction` con las etapas bloqueadas (`lockForUpdate`, en orden de id). Si una falla no se toca ninguna. Cada etapa se guarda con `update()` para que `Loggable` deje bitácora.
+- Ciclo: días entre `fecha_siembra_estimada` y `fecha_cosecha_estimada` de cada etapa; `fecha_cosecha_proyectada` = fecha de siembra real + ciclo, o `null` si la etapa no trae las dos estimadas.
+- Hueco conocido: `EtapaController` no revisa permisos de submódulo (cualquier usuario autenticado de la empresa puede llamarlo, igual que el resto de sus acciones).
+- Despliegue: sin migraciones; el back va antes que el front; `php artisan optimize:clear` si hay rutas en caché.
+
 ## Comandos de desarrollo
 
 ```bash

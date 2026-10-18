@@ -574,6 +574,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
                 // Etapas (subdivisiones de lote con hectareaje topado)
                 Route::get('etapas/superficie-disponible', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\EtapaController::class, 'superficieDisponible']);
+                Route::post('etapas/registrar-siembra', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\EtapaController::class, 'registrarSiembra']);
                 Route::apiResource('etapas', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\EtapaController::class)
                     ->parameters(['etapas' => 'etapa']);
 
