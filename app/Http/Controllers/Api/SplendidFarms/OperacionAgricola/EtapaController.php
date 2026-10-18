@@ -10,6 +10,9 @@ use App\Models\Variedad;
 use App\Models\TipoVariedad;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 class EtapaController extends Controller
 {
@@ -141,6 +144,76 @@ class EtapaController extends Controller
             'message' => 'Etapa creada exitosamente',
             'data' => $etapa,
         ], 201);
+    }
+
+    /**
+     * Registrar la siembra real de varias etapas a la vez (plan de siembra).
+     * Todo o nada: si una etapa no aplica, no se toca ninguna.
+     */
+    public function registrarSiembra(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'temporada_id' => 'required|exists:temporadas,id',
+            'etapa_ids' => 'required|array|min:1|max:100',
+            'etapa_ids.*' => 'integer|distinct|exists:etapas,id,deleted_at,NULL',
+            // La app corre en America/Mazatlan: "today" es el día del campo.
+            'fecha_siembra_real' => 'required|date_format:Y-m-d|before_or_equal:today',
+        ]);
+
+        $temporada = Temporada::findOrFail($validated['temporada_id']);
+        $fecha = Carbon::createFromFormat('Y-m-d', $validated['fecha_siembra_real'])->startOfDay();
+
+        $ids = DB::transaction(function () use ($validated, $temporada, $fecha) {
+            // Bloqueo en orden de id para que dos registros simultáneos no se crucen.
+            $etapas = Etapa::whereIn('id', $validated['etapa_ids'])
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get();
+
+            $loteIds = $temporada->lotesActivos()->pluck('lotes.id');
+            if ($etapas->contains(fn (Etapa $e) => !$loteIds->contains($e->lote_id))) {
+                throw ValidationException::withMessages([
+                    'etapa_ids' => 'Alguna etapa no pertenece a la temporada.',
+                ]);
+            }
+
+            $yaSembradas = $etapas->filter(fn (Etapa $e) => $e->fecha_siembra_real !== null);
+            if ($yaSembradas->isNotEmpty()) {
+                $codigos = $yaSembradas->map(fn (Etapa $e) => $e->codigo ?: $e->nombre)->implode(', ');
+                $verbo = $yaSembradas->count() === 1 ? 'ya tiene' : 'ya tienen';
+                throw ValidationException::withMessages([
+                    'etapa_ids' => "{$codigos} {$verbo} siembra registrada.",
+                ]);
+            }
+
+            foreach ($etapas as $etapa) {
+                // Ciclo = días entre la siembra y la cosecha estimadas; sin las dos no hay proyección.
+                $ciclo = ($etapa->fecha_siembra_estimada && $etapa->fecha_cosecha_estimada)
+                    ? $etapa->fecha_siembra_estimada->diffInDays($etapa->fecha_cosecha_estimada)
+                    : null;
+
+                $etapa->update([
+                    'fecha_siembra_real' => $fecha->toDateString(),
+                    'fecha_cosecha_proyectada' => $ciclo !== null
+                        ? $fecha->copy()->addDays((int) $ciclo)->toDateString()
+                        : null,
+                ]);
+            }
+
+            return $etapas->pluck('id');
+        });
+
+        $etapas = Etapa::with(['lote:id,nombre,codigo,superficie,numero_lote,zona_cultivo_id,productor_id', 'lote.productor:id,nombre,apellido', 'lote.zonaCultivo:id,nombre', 'variedad:id,nombre,cultivo_id', 'tipoVariedad:id,nombre,variedad_id'])
+            ->whereIn('id', $ids)
+            ->orderBy('lote_id')
+            ->orderBy('orden')
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'message' => $etapas->count() === 1 ? '1 siembra registrada' : "{$etapas->count()} siembras registradas",
+            'data' => $etapas,
+        ]);
     }
 
     /**
