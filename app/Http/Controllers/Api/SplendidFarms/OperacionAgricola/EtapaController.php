@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\SplendidFarms\OperacionAgricola;
 
+use App\Events\EtapaUpdated;
 use App\Http\Controllers\Controller;
 use App\Models\Etapa;
 use App\Models\Lote;
@@ -10,8 +11,10 @@ use App\Models\Variedad;
 use App\Models\TipoVariedad;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 
 class EtapaController extends Controller
@@ -137,7 +140,11 @@ class EtapaController extends Controller
         }
 
         $etapa = Etapa::create($validated);
-        $etapa->load(['lote:id,nombre,codigo,superficie,numero_lote,zona_cultivo_id,productor_id', 'lote.productor:id,nombre,apellido', 'lote.zonaCultivo:id,nombre', 'variedad:id,nombre,cultivo_id', 'tipoVariedad:id,nombre,variedad_id']);
+        // Releída: sin esto faltaban los valores por defecto de la base (is_active,
+        // fechas reales…) y la superficie salía tal como llegó, no como se guardó.
+        $etapa->refresh()->load(['lote:id,nombre,codigo,superficie,numero_lote,zona_cultivo_id,productor_id', 'lote.productor:id,nombre,apellido', 'lote.zonaCultivo:id,nombre', 'variedad:id,nombre,cultivo_id', 'tipoVariedad:id,nombre,variedad_id']);
+
+        $this->difundir(new EtapaUpdated('created', [$this->paraDifundir($etapa)]));
 
         return response()->json([
             'success' => true,
@@ -213,6 +220,15 @@ class EtapaController extends Controller
             ->orderBy('lote_id')
             ->orderBy('orden')
             ->get();
+
+        // Solo lo que cambió: la lista completa con relaciones no cabe en un mensaje de Reverb.
+        $parches = $etapas->map(fn (Etapa $e) => Arr::only(
+            $e->toArray(),
+            ['id', 'fecha_siembra_real', 'fecha_cosecha_proyectada', 'updated_at']
+        ));
+        foreach ($parches->chunk(EtapaUpdated::PARCHES_POR_EVENTO) as $grupo) {
+            $this->difundir(new EtapaUpdated('updated', $grupo->all()));
+        }
 
         return response()->json([
             'success' => true,
@@ -302,11 +318,14 @@ class EtapaController extends Controller
         unset($validated['temporada_id']);
 
         $etapa->update($validated);
+        $etapa = $etapa->fresh()->load(['lote:id,nombre,codigo,superficie,numero_lote,zona_cultivo_id,productor_id', 'lote.productor:id,nombre,apellido', 'lote.zonaCultivo:id,nombre', 'variedad:id,nombre,cultivo_id', 'tipoVariedad:id,nombre,variedad_id']);
+
+        $this->difundir(new EtapaUpdated('updated', [$this->paraDifundir($etapa)]));
 
         return response()->json([
             'success' => true,
             'message' => 'Etapa actualizada exitosamente',
-            'data' => $etapa->fresh()->load(['lote:id,nombre,codigo,superficie,numero_lote,zona_cultivo_id,productor_id', 'lote.productor:id,nombre,apellido', 'lote.zonaCultivo:id,nombre', 'variedad:id,nombre,cultivo_id', 'tipoVariedad:id,nombre,variedad_id']),
+            'data' => $etapa,
         ]);
     }
 
@@ -317,10 +336,47 @@ class EtapaController extends Controller
     {
         $etapa->delete();
 
+        $this->difundir(new EtapaUpdated('deleted', [['id' => $etapa->id, 'lote_id' => $etapa->lote_id]]));
+
         return response()->json([
             'success' => true,
             'message' => 'Etapa eliminada exitosamente',
         ]);
+    }
+
+    /**
+     * La etapa como la devuelve la API más las temporadas donde su lote está
+     * activo: con eso el front decide si la muestra en la temporada abierta.
+     */
+    private function paraDifundir(Etapa $etapa): array
+    {
+        return $etapa->toArray() + [
+            'temporada_ids' => DB::table('temporada_lote')
+                ->where('lote_id', $etapa->lote_id)
+                ->where('is_active', true)
+                ->pluck('temporada_id')
+                ->all(),
+        ];
+    }
+
+    /**
+     * Emite en tiempo real sin que un Reverb caído (o un mensaje demasiado
+     * grande) convierta en 500 una escritura que ya quedó guardada. Mismo
+     * criterio que `CrmBaseController::difundir()`.
+     */
+    private function difundir(EtapaUpdated $evento): void
+    {
+        try {
+            $pendiente = broadcast($evento);
+            // PendingBroadcast emite al destruirse; forzarlo aquí mantiene
+            // cualquier excepción dentro del try.
+            unset($pendiente);
+        } catch (\Throwable $e) {
+            Log::warning('Etapas: no se pudo emitir el evento en tiempo real', [
+                'accion' => $evento->action,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**
