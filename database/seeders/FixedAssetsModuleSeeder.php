@@ -17,6 +17,9 @@ use Illuminate\Database\Seeder;
 /**
  * Seeder para el módulo "Activos Fijos" dentro de la app Administración.
  *
+ * Recorre TODAS las empresas activas (`enterprises.is_active`): una empresa nueva
+ * queda con el módulo volviendo a correr este seeder. Las inactivas se omiten.
+ *
  * Estructura final (por empresa):
  *   Administración
  *     └── Activos Fijos (módulo)
@@ -27,7 +30,7 @@ use Illuminate\Database\Seeder;
  *           ├── Depreciación          (slug: depreciacion)   -> cierre mensual de depreciación
  *           └── Bajas y ventas       (slug: salidas)        -> ventas, bajas y traspasos
  *
- * Es seguro volver a correr este seeder (todo es firstOrCreate). El traslado
+ * Es seguro volver a correr este seeder (idempotente: todo es firstOrCreate). El traslado
  * desde Inventario lo hace la migración mover_activos_fijos_a_administracion.
  *
  * Ejecutar: php artisan db:seed --class=FixedAssetsModuleSeeder
@@ -48,15 +51,12 @@ class FixedAssetsModuleSeeder extends Seeder
 
         $created = [];
 
-        foreach (['splendidfarms', 'splendidbyporvenir', 'grupoesplendido'] as $enterpriseSlug) {
-            $result = $this->ensureModuleStructure($enterpriseSlug);
-            if ($result) {
-                $created[] = $result;
-            }
+        foreach (Enterprise::where('is_active', true)->orderBy('id')->get() as $enterprise) {
+            $created[] = $this->ensureModuleStructure($enterprise);
         }
 
         if (empty($created)) {
-            $this->command->error('No se pudo configurar el módulo Activos Fijos en ninguna empresa.');
+            $this->command->error('No hay empresas activas: no se configuró el módulo Activos Fijos.');
             return;
         }
 
@@ -100,13 +100,9 @@ class FixedAssetsModuleSeeder extends Seeder
         $this->command->info('✅ Módulo Activos Fijos listo en '.count($created).' empresa(s)');
     }
 
-    private function ensureModuleStructure(string $enterpriseSlug): ?array
+    private function ensureModuleStructure(Enterprise $enterprise): array
     {
-        $enterprise = Enterprise::where('slug', $enterpriseSlug)->first();
-        if (!$enterprise) {
-            $this->command->warn("  ⚠ {$enterpriseSlug}: empresa no encontrada, se omite.");
-            return null;
-        }
+        $enterpriseSlug = $enterprise->slug;
 
         $appIsNew = !Application::where('slug', 'administration')
             ->where('enterprise_id', $enterprise->id)->exists();
