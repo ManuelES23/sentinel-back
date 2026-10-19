@@ -269,6 +269,20 @@ class DashboardCosechaEjecutivoTest extends TestCase
         $this->assertNotContains($deLoteFuera->id, $ids);
     }
 
+    public function test_inactiva_con_solo_empaque_sale(): void
+    {
+        $this->crearEtapa(['is_active' => false]); // sin cosecha ni empaque: no sale
+        $conEmpaque = $this->crearEtapa(['is_active' => false]);
+        $this->crearProduccion($conEmpaque, 'A', 40, 720);
+
+        $r = $this->consultar()->assertOk();
+
+        $r->assertJsonCount(1, 'data.etapas')
+            ->assertJsonPath('data.etapas.0.id', $conEmpaque->id)
+            ->assertJsonPath('data.etapas.0.cortes', [])
+            ->assertJsonPath('data.etapas.0.empaque.cajas', 40);
+    }
+
     public function test_sin_etapa(): void
     {
         $this->crearEtapa();

@@ -98,14 +98,24 @@ class DashboardCosechaController extends Controller
         };
 
         // Cierres por día, separando los que tienen alguna venta no cancelada.
-        $conVenta = 'EXISTS (SELECT 1 FROM ventas_cosecha WHERE ventas_cosecha.cierre_cosecha_id = cierres_cosecha.id AND '
-            .self::VENTA_VIVA.')';
-        $cierres = DB::table('cierres_cosecha')
-            ->where('temporada_id', $temporadaId)
-            ->whereNull('deleted_at')
-            ->whereNotNull('etapa_id')
-            ->selectRaw("etapa_id, fecha_inicio, {$conVenta} AS con_venta, COALESCE(SUM(superficie_cosechada), 0) AS ha")
-            ->groupBy('etapa_id', 'fecha_inicio', DB::raw($conVenta))
+        // La bandera se calcula en una subconsulta (cada cierre una sola vez, aunque tenga
+        // varias ventas) y se agrupa por columnas simples: válido con only_full_group_by.
+        $cierresConVenta = DB::table('ventas_cosecha')
+            ->whereRaw(self::VENTA_VIVA)
+            ->select('cierre_cosecha_id')
+            ->distinct();
+        $cierresMarcados = DB::table('cierres_cosecha')
+            ->leftJoinSub($cierresConVenta, 'cv', 'cv.cierre_cosecha_id', '=', 'cierres_cosecha.id')
+            ->where('cierres_cosecha.temporada_id', $temporadaId)
+            ->whereNull('cierres_cosecha.deleted_at')
+            ->whereNotNull('cierres_cosecha.etapa_id')
+            ->selectRaw('cierres_cosecha.etapa_id AS etapa_id, cierres_cosecha.fecha_inicio AS fecha_inicio, '
+                .'cierres_cosecha.superficie_cosechada AS ha, '
+                .'CASE WHEN cv.cierre_cosecha_id IS NULL THEN 0 ELSE 1 END AS con_venta');
+        $cierres = DB::query()
+            ->fromSub($cierresMarcados, 'c')
+            ->selectRaw('c.etapa_id, c.fecha_inicio, c.con_venta, COALESCE(SUM(c.ha), 0) AS ha')
+            ->groupBy('c.etapa_id', 'c.fecha_inicio', 'c.con_venta')
             ->get();
         foreach ($cierres as $c) {
             $sumar((int) $c->etapa_id, $c->fecha_inicio, (bool) $c->con_venta, (float) $c->ha, 0.0);
