@@ -5,8 +5,10 @@ namespace App\Http\Controllers\Api\GrupoEsplendido\RH;
 use App\Http\Controllers\Controller;
 use App\Models\Department;
 use App\Models\Area;
+use App\Models\Employee;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 
 class DepartmentController extends Controller
 {
@@ -70,6 +72,8 @@ class DepartmentController extends Controller
             'is_active' => 'boolean',
         ]);
 
+        $this->exigirJefeValido($validated['manager_id'] ?? null, (int) $validated['enterprise_id']);
+
         // Generar código
         $validated['code'] = Department::generateCode($validated['enterprise_id']);
 
@@ -81,6 +85,28 @@ class DepartmentController extends Controller
             'message' => 'Departamento creado exitosamente',
             'data' => $department,
         ], 201);
+    }
+
+    /**
+     * El jefe aprueba el primer paso de las vacaciones de su departamento: debe ser un
+     * empleado activo de la misma empresa (nulo = departamento sin jefe).
+     */
+    private function exigirJefeValido(?int $managerId, int $enterpriseId): void
+    {
+        if ($managerId === null) {
+            return;
+        }
+
+        $valido = Employee::whereKey($managerId)
+            ->where('enterprise_id', $enterpriseId)
+            ->where('status', Employee::STATUS_ACTIVE)
+            ->exists();
+
+        if (! $valido) {
+            throw ValidationException::withMessages([
+                'manager_id' => 'El jefe debe ser un empleado activo de la misma empresa del departamento.',
+            ]);
+        }
     }
 
     /**
@@ -115,6 +141,10 @@ class DepartmentController extends Controller
                 'success' => false,
                 'message' => 'Un departamento no puede ser su propio padre',
             ], 422);
+        }
+
+        if (array_key_exists('manager_id', $validated)) {
+            $this->exigirJefeValido($validated['manager_id'], (int) $department->enterprise_id);
         }
 
         $department->update($validated);
