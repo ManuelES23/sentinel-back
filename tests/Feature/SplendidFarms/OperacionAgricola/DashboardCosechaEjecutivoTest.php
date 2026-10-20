@@ -7,6 +7,8 @@ use App\Models\EmbarqueEmpaque;
 use App\Models\EmbarqueEmpaqueDetalle;
 use App\Models\Etapa;
 use App\Models\Lote;
+use App\Models\ProduccionEmpaque;
+use App\Models\ProduccionEmpaqueDetalle;
 use App\Models\SalidaCampoCosecha;
 use App\Models\VentaCosecha;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -291,6 +293,141 @@ class DashboardCosechaEjecutivoTest extends TestCase
 
         $this->consultar()->assertOk()
             ->assertJsonPath('data.sin_etapa', ['kg' => '900.00', 'cajas' => 10]);
+    }
+
+    public function test_pallet_mixto_se_reparte_por_su_desglose(): void
+    {
+        $a = $this->crearEtapa();
+        $b = $this->crearEtapa();
+        $filaA = $this->crearProduccion($a, 'A', 10, 100);
+        $filaB = $this->crearProduccion($b, 'B', 20, 200);
+
+        // Pallet mixto: sin proceso propio, sus cajas salen de los procesos de A y B.
+        $mixto = ProduccionEmpaque::create([
+            'temporada_id' => $this->temporada->id,
+            'entity_id' => $this->entity->id,
+            'proceso_id' => null,
+            'folio_produccion' => 'PDN-MIX',
+            'fecha_produccion' => '2026-02-03',
+            'variedad_id' => $this->variedad->id,
+            'total_cajas' => 40,
+            'peso_neto_kg' => 725.6,
+            'status' => 'embarcado',
+        ]);
+        foreach ([[$filaA, 19, 344.66], [$filaB, 21, 380.94]] as $i => [$fila, $cajas, $kg]) {
+            ProduccionEmpaqueDetalle::create([
+                'produccion_id' => $mixto->id,
+                'numero_entrada' => $i + 1,
+                'proceso_id' => $fila['proceso']->id,
+                'fecha_produccion' => '2026-02-03',
+                'total_cajas' => $cajas,
+                'peso_neto_kg' => $kg,
+            ]);
+        }
+        $this->crearEmbarque('exportacion', 'EMB-MIX', $mixto, 40);
+
+        $r = $this->consultar()->assertOk();
+        $filas = collect($r->json('data.etapas'))->keyBy('id');
+
+        $this->assertSame(
+            ['cajas' => 29, 'kg' => '444.66', 'cajas_exportacion' => 19, 'cajas_nacional' => 0],
+            $filas[$a->id]['empaque']
+        );
+        $this->assertSame(
+            ['cajas' => 41, 'kg' => '580.94', 'cajas_exportacion' => 21, 'cajas_nacional' => 0],
+            $filas[$b->id]['empaque']
+        );
+        $r->assertJsonPath('data.sin_etapa', ['kg' => '0.00', 'cajas' => 0]);
+    }
+
+    public function test_pallet_mixto_embarcado_en_parte_reparte_sin_perder_cajas(): void
+    {
+        $a = $this->crearEtapa();
+        $b = $this->crearEtapa();
+        $filaA = $this->crearProduccion($a, 'A', 0, 0);
+        $filaB = $this->crearProduccion($b, 'B', 0, 0);
+
+        $mixto = ProduccionEmpaque::create([
+            'temporada_id' => $this->temporada->id,
+            'entity_id' => $this->entity->id,
+            'proceso_id' => null,
+            'folio_produccion' => 'PDN-MIX',
+            'fecha_produccion' => '2026-02-03',
+            'variedad_id' => $this->variedad->id,
+            'total_cajas' => 40,
+            'peso_neto_kg' => 700,
+            'status' => 'embarcado',
+        ]);
+        foreach ([[$filaA, 19], [$filaB, 21]] as $i => [$fila, $cajas]) {
+            ProduccionEmpaqueDetalle::create([
+                'produccion_id' => $mixto->id,
+                'numero_entrada' => $i + 1,
+                'proceso_id' => $fila['proceso']->id,
+                'fecha_produccion' => '2026-02-03',
+                'total_cajas' => $cajas,
+                'peso_neto_kg' => $cajas * 17.5,
+            ]);
+        }
+        $this->crearEmbarque('nacional', 'EMB-MIX', $mixto, 25);
+
+        $filas = collect($this->consultar()->assertOk()->json('data.etapas'))->keyBy('id');
+
+        // 25 × 19/40 = 11.875 y 25 × 21/40 = 13.125: enteros que suman 25.
+        $this->assertSame(12, $filas[$a->id]['empaque']['cajas_nacional']);
+        $this->assertSame(13, $filas[$b->id]['empaque']['cajas_nacional']);
+    }
+
+    public function test_produccion_de_proceso_borrado_no_cuenta(): void
+    {
+        $etapa = $this->crearEtapa();
+        $borrado = $this->crearProduccion($etapa, 'A', 30, 300);
+        $this->crearEmbarque('exportacion', 'EMB-1', $borrado['produccion'], 30);
+        $borrado['proceso']->delete();
+
+        $viva = $this->crearProduccion($etapa, 'B', 12, 120);
+        $this->crearEmbarque('nacional', 'EMB-2', $viva['produccion'], 12);
+
+        $r = $this->consultar()->assertOk();
+
+        $r->assertJsonPath('data.etapas.0.empaque', [
+            'cajas' => 12,
+            'kg' => '120.00',
+            'cajas_exportacion' => 0,
+            'cajas_nacional' => 12,
+        ])->assertJsonPath('data.sin_etapa.cajas', 0);
+    }
+
+    public function test_cosecha_de_etapa_fuera_de_la_lista_va_a_sin_etapa(): void
+    {
+        $viva = $this->crearEtapa();
+        $this->crearSalida($viva, '2026-03-10', 1000);
+
+        // Etapa borrada después de cosecharla.
+        $borrada = $this->crearEtapa();
+        $this->crearSalida($borrada, '2026-03-10', 8090);
+        $this->crearProduccion($borrada, 'A', 7, 70);
+        $borrada->delete();
+
+        // Etapa de un lote inactivo en la temporada.
+        $loteFuera = Lote::create([
+            'productor_id' => $this->productorPrincipal->id,
+            'zona_cultivo_id' => $this->zonaCultivo->id,
+            'nombre' => 'Lote fuera',
+            'is_active' => true,
+        ]);
+        $this->temporada->lotes()->attach($loteFuera->id, [
+            'cultivo_id' => $this->cultivo->id,
+            'is_active' => false,
+        ]);
+        $deLoteFuera = $this->crearEtapa([], $loteFuera);
+        $this->crearSalida($deLoteFuera, '2026-03-11', 900);
+        $this->crearProduccion($deLoteFuera, 'B', 15, 150);
+
+        $r = $this->consultar()->assertOk();
+
+        $r->assertJsonCount(1, 'data.etapas')
+            ->assertJsonPath('data.etapas.0.id', $viva->id)
+            ->assertJsonPath('data.sin_etapa', ['kg' => '8990.00', 'cajas' => 22]);
     }
 
     public function test_valida_temporada(): void

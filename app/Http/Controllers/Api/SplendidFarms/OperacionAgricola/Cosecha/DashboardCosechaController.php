@@ -7,6 +7,7 @@ use App\Models\Etapa;
 use App\Models\Temporada;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -46,9 +47,13 @@ class DashboardCosechaController extends Controller
             ->orderBy('orden')
             ->get();
 
+        // Lo cosechado o empacado en una etapa fuera de esta lista (lote inactivo en la
+        // temporada o etapa borrada) se cuenta en `sin_etapa` para que no se pierda.
+        $enLista = $etapas->pluck('id')->flip()->all();
+
         $avisos = [];
-        $cortes = $this->cortesPorEtapa($temporadaId, $avisos);
-        $empaque = $this->empaquePorEtapa($temporadaId);
+        $cortes = $this->cortesPorEtapa($temporadaId, $enLista, $avisos);
+        $empaque = $this->empaquePorEtapa($temporadaId, $enLista);
 
         $filas = [];
         foreach ($etapas as $etapa) {
@@ -81,10 +86,11 @@ class DashboardCosechaController extends Controller
      * Cortes por día de cada etapa: hectáreas de los cierres, kilos de las
      * salidas y, en los cierres con venta nacional, los kilos vendidos.
      *
+     * @param  array<int, int>  $enLista  Ids de las etapas de la respuesta (como llaves).
      * @param  string[]  $avisos  Se llena con las ventas cuya unidad no se pudo pasar a kilos.
      * @return array{porEtapa: array<int, array>, sinEtapaKg: float}
      */
-    private function cortesPorEtapa(int $temporadaId, array &$avisos): array
+    private function cortesPorEtapa(int $temporadaId, array $enLista, array &$avisos): array
     {
         // Un corte se identifica por (fecha, venta nacional): [fecha, ha, kg, venta_nacional]
         $porEtapa = [];
@@ -121,7 +127,7 @@ class DashboardCosechaController extends Controller
             $sumar((int) $c->etapa_id, $c->fecha_inicio, (bool) $c->con_venta, (float) $c->ha, 0.0);
         }
 
-        // Salidas de campo por día; las que no traen etapa van aparte.
+        // Salidas de campo por día; las que no traen etapa, o traen una fuera de la lista, van aparte.
         $sinEtapaKg = 0.0;
         $salidas = DB::table('salidas_campo_cosecha')
             ->where('temporada_id', $temporadaId)
@@ -130,7 +136,7 @@ class DashboardCosechaController extends Controller
             ->groupBy('etapa_id', 'fecha')
             ->get();
         foreach ($salidas as $s) {
-            if ($s->etapa_id === null) {
+            if ($s->etapa_id === null || ! isset($enLista[(int) $s->etapa_id])) {
                 $sinEtapaKg += (float) $s->kg;
             } else {
                 $sumar((int) $s->etapa_id, $s->fecha, false, 0.0, (float) $s->kg);
@@ -169,56 +175,142 @@ class DashboardCosechaController extends Controller
     }
 
     /**
-     * Empaque por etapa (la del proceso que dio origen a la producción) y
-     * cajas embarcadas por destino. La producción sin etapa se cuenta aparte.
+     * Empaque por etapa y cajas embarcadas por destino. Mismo criterio que los
+     * reportes de empaque: un pallet sin desglose va a la etapa de su proceso y un
+     * pallet con desglose (mixto) se reparte por sus filas de
+     * `produccion_empaque_detalles`, cada una con su proceso. La producción de un
+     * proceso borrado no cuenta. Las cajas sin etapa, o de una etapa fuera de la
+     * lista, se cuentan aparte.
      *
+     * @param  array<int, int>  $enLista  Ids de las etapas de la respuesta (como llaves).
      * @return array{porEtapa: array<int, array>, sinEtapaCajas: int}
      */
-    private function empaquePorEtapa(int $temporadaId): array
+    private function empaquePorEtapa(int $temporadaId, array $enLista): array
     {
         $porEtapa = [];
         $sinEtapaCajas = 0;
+        $etapaValida = fn ($etapaId) => $etapaId !== null && isset($enLista[(int) $etapaId]);
+        $fila = function (int $etapaId) use (&$porEtapa) {
+            $porEtapa[$etapaId] ??= ['cajas' => 0, 'kg' => 0.0, 'cajas_exportacion' => 0, 'cajas_nacional' => 0];
+        };
 
-        $produccion = DB::table('produccion_empaque as p')
-            ->leftJoin('proceso_empaque as pr', 'pr.id', '=', 'p.proceso_id')
-            ->where('p.temporada_id', $temporadaId)
-            ->whereNull('p.deleted_at')
-            ->selectRaw('pr.etapa_id, COALESCE(SUM(p.total_cajas), 0) AS cajas, COALESCE(SUM(p.peso_neto_kg), 0) AS kg')
-            ->groupBy('pr.etapa_id')
-            ->get();
-        foreach ($produccion as $p) {
-            if ($p->etapa_id === null) {
-                $sinEtapaCajas += (int) $p->cajas;
+        // Partes de cada pallet: [produccion_id => ['total' => cajas del pallet, 'partes' => [[etapa_id, cajas], …]]]
+        $pallets = [];
+        foreach ($this->partesDeProduccion($temporadaId) as $parte) {
+            $cajas = (int) $parte->cajas;
+            $pallets[$parte->produccion_id]['total'] = (int) $parte->total_pallet;
+            $pallets[$parte->produccion_id]['partes'][] = [$parte->etapa_id, $cajas];
+
+            if (! $etapaValida($parte->etapa_id)) {
+                $sinEtapaCajas += $cajas;
 
                 continue;
             }
-            $porEtapa[(int) $p->etapa_id] = [
-                'cajas' => (int) $p->cajas,
-                'kg' => (float) $p->kg,
-                'cajas_exportacion' => 0,
-                'cajas_nacional' => 0,
-            ];
+            $etapaId = (int) $parte->etapa_id;
+            $fila($etapaId);
+            $porEtapa[$etapaId]['cajas'] += $cajas;
+            $porEtapa[$etapaId]['kg'] += (float) $parte->kg;
         }
 
+        // Cajas embarcadas por pallet y destino, repartidas entre las partes del pallet.
         $embarcadas = DB::table('embarque_empaque_detalles as d')
             ->join('embarques_empaque as e', 'e.id', '=', 'd.embarque_id')
             ->join('produccion_empaque as p', 'p.id', '=', 'd.produccion_id')
-            ->join('proceso_empaque as pr', 'pr.id', '=', 'p.proceso_id')
             ->where('p.temporada_id', $temporadaId)
             ->whereNull('e.deleted_at')
             ->whereNull('p.deleted_at')
-            ->whereNotNull('pr.etapa_id')
-            ->selectRaw('pr.etapa_id, e.tipo_venta, COALESCE(SUM(d.cajas), 0) AS cajas')
-            ->groupBy('pr.etapa_id', 'e.tipo_venta')
+            ->selectRaw('d.produccion_id, e.tipo_venta, COALESCE(SUM(d.cajas), 0) AS cajas')
+            ->groupBy('d.produccion_id', 'e.tipo_venta')
             ->get();
         foreach ($embarcadas as $e) {
-            $etapaId = (int) $e->etapa_id;
-            $porEtapa[$etapaId] ??= ['cajas' => 0, 'kg' => 0.0, 'cajas_exportacion' => 0, 'cajas_nacional' => 0];
+            $pallet = $pallets[$e->produccion_id] ?? null;
+            if ($pallet === null) {
+                continue; // pallet de un proceso borrado
+            }
             $campo = $e->tipo_venta === 'exportacion' ? 'cajas_exportacion' : 'cajas_nacional';
-            $porEtapa[$etapaId][$campo] += (int) $e->cajas;
+            $reparto = $this->repartir((int) $e->cajas, $pallet['total'], array_column($pallet['partes'], 1));
+            foreach ($pallet['partes'] as $i => [$etapaId]) {
+                if ($reparto[$i] > 0 && $etapaValida($etapaId)) {
+                    $fila((int) $etapaId);
+                    $porEtapa[(int) $etapaId][$campo] += $reparto[$i];
+                }
+            }
         }
 
         return ['porEtapa' => $porEtapa, 'sinEtapaCajas' => $sinEtapaCajas];
+    }
+
+    /**
+     * Una fila por pallet sin desglose y una por renglón de desglose de un pallet
+     * mixto, con la etapa de su proceso (`null` si no hay proceso o no trae etapa).
+     * Los procesos borrados se excluyen.
+     */
+    private function partesDeProduccion(int $temporadaId): Collection
+    {
+        $simples = DB::table('produccion_empaque as p')
+            ->leftJoin('proceso_empaque as pr', 'pr.id', '=', 'p.proceso_id')
+            ->where('p.temporada_id', $temporadaId)
+            ->whereNull('p.deleted_at')
+            ->whereNull('pr.deleted_at')
+            ->whereNotExists(function ($sub) {
+                $sub->selectRaw('1')
+                    ->from('produccion_empaque_detalles as dd')
+                    ->whereColumn('dd.produccion_id', 'p.id');
+            })
+            ->select([
+                'p.id as produccion_id', 'pr.etapa_id', 'p.total_cajas as cajas',
+                'p.peso_neto_kg as kg', 'p.total_cajas as total_pallet',
+            ]);
+
+        $mixtos = DB::table('produccion_empaque as p')
+            ->join('produccion_empaque_detalles as d', 'd.produccion_id', '=', 'p.id')
+            ->leftJoin('proceso_empaque as pr', 'pr.id', '=', 'd.proceso_id')
+            ->where('p.temporada_id', $temporadaId)
+            ->whereNull('p.deleted_at')
+            ->whereNull('pr.deleted_at')
+            ->select([
+                'p.id as produccion_id', 'pr.etapa_id', 'd.total_cajas as cajas',
+                'd.peso_neto_kg as kg', 'p.total_cajas as total_pallet',
+            ]);
+
+        return $simples->unionAll($mixtos)->get();
+    }
+
+    /**
+     * Reparte $cantidad cajas en enteros proporcionales a $partes (resto mayor), sobre
+     * una base de $total cajas: si las partes suman menos que el pallet (un renglón de
+     * un proceso borrado), lo que le tocaba a ese renglón no se asigna a nadie.
+     *
+     * @param  int[]  $partes
+     * @return int[] con las mismas llaves que $partes
+     */
+    private function repartir(int $cantidad, int $total, array $partes): array
+    {
+        $suma = array_sum($partes);
+        $base = max($total, $suma);
+        if ($base <= 0) {
+            return array_map(fn () => 0, $partes);
+        }
+
+        $asignable = (int) round($cantidad * $suma / $base);
+        $enteros = [];
+        $restos = [];
+        foreach ($partes as $i => $parte) {
+            $exacto = $suma > 0 ? $asignable * $parte / $suma : 0;
+            $enteros[$i] = (int) floor($exacto);
+            $restos[$i] = $exacto - $enteros[$i];
+        }
+        arsort($restos);
+        $falta = $asignable - array_sum($enteros);
+        foreach (array_keys($restos) as $i) {
+            if ($falta <= 0) {
+                break;
+            }
+            $enteros[$i]++;
+            $falta--;
+        }
+
+        return $enteros;
     }
 
     /** Arma la fila de una etapa con el formato de la respuesta. */
