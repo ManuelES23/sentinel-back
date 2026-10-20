@@ -213,30 +213,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::group([], base_path('routes/activos-fijos.php'));
 
             // Módulo Organización
-            Route::prefix('organizacion')->group(function () {
-                // Sucursales
-                Route::apiResource('sucursales', App\Http\Controllers\Api\SplendidFarms\Administration\BranchController::class)
-                    ->parameters(['sucursales' => 'branch']);
-                // Tipos de Entidades
-                Route::apiResource('tipos-entidades', App\Http\Controllers\Api\SplendidFarms\Administration\EntityTypeController::class)
-                    ->parameters(['tipos-entidades' => 'entityType']);
-                // Entidades externas disponibles para vincular
-                Route::get('entidades/disponibles-externas', [App\Http\Controllers\Api\SplendidFarms\Administration\EntityController::class, 'externalCandidates']);
-                // Vincular / desvincular entidad de otra empresa (sin crear copia)
-                Route::post('entidades/vincular', [App\Http\Controllers\Api\SplendidFarms\Administration\EntityController::class, 'vincular']);
-                Route::delete('entidades/{entity}/desvincular', [App\Http\Controllers\Api\SplendidFarms\Administration\EntityController::class, 'desvincular']);
-                // Entidades
-                Route::apiResource('entidades', App\Http\Controllers\Api\SplendidFarms\Administration\EntityController::class)
-                    ->parameters(['entidades' => 'entity']);
-                // Áreas (catálogo)
-                Route::apiResource('areas', App\Http\Controllers\Api\SplendidFarms\Administration\AreaController::class)
-                    ->parameters(['areas' => 'area']);
-                // Asignación de áreas a entidades
-                Route::post('areas/{area}/assign', [App\Http\Controllers\Api\SplendidFarms\Administration\AreaController::class, 'assignToEntity']);
-                Route::delete('areas/{area}/unassign/{entity}', [App\Http\Controllers\Api\SplendidFarms\Administration\AreaController::class, 'unassignFromEntity']);
-                Route::put('areas/{area}/assignment/{entity}', [App\Http\Controllers\Api\SplendidFarms\Administration\AreaController::class, 'updateAssignment']);
-                Route::get('entidades/{entity}/areas', [App\Http\Controllers\Api\SplendidFarms\Administration\AreaController::class, 'getByEntity']);
-            });
+            Route::group([], base_path('routes/organizacion.php'));
 
             // Módulo Catálogos (catálogos generales de la empresa)
             Route::prefix('catalogos')->group(function () {
@@ -839,24 +816,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // =====================================================
         Route::prefix('administration')->group(function () {
             Route::group([], base_path('routes/activos-fijos.php'));
-            Route::prefix('organizacion')->group(function () {
-                Route::apiResource('sucursales', App\Http\Controllers\Api\SplendidFarms\Administration\BranchController::class)
-                    ->parameters(['sucursales' => 'branch']);
-                Route::apiResource('tipos-entidades', App\Http\Controllers\Api\SplendidFarms\Administration\EntityTypeController::class)
-                    ->parameters(['tipos-entidades' => 'entityType']);
-                Route::get('entidades/disponibles-externas', [App\Http\Controllers\Api\SplendidFarms\Administration\EntityController::class, 'externalCandidates']);
-                // Vincular / desvincular entidad de otra empresa (sin crear copia)
-                Route::post('entidades/vincular', [App\Http\Controllers\Api\SplendidFarms\Administration\EntityController::class, 'vincular']);
-                Route::delete('entidades/{entity}/desvincular', [App\Http\Controllers\Api\SplendidFarms\Administration\EntityController::class, 'desvincular']);
-                Route::apiResource('entidades', App\Http\Controllers\Api\SplendidFarms\Administration\EntityController::class)
-                    ->parameters(['entidades' => 'entity']);
-                Route::apiResource('areas', App\Http\Controllers\Api\SplendidFarms\Administration\AreaController::class)
-                    ->parameters(['areas' => 'area']);
-                Route::post('areas/{area}/assign', [App\Http\Controllers\Api\SplendidFarms\Administration\AreaController::class, 'assignToEntity']);
-                Route::delete('areas/{area}/unassign/{entity}', [App\Http\Controllers\Api\SplendidFarms\Administration\AreaController::class, 'unassignFromEntity']);
-                Route::put('areas/{area}/assignment/{entity}', [App\Http\Controllers\Api\SplendidFarms\Administration\AreaController::class, 'updateAssignment']);
-                Route::get('entidades/{entity}/areas', [App\Http\Controllers\Api\SplendidFarms\Administration\AreaController::class, 'getByEntity']);
-            });
+            Route::group([], base_path('routes/organizacion.php'));
 
             // Proveedores (catálogo global): lo que usa la pantalla de órdenes de compra
             Route::prefix('catalogos')->group(function () {
