@@ -1203,6 +1203,12 @@ Route::prefix('portal-vacaciones')->middleware('throttle:portal-vacaciones')->gr
         Route::get('solicitudes/{id}', [App\Http\Controllers\Api\Portal\VacationPortalController::class, 'detalle'])->where('id', '[0-9]{1,18}');
         Route::post('solicitudes/{id}/cancelar', [App\Http\Controllers\Api\Portal\VacationPortalController::class, 'cancelar'])->where('id', '[0-9]{1,18}');
         Route::get('solicitudes/{id}/formato', [App\Http\Controllers\Api\Portal\VacationPortalController::class, 'formato'])->where('id', '[0-9]{1,18}');
+
+        // Jefes de departamento: revisan y deciden las solicitudes de su gente (con o sin usuario de Sentinel).
+        Route::get('por-revisar', [App\Http\Controllers\Api\Portal\VacationPortalRevisionController::class, 'index']);
+        Route::get('por-revisar/{id}', [App\Http\Controllers\Api\Portal\VacationPortalRevisionController::class, 'show'])->where('id', '[0-9]{1,18}');
+        Route::post('por-revisar/{id}/aprobar', [App\Http\Controllers\Api\Portal\VacationPortalRevisionController::class, 'aprobar'])->where('id', '[0-9]{1,18}');
+        Route::post('por-revisar/{id}/rechazar', [App\Http\Controllers\Api\Portal\VacationPortalRevisionController::class, 'rechazar'])->where('id', '[0-9]{1,18}');
     });
 });
 

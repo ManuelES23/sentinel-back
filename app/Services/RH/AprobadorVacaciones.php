@@ -18,7 +18,8 @@ use Illuminate\Support\Collection;
  * Quién puede decidir cada paso de la cadena de vacaciones (spec §5.3),
  * con el patrón de AprobadorOrdenCompra:
  * - Jefe directo: el reports_to del solicitante.
- * - Jefe del departamento: el manager_id del departamento del solicitante.
+ * - Jefe del departamento: el manager_id del departamento del solicitante. También decide
+ *   desde el portal (número + PIN) aunque no tenga usuario: puedeDecidirComoEmpleado.
  * - Usuario específico: el user_id de la regla; no necesita ser empleado (si lo es, debe estar activo).
  * - Aprobador de la misma empresa: su regla (puesto o nivel) y su alcance por
  *   departamento (un solicitante sin departamento solo entra con alcance
@@ -103,6 +104,65 @@ class AprobadorVacaciones
             ->unique('id')
             ->filter(fn (User $usuario) => $this->puedeDecidir($usuario, $solicitud, $paso))
             ->values();
+    }
+
+    /**
+     * Jefe del departamento del solicitante que hoy podría decidir el paso desde el portal
+     * (número + PIN), con o sin usuario de Sentinel. Solo la regla «Jefe del departamento»
+     * abre esa puerta; los demás tipos siguen exigiendo usuario.
+     *
+     * @return Collection<int, Employee>
+     */
+    public function jefesDelPortal(VacationRequest $solicitud, VacationRequestApproval $paso): Collection
+    {
+        $solicitante = $solicitud->employee;
+        $jefeId = $solicitante ? $this->jefeDelDepartamento($solicitante) : null;
+        if ($jefeId === null || $paso->is_rh_final || $paso->decision !== VacationRequestApproval::WAITING) {
+            return collect();
+        }
+
+        $jefe = Employee::whereKey($jefeId)->first();
+
+        return $jefe && $this->puedeDecidirComoEmpleado($jefe, $solicitud, $paso) ? collect([$jefe]) : collect();
+    }
+
+    /** ¿Alguien (usuario de Sentinel o jefe por el portal) puede decidir el paso? Si no, la cadena lo salta. */
+    public function hayQuienDecida(VacationRequest $solicitud, VacationRequestApproval $paso): bool
+    {
+        return $this->elegiblesDelPaso($solicitud, $paso)->isNotEmpty() || $this->jefesDelPortal($solicitud, $paso)->isNotEmpty();
+    }
+
+    /** Decisión de un jefe de departamento desde el portal: el empleado de la sesión, no un usuario. */
+    public function puedeDecidirComoEmpleado(Employee $jefe, VacationRequest $solicitud, VacationRequestApproval $paso, string $accion = 'aprobar'): bool
+    {
+        if ($paso->decision !== VacationRequestApproval::WAITING || $paso->is_rh_final || $jefe->status !== Employee::STATUS_ACTIVE) {
+            return false;
+        }
+
+        $solicitante = $solicitud->employee;
+        if (! $solicitante || (int) $jefe->id === (int) $solicitante->id) {
+            return false;
+        }
+
+        // employees.user_id no es único: dos fichas ligadas al mismo usuario son la misma persona.
+        if ($jefe->user_id !== null && (int) $jefe->user_id === (int) $solicitante->user_id) {
+            return false;
+        }
+
+        if ($this->empleadoDecidioOtroPaso($jefe, $solicitud, $paso)) {
+            return false;
+        }
+
+        $jefeDelDepartamento = $this->jefeDelDepartamento($solicitante);
+        if ($jefeDelDepartamento === null || $jefeDelDepartamento !== (int) $jefe->id) {
+            return false;
+        }
+
+        $bandera = $accion === 'rechazar' ? 'can_reject' : 'can_approve';
+
+        return $this->reglasDelPaso($paso)->contains(
+            fn (ApprovalFlowStep $regla) => $regla->approver_type === ApprovalFlowStep::TYPE_DEPARTMENT_MANAGER && (bool) $regla->{$bandera}
+        );
     }
 
     /**
@@ -248,6 +308,20 @@ class AprobadorVacaciones
             ->where('id', '!=', $paso->id)
             ->where('decided_by', $usuario->id)
             ->whereIn('decision', [VacationRequestApproval::APPROVED, VacationRequestApproval::REJECTED])
+            ->exists();
+    }
+
+    private function empleadoDecidioOtroPaso(Employee $jefe, VacationRequest $solicitud, VacationRequestApproval $paso): bool
+    {
+        return VacationRequestApproval::where('vacation_request_id', $solicitud->id)
+            ->where('id', '!=', $paso->id)
+            ->whereIn('decision', [VacationRequestApproval::APPROVED, VacationRequestApproval::REJECTED])
+            ->where(function ($q) use ($jefe) {
+                $q->where('decided_by_employee_id', $jefe->id);
+                if ($jefe->user_id !== null) {
+                    $q->orWhere('decided_by', $jefe->user_id);
+                }
+            })
             ->exists();
     }
 

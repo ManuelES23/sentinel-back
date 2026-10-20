@@ -849,6 +849,7 @@ class PendingApprovalController extends Controller
                 'employee.department:id,name',
                 'employee.position:id,name',
                 'approvals.decider:id,name',
+                'approvals.decidedByEmployee:id,first_name,last_name,second_last_name',
             ])->find($id),
             'incident' => EmployeeIncident::with([
                 'employee:id,first_name,last_name,employee_number,department_id,position_id,photo',
@@ -1218,7 +1219,7 @@ class PendingApprovalController extends Controller
                 'step_order' => $paso->step_order,
                 'description' => $paso->description,
                 'decision' => $paso->decision,
-                'decided_by' => $paso->decider?->name,
+                'decided_by' => $paso->nombreDeQuienDecidio(),
                 'comment' => $paso->comment,
                 'decided_at' => $paso->decided_at?->toISOString(),
             ])->values()->all(),

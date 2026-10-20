@@ -95,6 +95,13 @@ class AvisosVacaciones
             }
             $aviso->vacation('Solicitud de vacaciones por aprobar', $texto);
         }
+
+        // El jefe sin usuario no ve la bandeja de Sentinel: se le avisa por correo con el enlace al portal.
+        foreach ($this->aprobador->jefesDelPortal($solicitud, $paso) as $jefe) {
+            if ($jefe->user_id === null) {
+                $this->aislado('correo al jefe del portal', fn () => $this->correo->avisarJefe($solicitud, $jefe));
+            }
+        }
     }
 
     /** Un aviso que falla (Reverb, notificaciones, correo) no debe romper la operación ya confirmada ni los demás avisos. */

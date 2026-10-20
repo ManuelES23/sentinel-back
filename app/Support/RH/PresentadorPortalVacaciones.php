@@ -102,9 +102,41 @@ class PresentadorPortalVacaciones
                 'orden' => $paso->step_order,
                 'descripcion' => $paso->description,
                 'decision' => $paso->decision,
-                'decidido_por' => $paso->decider?->name,
+                'decidido_por' => $paso->nombreDeQuienDecidio(),
                 'decidido_el' => $paso->decided_at?->toIso8601String(),
                 'comentario' => $paso->decision === VacationRequestApproval::REJECTED ? $paso->comment : null,
+                'es_rh' => $paso->is_rh_final,
+            ])->all(),
+        ];
+    }
+
+    /**
+     * Solicitud ajena que le toca revisar al jefe del portal (lista blanca): el solicitante, su
+     * puesto y departamento, el periodo y el motivo. Nada de saldo, ingreso ni datos personales.
+     */
+    public static function paraRevisar(VacationRequest $solicitud): array
+    {
+        $solicitante = $solicitud->employee;
+        $solicitante->loadMissing(['position:id,name', 'department:id,name']);
+
+        return [
+            'id' => $solicitud->id,
+            'folio' => self::folio($solicitud),
+            'solicitante' => $solicitante->full_name,
+            'numero' => $solicitante->employee_number,
+            'puesto' => $solicitante->position?->name,
+            'departamento' => $solicitante->department?->name,
+            'fecha_inicio' => $solicitud->start_date->format('Y-m-d'),
+            'fecha_fin' => $solicitud->end_date->format('Y-m-d'),
+            'dias' => (int) $solicitud->days_requested,
+            'motivo' => $solicitud->reason,
+            'solicitada_el' => $solicitud->created_at?->toIso8601String(),
+            'pasos' => self::pasosVisibles($solicitud)->map(fn (VacationRequestApproval $paso) => [
+                'orden' => $paso->step_order,
+                'descripcion' => $paso->description,
+                'decision' => $paso->decision,
+                'decidido_por' => $paso->nombreDeQuienDecidio(),
+                'decidido_el' => $paso->decided_at?->toIso8601String(),
                 'es_rh' => $paso->is_rh_final,
             ])->all(),
         ];
@@ -130,7 +162,9 @@ class PresentadorPortalVacaciones
                 'dias' => (int) $solicitud->days_requested,
                 'motivo' => $solicitud->reason,
             ],
-            'aprobado_por' => $solicitud->approver?->name,
+            // Un jefe del portal sin usuario no deja approved_by: el nombre sale del último paso aprobado.
+            'aprobado_por' => $solicitud->approver?->name
+                ?? $solicitud->approvals->where('decision', VacationRequestApproval::APPROVED)->last()?->nombreDeQuienDecidio(),
             'aprobado_el' => $solicitud->approved_at?->format('Y-m-d'),
         ];
     }
