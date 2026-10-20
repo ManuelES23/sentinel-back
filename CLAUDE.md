@@ -143,6 +143,10 @@ Módulo de Administración → Activos Fijos en todas las empresas activas (`Fix
 
 Despliegue: `php artisan db:seed --class=FixedAssetsModuleSeeder` (idempotente); dar permisos por empresa en el panel y capturar sucursales/entidades/áreas de cada empresa nueva (Grupo Espléndido las ve en el selector de alta cuando tienen el módulo).
 
+Rutas de Administración por empresa: viven en `routes/activos-fijos.php` y `routes/organizacion.php` (sucursales, tipos de entidades, entidades y áreas; controladores `SplendidFarms\Administration\*`, que filtran por `X-Enterprise-Slug`). Se incluyen con `Route::group([], base_path(...))` dentro de `administration` para `splendidfarms`, `splendidbyporvenir`, `canes-agro` y `splendid-logistic`; `grupoesplendido` solo incluye `activos-fijos.php` (el corporativo no captura Organización). `AlcanceActivos` toma la empresa del segmento 2 de la URL, así que los archivos funcionan bajo cualquier prefijo.
+
+Despliegue de Organización en empresas nuevas (back antes que el front): `php artisan route:clear` (o `optimize:clear`) + `php artisan db:seed --class=OrganizacionEmpresasSeeder` (idempotente; recorre las activas salvo GE, omite las que ya tienen el módulo y deja acceso sin conceder solo a admin@ y demo@) + dar permisos de Organización por empresa en el panel + capturar sucursales/entidades/áreas. Pruebas: `tests/Feature/ActivosFijos/OrganizacionEmpresasNuevasTest.php`.
+
 ### Asignaciones (fase 2)
 - Tabla `fixed_asset_assignments`: historial inmutable de entregas. `assignee_type` ∈ `employee` (`employees`), `sf_employee` (`sf_employees`), `user` (`users`) sin llave foránea; el nombre, puesto y departamento del responsable y una copia del activo (`asset_snapshot`) se guardan al entregar para reimprimir la carta idéntica.
 - Servicios en `App\Services\ActivosFijos`: `ResponsablesActivo` (búsqueda y validación de personas de la empresa del activo) y `AsignadorActivos` (asignar, devolver, reasignar y corregir, con `lockForUpdate`; una sola asignación activa por activo; asignar → `en_uso`, devolver → `disponible`; se bloquean `en_mantenimiento`, `fuera_de_servicio`, `baja` e inactivos).
