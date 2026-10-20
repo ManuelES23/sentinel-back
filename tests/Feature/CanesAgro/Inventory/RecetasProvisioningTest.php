@@ -42,7 +42,11 @@ class RecetasProvisioningTest extends TestCase
         \App\Models\Enterprise::create(['name' => 'Splendid Farms', 'slug' => 'splendidfarms', 'description' => 'Splendid Farms', 'is_active' => true]);
         $canesAgro = \App\Models\Enterprise::create(['name' => 'Canes Agro', 'slug' => 'canes-agro', 'description' => 'Alimentos para canes', 'is_active' => true]);
 
-        \Laravel\Sanctum\Sanctum::actingAs(\App\Models\User::factory()->create());
+        // Las rutas de Canes Agro son genéricas ({empresa}/inventario, EmpresaDeLaRuta):
+        // el usuario necesita acceso activo a la empresa de la URL.
+        $usuario = \App\Models\User::factory()->create(['role' => 'user']);
+        \App\Models\UserEnterpriseAccess::create(['user_id' => $usuario->id, 'enterprise_id' => $canesAgro->id, 'is_active' => true]);
+        \Laravel\Sanctum\Sanctum::actingAs($usuario);
 
         $unit = \App\Models\UnitOfMeasure::create(['code' => 'LT', 'name' => 'Litro', 'abbreviation' => 'lt', 'type' => 'volume']);
         $unit->enterprises()->attach($canesAgro->id);
