@@ -319,13 +319,22 @@ class OrganizacionEmpresasNuevasTest extends TestCase
         Sanctum::actingAs($this->actingUser);
 
         $this->getJson('/api/grupoesplendido/administration/activos-fijos/mis-permisos')->assertOk();
-        $this->getJson('/api/grupoesplendido/administration/organizacion/sucursales', $this->headersDe($this->corporativo))->assertNotFound();
+
+        // Las rutas son genéricas por empresa: a nivel API responden para GE
+        // (solo con lo suyo), pero GE no tiene el módulo en la BD, así que no
+        // aparece en su menú.
+        $this->sembrar();
+        $this->assertNull($this->moduloOrganizacion($this->corporativo));
+        $respuesta = $this->getJson('/api/grupoesplendido/administration/organizacion/sucursales', $this->headersDe($this->corporativo))->assertOk();
+        $this->assertSame([], $respuesta->json('data'));
     }
 
     public function test_las_rutas_de_organizacion_de_sf_y_sbp_siguen_respondiendo(): void
     {
         $porvenir = $this->crearEmpresaActivos('splendidbyporvenir', 'Splendid by Porvenir', 'SBP');
         $this->crearUbicacion($porvenir, 'SBP');
+        // Organización exige acceso a la empresa de la URL (EmpresaDeLaRuta).
+        $this->otorgarActivos($this->actingUser, $porvenir, 'activos', ['view']);
         Sanctum::actingAs($this->actingUser);
 
         $sf = $this->getJson('/api/splendidfarms/administration/organizacion/sucursales', $this->headersDe($this->enterprise))->assertOk();

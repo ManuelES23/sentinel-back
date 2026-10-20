@@ -12,6 +12,7 @@ use App\Models\UserApplicationAccess;
 use App\Models\UserModuleAccess;
 use App\Models\UserSubmoduleAccess;
 use App\Models\UserSubmodulePermission;
+use App\Services\ActivosFijos\AlcanceActivos;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
 
@@ -43,8 +44,6 @@ use Illuminate\Support\Facades\DB;
  */
 class OrganizacionEmpresasSeeder extends Seeder
 {
-    private const EMPRESA_CORPORATIVA = 'grupoesplendido';
-
     private const STANDARD_PERMISSIONS = [
         ['slug' => 'view', 'name' => 'Ver', 'description' => 'Ver y listar registros', 'order' => 1],
         ['slug' => 'create', 'name' => 'Crear', 'description' => 'Crear nuevos registros', 'order' => 2],
@@ -67,7 +66,7 @@ class OrganizacionEmpresasSeeder extends Seeder
         $nuevas = [];
 
         $empresas = Enterprise::where('is_active', true)
-            ->where('slug', '!=', self::EMPRESA_CORPORATIVA)
+            ->where('slug', '!=', AlcanceActivos::EMPRESA_CORPORATIVA)
             ->orderBy('id')
             ->get();
 
