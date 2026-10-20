@@ -71,7 +71,7 @@ class CadenaAprobacionVacaciones
                 return $paso;
             }
 
-            if ($this->aprobador->elegiblesDelPaso($solicitud, $paso)->isEmpty()) {
+            if (! $this->aprobador->hayQuienDecida($solicitud, $paso)) {
                 $this->saltar($paso, self::SIN_APROBADOR);
 
                 continue;

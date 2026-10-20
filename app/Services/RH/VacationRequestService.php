@@ -179,16 +179,17 @@ class VacationRequestService
         return $solicitud->fresh(['employee', 'approvals']);
     }
 
-    public function aprobarPaso(VacationRequest $solicitud, User $usuario): VacationRequest
+    /** $quien: un usuario de Sentinel, o el jefe de departamento (Employee) que decide desde el portal. */
+    public function aprobarPaso(VacationRequest $solicitud, User|Employee $quien): VacationRequest
     {
-        [$solicitud, $terminada] = DB::transaction(function () use ($solicitud, $usuario) {
+        [$solicitud, $terminada] = DB::transaction(function () use ($solicitud, $quien) {
             $solicitud = $this->bloquearPendiente($solicitud);
-            $paso = $this->pasoDecidible($solicitud, $usuario, 'aprobar');
-            $paso->update(['decision' => VacationRequestApproval::APPROVED, 'decided_by' => $usuario->id, 'decided_at' => now()]);
+            $paso = $this->pasoDecidible($solicitud, $quien, 'aprobar');
+            $paso->update(['decision' => VacationRequestApproval::APPROVED, 'decided_at' => now()] + $this->quienDecidio($quien));
 
             $siguiente = $this->cadena->avanzar($solicitud);
             if ($siguiente === null) {
-                $this->marcarAprobada($solicitud, $usuario);
+                $this->marcarAprobada($solicitud, $this->usuarioDe($quien));
             }
 
             return [$solicitud, $siguiente === null];
@@ -200,16 +201,16 @@ class VacationRequestService
         return $solicitud;
     }
 
-    public function rechazar(VacationRequest $solicitud, User $usuario, string $motivo): VacationRequest
+    public function rechazar(VacationRequest $solicitud, User|Employee $quien, string $motivo): VacationRequest
     {
         $motivo = $this->exigirMotivo($motivo);
 
-        $solicitud = DB::transaction(function () use ($solicitud, $usuario, $motivo) {
+        $solicitud = DB::transaction(function () use ($solicitud, $quien, $motivo) {
             $solicitud = $this->bloquearPendiente($solicitud);
-            $paso = $this->pasoDecidible($solicitud, $usuario, 'rechazar');
-            $paso->update(['decision' => VacationRequestApproval::REJECTED, 'decided_by' => $usuario->id, 'decided_at' => now(), 'comment' => $motivo]);
+            $paso = $this->pasoDecidible($solicitud, $quien, 'rechazar');
+            $paso->update(['decision' => VacationRequestApproval::REJECTED, 'decided_at' => now(), 'comment' => $motivo] + $this->quienDecidio($quien));
             $this->cadena->cerrarPendientes($solicitud, 'Solicitud rechazada');
-            $this->marcarRechazada($solicitud, $usuario, $motivo);
+            $this->marcarRechazada($solicitud, $this->usuarioDe($quien), $motivo);
 
             return $solicitud;
         });
@@ -257,26 +258,44 @@ class VacationRequestService
         return $solicitud;
     }
 
-    private function pasoDecidible(VacationRequest $solicitud, User $usuario, string $accion): VacationRequestApproval
+    private function pasoDecidible(VacationRequest $solicitud, User|Employee $quien, string $accion): VacationRequestApproval
     {
         $paso = $this->cadena->pasoActual($solicitud);
-        if (! $paso || ! $this->aprobador->puedeDecidir($usuario, $solicitud, $paso, $accion)) {
+        $puede = $paso && ($quien instanceof Employee
+            ? $this->aprobador->puedeDecidirComoEmpleado($quien, $solicitud, $paso, $accion)
+            : $this->aprobador->puedeDecidir($quien, $solicitud, $paso, $accion));
+
+        if (! $puede) {
             throw new VacacionesException('No puede '.($accion === 'rechazar' ? 'rechazar' : 'aprobar').' el paso actual de esta solicitud.', 403);
         }
 
         return $paso;
     }
 
-    private function marcarAprobada(VacationRequest $solicitud, User $usuario): void
+    /** Columnas de quién decidió: el jefe del portal deja su empleado y, si tiene, también su usuario. */
+    private function quienDecidio(User|Employee $quien): array
     {
-        $solicitud->update(['status' => 'approved', 'approved_by' => $usuario->id, 'approved_at' => now(), 'current_step' => null]);
+        return $quien instanceof Employee
+            ? ['decided_by_employee_id' => $quien->id, 'decided_by' => $quien->user_id]
+            : ['decided_by' => $quien->id];
+    }
+
+    /** El usuario detrás de la decisión; un jefe del portal sin usuario no tiene (approved_by queda nulo). */
+    private function usuarioDe(User|Employee $quien): ?User
+    {
+        return $quien instanceof Employee ? $quien->user : $quien;
+    }
+
+    private function marcarAprobada(VacationRequest $solicitud, ?User $usuario): void
+    {
+        $solicitud->update(['status' => 'approved', 'approved_by' => $usuario?->id, 'approved_at' => now(), 'current_step' => null]);
         $this->asistencia->registrar($solicitud->fresh('employee'), $usuario);
     }
 
-    private function marcarRechazada(VacationRequest $solicitud, User $usuario, string $motivo): void
+    private function marcarRechazada(VacationRequest $solicitud, ?User $usuario, string $motivo): void
     {
         $solicitud->update([
-            'status' => 'rejected', 'approved_by' => $usuario->id, 'approved_at' => now(),
+            'status' => 'rejected', 'approved_by' => $usuario?->id, 'approved_at' => now(),
             'rejection_reason' => $motivo, 'current_step' => null,
         ]);
     }
