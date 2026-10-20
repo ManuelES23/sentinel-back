@@ -953,47 +953,6 @@ Route::middleware('auth:sanctum')->group(function () {
         });
     });
 
-    // Rutas específicas de Canes Agro — Inventario/Catálogos y Administración.
-    // Reutiliza literalmente los mismos controllers que Splendid Farms
-    // (ya aislados por enterprise_id / enterprise_product* vía header
-    // X-Enterprise-Slug, ver docs/superpowers/specs/2026-09-09-recetas-generalization-design.md).
-    Route::prefix('canes-agro')->group(function () {
-        Route::prefix('inventario')->group(function () {
-            Route::prefix('catalogos')->group(function () {
-                Route::get('categorias/tree', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductCategoryController::class, 'tree']);
-                Route::apiResource('categorias', App\Http\Controllers\Api\SplendidFarms\Inventory\ProductCategoryController::class)
-                    ->parameters(['categorias' => 'category']);
-
-                Route::get('unidades/convert', [App\Http\Controllers\Api\SplendidFarms\Inventory\UnitOfMeasureController::class, 'convert']);
-                Route::apiResource('unidades', App\Http\Controllers\Api\SplendidFarms\Inventory\UnitOfMeasureController::class)
-                    ->parameters(['unidades' => 'unit']);
-
-                Route::get('articulos/available-import', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'availableForImport']);
-                Route::get('articulos/{product}/stock', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'stock']);
-                Route::get('articulos/{product}/usado-en-recetas', [App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class, 'usadoEnRecetas']);
-                Route::apiResource('articulos', App\Http\Controllers\Api\SplendidFarms\Inventory\ProductController::class)
-                    ->parameters(['articulos' => 'product']);
-
-                Route::get('marcas/list', [App\Http\Controllers\Api\SplendidFarms\Inventory\BrandController::class, 'list']);
-                Route::apiResource('marcas', App\Http\Controllers\Api\SplendidFarms\Inventory\BrandController::class)
-                    ->parameters(['marcas' => 'brand']);
-
-                Route::post('recetas/{recipe}/items', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'addItem']);
-                Route::put('recetas/{recipe}/items/{item}', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'updateItem']);
-                Route::delete('recetas/{recipe}/items/{item}', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'deleteItem']);
-                Route::post('recetas/{recipe}/recalculate-cost', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'recalculateCost']);
-                Route::get('recetas/{recipe}/uso', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'uso']);
-                Route::get('recetas/{recipe}/versions', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'versions']);
-                Route::post('recetas/{recipe}/versions/{versionNumber}/restore', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'restoreVersion']);
-                Route::post('recetas/{recipe}/submit-for-approval', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'submitForApproval']);
-                Route::post('recetas/{recipe}/approve', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'approve']);
-                Route::post('recetas/{recipe}/reject', [App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class, 'reject']);
-                Route::apiResource('recetas', App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class)
-                    ->parameters(['recetas' => 'recipe']);
-            });
-        });
-    });
-
     // =====================================================
     // RUTAS DE GRUPO ESPLÉNDIDO
     // Corporativo central - acceso a todas las empresas
@@ -1137,6 +1096,20 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::group([], base_path('routes/activos-fijos.php'));
             Route::group([], base_path('routes/organizacion.php'));
         });
+
+    // =====================================================
+    // INVENTARIO → CATÁLOGOS (cualquier empresa)
+    // Categorías, unidades, artículos, marcas y recetas con los controladores de
+    // Splendid Farms (aislados por X-Enterprise-Slug, que EmpresaDeLaRuta fija al
+    // slug de la URL). Antes estaba atado al slug fijo canes-agro. Va después de
+    // los prefijos fijos: splendidfarms y splendidbyporvenir tienen sus propias
+    // rutas de inventario y siguen ganando; esto solo aporta las de
+    // inventario/catalogos para las demás empresas.
+    // =====================================================
+    Route::prefix('{empresa}/inventario')
+        ->where(['empresa' => '[A-Za-z0-9_-]+'])
+        ->middleware(App\Http\Middleware\EmpresaDeLaRuta::class)
+        ->group(base_path('routes/inventario-catalogos-empresa.php'));
 });
 
 // =====================================================
