@@ -12,8 +12,9 @@ use Illuminate\Support\Facades\Route;
 
 /*
  * Administración → Activos Fijos. Se incluye dentro del grupo
- * {empresa}/administration de Splendid Farms, Splendid by Porvenir y Grupo
- * Espléndido; la empresa la resuelve AlcanceActivos desde la URL.
+ * {empresa}/administration de Splendid Farms, Splendid by Porvenir, Canes Agro,
+ * Splendid Logistic y Grupo Espléndido; la empresa la resuelve AlcanceActivos
+ * desde la URL (segmento 2), así que funciona bajo cualquier prefijo de empresa.
  */
 Route::prefix('activos-fijos')->group(function () {
     Route::get('mis-permisos', [ContextoActivosController::class, 'permisos']);

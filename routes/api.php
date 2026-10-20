@@ -957,7 +957,7 @@ Route::middleware('auth:sanctum')->group(function () {
         });
     });
 
-    // Rutas específicas de Canes Agro — solo Inventario/Catálogos.
+    // Rutas específicas de Canes Agro — Inventario/Catálogos y Administración.
     // Reutiliza literalmente los mismos controllers que Splendid Farms
     // (ya aislados por enterprise_id / enterprise_product* vía header
     // X-Enterprise-Slug, ver docs/superpowers/specs/2026-09-09-recetas-generalization-design.md).
@@ -995,6 +995,22 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::apiResource('recetas', App\Http\Controllers\Api\SplendidFarms\Inventory\RecipeController::class)
                     ->parameters(['recetas' => 'recipe']);
             });
+        });
+
+        // Administración: Organización (sucursales, entidades, áreas) y Activos Fijos.
+        // La empresa sale de la URL (AlcanceActivos) y del header X-Enterprise-Slug.
+        Route::prefix('administration')->group(function () {
+            Route::group([], base_path('routes/activos-fijos.php'));
+            Route::group([], base_path('routes/organizacion.php'));
+        });
+    });
+
+    // Splendid Logistic: Administración → Organización y Activos Fijos
+    // (mismos controllers que Splendid Farms; el CRM tiene sus propias rutas).
+    Route::prefix('splendid-logistic')->group(function () {
+        Route::prefix('administration')->group(function () {
+            Route::group([], base_path('routes/activos-fijos.php'));
+            Route::group([], base_path('routes/organizacion.php'));
         });
     });
 
