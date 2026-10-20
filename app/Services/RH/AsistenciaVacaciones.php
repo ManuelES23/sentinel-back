@@ -12,7 +12,8 @@ class AsistenciaVacaciones
 {
     public function __construct(private WorkingDaysCalculator $dias) {}
 
-    public function registrar(VacationRequest $solicitud, User $aprobador): void
+    /** $aprobador es nulo cuando decidió un jefe del portal sin usuario de Sentinel. */
+    public function registrar(VacationRequest $solicitud, ?User $aprobador): void
     {
         // El empleado pudo darse de baja (borrado lógico) con la solicitud pendiente.
         $empleado = $solicitud->employee()->withTrashed()->first();
@@ -30,11 +31,11 @@ class AsistenciaVacaciones
                     'employee_id' => $solicitud->employee_id,
                     'date' => $fecha,
                     'status' => 'vacation',
-                    'approved_by' => $aprobador->id,
+                    'approved_by' => $aprobador?->id,
                     'notes' => "Vacaciones (solicitud #{$solicitud->id})",
                 ]);
             } elseif ($registro->check_in === null) {
-                $registro->update(['status' => 'vacation', 'approved_by' => $aprobador->id]);
+                $registro->update(['status' => 'vacation', 'approved_by' => $aprobador?->id]);
             } else {
                 Log::warning('Vacaciones: el día ya tiene entrada registrada y no se marcó', [
                     'vacation_request_id' => $solicitud->id, 'employee_id' => $solicitud->employee_id, 'fecha' => $fecha,

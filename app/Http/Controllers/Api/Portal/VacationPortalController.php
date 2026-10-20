@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\Portal;
 
 use App\Exceptions\RH\VacacionesException;
 use App\Http\Controllers\Controller;
+use App\Models\Department;
 use App\Models\Employee;
 use App\Models\VacationPortalSession;
 use App\Models\VacationRequest;
@@ -64,6 +65,8 @@ class VacationPortalController extends Controller
             'data' => [
                 'empleado' => PresentadorPortalVacaciones::empleado($empleado),
                 'saldo' => PresentadorPortalVacaciones::saldo($empleado),
+                // Muestra la pestaña «Por revisar»: el empleado es jefe de algún departamento.
+                'es_jefe' => Department::where('manager_id', $empleado->id)->exists(),
             ],
         ]);
     }
@@ -137,7 +140,7 @@ class VacationPortalController extends Controller
     {
         $solicitud = VacationRequest::whereKey($id)
             ->where('employee_id', $this->empleado($request)->id)
-            ->with(['approvals.decider:id,name', 'approver:id,name', 'employee'])
+            ->with(['approvals.decider:id,name', 'approvals.decidedByEmployee:id,first_name,last_name,second_last_name', 'approver:id,name', 'employee'])
             ->first();
 
         if (! $solicitud) {

@@ -52,7 +52,7 @@ class ProfileController extends Controller
             // Solicitudes del año actual y posteriores (una de diciembre puede ser de enero)
             $vacationRequests = VacationRequest::where('employee_id', $employee->id)
                 ->where('vacation_year', '>=', $currentYear)
-                ->with('approvals.decider:id,name')
+                ->with(['approvals.decider:id,name', 'approvals.decidedByEmployee:id,first_name,last_name,second_last_name'])
                 ->orderBy('created_at', 'desc')
                 ->limit(10)
                 ->get()
