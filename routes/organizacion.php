@@ -8,10 +8,11 @@ use Illuminate\Support\Facades\Route;
 
 /*
  * Administración → Organización (sucursales, tipos de entidades, entidades y
- * áreas). Se incluye dentro del grupo {empresa}/administration de Splendid
- * Farms, Splendid by Porvenir, Canes Agro y Splendid Logistic (Grupo
- * Espléndido solo consolida y no lo incluye). Los controladores filtran por la
- * empresa del header X-Enterprise-Slug.
+ * áreas). Se incluye UNA vez en el grupo genérico {empresa}/administration de
+ * routes/api.php: responde para cualquier empresa existente (el menú lo da la
+ * BD; Grupo Espléndido no tiene el módulo). Los controladores filtran por el
+ * header X-Enterprise-Slug, que el middleware EmpresaDeLaRuta fija siempre al
+ * slug de la URL.
  */
 Route::prefix('organizacion')->group(function () {
     // Sucursales

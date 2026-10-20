@@ -7,6 +7,7 @@ use App\Models\Enterprise;
 use App\Models\FixedAsset;
 use App\Models\FixedAssetAssignment;
 use App\Models\FixedAssetDisposal;
+use App\Models\User;
 use App\Models\UserEnterpriseAccess;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
@@ -24,6 +25,8 @@ class AlcanceActivos
 {
     public const EMPRESA_CORPORATIVA = 'grupoesplendido';
 
+    public const MENSAJE_SIN_ACCESO = 'No tienes acceso a esta empresa.';
+
     private const ATRIBUTO = 'activos_fijos.empresa';
 
     private const ATRIBUTO_VISIBLES = 'activos_fijos.empresas_visibles';
@@ -37,17 +40,36 @@ class AlcanceActivos
         $empresa = Enterprise::where('slug', $request->segment(2))->first();
         abort_unless($empresa, 404);
 
-        $usuario = $request->user();
-        $tieneAcceso = EnsureUserIsAdmin::esAdmin($usuario)
+        abort_unless(self::tieneAcceso($request->user(), $empresa), 403, self::MENSAJE_SIN_ACCESO);
+
+        $this->recordarEmpresa($request, $empresa);
+
+        return $empresa;
+    }
+
+    /** Admin del sistema o acceso activo en user_enterprise_access. */
+    public static function tieneAcceso(?User $usuario, Enterprise $empresa): bool
+    {
+        if (! $usuario) {
+            return false;
+        }
+
+        return EnsureUserIsAdmin::esAdmin($usuario)
             || UserEnterpriseAccess::where('user_id', $usuario->id)
                 ->where('enterprise_id', $empresa->id)
                 ->where('is_active', true)
                 ->exists();
-        abort_unless($tieneAcceso, 403, 'No tienes acceso a esta empresa.');
+    }
 
+    /**
+     * Deja la empresa YA VALIDADA (existe y el usuario tiene acceso) como la
+     * empresa actual de la petición; `empresaActual` ya no vuelve a consultar.
+     * Lo usa el middleware EmpresaDeLaRuta: solo debe llamarse después de
+     * comprobar `tieneAcceso`.
+     */
+    public function recordarEmpresa(Request $request, Enterprise $empresa): void
+    {
         $request->attributes->set(self::ATRIBUTO, $empresa);
-
-        return $empresa;
     }
 
     public function esCorporativo(Request $request): bool

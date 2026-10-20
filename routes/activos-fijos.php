@@ -11,10 +11,10 @@ use App\Http\Controllers\Api\SplendidFarms\Inventory\FixedAssetController;
 use Illuminate\Support\Facades\Route;
 
 /*
- * Administración → Activos Fijos. Se incluye dentro del grupo
- * {empresa}/administration de Splendid Farms, Splendid by Porvenir, Canes Agro,
- * Splendid Logistic y Grupo Espléndido; la empresa la resuelve AlcanceActivos
- * desde la URL (segmento 2), así que funciona bajo cualquier prefijo de empresa.
+ * Administración → Activos Fijos. Se incluye UNA vez en el grupo genérico
+ * {empresa}/administration de routes/api.php (middleware EmpresaDeLaRuta), así
+ * que sirve a cualquier empresa existente; la empresa la resuelve AlcanceActivos
+ * desde la URL (segmento 2). Grupo Espléndido es la vista corporativa.
  */
 Route::prefix('activos-fijos')->group(function () {
     Route::get('mis-permisos', [ContextoActivosController::class, 'permisos']);

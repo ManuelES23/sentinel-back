@@ -12,6 +12,7 @@ use App\Models\UserApplicationAccess;
 use App\Models\UserModuleAccess;
 use App\Models\UserSubmoduleAccess;
 use App\Models\UserSubmodulePermission;
+use App\Services\ActivosFijos\AlcanceActivos;
 use Illuminate\Database\Seeder;
 
 /**
@@ -134,7 +135,7 @@ class FixedAssetsModuleSeeder extends Seeder
         // Submódulo "Tipos de Activos Fijos": el catálogo solo se administra desde Grupo Espléndido
         $tiposSubmodule = Submodule::firstOrCreate(
             ['slug' => 'tipos-activo', 'module_id' => $module->id],
-            ['name' => 'Tipos de Activos Fijos', 'icon' => 'Layers', 'order' => 2, 'is_active' => $enterpriseSlug === 'grupoesplendido']
+            ['name' => 'Tipos de Activos Fijos', 'icon' => 'Layers', 'order' => 2, 'is_active' => $enterpriseSlug === AlcanceActivos::EMPRESA_CORPORATIVA]
         );
         $this->ensurePermissionTypes($tiposSubmodule);
 

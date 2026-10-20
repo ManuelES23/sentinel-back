@@ -210,10 +210,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // APLICACIÓN ADMINISTRACIÓN - Rutas específicas
         // =====================================================
         Route::prefix('administration')->group(function () {
-            Route::group([], base_path('routes/activos-fijos.php'));
-
-            // Módulo Organización
-            Route::group([], base_path('routes/organizacion.php'));
+            // Activos Fijos y Organización: grupo genérico {empresa}/administration (al final).
 
             // Módulo Catálogos (catálogos generales de la empresa)
             Route::prefix('catalogos')->group(function () {
@@ -815,8 +812,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // APLICACIÓN ADMINISTRACIÓN (mismos controllers que SF)
         // =====================================================
         Route::prefix('administration')->group(function () {
-            Route::group([], base_path('routes/activos-fijos.php'));
-            Route::group([], base_path('routes/organizacion.php'));
+            // Activos Fijos y Organización: grupo genérico {empresa}/administration (al final).
 
             // Proveedores (catálogo global): lo que usa la pantalla de órdenes de compra
             Route::prefix('catalogos')->group(function () {
@@ -996,22 +992,6 @@ Route::middleware('auth:sanctum')->group(function () {
                     ->parameters(['recetas' => 'recipe']);
             });
         });
-
-        // Administración: Organización (sucursales, entidades, áreas) y Activos Fijos.
-        // La empresa sale de la URL (AlcanceActivos) y del header X-Enterprise-Slug.
-        Route::prefix('administration')->group(function () {
-            Route::group([], base_path('routes/activos-fijos.php'));
-            Route::group([], base_path('routes/organizacion.php'));
-        });
-    });
-
-    // Splendid Logistic: Administración → Organización y Activos Fijos
-    // (mismos controllers que Splendid Farms; el CRM tiene sus propias rutas).
-    Route::prefix('splendid-logistic')->group(function () {
-        Route::prefix('administration')->group(function () {
-            Route::group([], base_path('routes/activos-fijos.php'));
-            Route::group([], base_path('routes/organizacion.php'));
-        });
     });
 
     // =====================================================
@@ -1139,13 +1119,24 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::apiResource('tipos-incidencia', App\Http\Controllers\Api\GrupoEsplendido\RH\IncidentTypeController::class)
                 ->parameters(['tipos-incidencia' => 'incidentType']);
         });
-
-        // =====================================================
-        // APLICACIÓN ADMINISTRACIÓN (solo Activos Fijos: vista
-        // corporativa de todas las empresas y catálogo de tipos)
-        // =====================================================
-        Route::prefix('administration')->group(base_path('routes/activos-fijos.php'));
     });
+
+    // =====================================================
+    // ADMINISTRACIÓN → ACTIVOS FIJOS Y ORGANIZACIÓN (cualquier empresa)
+    // Un solo grupo genérico por slug de la URL, sin lista de slugs fijos: un
+    // cambio de nombre/slug o una empresa nueva no lo rompe. EmpresaDeLaRuta
+    // exige que la empresa exista y que el usuario tenga acceso, fija
+    // X-Enterprise-Slug al slug de la URL y olvida el parámetro {empresa}.
+    // Va al final para que los prefijos fijos de arriba ganen. El menú y los
+    // permisos salen de la BD (apps/módulos/submódulos de cada usuario).
+    // =====================================================
+    Route::prefix('{empresa}/administration')
+        ->where(['empresa' => '[A-Za-z0-9_-]+'])
+        ->middleware(App\Http\Middleware\EmpresaDeLaRuta::class)
+        ->group(function () {
+            Route::group([], base_path('routes/activos-fijos.php'));
+            Route::group([], base_path('routes/organizacion.php'));
+        });
 });
 
 // =====================================================
