@@ -5,10 +5,12 @@ namespace App\Http\Controllers\Api\GrupoEsplendido\RH;
 use App\Http\Controllers\Controller;
 use App\Models\Employee;
 use App\Models\Enterprise;
+use App\Models\Holiday;
 use App\Models\VacationBalance;
 use App\Models\VacationRequest;
 use App\Models\VacationRequestApproval;
 use App\Services\RH\AprobadorVacaciones;
+use App\Services\RH\SaldosVacaciones;
 use App\Services\RH\VacationRequestService;
 use App\Services\VacationCalculatorService;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
@@ -16,6 +18,7 @@ use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Validation\ValidationException;
 
 /**
  * Vacaciones desde RH de Grupo Espléndido. Las reglas viven en
@@ -185,6 +188,44 @@ class VacationController extends Controller
                 $permiso => $empresaId && $this->tienePermisoSubmodulo($empresaId, 'gestion', 'vacaciones', $permiso, 'rh'),
             ]),
         ]);
+    }
+
+    /** Saldo de todos los empleados activos o de permiso (pestaña Saldos); `enterprise_id` opcional. */
+    public function saldos(Request $request, SaldosVacaciones $saldos): JsonResponse
+    {
+        $this->exigir('view');
+
+        $datos = $request->validate(['enterprise_id' => 'nullable|integer|exists:enterprises,id']);
+
+        return response()->json(['success' => true, 'data' => $saldos->todos($datos['enterprise_id'] ?? null)]);
+    }
+
+    /**
+     * Festivos entre dos fechas para el calendario del equipo. Con `view` de Vacaciones
+     * (la API de Festivos pide su propio permiso). Con `enterprise_id`, los generales y los
+     * de esa empresa; sin él, todos.
+     */
+    public function festivosRango(Request $request): JsonResponse
+    {
+        $this->exigir('view');
+
+        $datos = $request->validate([
+            'desde' => 'required|date_format:Y-m-d',
+            'hasta' => 'required|date_format:Y-m-d|after_or_equal:desde',
+            'enterprise_id' => 'nullable|integer|exists:enterprises,id',
+        ]);
+        if (Carbon::parse($datos['desde'])->diffInDays(Carbon::parse($datos['hasta'])) > 400) {
+            throw ValidationException::withMessages(['hasta' => 'El rango no puede pasar de 400 días.']);
+        }
+
+        $festivos = Holiday::whereBetween('date', [$datos['desde'], $datos['hasta']])
+            ->when($datos['enterprise_id'] ?? null, fn ($q, $empresa) => $q->where(
+                fn ($q) => $q->whereNull('enterprise_id')->orWhere('enterprise_id', $empresa),
+            ))
+            ->orderBy('date')->orderBy('id')
+            ->get(['date', 'name', 'enterprise_id']);
+
+        return response()->json(['success' => true, 'data' => $festivos]);
     }
 
     private function exigir(string $permiso): void
