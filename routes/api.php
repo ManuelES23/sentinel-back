@@ -1028,6 +1028,15 @@ Route::middleware('auth:sanctum')->group(function () {
 
             // Submódulo Vacaciones
             Route::prefix('vacaciones')->group(function () {
+                // Historial capturado por RH (lo que llevaban en Excel): cuenta como días tomados.
+                Route::get('historico', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationHistoryController::class, 'index']);
+                Route::post('historico', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationHistoryController::class, 'store']);
+                Route::post('historico/importar/leer', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationHistoryController::class, 'leer']);
+                Route::post('historico/importar/validar', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationHistoryController::class, 'validar']);
+                Route::post('historico/importar', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationHistoryController::class, 'importar']);
+                Route::put('historico/{historico}', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationHistoryController::class, 'update'])->whereNumber('historico');
+                Route::delete('historico/{historico}', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationHistoryController::class, 'destroy'])->whereNumber('historico');
+
                 // Rutas de cálculo según Ley Federal del Trabajo México
                 Route::get('tabla-lft', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationController::class, 'getVacationTable']);
                 Route::get('mis-permisos', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationController::class, 'misPermisos']);
@@ -1163,6 +1172,7 @@ Route::prefix('portal-vacaciones')->middleware('throttle:portal-vacaciones')->gr
         Route::get('yo', [App\Http\Controllers\Api\Portal\VacationPortalController::class, 'yo']);
         Route::post('calcular', [App\Http\Controllers\Api\Portal\VacationPortalController::class, 'calcular']);
         Route::get('solicitudes', [App\Http\Controllers\Api\Portal\VacationPortalController::class, 'solicitudes']);
+        Route::get('historial', [App\Http\Controllers\Api\Portal\VacationPortalController::class, 'historial']);
         Route::post('solicitudes', [App\Http\Controllers\Api\Portal\VacationPortalController::class, 'crear']);
         Route::get('solicitudes/{id}', [App\Http\Controllers\Api\Portal\VacationPortalController::class, 'detalle'])->where('id', '[0-9]{1,18}');
         Route::post('solicitudes/{id}/cancelar', [App\Http\Controllers\Api\Portal\VacationPortalController::class, 'cancelar'])->where('id', '[0-9]{1,18}');

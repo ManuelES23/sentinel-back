@@ -81,6 +81,12 @@ class VacationPortalController extends Controller
         ]);
     }
 
+    /** Periodos que RH capturó del historial (lo que llevaba en Excel); cuentan como días tomados. */
+    public function historial(Request $request): JsonResponse
+    {
+        return response()->json(['success' => true, 'data' => PresentadorPortalVacaciones::historial($this->empleado($request))]);
+    }
+
     public function solicitudes(Request $request): JsonResponse
     {
         $solicitudes = VacationRequest::where('employee_id', $this->empleado($request)->id)

@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Employee;
 use App\Models\VacationBalance;
+use App\Models\VacationHistoryEntry;
 use App\Models\VacationRequest;
 use Carbon\Carbon;
 
@@ -166,8 +167,8 @@ class VacationCalculatorService
         // Días del próximo período (cuando cumpla otro año)
         $nextYearEntitledDays = self::calculateEntitledDays($yearsOfService + 1);
 
-        // Usados y pendientes salen de las solicitudes (fuente única); de
-        // vacation_balances solo cuentan los ajustes manuales de RH.
+        // Usados y pendientes salen de las solicitudes y del historial capturado por RH;
+        // de vacation_balances solo cuentan los ajustes manuales de RH.
         $totales = self::totalesDeSolicitudes($employee);
         $totalUsedDays = $totales['usados'];
         $totalPendingDays = $totales['pendientes'];
@@ -211,6 +212,8 @@ class VacationCalculatorService
             'accumulated' => [
                 'total_accumulated_days' => $totalAccumulatedDays,
                 'total_used_days' => $totalUsedDays,
+                // Parte de total_used_days que viene del historial capturado por RH.
+                'total_history_days' => $totales['historial'],
                 'total_pending_days' => $totalPendingDays,
                 'total_adjustment_days' => $totalAdjustmentDays,
                 'total_available_days' => max(0, $availableDays),
@@ -241,10 +244,11 @@ class VacationCalculatorService
     }
 
     /**
-     * Usados = Σ días de solicitudes aprobadas; pendientes = Σ de las que
-     * siguen en revisión. Las borradas (soft delete) no cuentan.
+     * Usados = Σ días de solicitudes aprobadas + Σ días del historial que capturó RH;
+     * pendientes = Σ de las que siguen en revisión. Las borradas (soft delete) no cuentan.
+     * `historial` es la parte de `usados` que viene del historial (para mostrarla aparte).
      *
-     * @return array{usados: int, pendientes: int}
+     * @return array{usados: int, pendientes: int, historial: int}
      */
     public static function totalesDeSolicitudes(Employee $employee): array
     {
@@ -253,10 +257,12 @@ class VacationCalculatorService
             ->selectRaw('status, SUM(days_requested) as dias')
             ->groupBy('status')
             ->pluck('dias', 'status');
+        $historial = (int) VacationHistoryEntry::where('employee_id', $employee->id)->sum('days');
 
         return [
-            'usados' => (int) ($porEstado['approved'] ?? 0),
+            'usados' => (int) ($porEstado['approved'] ?? 0) + $historial,
             'pendientes' => (int) ($porEstado['pending'] ?? 0),
+            'historial' => $historial,
         ];
     }
 
