@@ -109,6 +109,8 @@ class ProfileController extends Controller
                     'entitled_days' => $info['entitled_days'] ?? 0,
                     'available_days' => max(0, VacationCalculatorService::diasDisponibles($employee)),
                     'used_days' => $acumulado['total_used_days'] ?? 0,
+                    // Parte de used_days que viene del historial capturado por RH.
+                    'history_days' => $acumulado['total_history_days'] ?? 0,
                     'pending_days' => $acumulado['total_pending_days'] ?? 0,
                     'carried_over' => 0,
                     'adjustment_days' => $acumulado['total_adjustment_days'] ?? 0,
@@ -119,6 +121,8 @@ class ProfileController extends Controller
                     'year' => $currentYear,
                 ],
                 'requests' => $vacationRequests,
+                // Periodos que RH capturó del historial (sin sus notas internas).
+                'history' => PresentadorPortalVacaciones::historial($employee),
                 'pending_count' => $pendingRequests,
                 'blocked_dates' => $blockedDates,
             ];

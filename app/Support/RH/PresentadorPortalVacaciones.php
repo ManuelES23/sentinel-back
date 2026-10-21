@@ -3,6 +3,7 @@
 namespace App\Support\RH;
 
 use App\Models\Employee;
+use App\Models\VacationHistoryEntry;
 use App\Models\VacationRequest;
 use App\Models\VacationRequestApproval;
 use App\Services\VacationCalculatorService;
@@ -35,7 +36,7 @@ class PresentadorPortalVacaciones
 
         if (isset($info['error'])) {
             return [
-                'disponibles' => 0, 'acumulados' => 0, 'ajustes' => 0, 'usados' => 0, 'en_revision' => 0,
+                'disponibles' => 0, 'acumulados' => 0, 'ajustes' => 0, 'usados' => 0, 'de_historial' => 0, 'en_revision' => 0,
                 'antiguedad' => null, 'anios_servicio' => 0, 'proximo_aniversario' => null,
                 'dias_para_aniversario' => null, 'dias_proximo_periodo' => null, 'sin_fecha_ingreso' => true,
             ];
@@ -48,6 +49,8 @@ class PresentadorPortalVacaciones
             'acumulados' => (int) $acumulado['total_accumulated_days'],
             'ajustes' => (int) $acumulado['total_adjustment_days'],
             'usados' => (int) $acumulado['total_used_days'],
+            // Parte de «usados» que viene del historial capturado por RH.
+            'de_historial' => (int) ($acumulado['total_history_days'] ?? 0),
             'en_revision' => (int) $acumulado['total_pending_days'],
             'antiguedad' => $info['seniority_text'],
             'anios_servicio' => (int) $info['years_of_service'],
@@ -56,6 +59,30 @@ class PresentadorPortalVacaciones
             'dias_proximo_periodo' => (int) $info['next_year_entitled_days'],
             'sin_fecha_ingreso' => false,
         ];
+    }
+
+    /**
+     * Historial que capturó RH, del más reciente al más antiguo. Sin la nota: es
+     * interna de RH y puede traer comentarios que no son para el empleado.
+     *
+     * @return list<array{id: int, anio: int, fecha_inicio: ?string, fecha_fin: ?string, dias: int}>
+     */
+    public static function historial(Employee $empleado): array
+    {
+        return VacationHistoryEntry::where('employee_id', $empleado->id)
+            ->orderByDesc('vacation_year')
+            ->orderByDesc('start_date')
+            ->orderByDesc('id')
+            ->get()
+            ->map(fn (VacationHistoryEntry $entrada) => [
+                'id' => $entrada->id,
+                'anio' => $entrada->vacation_year,
+                'fecha_inicio' => $entrada->start_date?->format('Y-m-d'),
+                'fecha_fin' => $entrada->end_date?->format('Y-m-d'),
+                'dias' => $entrada->days,
+            ])
+            ->values()
+            ->all();
     }
 
     /** Vista previa de calcular() sin la lista de días descontables (el portal solo muestra los excluidos). */
