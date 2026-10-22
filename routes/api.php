@@ -403,6 +403,8 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::get('productores', [App\Http\Controllers\Api\SplendidFarms\Administration\ReporteProductoresController::class, 'index']);
                 Route::prefix('empaque')->group(function () {
                     Route::get('recepcion', [App\Http\Controllers\Api\SplendidFarms\Administration\ReporteEmpaqueController::class, 'recepcion']);
+                    Route::get('rezaga-recepciones/empaques', [App\Http\Controllers\Api\SplendidFarms\Administration\ReporteRezagaRecepcionesController::class, 'empaques']);
+                    Route::get('rezaga-recepciones', [App\Http\Controllers\Api\SplendidFarms\Administration\ReporteRezagaRecepcionesController::class, 'descargar']);
                 });
             });
         });
