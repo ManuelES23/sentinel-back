@@ -11,8 +11,10 @@ use Carbon\CarbonPeriod;
 /**
  * Días de un rango que se descuentan del saldo de vacaciones: los que el
  * empleado trabajaría según su horario y que no son festivo para su empresa.
- * Horario: el propio; si no tiene, el predeterminado de su empresa
- * (enterprise_work_schedule.is_default); si no hay, lunes a viernes.
+ * El domingo no se trabaja: nunca se descuenta, aunque el horario lo marque
+ * (el «Mexicano» lo trae para el checador). Horario: el propio; si no tiene, el
+ * predeterminado de su empresa (enterprise_work_schedule.is_default); si no
+ * hay, lunes a sábado.
  */
 class WorkingDaysCalculator
 {
@@ -63,8 +65,12 @@ class WorkingDaysCalculator
 
     private function trabaja(?WorkSchedule $horario, Carbon $dia): bool
     {
+        if ($dia->isSunday()) {
+            return false;
+        }
+
         if (! $horario) {
-            return ! $dia->isWeekend();
+            return true;
         }
 
         return $horario->{WorkSchedule::DAYS[$dia->dayOfWeek].'_start'} !== null;

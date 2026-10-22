@@ -181,7 +181,8 @@ class VacationCalculatorService
             ->with('adjustedByUser')
             ->first();
 
-        // Días disponibles = Total acumulado + Ajustes - Usados - Pendientes
+        // Días disponibles = Total acumulado + Ajustes - Usados - Pendientes. Negativo = adelanto
+        // del siguiente periodo (se cubre al cumplir el aniversario); por eso no se recorta a 0.
         $availableDays = $totalAccumulatedDays + $totalAdjustmentDays - $totalUsedDays - $totalPendingDays;
 
         // Información proporcional si tiene menos de 1 año
@@ -216,7 +217,7 @@ class VacationCalculatorService
                 'total_history_days' => $totales['historial'],
                 'total_pending_days' => $totalPendingDays,
                 'total_adjustment_days' => $totalAdjustmentDays,
-                'total_available_days' => max(0, $availableDays),
+                'total_available_days' => $availableDays,
                 'breakdown' => $accumulatedData['breakdown'],
             ],
             
@@ -231,7 +232,7 @@ class VacationCalculatorService
                 'adjusted_at' => $currentBalance?->adjusted_at?->toDateTimeString(),
                 'used_days' => $totalUsedDays,
                 'pending_days' => $totalPendingDays,
-                'available_days' => max(0, $availableDays), // Ahora muestra el total disponible
+                'available_days' => $availableDays, // Ahora muestra el total disponible
                 'total_days' => $totalAccumulatedDays + $totalAdjustmentDays,
             ],
             
