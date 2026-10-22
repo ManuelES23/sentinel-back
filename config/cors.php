@@ -33,7 +33,8 @@ return [
 
     'allowed_headers' => ['*'],
 
-    'exposed_headers' => [],
+    // Content-Disposition: el front lee el nombre de las descargas (Excel).
+    'exposed_headers' => ['Content-Disposition'],
 
     'max_age' => 0,
 
