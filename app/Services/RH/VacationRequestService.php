@@ -126,6 +126,62 @@ class VacationRequestService
         return $solicitud->fresh(['employee', 'approvals']);
     }
 
+    /**
+     * Solicitud que ya se autorizó fuera del sistema (p. ej. antes de usar el portal): RH con
+     * permiso `aprobar` la captura aprobada, con las mismas reglas de días, empalmes y adelanto,
+     * pero sin cadena ni avisos (el empleado y sus jefes ya lo saben). Queda un solo paso que
+     * dice quién la capturó, con la nota.
+     */
+    public function capturarAutorizada(Employee $empleado, Carbon $inicio, Carbon $fin, ?string $motivo, User $usuario, ?string $nota = null): VacationRequest
+    {
+        if (! $this->aprobador->esRh($usuario)) {
+            throw new VacacionesException('No tiene permiso para capturar solicitudes ya autorizadas.', 403);
+        }
+
+        $solicitud = DB::transaction(function () use ($empleado, $inicio, $fin, $motivo, $usuario, $nota) {
+            $empleado = Employee::whereKey($empleado->id)->lockForUpdate()->firstOrFail();
+            $calculo = $this->exigirSinErrores($this->calcular($empleado, $inicio, $fin, ['permitir_pasado' => true]));
+
+            $solicitud = VacationRequest::create([
+                'employee_id' => $empleado->id,
+                'enterprise_id' => $empleado->enterprise_id,
+                'start_date' => $inicio->format('Y-m-d'),
+                'end_date' => $fin->format('Y-m-d'),
+                'days_requested' => $calculo['dias_descontables'],
+                'advance_days' => $calculo['adelanto'],
+                'reason' => $motivo,
+                'vacation_year' => $inicio->year,
+                'status' => 'pending',
+                'source' => VacationRequest::SOURCE_RH,
+                'created_by' => $usuario->id,
+                'resolved_by_rh' => true,
+            ]);
+
+            if ($this->aprobador->esSolicitante($usuario, $solicitud)) {
+                throw new VacacionesException('No puede capturar como autorizadas sus propias vacaciones.', 403);
+            }
+
+            $nota = trim((string) $nota);
+            $solicitud->approvals()->create([
+                'step_order' => 1,
+                'description' => CadenaAprobacionVacaciones::YA_AUTORIZADA,
+                'rules' => [],
+                'is_rh_final' => true,
+                'decision' => VacationRequestApproval::APPROVED,
+                'decided_by' => $usuario->id,
+                'decided_at' => now(),
+                'comment' => 'Capturada como ya autorizada por RH'.($nota !== '' ? ': '.$nota : ''),
+            ]);
+            $this->marcarAprobada($solicitud, $usuario);
+
+            return $solicitud;
+        });
+
+        $this->avisos->capturadaAutorizada($solicitud->fresh());
+
+        return $solicitud->fresh(['employee', 'approvals']);
+    }
+
     public function reprogramar(VacationRequest $solicitud, Carbon $inicio, Carbon $fin, ?string $motivo, array $opciones = []): VacationRequest
     {
         $solicitud = DB::transaction(function () use ($solicitud, $inicio, $fin, $motivo, $opciones) {
