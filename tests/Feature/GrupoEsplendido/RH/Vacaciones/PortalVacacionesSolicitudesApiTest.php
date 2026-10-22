@@ -54,11 +54,11 @@ class PortalVacacionesSolicitudesApiTest extends TestCase
         $this->postJson(self::BASE.'/calcular', $this->semana(), $encabezados)
             ->assertOk()
             ->assertJsonPath('data.dias_naturales', 7)
-            ->assertJsonPath('data.dias_descontables', 5)
+            ->assertJsonPath('data.dias_descontables', 6)
             ->assertJsonPath('data.excluidos.0.motivo', 'descanso')
-            ->assertJsonCount(2, 'data.excluidos')
+            ->assertJsonCount(1, 'data.excluidos')
             ->assertJsonPath('data.disponibles', 42)
-            ->assertJsonPath('data.disponibles_despues', 37)
+            ->assertJsonPath('data.disponibles_despues', 36)
             ->assertJsonPath('data.errores', []);
     }
 
@@ -67,9 +67,10 @@ class PortalVacacionesSolicitudesApiTest extends TestCase
         $nuevo = $this->empleado($this->empresa, ['hire_date' => now()->subMonths(6)->toDateString()]);
         $encabezados = $this->entrar($nuevo);
 
-        $this->postJson(self::BASE.'/calcular', $this->semana(), $encabezados)
-            ->assertOk()
-            ->assertJsonFragment(['Se requiere al menos 1 año de antigüedad para solicitar vacaciones.']);
+        // Tres semanas (18 días) pasan de los 12 que puede adelantar.
+        $fechas = ['start_date' => $this->lunes()->toDateString(), 'end_date' => $this->lunes()->addDays(20)->toDateString()];
+        $errores = $this->postJson(self::BASE.'/calcular', $fechas, $encabezados)->assertOk()->json('data.errores');
+        $this->assertStringContainsString('Puede adelantar hasta 12 días', implode(' ', $errores));
 
         $this->assertDatabaseCount('vacation_requests', 0);
     }
@@ -92,7 +93,7 @@ class PortalVacacionesSolicitudesApiTest extends TestCase
         $this->postJson(self::BASE.'/solicitudes', $this->semana() + ['reason' => 'Viaje familiar', 'employee_id' => $ajeno->id], $encabezados)
             ->assertCreated()
             ->assertJsonPath('data.estado', 'pending')
-            ->assertJsonPath('data.dias', 5)
+            ->assertJsonPath('data.dias', 6)
             ->assertJsonPath('data.motivo', 'Viaje familiar')
             ->assertJsonPath('data.paso_actual', 1)
             ->assertJsonPath('data.total_pasos', 1)

@@ -270,7 +270,7 @@ class JefeDelPortalTest extends TestCase
         $item = $this->getJson(self::BASE.'/por-revisar', $this->entrar($jefe))->assertOk()->json('data.0');
 
         $this->assertEqualsCanonicalizing(
-            ['id', 'folio', 'solicitante', 'numero', 'puesto', 'departamento', 'fecha_inicio', 'fecha_fin', 'dias', 'motivo', 'solicitada_el', 'pasos'],
+            ['id', 'folio', 'solicitante', 'numero', 'puesto', 'departamento', 'fecha_inicio', 'fecha_fin', 'dias', 'adelanto', 'motivo', 'solicitada_el', 'pasos'],
             array_keys($item),
         );
         $this->assertSame($solicitante->full_name, $item['solicitante']);
