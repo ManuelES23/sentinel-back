@@ -64,7 +64,29 @@ class VacationController extends Controller
             'reason' => 'nullable|string|max:500',
             // Ya sin efecto (sin saldo es adelanto); se acepta para no romper un front viejo.
             'omitir_antiguedad' => 'sometimes|boolean',
+            // Ya autorizada fuera del sistema: entra aprobada, sin cadena ni avisos (requiere `aprobar`).
+            'ya_autorizada' => 'sometimes|boolean',
+            'nota_autorizacion' => 'nullable|string|max:255',
         ]);
+
+        if ($request->boolean('ya_autorizada')) {
+            $this->exigir('aprobar');
+
+            $vacation = $this->vacaciones->capturarAutorizada(
+                Employee::findOrFail($validated['employee_id']),
+                Carbon::parse($validated['start_date']),
+                Carbon::parse($validated['end_date']),
+                $validated['reason'] ?? null,
+                Auth::user(),
+                $validated['nota_autorizacion'] ?? null,
+            );
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Solicitud capturada como ya autorizada',
+                'data' => $this->presentar($vacation),
+            ], 201);
+        }
 
         $vacation = $this->vacaciones->crear(
             Employee::findOrFail($validated['employee_id']),
