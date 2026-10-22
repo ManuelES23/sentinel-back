@@ -20,6 +20,9 @@ class CadenaAprobacionVacaciones
 
     public const NO_REQUERIDO = 'No requerido';
 
+    /** Único paso de una solicitud que RH capturó ya autorizada (sin cadena). */
+    public const YA_AUTORIZADA = 'Autorizada antes de capturarse';
+
     public function __construct(private AprobadorVacaciones $aprobador) {}
 
     public function construir(VacationRequest $solicitud): ?VacationRequestApproval
