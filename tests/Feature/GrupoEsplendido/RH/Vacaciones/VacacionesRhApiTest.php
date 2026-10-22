@@ -96,9 +96,9 @@ class VacacionesRhApiTest extends TestCase
         $this->postJson(self::BASE, [
             'employee_id' => $empleado->id,
             'start_date' => $this->lunes()->toDateString(),
-            'end_date' => $this->lunes()->copy()->addDays(20)->toDateString(),
+            'end_date' => $this->lunes()->copy()->addDays(40)->toDateString(),
         ])->assertStatus(422)->assertJsonPath('success', false)
-            ->assertJsonPath('message', fn ($m) => str_contains($m, 'No tiene suficientes días disponibles'));
+            ->assertJsonPath('message', fn ($m) => str_contains($m, 'Puede adelantar hasta 14 días'));
     }
 
     public function test_aprobar_como_rh_requiere_el_permiso_aprobar(): void

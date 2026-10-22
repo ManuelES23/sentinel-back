@@ -13,6 +13,7 @@ use App\Services\RH\AprobadorVacaciones;
 use App\Services\RH\SaldosVacaciones;
 use App\Services\RH\VacationRequestService;
 use App\Services\VacationCalculatorService;
+use App\Support\RH\PresentadorPortalVacaciones;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -61,6 +62,7 @@ class VacationController extends Controller
             'start_date' => 'required|date',
             'end_date' => 'required|date',
             'reason' => 'nullable|string|max:500',
+            // Ya sin efecto (sin saldo es adelanto); se acepta para no romper un front viejo.
             'omitir_antiguedad' => 'sometimes|boolean',
         ]);
 
@@ -71,7 +73,7 @@ class VacationController extends Controller
             $validated['reason'] ?? null,
             VacationRequest::SOURCE_RH,
             Auth::user(),
-            ['permitir_pasado' => true, 'omitir_antiguedad' => (bool) ($validated['omitir_antiguedad'] ?? false)],
+            ['permitir_pasado' => true],
         );
 
         return response()->json([
@@ -79,6 +81,31 @@ class VacationController extends Controller
             'message' => 'Solicitud de vacaciones creada exitosamente',
             'data' => $this->presentar($vacation),
         ], 201);
+    }
+
+    /**
+     * Vista previa para el formulario de RH: días que se descuentan (sin domingos ni festivos),
+     * saldo, adelanto y errores, con las mismas reglas que al crear (RH puede capturar fechas pasadas).
+     */
+    public function calcular(Request $request): JsonResponse
+    {
+        $this->exigir('view');
+
+        $validated = $request->validate([
+            'employee_id' => 'required|exists:employees,id',
+            'start_date' => 'required|date_format:Y-m-d',
+            'end_date' => 'required|date_format:Y-m-d',
+            'excluir_id' => 'nullable|integer',
+        ]);
+
+        $calculo = $this->vacaciones->calcular(
+            Employee::findOrFail($validated['employee_id']),
+            Carbon::parse($validated['start_date']),
+            Carbon::parse($validated['end_date']),
+            ['permitir_pasado' => true] + (isset($validated['excluir_id']) ? ['excluir_id' => (int) $validated['excluir_id']] : []),
+        );
+
+        return response()->json(['success' => true, 'data' => PresentadorPortalVacaciones::calculo($calculo)]);
     }
 
     public function show(VacationRequest $vacation): JsonResponse
@@ -103,7 +130,7 @@ class VacationController extends Controller
             Carbon::parse($validated['start_date'] ?? $vacation->start_date),
             Carbon::parse($validated['end_date'] ?? $vacation->end_date),
             $validated['reason'] ?? null,
-            ['permitir_pasado' => true, 'omitir_antiguedad' => true],
+            ['permitir_pasado' => true],
         );
 
         return response()->json([

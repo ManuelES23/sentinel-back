@@ -94,6 +94,10 @@ class PresentadorPortalVacaciones
             'excluidos' => $calculo['excluidos'],
             'disponibles' => $calculo['disponibles'],
             'disponibles_despues' => $calculo['disponibles_despues'],
+            // Días que se adelantan del siguiente periodo y cuántos puede adelantar.
+            'adelanto' => $calculo['adelanto'],
+            'limite_adelanto' => $calculo['limite_adelanto'],
+            'proximo_aniversario' => $calculo['proximo_aniversario'],
             'errores' => $calculo['errores'],
         ];
     }
@@ -111,6 +115,7 @@ class PresentadorPortalVacaciones
             'fecha_inicio' => $solicitud->start_date->format('Y-m-d'),
             'fecha_fin' => $solicitud->end_date->format('Y-m-d'),
             'dias' => (int) $solicitud->days_requested,
+            'adelanto' => (int) $solicitud->advance_days,
             'motivo' => $solicitud->reason,
             'estado' => $solicitud->status,
             'motivo_rechazo' => $solicitud->status === 'rejected' ? $solicitud->rejection_reason : null,
@@ -156,6 +161,8 @@ class PresentadorPortalVacaciones
             'fecha_inicio' => $solicitud->start_date->format('Y-m-d'),
             'fecha_fin' => $solicitud->end_date->format('Y-m-d'),
             'dias' => (int) $solicitud->days_requested,
+            // El jefe ve que es adelanto (no el saldo).
+            'adelanto' => (int) $solicitud->advance_days,
             'motivo' => $solicitud->reason,
             'solicitada_el' => $solicitud->created_at?->toIso8601String(),
             'pasos' => self::pasosVisibles($solicitud)->map(fn (VacationRequestApproval $paso) => [

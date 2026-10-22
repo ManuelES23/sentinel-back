@@ -1046,6 +1046,8 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::get('saldos', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationController::class, 'saldos']);
                 Route::get('festivos-rango', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationController::class, 'festivosRango']);
                 Route::post('calcular-dias', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationController::class, 'calculateDays']);
+                // Vista previa del formulario de RH (días sin domingos ni festivos, saldo y adelanto)
+                Route::post('calcular', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationController::class, 'calcular']);
                 Route::post('inicializar-balances', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationController::class, 'initializeBalances']);
                 Route::get('empleado/{employee}/info', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationController::class, 'getEmployeeVacationInfo']);
                 Route::post('empleado/{employee}/recalcular', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationController::class, 'recalculateBalance']);
