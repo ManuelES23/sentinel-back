@@ -233,6 +233,35 @@ class OportunidadProductosTest extends TestCase
         $this->assertEquals(100.00, (float) $op->fresh()->monto_esperado);
     }
 
+    public function test_update_sin_productos_ignora_monto_enviado(): void
+    {
+        $a = $this->producto();
+        $op = $this->crear([$this->linea($a, 10, 10)]);
+
+        $this->withHeaders($this->crmHeaders())->putJson(self::BASE_URL.'/'.$op->id, ['monto_esperado' => 999])
+            ->assertOk();
+
+        $this->assertEquals(100.00, (float) $op->fresh()->monto_esperado);
+        $this->assertCount(1, $this->lineasDe($op));
+    }
+
+    public function test_update_ignora_monto_en_oportunidad_antigua_sin_lineas(): void
+    {
+        $op = CrmOportunidad::create([
+            'empresa_id' => $this->enterprise->id,
+            'cliente_id' => $this->cliente->id,
+            'vendedor_id' => $this->vendedor->id,
+            'nombre' => 'Antigua',
+            'monto_esperado' => 7500,
+        ]);
+
+        $this->withHeaders($this->crmHeaders())->putJson(self::BASE_URL.'/'.$op->id, ['monto_esperado' => 1, 'notas' => 'x'])
+            ->assertOk();
+
+        $this->assertEquals(7500.00, (float) $op->fresh()->monto_esperado);
+        $this->assertSame('x', $op->fresh()->notas);
+    }
+
     public function test_cerrada_rechaza_cambio_de_productos(): void
     {
         $a = $this->producto();

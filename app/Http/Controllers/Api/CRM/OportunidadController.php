@@ -179,12 +179,13 @@ class OportunidadController extends CrmBaseController
 
         $lineas = null;
         if ($conProductos) {
+            // El monto lo calcula el back (o queda congelado/guardado): el que
+            // mande el cliente se ignora siempre, traiga o no productos.
+            unset($validated['monto_esperado']);
             if ($oportunidad->estaCerrada()) {
                 if (array_key_exists('productos', $validated)) {
                     return $this->jsonError('Esta oportunidad está cerrada; sus productos no se pueden cambiar.', 422);
                 }
-                // Congelada: el monto no cambia a posteriori.
-                unset($validated['monto_esperado']);
             } elseif (array_key_exists('productos', $validated)) {
                 $actuales = $oportunidad->productos()->pluck('producto_id')->all();
                 $inactivo = $this->productoInactivoNuevo($empresaId, $validated['productos'], $actuales);
@@ -192,7 +193,6 @@ class OportunidadController extends CrmBaseController
                     return $this->jsonError("El producto «{$inactivo}» está inactivo.", 422);
                 }
                 $lineas = $validated['productos'];
-                unset($validated['monto_esperado']);
             }
         }
         unset($validated['productos']);
