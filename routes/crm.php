@@ -67,6 +67,16 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
         ->parameters(['plantillas-whatsapp' => 'plantilla'])
         ->except(['show']);
 
+    // Categorías y motivos de rechazo por empresa (spec 2026-10-23 §4.5).
+    // Lectura abierta dentro del tenant; escribir exige catalogos.categorias-rechazo.
+    Route::get('categorias-rechazo', [App\Http\Controllers\Api\CRM\CategoriaRechazoController::class, 'index']);
+    Route::post('categorias-rechazo', [App\Http\Controllers\Api\CRM\CategoriaRechazoController::class, 'store']);
+    Route::put('categorias-rechazo/{categoria}', [App\Http\Controllers\Api\CRM\CategoriaRechazoController::class, 'update']);
+    Route::delete('categorias-rechazo/{categoria}', [App\Http\Controllers\Api\CRM\CategoriaRechazoController::class, 'destroy']);
+    Route::post('categorias-rechazo/{categoria}/motivos', [App\Http\Controllers\Api\CRM\MotivoRechazoController::class, 'store']);
+    Route::put('motivos-rechazo/{motivo}', [App\Http\Controllers\Api\CRM\MotivoRechazoController::class, 'update']);
+    Route::delete('motivos-rechazo/{motivo}', [App\Http\Controllers\Api\CRM\MotivoRechazoController::class, 'destroy']);
+
     // -------------------------------------------------
     // PROSPECTOS
     // CRUD + convertir-cliente + asignar-vendedor

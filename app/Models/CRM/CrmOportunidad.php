@@ -69,6 +69,7 @@ class CrmOportunidad extends Model
         'fecha_cierre_esperada',
         'notas',
         'motivo_perdida',
+        'motivo_rechazo_id',
         'fecha_cierre_real',
     ];
 
@@ -97,6 +98,11 @@ class CrmOportunidad extends Model
     public function cliente(): BelongsTo
     {
         return $this->belongsTo(CrmCliente::class, 'cliente_id');
+    }
+
+    public function motivoRechazo(): BelongsTo
+    {
+        return $this->belongsTo(CrmMotivoRechazo::class, 'motivo_rechazo_id');
     }
 
     public function historialEtapas(): HasMany
