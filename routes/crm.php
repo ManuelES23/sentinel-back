@@ -249,6 +249,9 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('dashboard/actividad', [App\Http\Controllers\Api\CRM\DashboardController::class, 'actividad']);
     Route::get('dashboard/ranking-vendedores', [App\Http\Controllers\Api\CRM\DashboardController::class, 'rankingVendedores']);
     Route::get('dashboard/detalle', [App\Http\Controllers\Api\CRM\DashboardController::class, 'detalle']);
+    // Pérdidas por categoría de rechazo (spec 2026-10-23 §4.6)
+    Route::get('dashboard/perdidas-por-categoria', [App\Http\Controllers\Api\CRM\DashboardController::class, 'perdidasPorCategoria']);
+    Route::get('dashboard/perdidas-por-categoria/detalle', [App\Http\Controllers\Api\CRM\DashboardController::class, 'perdidasPorCategoriaDetalle']);
 
     // -------------------------------------------------
     // INTEGRACIONES · DIALPAD

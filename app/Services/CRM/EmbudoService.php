@@ -21,6 +21,9 @@ class EmbudoService
 
     public const LIMITE_DETALLE = 50;
 
+    /** Relaciones que necesita itemDetalle(); sin filtros de activo: el motivo se muestra aunque hoy esté desactivado. */
+    public const RELACIONES_DETALLE = ['cliente:id,nombre', 'prospecto:id,nombre', 'vendedor:id,nombre', 'motivoRechazo.categoria'];
+
     /** @return array<int, array{etapa: string, cantidad: int, monto: float, ponderado: float, probabilidadPromedio: float}> */
     public function pipeline(int $empresaId, ?int $vendedorId): array
     {
@@ -124,31 +127,37 @@ class EmbudoService
 
         $total = (clone $query)->count();
         // Sin filtros de activo: el motivo se muestra aunque hoy esté desactivado.
-        $items = $query->with(['cliente:id,nombre', 'prospecto:id,nombre', 'vendedor:id,nombre', 'motivoRechazo.categoria'])
+        $items = $query->with(self::RELACIONES_DETALLE)
             ->orderByDesc('monto_esperado')
             ->orderBy('id')
             ->limit(self::LIMITE_DETALLE)
             ->get()
-            ->map(fn (CrmOportunidad $o) => [
-                'id' => $o->id,
-                'nombre' => $o->nombre,
-                'cuenta' => $o->cliente
-                    ? ['tipo' => 'cliente', 'nombre' => $o->cliente->nombre]
-                    : ($o->prospecto ? ['tipo' => 'prospecto', 'nombre' => $o->prospecto->nombre] : null),
-                'monto' => (float) $o->monto_esperado,
-                'probabilidad' => $o->probabilidad,
-                'etapa' => $o->etapa,
-                'vendedor' => $o->vendedor ? ['id' => $o->vendedor->id, 'nombre' => $o->vendedor->nombre] : null,
-                'fechaCierreEsperada' => $o->fecha_cierre_esperada?->toDateString(),
-                'fechaCierreReal' => $o->fecha_cierre_real?->toIso8601String(),
-                'motivoPerdida' => $o->motivo_perdida,
-                'motivoRechazo' => $o->motivoRechazo
-                    ? ['categoria' => $o->motivoRechazo->categoria?->nombre, 'motivo' => $o->motivoRechazo->nombre]
-                    : null,
-            ])
+            ->map(fn (CrmOportunidad $o) => self::itemDetalle($o))
             ->all();
 
         return ['total' => $total, 'items' => $items];
+    }
+
+    /** Forma de cada oportunidad en los cajones de detalle del Dashboard (requiere RELACIONES_DETALLE). */
+    public static function itemDetalle(CrmOportunidad $o): array
+    {
+        return [
+            'id' => $o->id,
+            'nombre' => $o->nombre,
+            'cuenta' => $o->cliente
+                ? ['tipo' => 'cliente', 'nombre' => $o->cliente->nombre]
+                : ($o->prospecto ? ['tipo' => 'prospecto', 'nombre' => $o->prospecto->nombre] : null),
+            'monto' => (float) $o->monto_esperado,
+            'probabilidad' => $o->probabilidad,
+            'etapa' => $o->etapa,
+            'vendedor' => $o->vendedor ? ['id' => $o->vendedor->id, 'nombre' => $o->vendedor->nombre] : null,
+            'fechaCierreEsperada' => $o->fecha_cierre_esperada?->toDateString(),
+            'fechaCierreReal' => $o->fecha_cierre_real?->toIso8601String(),
+            'motivoPerdida' => $o->motivo_perdida,
+            'motivoRechazo' => $o->motivoRechazo
+                ? ['categoria' => $o->motivoRechazo->categoria?->nombre, 'motivo' => $o->motivoRechazo->nombre]
+                : null,
+        ];
     }
 
     private function perdidasEn(Builder $cohorte, ?string $etapa): Builder
