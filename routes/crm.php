@@ -32,6 +32,9 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
         ->parameters(['bodegas' => 'bodega']);
 
     // Productos (+ typeahead + toggle activo)
+    Route::get('productos/commodities', [
+        App\Http\Controllers\Api\CRM\ProductoController::class, 'commodities'
+    ]);
     Route::get('productos/buscar', [
         App\Http\Controllers\Api\CRM\ProductoController::class, 'buscar'
     ]);

@@ -18,6 +18,7 @@ class CrmProducto extends Model
     protected $fillable = [
         'empresa_id',
         'nombre',
+        'commodity',
         'descripcion',
         'precio',
         'unidad_medida',
