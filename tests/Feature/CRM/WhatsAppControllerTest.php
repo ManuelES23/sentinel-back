@@ -3,6 +3,7 @@
 namespace Tests\Feature\CRM;
 
 use App\Models\CRM\CrmCliente;
+use App\Models\CRM\CrmConfiguracionComercial;
 use App\Models\CRM\CrmContacto;
 use App\Models\CRM\CrmCotizacion;
 use App\Models\CRM\CrmEmpresaExterna;
@@ -259,6 +260,35 @@ class WhatsAppControllerTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data.mensaje', 'Juan|Agrícola del Valle|María López|Splendid Farms|Riego por goteo 2027|$12,345.00|COT-00012|$1,234,567.50')
             ->assertJsonPath('data.variables_faltantes', []);
+    }
+
+    public function test_monto_en_usd_para_empresa_usd(): void
+    {
+        $this->otorgarPermisosCrm('oportunidades', 'oportunidades', ['ver']);
+        $this->otorgarPermisosCrm('cotizaciones', 'cotizaciones', ['ver']);
+        CrmConfiguracionComercial::paraEmpresa($this->enterprise->id)->update(['moneda' => 'USD']);
+        $oportunidad = $this->oportunidad(null, ['monto_esperado' => 17400]);
+        $cotizacion = $this->cotizacion($oportunidad, 'COT-00020', 1234567.5);
+
+        $this->renderizar([
+            'plantilla_id' => $this->plantilla('{{monto}}|{{total}}')->id,
+            'entidad_tipo' => 'oportunidad', 'entidad_id' => $oportunidad->id, 'cotizacion_id' => $cotizacion->id,
+        ])
+            ->assertOk()
+            ->assertJsonPath('data.mensaje', 'USD 17,400.00|USD 1,234,567.50');
+    }
+
+    public function test_monto_en_mxn_sin_cambios(): void
+    {
+        $this->otorgarPermisosCrm('oportunidades', 'oportunidades', ['ver']);
+        $oportunidad = $this->oportunidad(null, ['monto_esperado' => 17400]);
+
+        $this->renderizar([
+            'plantilla_id' => $this->plantilla('{{monto}}')->id,
+            'entidad_tipo' => 'oportunidad', 'entidad_id' => $oportunidad->id,
+        ])
+            ->assertOk()
+            ->assertJsonPath('data.mensaje', '$17,400.00');
     }
 
     public function test_sin_destinatario_el_nombre_es_el_de_la_entidad_y_se_reportan_las_faltantes(): void

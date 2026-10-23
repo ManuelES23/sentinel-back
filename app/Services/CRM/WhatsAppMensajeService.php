@@ -3,6 +3,7 @@
 namespace App\Services\CRM;
 
 use App\Models\CRM\CrmCliente;
+use App\Models\CRM\CrmConfiguracionComercial;
 use App\Models\CRM\CrmContacto;
 use App\Models\CRM\CrmCotizacion;
 use App\Models\CRM\CrmEmpresaExterna;
@@ -148,6 +149,7 @@ class WhatsAppMensajeService
     {
         $nombreEntidad = $this->nombreDe($this->titular($entidad));
         $oportunidad = $entidad instanceof CrmOportunidad ? $entidad : $cotizacion?->oportunidad;
+        $moneda = CrmConfiguracionComercial::monedaDe((int) $entidad->empresa_id);
 
         return [
             'nombre' => $destinatario ? $this->nombreParaSaludo($destinatario) : $nombreEntidad,
@@ -155,9 +157,9 @@ class WhatsAppMensajeService
             'vendedor' => $vendedor?->nombre,
             'empresa' => $empresa,
             'oportunidad' => $oportunidad?->nombre,
-            'monto' => $oportunidad ? self::moneda($oportunidad->monto_esperado) : null,
+            'monto' => $oportunidad ? self::moneda($oportunidad->monto_esperado, $moneda) : null,
             'folio' => $cotizacion?->folio,
-            'total' => $cotizacion ? self::moneda($cotizacion->total) : null,
+            'total' => $cotizacion ? self::moneda($cotizacion->total, $moneda) : null,
         ];
     }
 
@@ -167,14 +169,16 @@ class WhatsAppMensajeService
         return PlantillaWhatsappVariables::sustituir($plantilla->cuerpo, $valores);
     }
 
-    /** Dinero en MXN: `$12,345.00`. */
-    public static function moneda(mixed $valor): ?string
+    /** Dinero según la moneda de la empresa: MXN `$12,345.00`, USD `USD 12,345.00`. */
+    public static function moneda(mixed $valor, string $moneda = 'MXN'): ?string
     {
         if ($valor === null || $valor === '') {
             return null;
         }
 
-        return '$'.number_format((float) $valor, 2);
+        $importe = number_format((float) $valor, 2);
+
+        return $moneda === 'USD' ? 'USD '.$importe : '$'.$importe;
     }
 
     private function rolContacto(CrmContacto $contacto): string
