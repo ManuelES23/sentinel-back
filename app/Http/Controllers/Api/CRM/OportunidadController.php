@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\CRM;
 
 use App\Events\CRM\OportunidadUpdated;
+use App\Models\CRM\CrmCategoriaRechazo;
 use App\Models\CRM\CrmConfiguracionComercial;
 use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmProducto;
@@ -16,6 +17,7 @@ use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 
 class OportunidadController extends CrmBaseController
 {
@@ -321,11 +323,32 @@ class OportunidadController extends CrmBaseController
     {
         $this->verificarEmpresa($oportunidad);
 
-        $validated = $request->validate([
+        // Con catálogo de rechazo (categorías activas con motivos activos) al
+        // perder se elige un motivo del catálogo y el texto pasa a ser un
+        // comentario opcional; sin catálogo el texto libre sigue siendo el motivo.
+        $conCatalogo = $request->input('etapa') === 'cerrado_perdido'
+            && CrmCategoriaRechazo::empresaTieneCatalogo((int) $oportunidad->empresa_id);
+
+        $reglas = [
             'etapa' => 'required|in:prospecto,calificado,propuesta,negociacion,cerrado_ganado,cerrado_perdido',
             'motivo_perdida' => 'required_if:etapa,cerrado_perdido|nullable|string',
             'forzar' => 'sometimes|boolean',
-        ]);
+        ];
+        if ($conCatalogo) {
+            $reglas['motivo_perdida'] = 'nullable|string|max:1000';
+            $reglas['motivo_rechazo_id'] = [
+                'required',
+                'integer',
+                Rule::exists('crm_motivos_rechazo', 'id')->where(fn ($q) => $q
+                    ->where('activo', true)
+                    ->whereIn('categoria_id', CrmCategoriaRechazo::query()
+                        ->where('empresa_id', $oportunidad->empresa_id)
+                        ->where('activo', true)
+                        ->select('id'))),
+            ];
+        }
+
+        $validated = $request->validate($reglas);
 
         $nuevaEtapa = $validated['etapa'];
 
@@ -366,7 +389,10 @@ class OportunidadController extends CrmBaseController
 
         $oportunidad->etapa = $nuevaEtapa;
         if ($nuevaEtapa === 'cerrado_perdido') {
-            $oportunidad->motivo_perdida = $validated['motivo_perdida'];
+            $oportunidad->motivo_perdida = $validated['motivo_perdida'] ?? null;
+            if ($conCatalogo) {
+                $oportunidad->motivo_rechazo_id = $validated['motivo_rechazo_id'];
+            }
             $oportunidad->fecha_cierre_real = now();
         } elseif ($nuevaEtapa === 'cerrado_ganado') {
             $oportunidad->fecha_cierre_real = now();

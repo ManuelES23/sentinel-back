@@ -55,6 +55,8 @@ class CrmOportunidad extends Model
         'cliente:id,nombre',
         'vendedor:id,nombre',
         'productos.producto:id,nombre,commodity,unidad_medida',
+        'motivoRechazo:id,categoria_id,nombre',
+        'motivoRechazo.categoria:id,nombre',
     ];
 
     protected $fillable = [

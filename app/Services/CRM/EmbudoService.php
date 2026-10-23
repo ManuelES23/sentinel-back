@@ -123,7 +123,8 @@ class EmbudoService
         };
 
         $total = (clone $query)->count();
-        $items = $query->with(['cliente:id,nombre', 'prospecto:id,nombre', 'vendedor:id,nombre'])
+        // Sin filtros de activo: el motivo se muestra aunque hoy esté desactivado.
+        $items = $query->with(['cliente:id,nombre', 'prospecto:id,nombre', 'vendedor:id,nombre', 'motivoRechazo.categoria'])
             ->orderByDesc('monto_esperado')
             ->orderBy('id')
             ->limit(self::LIMITE_DETALLE)
@@ -141,6 +142,9 @@ class EmbudoService
                 'fechaCierreEsperada' => $o->fecha_cierre_esperada?->toDateString(),
                 'fechaCierreReal' => $o->fecha_cierre_real?->toIso8601String(),
                 'motivoPerdida' => $o->motivo_perdida,
+                'motivoRechazo' => $o->motivoRechazo
+                    ? ['categoria' => $o->motivoRechazo->categoria?->nombre, 'motivo' => $o->motivoRechazo->nombre]
+                    : null,
             ])
             ->all();
 
