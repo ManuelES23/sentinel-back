@@ -50,7 +50,12 @@ class CrmOportunidad extends Model
      * para que todos los emisores del evento OportunidadUpdated manden la
      * misma forma de payload (OportunidadController y CotizacionController).
      */
-    public const RELACIONES_API = ['prospecto:id,nombre', 'cliente:id,nombre', 'vendedor:id,nombre'];
+    public const RELACIONES_API = [
+        'prospecto:id,nombre',
+        'cliente:id,nombre',
+        'vendedor:id,nombre',
+        'productos.producto:id,nombre,commodity,unidad_medida',
+    ];
 
     protected $fillable = [
         'empresa_id',
@@ -99,9 +104,13 @@ class CrmOportunidad extends Model
         return $this->hasMany(CrmOportunidadEtapa::class, 'oportunidad_id');
     }
 
+    /**
+     * Líneas de producto de la OPORTUNIDAD (cotizacion_id nulo). Las líneas de
+     * cada cotización viven en la misma tabla pero se leen con CrmCotizacion::lineas().
+     */
     public function productos(): HasMany
     {
-        return $this->hasMany(CrmOportunidadProducto::class, 'oportunidad_id');
+        return $this->hasMany(CrmOportunidadProducto::class, 'oportunidad_id')->whereNull('cotizacion_id');
     }
 
     public function cotizaciones(): HasMany

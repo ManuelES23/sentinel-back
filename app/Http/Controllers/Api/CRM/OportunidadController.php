@@ -3,15 +3,19 @@
 namespace App\Http\Controllers\Api\CRM;
 
 use App\Events\CRM\OportunidadUpdated;
+use App\Models\CRM\CrmConfiguracionComercial;
 use App\Models\CRM\CrmOportunidad;
+use App\Models\CRM\CrmProducto;
 use App\Services\CRM\DashboardResumenService;
 use App\Services\CRM\EmbudoService;
+use App\Services\CRM\OportunidadProductosService;
 use App\Services\CRM\VisibilidadOportunidades;
 use App\Support\CRM\RangoDashboard;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class OportunidadController extends CrmBaseController
 {
@@ -20,7 +24,10 @@ class OportunidadController extends CrmBaseController
 
     private const RELACIONES = CrmOportunidad::RELACIONES_API;
 
-    public function __construct(private readonly VisibilidadOportunidades $visibilidad) {}
+    public function __construct(
+        private readonly VisibilidadOportunidades $visibilidad,
+        private readonly OportunidadProductosService $productos,
+    ) {}
 
     /** GET /crm/oportunidades */
     public function index(Request $request): JsonResponse
@@ -93,6 +100,8 @@ class OportunidadController extends CrmBaseController
         abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
         $this->exigirPermisoSubmodulo($empresaId, 'oportunidades', 'oportunidades', 'crear', 'No tienes permiso para crear oportunidades.');
 
+        $conProductos = CrmConfiguracionComercial::productosEnOportunidad($empresaId);
+
         $validated = $request->validate([
             'prospecto_id' => ['nullable', 'integer', $this->existeEnEmpresa('crm_prospectos', $empresaId)],
             'cliente_id' => ['nullable', 'integer', $this->existeEnEmpresa('crm_clientes', $empresaId)],
@@ -102,7 +111,7 @@ class OportunidadController extends CrmBaseController
             'probabilidad' => 'nullable|integer|min:0|max:100',
             'fecha_cierre_esperada' => 'nullable|date',
             'notas' => 'nullable|string',
-        ]);
+        ] + $this->reglasProductos($empresaId, $conProductos, 'required'));
 
         // Asignarla a otro vendedor es decisión de gerencia (misma regla que
         // update): sin equipo solo al CrmVendedor activo propio.
@@ -117,9 +126,29 @@ class OportunidadController extends CrmBaseController
             return $this->jsonError($error, 422);
         }
 
+        if ($conProductos) {
+            $inactivo = $this->productoInactivoNuevo($empresaId, $validated['productos'], []);
+            if ($inactivo) {
+                return $this->jsonError("El producto «{$inactivo}» está inactivo.", 422);
+            }
+        }
+
+        $lineas = $conProductos ? $validated['productos'] : null;
+        unset($validated['productos']);
+        if ($conProductos) {
+            // El monto lo calcula el back a partir de las líneas.
+            unset($validated['monto_esperado']);
+        }
         $validated['empresa_id'] = $empresaId;
 
-        $oportunidad = CrmOportunidad::create($validated);
+        $oportunidad = DB::transaction(function () use ($validated, $lineas) {
+            $oportunidad = CrmOportunidad::create($validated);
+            if ($lineas !== null) {
+                $this->productos->reemplazar($oportunidad, $lineas);
+            }
+
+            return $oportunidad;
+        });
         $oportunidad->load(self::RELACIONES);
 
         $this->difundir(new OportunidadUpdated('created', $oportunidad->toArray()));
@@ -135,6 +164,8 @@ class OportunidadController extends CrmBaseController
         $empresaId = (int) $oportunidad->empresa_id;
         $this->visibilidad->exigirVisible($empresaId, $oportunidad, VisibilidadOportunidades::MENSAJE_MODIFICAR_AJENA);
 
+        $conProductos = CrmConfiguracionComercial::productosEnOportunidad($empresaId);
+
         $validated = $request->validate([
             'prospecto_id' => ['sometimes', 'nullable', 'integer', $this->existeEnEmpresa('crm_prospectos', $empresaId)],
             'cliente_id' => ['sometimes', 'nullable', 'integer', $this->existeEnEmpresa('crm_clientes', $empresaId)],
@@ -144,7 +175,27 @@ class OportunidadController extends CrmBaseController
             'probabilidad' => 'sometimes|nullable|integer|min:0|max:100',
             'fecha_cierre_esperada' => 'sometimes|nullable|date',
             'notas' => 'sometimes|nullable|string',
-        ]);
+        ] + $this->reglasProductos($empresaId, $conProductos, 'sometimes'));
+
+        $lineas = null;
+        if ($conProductos) {
+            if ($oportunidad->estaCerrada()) {
+                if (array_key_exists('productos', $validated)) {
+                    return $this->jsonError('Esta oportunidad está cerrada; sus productos no se pueden cambiar.', 422);
+                }
+                // Congelada: el monto no cambia a posteriori.
+                unset($validated['monto_esperado']);
+            } elseif (array_key_exists('productos', $validated)) {
+                $actuales = $oportunidad->productos()->pluck('producto_id')->all();
+                $inactivo = $this->productoInactivoNuevo($empresaId, $validated['productos'], $actuales);
+                if ($inactivo) {
+                    return $this->jsonError("El producto «{$inactivo}» está inactivo.", 422);
+                }
+                $lineas = $validated['productos'];
+                unset($validated['monto_esperado']);
+            }
+        }
+        unset($validated['productos']);
 
         // Reasignar a otro vendedor es decisión de gerencia: sin equipo solo
         // se acepta el vendedor propio (el actual, porque solo edita las suyas).
@@ -167,7 +218,12 @@ class OportunidadController extends CrmBaseController
             }
         }
 
-        $oportunidad->update($validated);
+        DB::transaction(function () use ($oportunidad, $validated, $lineas) {
+            $oportunidad->update($validated);
+            if ($lineas !== null) {
+                $this->productos->reemplazar($oportunidad, $lineas);
+            }
+        });
         $oportunidad->load(self::RELACIONES);
 
         $this->difundir(new OportunidadUpdated('updated', $oportunidad->toArray()));
@@ -188,6 +244,53 @@ class OportunidadController extends CrmBaseController
         $this->difundir(new OportunidadUpdated('deleted', $data));
 
         return $this->jsonSuccess(null, 'Oportunidad eliminada correctamente');
+    }
+
+    /**
+     * Reglas de las líneas de producto. Con el interruptor de la empresa
+     * encendido son obligatorias en store ('required') y opcionales en update
+     * ('sometimes'); apagado se prohíben, para que nada cambie en las demás empresas.
+     *
+     * @return array<string, mixed>
+     */
+    private function reglasProductos(int $empresaId, bool $conProductos, string $presencia): array
+    {
+        if (! $conProductos) {
+            return ['productos' => 'prohibited'];
+        }
+
+        return [
+            'productos' => [$presencia, 'array', 'min:1'],
+            'productos.*.producto_id' => ['required', 'integer', 'distinct', $this->existeEnEmpresa('crm_productos', $empresaId)],
+            'productos.*.cantidad' => 'required|numeric|gt:0',
+            'productos.*.precio_unitario' => 'required|numeric|min:0',
+        ];
+    }
+
+    /**
+     * Nombre del primer producto inactivo que no estaba ya en las líneas
+     * actuales de la oportunidad (un producto desactivado después de
+     * agregarlo se conserva, pero no se agrega uno inactivo nuevo).
+     *
+     * @param  array<int, array<string, mixed>>  $lineas
+     * @param  array<int, int|string>  $idsActuales
+     */
+    private function productoInactivoNuevo(int $empresaId, array $lineas, array $idsActuales): ?string
+    {
+        $ids = array_diff(
+            array_map('intval', array_column($lineas, 'producto_id')),
+            array_map('intval', $idsActuales),
+        );
+        if ($ids === []) {
+            return null;
+        }
+
+        return CrmProducto::query()
+            ->where('empresa_id', $empresaId)
+            ->whereIn('id', $ids)
+            ->where('activo', false)
+            ->orderBy('id')
+            ->value('nombre');
     }
 
     /** Exactamente uno de prospecto_id/cliente_id debe estar presente. */
