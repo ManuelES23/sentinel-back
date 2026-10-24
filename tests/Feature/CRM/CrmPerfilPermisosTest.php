@@ -215,13 +215,16 @@ class CrmPerfilPermisosTest extends TestCase
         $this->aplicar('administracion')->assertOk();
         foreach (['ver', 'crear', 'editar', 'eliminar'] as $permiso) {
             $this->assertTrue($this->tienePermiso('catalogos', 'plantillas-whatsapp', $permiso));
+            $this->assertTrue($this->tienePermiso('catalogos', 'categorias-rechazo', $permiso));
         }
 
         $this->aplicar('gerencia')->assertOk();
         $this->assertFalse($this->tienePermiso('catalogos', 'plantillas-whatsapp', 'ver'));
+        $this->assertFalse($this->tienePermiso('catalogos', 'categorias-rechazo', 'ver'));
 
         $this->aplicar('vendedor')->assertOk();
         $this->assertFalse($this->tienePermiso('catalogos', 'plantillas-whatsapp', 'ver'));
+        $this->assertFalse($this->tienePermiso('catalogos', 'categorias-rechazo', 'ver'));
         // Usar el botón de WhatsApp solo exige actividades.crear, que el vendedor ya tiene.
         $this->assertTrue($this->tienePermiso('actividades', 'actividades', 'crear'));
     }

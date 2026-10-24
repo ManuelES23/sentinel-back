@@ -47,6 +47,56 @@ class ConfiguracionComercialControllerTest extends TestCase
         $response->assertOk()->assertJsonPath('data.descuento_global_habilitado', false);
     }
 
+    public function test_show_incluye_moneda_y_productos_por_defecto(): void
+    {
+        $this->withHeaders($this->crmHeaders())->getJson(self::BASE_URL)
+            ->assertOk()
+            ->assertJsonPath('data.moneda', 'MXN')
+            ->assertJsonPath('data.productos_en_oportunidad', false)
+            ->assertJsonPath('data.descuento_global_habilitado', true);
+    }
+
+    public function test_update_cambia_moneda_y_productos(): void
+    {
+        $this->withHeaders($this->crmHeaders())->putJson(self::BASE_URL, [
+            'moneda' => 'USD',
+            'productos_en_oportunidad' => true,
+        ])->assertOk();
+
+        $this->withHeaders($this->crmHeaders())->getJson(self::BASE_URL)
+            ->assertOk()
+            ->assertJsonPath('data.moneda', 'USD')
+            ->assertJsonPath('data.productos_en_oportunidad', true)
+            ->assertJsonPath('data.descuento_global_habilitado', true);
+    }
+
+    public function test_update_rechaza_moneda_invalida(): void
+    {
+        $this->withHeaders($this->crmHeaders())->putJson(self::BASE_URL, ['moneda' => 'EUR'])
+            ->assertStatus(422);
+    }
+
+    public function test_update_sin_ningun_campo_es_422(): void
+    {
+        $this->withHeaders($this->crmHeaders())->putJson(self::BASE_URL, [])
+            ->assertStatus(422);
+    }
+
+    public function test_update_sin_permiso_editar_403(): void
+    {
+        $sinPermisos = \App\Models\User::factory()->create();
+        \App\Models\UserEnterpriseAccess::create([
+            'user_id' => $sinPermisos->id,
+            'enterprise_id' => $this->enterprise->id,
+            'is_active' => true,
+            'granted_at' => now(),
+        ]);
+        Sanctum::actingAs($sinPermisos);
+
+        $this->withHeaders($this->crmHeaders())->putJson(self::BASE_URL, ['moneda' => 'USD'])
+            ->assertStatus(403);
+    }
+
     public function test_puede_crear_y_listar_un_impuesto(): void
     {
         $response = $this->withHeaders($this->crmHeaders())->postJson(self::BASE_URL.'/impuestos', [

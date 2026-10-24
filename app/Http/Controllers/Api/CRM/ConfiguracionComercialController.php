@@ -8,6 +8,7 @@ use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class ConfiguracionComercialController extends CrmBaseController
 {
@@ -25,6 +26,8 @@ class ConfiguracionComercialController extends CrmBaseController
 
         return $this->jsonSuccess([
             'descuento_global_habilitado' => $config->descuento_global_habilitado,
+            'moneda' => $config->moneda,
+            'productos_en_oportunidad' => $config->productos_en_oportunidad,
             'impuestos' => $impuestos,
         ]);
     }
@@ -37,7 +40,9 @@ class ConfiguracionComercialController extends CrmBaseController
         $this->exigirPermisoSubmodulo($empresaId, 'catalogos', 'configuracion-comercial', 'editar', 'No tienes permiso para editar la configuración comercial.');
 
         $validated = $request->validate([
-            'descuento_global_habilitado' => 'required|boolean',
+            'descuento_global_habilitado' => 'boolean|required_without_all:moneda,productos_en_oportunidad',
+            'moneda' => ['sometimes', 'string', Rule::in(CrmConfiguracionComercial::MONEDAS)],
+            'productos_en_oportunidad' => 'sometimes|boolean',
         ]);
 
         $config = CrmConfiguracionComercial::paraEmpresa($empresaId);

@@ -32,6 +32,9 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
         ->parameters(['bodegas' => 'bodega']);
 
     // Productos (+ typeahead + toggle activo)
+    Route::get('productos/commodities', [
+        App\Http\Controllers\Api\CRM\ProductoController::class, 'commodities'
+    ]);
     Route::get('productos/buscar', [
         App\Http\Controllers\Api\CRM\ProductoController::class, 'buscar'
     ]);
@@ -63,6 +66,16 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::apiResource('plantillas-whatsapp', App\Http\Controllers\Api\CRM\PlantillaWhatsappController::class)
         ->parameters(['plantillas-whatsapp' => 'plantilla'])
         ->except(['show']);
+
+    // Categorías y motivos de rechazo por empresa (spec 2026-10-23 §4.5).
+    // Lectura abierta dentro del tenant; escribir exige catalogos.categorias-rechazo.
+    Route::get('categorias-rechazo', [App\Http\Controllers\Api\CRM\CategoriaRechazoController::class, 'index']);
+    Route::post('categorias-rechazo', [App\Http\Controllers\Api\CRM\CategoriaRechazoController::class, 'store']);
+    Route::put('categorias-rechazo/{categoria}', [App\Http\Controllers\Api\CRM\CategoriaRechazoController::class, 'update']);
+    Route::delete('categorias-rechazo/{categoria}', [App\Http\Controllers\Api\CRM\CategoriaRechazoController::class, 'destroy']);
+    Route::post('categorias-rechazo/{categoria}/motivos', [App\Http\Controllers\Api\CRM\MotivoRechazoController::class, 'store']);
+    Route::put('motivos-rechazo/{motivo}', [App\Http\Controllers\Api\CRM\MotivoRechazoController::class, 'update']);
+    Route::delete('motivos-rechazo/{motivo}', [App\Http\Controllers\Api\CRM\MotivoRechazoController::class, 'destroy']);
 
     // -------------------------------------------------
     // PROSPECTOS
@@ -236,6 +249,9 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('dashboard/actividad', [App\Http\Controllers\Api\CRM\DashboardController::class, 'actividad']);
     Route::get('dashboard/ranking-vendedores', [App\Http\Controllers\Api\CRM\DashboardController::class, 'rankingVendedores']);
     Route::get('dashboard/detalle', [App\Http\Controllers\Api\CRM\DashboardController::class, 'detalle']);
+    // Pérdidas por categoría de rechazo (spec 2026-10-23 §4.6)
+    Route::get('dashboard/perdidas-por-categoria', [App\Http\Controllers\Api\CRM\DashboardController::class, 'perdidasPorCategoria']);
+    Route::get('dashboard/perdidas-por-categoria/detalle', [App\Http\Controllers\Api\CRM\DashboardController::class, 'perdidasPorCategoriaDetalle']);
 
     // -------------------------------------------------
     // INTEGRACIONES · DIALPAD
