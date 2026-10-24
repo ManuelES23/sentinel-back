@@ -148,6 +148,58 @@ class OportunidadProductosTest extends TestCase
             ->assertStatus(422)->assertJsonValidationErrors('productos.0.cantidad');
     }
 
+    public function test_cantidad_demasiado_grande_422(): void
+    {
+        $a = $this->producto();
+
+        $this->withHeaders($this->crmHeaders())->postJson(self::BASE_URL, $this->payload([$this->linea($a, 100000000, 1)]))
+            ->assertStatus(422)->assertJsonValidationErrors('productos.0.cantidad');
+        $this->assertSame(0, CrmOportunidad::count());
+    }
+
+    public function test_precio_demasiado_grande_422(): void
+    {
+        $a = $this->producto();
+
+        $this->withHeaders($this->crmHeaders())->postJson(self::BASE_URL, $this->payload([$this->linea($a, 1, 10000000000)]))
+            ->assertStatus(422)->assertJsonValidationErrors('productos.0.precio_unitario');
+        $this->assertSame(0, CrmOportunidad::count());
+    }
+
+    public function test_total_demasiado_grande_422_en_store(): void
+    {
+        $a = $this->producto();
+
+        $this->withHeaders($this->crmHeaders())->postJson(self::BASE_URL, $this->payload([$this->linea($a, 10000000, 2000)]))
+            ->assertStatus(422)->assertJsonValidationErrors('productos')
+            ->assertJsonPath('errors.productos.0', 'El total de la oportunidad excede el máximo permitido.');
+        $this->assertSame(0, CrmOportunidad::count());
+        $this->assertSame(0, CrmOportunidadProducto::count());
+    }
+
+    public function test_total_demasiado_grande_422_en_update_sin_cambiar_nada(): void
+    {
+        $a = $this->producto();
+        $b = $this->producto('Ataulfo');
+        $o = $this->crear([$this->linea($a, 10, 5)]);
+
+        $this->withHeaders($this->crmHeaders())->putJson(self::BASE_URL.'/'.$o->id, [
+            'productos' => [$this->linea($a, 5000000, 1500), $this->linea($b, 5000000, 1500)],
+        ])->assertStatus(422)->assertJsonValidationErrors('productos');
+
+        $this->assertEquals(50, $o->fresh()->monto_esperado);
+        $this->assertCount(1, $this->lineasDe($o));
+    }
+
+    public function test_total_en_el_limite_pasa(): void
+    {
+        $a = $this->producto();
+
+        $o = $this->crear([$this->linea($a, 99999999, 99.99)]);
+
+        $this->assertEqualsWithDelta(9998999900.01, (float) $o->fresh()->monto_esperado, 0.001);
+    }
+
     public function test_redondeo_cajas_decimales(): void
     {
         $a = $this->producto('A');

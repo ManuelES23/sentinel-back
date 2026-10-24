@@ -18,6 +18,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 class OportunidadController extends CrmBaseController
 {
@@ -25,6 +26,9 @@ class OportunidadController extends CrmBaseController
     use VerificaPermisoSubmodulo;
 
     private const RELACIONES = CrmOportunidad::RELACIONES_API;
+
+    /** Máximo que cabe en monto_esperado (decimal(12,2)). */
+    private const MONTO_MAXIMO = 9999999999.99;
 
     public function __construct(
         private readonly VisibilidadOportunidades $visibilidad,
@@ -129,6 +133,7 @@ class OportunidadController extends CrmBaseController
         }
 
         if ($conProductos) {
+            $this->exigirTotalDentroDeLimite($validated['productos']);
             $inactivo = $this->productoInactivoNuevo($empresaId, $validated['productos'], []);
             if ($inactivo) {
                 return $this->jsonError("El producto «{$inactivo}» está inactivo.", 422);
@@ -189,6 +194,7 @@ class OportunidadController extends CrmBaseController
                     return $this->jsonError('Esta oportunidad está cerrada; sus productos no se pueden cambiar.', 422);
                 }
             } elseif (array_key_exists('productos', $validated)) {
+                $this->exigirTotalDentroDeLimite($validated['productos']);
                 $actuales = $oportunidad->productos()->pluck('producto_id')->all();
                 $inactivo = $this->productoInactivoNuevo($empresaId, $validated['productos'], $actuales);
                 if ($inactivo) {
@@ -264,9 +270,24 @@ class OportunidadController extends CrmBaseController
         return [
             'productos' => [$presencia, 'array', 'min:1'],
             'productos.*.producto_id' => ['required', 'integer', 'distinct', $this->existeEnEmpresa('crm_productos', $empresaId)],
-            'productos.*.cantidad' => 'required|numeric|gt:0',
-            'productos.*.precio_unitario' => 'required|numeric|min:0',
+            'productos.*.cantidad' => 'required|numeric|gt:0|max:99999999',
+            'productos.*.precio_unitario' => 'required|numeric|min:0|max:9999999999.99',
         ];
+    }
+
+    /**
+     * El total calculado debe caber en monto_esperado (decimal(12,2)); si no,
+     * MySQL estricto daría 500 en lugar de un 422 claro.
+     *
+     * @param  array<int, array<string, mixed>>  $lineas
+     */
+    private function exigirTotalDentroDeLimite(array $lineas): void
+    {
+        if ($this->productos->monto($lineas) > self::MONTO_MAXIMO) {
+            throw ValidationException::withMessages([
+                'productos' => 'El total de la oportunidad excede el máximo permitido.',
+            ]);
+        }
     }
 
     /**
