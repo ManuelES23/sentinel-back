@@ -21,7 +21,10 @@ class ProductoController extends CrmBaseController
     use VerificaPermisoSubmodulo;
 
     /** Unidades de medida permitidas. */
-    private const UNIDADES = ['pieza', 'kg', 'litro', 'servicio', 'hora'];
+    private const UNIDADES = ['pieza', 'kg', 'litro', 'servicio', 'hora', 'caja'];
+
+    /** Columnas que devuelven la lista simple (all=1) y el buscador. */
+    private const COLUMNAS_LISTA = ['id', 'nombre', 'precio', 'unidad_medida', 'commodity', 'activo'];
 
     /**
      * GET /crm/productos
@@ -34,6 +37,7 @@ class ProductoController extends CrmBaseController
             ->where('empresa_id', $empresaId)
             ->when($request->has('activo'), fn ($q) => $q->where('activo', $request->boolean('activo')))
             ->when($request->unidad_medida, fn ($q, $u) => $q->where('unidad_medida', $u))
+            ->when($request->filled('commodity'), fn ($q) => $q->where('commodity', trim((string) $request->query('commodity'))))
             ->when($request->search, function ($q, $search) {
                 $q->where(function ($sub) use ($search) {
                     $sub->where('nombre', 'like', "%{$search}%")
@@ -45,7 +49,7 @@ class ProductoController extends CrmBaseController
         // Modo lista simple para selects (sin paginación): sólo activos.
         if ($request->boolean('all')) {
             return $this->jsonSuccess(
-                $query->clone()->where('activo', true)->get(['id', 'nombre', 'precio', 'unidad_medida'])
+                $query->clone()->where('activo', true)->get(self::COLUMNAS_LISTA)
             );
         }
 
@@ -73,9 +77,28 @@ class ProductoController extends CrmBaseController
             })
             ->orderBy('nombre')
             ->limit(10)
-            ->get(['id', 'nombre', 'precio', 'unidad_medida']);
+            ->get(self::COLUMNAS_LISTA);
 
         return $this->jsonSuccess($productos);
+    }
+
+    /**
+     * GET /crm/productos/commodities
+     * Commodities distintos (no vacíos) de los productos de la empresa, para el autocompletado.
+     */
+    public function commodities(Request $request): JsonResponse
+    {
+        $empresaId = $this->getEmpresaId($request);
+
+        $commodities = CrmProducto::where('empresa_id', $empresaId)
+            ->whereNotNull('commodity')
+            ->where('commodity', '!=', '')
+            ->distinct()
+            ->orderBy('commodity')
+            ->pluck('commodity')
+            ->values();
+
+        return $this->jsonSuccess($commodities);
     }
 
     /**
@@ -101,6 +124,7 @@ class ProductoController extends CrmBaseController
             'descripcion'   => 'nullable|string',
             'precio'        => 'required|numeric|min:0',
             'unidad_medida' => ['required', Rule::in(self::UNIDADES)],
+            'commodity'     => 'nullable|string|max:100',
             'activo'        => 'nullable|boolean',
         ]);
 
@@ -110,6 +134,7 @@ class ProductoController extends CrmBaseController
             'descripcion'   => $validated['descripcion'] ?? null,
             'precio'        => $validated['precio'],
             'unidad_medida' => $validated['unidad_medida'],
+            'commodity'     => $this->normalizarCommodity($validated['commodity'] ?? null),
             'activo'        => $validated['activo'] ?? true,
         ]);
 
@@ -131,8 +156,13 @@ class ProductoController extends CrmBaseController
             'descripcion'   => 'sometimes|nullable|string',
             'precio'        => 'sometimes|required|numeric|min:0',
             'unidad_medida' => ['sometimes', 'required', Rule::in(self::UNIDADES)],
+            'commodity'     => 'sometimes|nullable|string|max:100',
             'activo'        => 'sometimes|boolean',
         ]);
+
+        if (array_key_exists('commodity', $validated)) {
+            $validated['commodity'] = $this->normalizarCommodity($validated['commodity']);
+        }
 
         $producto->update($validated);
 
@@ -174,6 +204,14 @@ class ProductoController extends CrmBaseController
         $this->difundir(new ProductoUpdated('deleted', $data));
 
         return $this->jsonSuccess(null, 'Producto eliminado correctamente');
+    }
+
+    /** Texto recortado; vacío equivale a sin commodity. */
+    private function normalizarCommodity(?string $commodity): ?string
+    {
+        $commodity = trim((string) $commodity);
+
+        return $commodity === '' ? null : $commodity;
     }
 
     /**

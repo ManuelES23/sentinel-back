@@ -2,6 +2,8 @@
 
 namespace Tests\Feature\CRM;
 
+use App\Models\CRM\CrmCategoriaRechazo;
+use App\Models\CRM\CrmMotivoRechazo;
 use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmOportunidadEtapa;
 use App\Models\CRM\CrmVendedor;
@@ -344,5 +346,31 @@ class EmbudoServiceTest extends TestCase
         $this->assertSame(55, $r['total']);
         $this->assertCount(50, $r['items']);
         $this->assertSame(55.0, $r['items'][0]['monto']);
+    }
+
+    public function test_detalle_perdidas_incluye_motivo_rechazo(): void
+    {
+        $categoria = CrmCategoriaRechazo::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Producto']);
+        $motivo = CrmMotivoRechazo::create(['categoria_id' => $categoria->id, 'nombre' => 'Problemas de calidad']);
+        $this->oportunidad('2026-10-01', ['2026-10-02' => 'calificado', '2026-10-03' => 'cerrado_perdido'], [
+            'nombre' => 'Con motivo', 'motivo_rechazo_id' => $motivo->id, 'motivo_perdida' => 'Comentario',
+        ]);
+        $this->oportunidad('2026-10-01', ['2026-10-02' => 'calificado', '2026-10-03' => 'cerrado_perdido'], [
+            'nombre' => 'Texto libre', 'motivo_perdida' => 'Precio',
+        ]);
+        $this->ahora('2026-10-20');
+
+        $porNombre = fn () => collect($this->detalle('perdidas', 'calificado')['items'])->keyBy('nombre');
+
+        $items = $porNombre();
+        $this->assertSame(['categoria' => 'Producto', 'motivo' => 'Problemas de calidad'], $items['Con motivo']['motivoRechazo']);
+        $this->assertSame('Comentario', $items['Con motivo']['motivoPerdida']);
+        $this->assertNull($items['Texto libre']['motivoRechazo']);
+
+        // Desactivados después, el motivo y su categoría se siguen mostrando.
+        $motivo->update(['activo' => false]);
+        $categoria->update(['activo' => false]);
+
+        $this->assertSame(['categoria' => 'Producto', 'motivo' => 'Problemas de calidad'], $porNombre()['Con motivo']['motivoRechazo']);
     }
 }

@@ -66,6 +66,7 @@ class CrmPerfilPermisosService
             'productos' => ['ver', 'crear', 'editar', 'eliminar'],
             'configuracion-comercial' => ['ver', 'editar'],
             'plantillas-whatsapp' => ['ver', 'crear', 'editar', 'eliminar'],
+            'categorias-rechazo' => ['ver', 'crear', 'editar', 'eliminar'],
         ],
         'integraciones' => [
             'dialpad' => ['ver', 'sync'],

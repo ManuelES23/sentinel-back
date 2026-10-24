@@ -2,9 +2,11 @@
 
 namespace App\Http\Controllers\Api\CRM;
 
+use App\Models\CRM\CrmCategoriaRechazo;
 use App\Models\CRM\CrmVendedor;
 use App\Services\CRM\DashboardResumenService;
 use App\Services\CRM\EmbudoService;
+use App\Services\CRM\PerdidasCategoriaService;
 use App\Support\CRM\RangoDashboard;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
@@ -29,6 +31,7 @@ class DashboardController extends CrmBaseController
     public function __construct(
         private readonly DashboardResumenService $resumen,
         private readonly EmbudoService $embudos,
+        private readonly PerdidasCategoriaService $perdidas,
     ) {}
 
     public function kpis(Request $request): JsonResponse
@@ -100,6 +103,35 @@ class DashboardController extends CrmBaseController
         }
 
         return $this->jsonSuccess($this->embudos->detalle($c['empresaId'], $c['vendedorId'], $c['rango'], $tipo, $etapa));
+    }
+
+    /** GET /crm/dashboard/perdidas-por-categoria -- «Por qué se pierden»: cerradas como perdidas en el periodo (fecha_cierre_real). */
+    public function perdidasPorCategoria(Request $request): JsonResponse
+    {
+        $c = $this->contexto($request);
+
+        return $this->jsonSuccess($this->perdidas->resumen($c['empresaId'], $c['vendedorId'], $c['rango']));
+    }
+
+    /** GET /crm/dashboard/perdidas-por-categoria/detalle?categoria_id=<id|sin> -- lista para el cajón de detalle. */
+    public function perdidasPorCategoriaDetalle(Request $request): JsonResponse
+    {
+        $c = $this->contexto($request);
+        $validated = $request->validate([
+            'categoria_id' => ['required', function (string $atributo, mixed $valor, \Closure $fallo) use ($c) {
+                if ($valor === 'sin') {
+                    return;
+                }
+                $esEntero = is_scalar($valor) && preg_match('/^\d+$/', (string) $valor) === 1;
+                if (! $esEntero || ! CrmCategoriaRechazo::where('empresa_id', $c['empresaId'])->whereKey((int) $valor)->exists()) {
+                    $fallo('La categoría no existe en esta empresa.');
+                }
+            }],
+        ]);
+
+        $categoriaId = $validated['categoria_id'] === 'sin' ? null : (int) $validated['categoria_id'];
+
+        return $this->jsonSuccess($this->perdidas->detalle($c['empresaId'], $c['vendedorId'], $c['rango'], $categoriaId));
     }
 
     /** GET /crm/dashboard/ranking-vendedores -- exige 'ejecutivo' (no 'ver'); siempre de todo el equipo. */
