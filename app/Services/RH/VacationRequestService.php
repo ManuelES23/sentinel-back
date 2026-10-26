@@ -32,9 +32,11 @@ class VacationRequestService
     ) {}
 
     /**
-     * Vista previa sin escribir. Opciones: omitir_antiguedad y permitir_pasado
-     * (solo RH), excluir_id (al reprogramar, la propia solicitud no cuenta para
-     * el saldo ni los empalmes).
+     * Vista previa sin escribir. Opciones: permitir_pasado (solo RH), excluir_id
+     * (al reprogramar, la propia solicitud no cuenta para el saldo ni los
+     * empalmes). Sin saldo suficiente no hay error: la diferencia es adelanto
+     * (`adelanto`) hasta los días de su siguiente aniversario (`limite_adelanto`);
+     * el saldo queda en negativo y se cubre al cumplirlo. Ya no se exige 1 año.
      */
     public function calcular(Employee $empleado, Carbon $inicio, Carbon $fin, array $opciones = []): array
     {
@@ -43,6 +45,7 @@ class VacationRequestService
         $resultado = [
             'dias_naturales' => 0, 'dias_descontables' => 0, 'descontables' => [], 'excluidos' => [],
             'disponibles' => 0, 'disponibles_despues' => 0, 'errores' => [],
+            'adelanto' => 0, 'limite_adelanto' => 0, 'proximo_aniversario' => null,
         ];
 
         if ($fin->lt($inicio)) {
@@ -62,11 +65,6 @@ class VacationRequestService
             $resultado['errores'][] = 'La fecha de inicio no puede ser anterior a hoy.';
         }
 
-        if (empty($opciones['omitir_antiguedad'])
-            && (! $empleado->hire_date || (int) $empleado->hire_date->diffInYears($inicio) < 1)) {
-            $resultado['errores'][] = 'Se requiere al menos 1 año de antigüedad para solicitar vacaciones.';
-        }
-
         $calculo = $this->dias->calcular($empleado, $inicio, $fin);
         $resultado['descontables'] = $calculo['descontables'];
         $resultado['excluidos'] = $calculo['excluidos'];
@@ -82,8 +80,14 @@ class VacationRequestService
         $resultado['disponibles'] = VacationCalculatorService::diasDisponibles($empleado) + $propia;
         $resultado['disponibles_despues'] = $resultado['disponibles'] - $resultado['dias_descontables'];
 
-        if ($resultado['dias_descontables'] > 0 && $resultado['disponibles_despues'] < 0) {
-            $resultado['errores'][] = "No tiene suficientes días disponibles. Disponibles: {$resultado['disponibles']}, solicitados: {$resultado['dias_descontables']}.";
+        // Adelanto: lo que pase del saldo sale del siguiente periodo, hasta los días de ese periodo.
+        $adelanto = $this->adelanto($empleado);
+        $resultado['adelanto'] = min($resultado['dias_descontables'], max(0, -$resultado['disponibles_despues']));
+        $resultado['limite_adelanto'] = $adelanto['dias'];
+        $resultado['proximo_aniversario'] = $adelanto['fecha'];
+        if ($resultado['dias_descontables'] > 0 && $resultado['disponibles_despues'] < -$adelanto['dias']) {
+            $aniversario = $adelanto['fecha'] ? Carbon::parse($adelanto['fecha'])->format('d/m/Y') : 'su aniversario';
+            $resultado['errores'][] = "Puede adelantar hasta {$adelanto['dias']} días de su siguiente periodo (aniversario el {$aniversario}). Disponibles: {$resultado['disponibles']}, solicitados: {$resultado['dias_descontables']}.";
         }
 
         if ($this->seEmpalma($empleado, $inicio, $fin, $excluirId)) {
@@ -105,6 +109,7 @@ class VacationRequestService
                 'start_date' => $inicio->format('Y-m-d'),
                 'end_date' => $fin->format('Y-m-d'),
                 'days_requested' => $calculo['dias_descontables'],
+                'advance_days' => $calculo['adelanto'],
                 'reason' => $motivo,
                 'vacation_year' => $inicio->year,
                 'status' => 'pending',
@@ -121,6 +126,62 @@ class VacationRequestService
         return $solicitud->fresh(['employee', 'approvals']);
     }
 
+    /**
+     * Solicitud que ya se autorizó fuera del sistema (p. ej. antes de usar el portal): RH con
+     * permiso `aprobar` la captura aprobada, con las mismas reglas de días, empalmes y adelanto,
+     * pero sin cadena ni avisos (el empleado y sus jefes ya lo saben). Queda un solo paso que
+     * dice quién la capturó, con la nota.
+     */
+    public function capturarAutorizada(Employee $empleado, Carbon $inicio, Carbon $fin, ?string $motivo, User $usuario, ?string $nota = null): VacationRequest
+    {
+        if (! $this->aprobador->esRh($usuario)) {
+            throw new VacacionesException('No tiene permiso para capturar solicitudes ya autorizadas.', 403);
+        }
+
+        $solicitud = DB::transaction(function () use ($empleado, $inicio, $fin, $motivo, $usuario, $nota) {
+            $empleado = Employee::whereKey($empleado->id)->lockForUpdate()->firstOrFail();
+            $calculo = $this->exigirSinErrores($this->calcular($empleado, $inicio, $fin, ['permitir_pasado' => true]));
+
+            $solicitud = VacationRequest::create([
+                'employee_id' => $empleado->id,
+                'enterprise_id' => $empleado->enterprise_id,
+                'start_date' => $inicio->format('Y-m-d'),
+                'end_date' => $fin->format('Y-m-d'),
+                'days_requested' => $calculo['dias_descontables'],
+                'advance_days' => $calculo['adelanto'],
+                'reason' => $motivo,
+                'vacation_year' => $inicio->year,
+                'status' => 'pending',
+                'source' => VacationRequest::SOURCE_RH,
+                'created_by' => $usuario->id,
+                'resolved_by_rh' => true,
+            ]);
+
+            if ($this->aprobador->esSolicitante($usuario, $solicitud)) {
+                throw new VacacionesException('No puede capturar como autorizadas sus propias vacaciones.', 403);
+            }
+
+            $nota = trim((string) $nota);
+            $solicitud->approvals()->create([
+                'step_order' => 1,
+                'description' => CadenaAprobacionVacaciones::YA_AUTORIZADA,
+                'rules' => [],
+                'is_rh_final' => true,
+                'decision' => VacationRequestApproval::APPROVED,
+                'decided_by' => $usuario->id,
+                'decided_at' => now(),
+                'comment' => 'Capturada como ya autorizada por RH'.($nota !== '' ? ': '.$nota : ''),
+            ]);
+            $this->marcarAprobada($solicitud, $usuario);
+
+            return $solicitud;
+        });
+
+        $this->avisos->capturadaAutorizada($solicitud->fresh());
+
+        return $solicitud->fresh(['employee', 'approvals']);
+    }
+
     public function reprogramar(VacationRequest $solicitud, Carbon $inicio, Carbon $fin, ?string $motivo, array $opciones = []): VacationRequest
     {
         $solicitud = DB::transaction(function () use ($solicitud, $inicio, $fin, $motivo, $opciones) {
@@ -132,6 +193,7 @@ class VacationRequestService
                 'start_date' => $inicio->format('Y-m-d'),
                 'end_date' => $fin->format('Y-m-d'),
                 'days_requested' => $calculo['dias_descontables'],
+                'advance_days' => $calculo['adelanto'],
                 'reason' => $motivo ?? $solicitud->reason,
                 'vacation_year' => $inicio->year,
             ]);
@@ -327,6 +389,25 @@ class VacationRequestService
         }
 
         return $calculo;
+    }
+
+    /**
+     * Cuánto puede adelantar: los días LFT de su siguiente aniversario (12 el primer año).
+     *
+     * @return array{dias: int, fecha: ?string}
+     */
+    private function adelanto(Employee $empleado): array
+    {
+        if (! $empleado->hire_date) {
+            return ['dias' => 0, 'fecha' => null];
+        }
+
+        $anios = max(0, (int) $empleado->hire_date->diffInYears(now()));
+
+        return [
+            'dias' => VacationCalculatorService::calculateEntitledDays($anios + 1),
+            'fecha' => $empleado->hire_date->copy()->addYears($anios + 1)->toDateString(),
+        ];
     }
 
     private function seEmpalma(Employee $empleado, Carbon $inicio, Carbon $fin, ?int $excluirId): bool

@@ -87,4 +87,88 @@ class ProductoControllerTest extends TestCase
 
         $response->assertStatus(404);
     }
+
+    public function test_store_acepta_commodity_y_unidad_caja(): void
+    {
+        $response = $this->withHeaders($this->crmHeaders())->postJson(self::BASE_URL, [
+            'nombre' => 'Kent Mango',
+            'precio' => 0,
+            'unidad_medida' => 'caja',
+            'commodity' => ' Mango ',
+        ]);
+
+        $response->assertCreated()
+            ->assertJsonPath('data.commodity', 'Mango')
+            ->assertJsonPath('data.unidad_medida', 'caja');
+    }
+
+    public function test_commodity_vacio_se_guarda_como_null(): void
+    {
+        $response = $this->withHeaders($this->crmHeaders())->postJson(self::BASE_URL, [
+            'nombre' => 'Producto sin commodity',
+            'precio' => 5,
+            'unidad_medida' => 'pieza',
+            'commodity' => '   ',
+        ]);
+
+        $response->assertCreated()->assertJsonPath('data.commodity', null);
+    }
+
+    public function test_update_cambia_el_commodity(): void
+    {
+        $producto = CrmProducto::create([
+            'empresa_id' => $this->enterprise->id, 'nombre' => 'Kent Mango', 'precio' => 0,
+            'unidad_medida' => 'caja', 'commodity' => 'Mango',
+        ]);
+
+        $this->withHeaders($this->crmHeaders())
+            ->putJson(self::BASE_URL.'/'.$producto->id, ['commodity' => ' Fruta '])
+            ->assertOk()
+            ->assertJsonPath('data.commodity', 'Fruta');
+    }
+
+    public function test_buscar_devuelve_commodity(): void
+    {
+        CrmProducto::create([
+            'empresa_id' => $this->enterprise->id, 'nombre' => 'Kent Mango', 'precio' => 0,
+            'unidad_medida' => 'caja', 'commodity' => 'Mango',
+        ]);
+
+        $response = $this->withHeaders($this->crmHeaders())->getJson(self::BASE_URL.'/buscar?q=Kent');
+
+        $response->assertOk()->assertJsonPath('data.0.commodity', 'Mango');
+    }
+
+    public function test_commodities_lista_distintos_de_la_empresa(): void
+    {
+        $otra = $this->crearOtraEmpresa();
+        foreach (['Mango', 'Mango', 'Corn', null] as $i => $commodity) {
+            CrmProducto::create([
+                'empresa_id' => $this->enterprise->id, 'nombre' => "P$i", 'precio' => 0,
+                'unidad_medida' => 'caja', 'commodity' => $commodity,
+            ]);
+        }
+        CrmProducto::create([
+            'empresa_id' => $otra->id, 'nombre' => 'Pimiento', 'precio' => 0,
+            'unidad_medida' => 'caja', 'commodity' => 'Pepper',
+        ]);
+
+        $this->withHeaders($this->crmHeaders())->getJson(self::BASE_URL.'/commodities')
+            ->assertOk()
+            ->assertExactJson(['success' => true, 'message' => 'Operación exitosa', 'data' => ['Corn', 'Mango']]);
+    }
+
+    public function test_index_filtra_por_commodity(): void
+    {
+        foreach (['Kent Mango' => 'Mango', 'Haden Mango' => 'Mango', 'White Corn' => 'Corn'] as $nombre => $commodity) {
+            CrmProducto::create([
+                'empresa_id' => $this->enterprise->id, 'nombre' => $nombre, 'precio' => 0,
+                'unidad_medida' => 'caja', 'commodity' => $commodity,
+            ]);
+        }
+
+        $response = $this->withHeaders($this->crmHeaders())->getJson(self::BASE_URL.'?commodity=Mango&all=1');
+
+        $response->assertOk()->assertJsonCount(2, 'data')->assertJsonPath('data.0.commodity', 'Mango');
+    }
 }

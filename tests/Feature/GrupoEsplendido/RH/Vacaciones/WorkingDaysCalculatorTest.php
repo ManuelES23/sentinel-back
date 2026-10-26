@@ -36,12 +36,12 @@ class WorkingDaysCalculatorTest extends TestCase
         return WorkSchedule::create($datos);
     }
 
-    public function test_sin_horario_cuenta_lunes_a_viernes(): void
+    public function test_sin_horario_cuenta_lunes_a_sabado(): void
     {
         $resultado = $this->calcular($this->empleado($this->empresa), '2026-10-12', '2026-10-18');
 
-        $this->assertSame(['2026-10-12', '2026-10-13', '2026-10-14', '2026-10-15', '2026-10-16'], $resultado['descontables']);
-        $this->assertSame([['fecha' => '2026-10-17', 'motivo' => 'descanso'], ['fecha' => '2026-10-18', 'motivo' => 'descanso']], $resultado['excluidos']);
+        $this->assertSame(['2026-10-12', '2026-10-13', '2026-10-14', '2026-10-15', '2026-10-16', '2026-10-17'], $resultado['descontables']);
+        $this->assertSame([['fecha' => '2026-10-18', 'motivo' => 'descanso']], $resultado['excluidos']);
     }
 
     public function test_un_festivo_general_no_se_descuenta(): void
@@ -80,8 +80,9 @@ class WorkingDaysCalculatorTest extends TestCase
         $this->assertCount(4, $this->calcular($this->empleado($this->empresa), '2026-10-12', '2026-10-18')['descontables']);
     }
 
-    public function test_solo_fin_de_semana_no_descuenta_nada(): void
+    public function test_solo_domingo_no_descuenta_nada_y_el_sabado_si(): void
     {
-        $this->assertSame([], $this->calcular($this->empleado($this->empresa), '2026-10-17', '2026-10-18')['descontables']);
+        $this->assertSame([], $this->calcular($this->empleado($this->empresa), '2026-10-18', '2026-10-18')['descontables']);
+        $this->assertSame(['2026-10-17'], $this->calcular($this->empleado($this->empresa), '2026-10-17', '2026-10-18')['descontables']);
     }
 }

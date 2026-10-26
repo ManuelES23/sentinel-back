@@ -61,15 +61,15 @@ class VacationRequestServiceTest extends TestCase
         $this->regla(1, ApprovalFlowStep::TYPE_DIRECT_SUPERVISOR);
         $empleado = $this->empleado($this->empresa, ['reports_to' => $jefe->id]);
 
-        $solicitud = $this->crear($empleado, 0, 6); // lunes a domingo
+        $solicitud = $this->crear($empleado, 0, 6); // lunes a domingo: el domingo no cuenta
 
         $this->assertSame('pending', $solicitud->status);
-        $this->assertSame(5, $solicitud->days_requested);
+        $this->assertSame(6, $solicitud->days_requested);
         $this->assertSame(VacationRequest::SOURCE_PORTAL, $solicitud->source);
         $this->assertSame(1, $solicitud->current_step);
         $this->assertCount(2, $solicitud->approvals);
         $this->assertDatabaseHas('system_notifications', ['user_id' => $jefe->user_id, 'category' => 'vacation']);
-        $this->assertSame(37, VacationCalculatorService::diasDisponibles($empleado));
+        $this->assertSame(36, VacationCalculatorService::diasDisponibles($empleado));
     }
 
     public function test_calcular_reporta_excluidos_y_saldo(): void
@@ -80,29 +80,29 @@ class VacationRequestServiceTest extends TestCase
         $calculo = $this->servicio()->calcular($empleado, $this->dia(0), $this->dia(6));
 
         $this->assertSame(7, $calculo['dias_naturales']);
-        $this->assertSame(4, $calculo['dias_descontables']);
+        $this->assertSame(5, $calculo['dias_descontables']);
         $this->assertContains(['fecha' => $this->dia(2)->toDateString(), 'motivo' => 'festivo: Festivo de prueba'], $calculo['excluidos']);
         $this->assertSame(42, $calculo['disponibles']);
-        $this->assertSame(38, $calculo['disponibles_despues']);
+        $this->assertSame(37, $calculo['disponibles_despues']);
         $this->assertSame([], $calculo['errores']);
     }
 
-    public function test_menos_de_un_anio_de_antiguedad(): void
+    public function test_menos_de_un_anio_ya_no_bloquea_se_adelanta(): void
     {
         $empleado = $this->empleado($this->empresa, ['hire_date' => now()->subMonths(6)->toDateString()]);
 
-        $this->esperarError('al menos 1 año de antigüedad', fn () => $this->crear($empleado, 0, 4));
+        $solicitud = $this->crear($empleado, 0, 4);
 
-        VacationBalance::create(['employee_id' => $empleado->id, 'year' => now()->year, 'entitled_days' => 0, 'used_days' => 0, 'pending_days' => 0, 'carried_over' => 0, 'adjustment_days' => 10]);
-        $this->assertSame('pending', $this->crear($empleado, 0, 4, ['omitir_antiguedad' => true])->status);
+        $this->assertSame('pending', $solicitud->status);
+        $this->assertSame(5, $solicitud->advance_days);
     }
 
-    public function test_no_pasa_del_saldo(): void
+    public function test_no_pasa_del_saldo_mas_el_adelanto(): void
     {
-        $empleado = $this->empleado($this->empresa, ['hire_date' => now()->subYear()->subDay()->toDateString()]); // 12 días
+        $empleado = $this->empleado($this->empresa, ['hire_date' => now()->subYear()->subDay()->toDateString()]); // 12 días; adelanta hasta 14
         $this->solicitud($empleado, 'approved', 10);
 
-        $this->esperarError('Disponibles: 2, solicitados: 5', fn () => $this->crear($empleado, 0, 4));
+        $this->esperarError('Disponibles: 2, solicitados: 17', fn () => $this->crear($empleado, 0, 18));
     }
 
     public function test_sin_empalmes_con_pendientes_o_aprobadas(): void
@@ -124,7 +124,7 @@ class VacationRequestServiceTest extends TestCase
 
         $this->esperarError('igual o posterior', fn () => $this->crear($empleado, 4, 0));
         $this->esperarError('más de 60 días naturales', fn () => $this->crear($empleado, 0, 60));
-        $this->esperarError('no incluye días laborables', fn () => $this->crear($empleado, 5, 6)); // sábado y domingo
+        $this->esperarError('no incluye días laborables', fn () => $this->crear($empleado, 6, 6)); // domingo
         $this->esperarError('anterior a hoy', fn () => $this->servicio()->crear(
             $empleado, today()->subDays(10), today()->subDays(3), null, VacationRequest::SOURCE_PORTAL
         ));
@@ -145,8 +145,9 @@ class VacationRequestServiceTest extends TestCase
     {
         $empleado = $this->empleado($this->empresa, ['hire_date' => now()->subYear()->subDay()->toDateString()]); // 12 días
 
-        $this->crear($empleado, 0, 11); // dos semanas = 10 días
-        $this->esperarError('Disponibles: 2', fn () => $this->crear($empleado, 14, 18));
+        $this->crear($empleado, 0, 11); // lunes a viernes de la semana siguiente = 11 días
+        // Le queda 1 y adelanta hasta 14: 16 días más ya no caben.
+        $this->esperarError('Disponibles: 1', fn () => $this->crear($empleado, 14, 31));
     }
 
     public function test_el_empleado_cancela_una_pendiente_y_recupera_los_dias(): void
@@ -202,9 +203,9 @@ class VacationRequestServiceTest extends TestCase
         $calculo = $this->servicio()->calcular($empleado, $this->dia(14), $this->dia(18), ['excluir_id' => $ajena->id]);
         $this->assertSame(9, $calculo['disponibles']);
 
-        // Una solicitud de 15 días hábiles rebasa los 12 aunque se pase una excluir_id ajena en las opciones.
+        // 27 días rebasan los 12 + 14 de adelanto aunque se pase una excluir_id ajena en las opciones.
         $this->esperarError('Disponibles: 12', fn () => $this->servicio()->reprogramar(
-            $propia, $this->dia(0), $this->dia(18), null, ['excluir_id' => $ajena->id]
+            $propia, $this->dia(0), $this->dia(30), null, ['excluir_id' => $ajena->id]
         ));
     }
 

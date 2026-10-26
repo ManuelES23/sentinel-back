@@ -64,6 +64,9 @@ class CrmPermisosSeeder extends Seeder
             // CRM · WhatsApp Fase 0. La migración 2026_10_12_200100 lo agrega a las
             // empresas ya sembradas; mantener ambos iguales.
             ['slug' => 'plantillas-whatsapp', 'name' => 'Plantillas de WhatsApp', 'icon' => 'MessageCircle', 'order' => 7, 'permisos' => $this->permisosBase()],
+            // CRM · categorías de rechazo (spec 2026-10-23 §4.5). La migración
+            // 2026_10_23_100300 lo agrega a las empresas ya sembradas; mantener ambos iguales.
+            ['slug' => 'categorias-rechazo', 'name' => 'Categorías de rechazo', 'icon' => 'ThumbsDown', 'order' => 8, 'permisos' => $this->permisosBase()],
         ]);
 
         $this->crearModulo($app, 'prospectos', 'Prospectos', 'UserPlus', 4, [

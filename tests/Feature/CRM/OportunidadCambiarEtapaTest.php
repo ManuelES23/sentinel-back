@@ -2,8 +2,10 @@
 
 namespace Tests\Feature\CRM;
 
+use App\Models\CRM\CrmCategoriaRechazo;
 use App\Models\CRM\CrmCliente;
 use App\Models\CRM\CrmCotizacion;
+use App\Models\CRM\CrmMotivoRechazo;
 use App\Models\CRM\CrmOportunidad;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
@@ -151,5 +153,118 @@ class OportunidadCambiarEtapaTest extends TestCase
 
         $response->assertStatus(422);
         $this->assertEquals('cerrado_ganado', $this->oportunidad->fresh()->etapa);
+    }
+
+    private function crearMotivo(?int $empresaId = null, bool $categoriaActiva = true, bool $motivoActivo = true, string $nombre = 'Precio'): CrmMotivoRechazo
+    {
+        $categoria = CrmCategoriaRechazo::create([
+            'empresa_id' => $empresaId ?? $this->enterprise->id,
+            'nombre' => $nombre.' (cat) '.uniqid(),
+            'activo' => $categoriaActiva,
+        ]);
+
+        return CrmMotivoRechazo::create([
+            'categoria_id' => $categoria->id,
+            'nombre' => $nombre.' alto',
+            'activo' => $motivoActivo,
+        ]);
+    }
+
+    public function test_perdida_con_catalogo_exige_motivo_rechazo(): void
+    {
+        $motivo = $this->crearMotivo();
+
+        $this->cambiarEtapa(['etapa' => 'cerrado_perdido'])->assertStatus(422)->assertJsonValidationErrors('motivo_rechazo_id');
+        // El texto libre ya no basta cuando hay catálogo.
+        $this->cambiarEtapa(['etapa' => 'cerrado_perdido', 'motivo_perdida' => 'Texto libre'])->assertStatus(422);
+        $this->assertSame('calificado', $this->oportunidad->fresh()->etapa);
+
+        $this->cambiarEtapa(['etapa' => 'cerrado_perdido', 'motivo_rechazo_id' => $motivo->id])
+            ->assertOk()
+            ->assertJsonPath('data.etapa', 'cerrado_perdido')
+            ->assertJsonPath('data.motivo_rechazo.id', $motivo->id)
+            ->assertJsonPath('data.motivo_rechazo.categoria.id', $motivo->categoria_id);
+
+        $fresca = $this->oportunidad->fresh();
+        $this->assertSame($motivo->id, $fresca->motivo_rechazo_id);
+        $this->assertNull($fresca->motivo_perdida);
+        $this->assertNotNull($fresca->fecha_cierre_real);
+    }
+
+    public function test_perdida_guarda_comentario_opcional(): void
+    {
+        $motivo = $this->crearMotivo();
+
+        $this->cambiarEtapa([
+            'etapa' => 'cerrado_perdido',
+            'motivo_rechazo_id' => $motivo->id,
+            'motivo_perdida' => 'El cliente pidió otra marca',
+        ])->assertOk();
+
+        $fresca = $this->oportunidad->fresh();
+        $this->assertSame($motivo->id, $fresca->motivo_rechazo_id);
+        $this->assertSame('El cliente pidió otra marca', $fresca->motivo_perdida);
+    }
+
+    public function test_comentario_de_perdida_tiene_maximo_1000_caracteres(): void
+    {
+        $motivo = $this->crearMotivo();
+
+        $this->cambiarEtapa([
+            'etapa' => 'cerrado_perdido',
+            'motivo_rechazo_id' => $motivo->id,
+            'motivo_perdida' => str_repeat('a', 1001),
+        ])->assertStatus(422)->assertJsonValidationErrors('motivo_perdida');
+    }
+
+    public function test_motivo_inactivo_o_de_otra_empresa_422(): void
+    {
+        $this->crearMotivo(nombre: 'Valido');
+        $motivoInactivo = $this->crearMotivo(motivoActivo: false, nombre: 'Inactivo');
+        $categoriaInactiva = $this->crearMotivo(categoriaActiva: false, nombre: 'CatInactiva');
+        $otra = $this->crearMotivo($this->crearOtraEmpresa()->id, nombre: 'Ajeno');
+
+        foreach ([$motivoInactivo->id, $categoriaInactiva->id, $otra->id, 999999] as $id) {
+            $this->cambiarEtapa(['etapa' => 'cerrado_perdido', 'motivo_rechazo_id' => $id])
+                ->assertStatus(422)
+                ->assertJsonValidationErrors('motivo_rechazo_id');
+        }
+
+        $fresca = $this->oportunidad->fresh();
+        $this->assertSame('calificado', $fresca->etapa);
+        $this->assertNull($fresca->motivo_rechazo_id);
+    }
+
+    public function test_empresa_sin_catalogo_sigue_exigiendo_texto(): void
+    {
+        // Solo hay catálogo en otra empresa: esta sigue como hoy.
+        $this->crearMotivo($this->crearOtraEmpresa()->id);
+
+        $this->cambiarEtapa(['etapa' => 'cerrado_perdido'])->assertStatus(422)->assertJsonValidationErrors('motivo_perdida');
+
+        $this->cambiarEtapa(['etapa' => 'cerrado_perdido', 'motivo_perdida' => 'Se fue con la competencia'])->assertOk();
+
+        $fresca = $this->oportunidad->fresh();
+        $this->assertSame('Se fue con la competencia', $fresca->motivo_perdida);
+        $this->assertNull($fresca->motivo_rechazo_id);
+    }
+
+    public function test_categorias_sin_motivos_activos_vuelve_a_texto_libre(): void
+    {
+        $this->crearMotivo(motivoActivo: false, nombre: 'A');
+        $this->crearMotivo(categoriaActiva: false, nombre: 'B');
+        CrmCategoriaRechazo::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Vacía']);
+
+        $this->cambiarEtapa(['etapa' => 'cerrado_perdido'])->assertStatus(422)->assertJsonValidationErrors('motivo_perdida');
+        $this->cambiarEtapa(['etapa' => 'cerrado_perdido', 'motivo_perdida' => 'Texto libre'])->assertOk();
+    }
+
+    public function test_motivo_rechazo_se_ignora_en_etapas_que_no_son_perdida(): void
+    {
+        $motivo = $this->crearMotivo();
+
+        $this->cambiarEtapa(['etapa' => 'propuesta', 'motivo_rechazo_id' => $motivo->id])->assertOk();
+
+        $this->assertNull($this->oportunidad->fresh()->motivo_rechazo_id);
     }
 }

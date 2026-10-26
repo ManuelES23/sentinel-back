@@ -46,6 +46,12 @@ class AvisosVacaciones
         $this->aislado('aprobadores (paso avanzado)', fn () => $this->avisarAprobadoresDelPasoActual($solicitud));
     }
 
+    /** Ya estaba autorizada fuera del sistema: solo se refrescan las pantallas, sin correo ni avisos. */
+    public function capturadaAutorizada(VacationRequest $solicitud): void
+    {
+        $this->aislado('emitir (ya autorizada)', fn () => $this->emitir('approved', $solicitud));
+    }
+
     /** Aviso interno al empleado (si tiene usuario) de una solicitud aprobada o rechazada. */
     public function resuelta(VacationRequest $solicitud): void
     {
