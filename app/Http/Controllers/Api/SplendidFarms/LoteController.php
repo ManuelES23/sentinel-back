@@ -133,7 +133,9 @@ class LoteController extends Controller
             $asignada = (float) Etapa::where('lote_id', $lote->id)->sum('superficie');
             $efectiva = $this->superficieEfectivaResultante($lote, $validated);
 
-            if ($asignada > 0 && $efectiva < $asignada) {
+            // A 2 decimales, como el disponible de las etapas: si no, un lote lleno
+            // (14.40 asignadas en un mapa de 14.3996) ya no se podría editar.
+            if ($asignada > 0 && round($efectiva, 2) < round($asignada, 2)) {
                 return response()->json([
                     'status' => 'error',
                     'message' => "La superficie ({$efectiva} ha) es menor a la ya asignada a las etapas del lote ({$asignada} ha)",

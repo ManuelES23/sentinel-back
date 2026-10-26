@@ -84,6 +84,12 @@ class Etapa extends Model
      * Calcula la superficie restante disponible en el lote
      * (superficie del lote - suma de etapas existentes)
      */
+    /**
+     * Hectáreas libres del lote, redondeadas a 2 decimales: la precisión con la que
+     * la pantalla muestra lotes y etapas. Sin redondear, la resta en punto flotante
+     * (24.4 − 20 = 4.3999999999999986) o una superficie de mapa con 4 decimales
+     * (14.3996, que se ve como 14.40) impedían capturar lo que se ve disponible.
+     */
     public static function superficieDisponible(int $loteId, ?int $excludeId = null): float
     {
         $lote = Lote::findOrFail($loteId);
@@ -98,6 +104,18 @@ class Etapa extends Model
         }
         $superficieUsada = (float) $query->sum('superficie');
 
-        return max(0, $superficieLote - $superficieUsada);
+        return self::redondearDisponible($superficieLote - $superficieUsada);
+    }
+
+    /** Hectáreas libres a 2 decimales y nunca negativas. */
+    public static function redondearDisponible(float $hectareas): float
+    {
+        return max(0.0, round($hectareas, 2));
+    }
+
+    /** ¿La superficie pedida pasa de la disponible? Compara con la precisión de la columna (4 decimales). */
+    public static function excedeDisponible(float $superficie, float $disponible): bool
+    {
+        return round($superficie, 4) > round($disponible, 4);
     }
 }

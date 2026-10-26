@@ -152,7 +152,8 @@ class LoteSimpleController extends Controller
                 ? (float) $calculada
                 : (float) ($superficie ?? 0);
 
-            if ($asignada > 0 && $efectiva < $asignada) {
+            // A 2 decimales, como el disponible de las etapas (Etapa::superficieDisponible).
+            if ($asignada > 0 && round($efectiva, 2) < round($asignada, 2)) {
                 return response()->json([
                     'status' => 'error',
                     'message' => "La superficie ({$efectiva} ha) es menor a la ya asignada a las etapas del lote ({$asignada} ha)",

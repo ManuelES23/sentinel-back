@@ -109,6 +109,86 @@ class AgricolaBugfixesTest extends TestCase
             ->assertJsonPath('data.superficie_disponible', 12.5);
     }
 
+    private function loteManual(float $superficie): Lote
+    {
+        $lote = Lote::create([
+            'productor_id' => $this->productor->id,
+            'zona_cultivo_id' => $this->zona->id,
+            'nombre' => 'Lote manual',
+            'superficie' => $superficie,
+            'is_active' => true,
+        ]);
+        $this->temporada->asignarLote($lote->id, $this->temporada->cultivo_id);
+
+        return $lote;
+    }
+
+    private function crearEtapaApi(Lote $lote, float $superficie, string $nombre)
+    {
+        return $this->postJson(self::OA.'/etapas', [
+            'lote_id' => $lote->id,
+            'nombre' => $nombre,
+            'superficie' => $superficie,
+            'temporada_id' => $this->temporada->id,
+        ]);
+    }
+
+    public function test_la_ultima_etapa_puede_ocupar_justo_lo_que_queda_del_lote(): void
+    {
+        // 14.4 − 10 en punto flotante da 4.3999999999999995: antes se rechazaba 4.4.
+        $lote = $this->loteManual(14.4);
+        $this->crearEtapaApi($lote, 10, 'Etapa 1')->assertCreated();
+
+        $this->getJson(self::OA.'/etapas/superficie-disponible?lote_id='.$lote->id)
+            ->assertOk()
+            ->assertJsonPath('data.superficie_disponible', 4.4);
+
+        $this->crearEtapaApi($lote, 4.4, 'Etapa 2')->assertCreated();
+        $this->crearEtapaApi($lote, 0.01, 'Etapa 3')->assertStatus(422);
+    }
+
+    public function test_decimales_que_no_cuadran_en_punto_flotante_no_bloquean(): void
+    {
+        // 0.3 − 0.1 = 0.19999999999999998 en punto flotante.
+        $lote = $this->loteManual(0.3);
+        $this->crearEtapaApi($lote, 0.1, 'Etapa 1')->assertCreated();
+        $this->crearEtapaApi($lote, 0.2, 'Etapa 2')->assertCreated();
+    }
+
+    public function test_resta_que_queda_debajo_en_punto_flotante_no_bloquea(): void
+    {
+        // 24.4 − 20 = 4.3999999999999986 en punto flotante.
+        $lote = $this->loteManual(24.4);
+        $this->crearEtapaApi($lote, 20, 'Etapa 1')->assertCreated();
+
+        $this->getJson(self::OA.'/etapas/superficie-disponible?lote_id='.$lote->id)
+            ->assertJsonPath('data.superficie_disponible', 4.4);
+        $this->crearEtapaApi($lote, 4.4, 'Etapa 2')->assertCreated();
+    }
+
+    public function test_disponible_se_redondea_como_se_muestra_en_lote_de_mapa(): void
+    {
+        // El mapa da 14.3996 ha y la pantalla muestra 14.40: lo que queda se ve como 4.40.
+        $lote = $this->loteConMapa();
+        $lote->update(['superficie_calculada' => 14.3996]);
+        $this->crearEtapaApi($lote, 10, 'Etapa 1')->assertCreated();
+
+        $this->getJson(self::OA.'/etapas/superficie-disponible?lote_id='.$lote->id)
+            ->assertJsonPath('data.superficie_disponible', 4.4);
+        $this->crearEtapaApi($lote, 4.4, 'Etapa 2')->assertCreated();
+        $this->crearEtapaApi($lote, 0.01, 'Etapa 3')->assertStatus(422);
+    }
+
+    public function test_editar_la_ultima_etapa_a_lo_que_queda_no_se_rechaza(): void
+    {
+        $lote = $this->loteManual(14.4);
+        $this->crearEtapaApi($lote, 10, 'Etapa 1')->assertCreated();
+        $id = $this->crearEtapaApi($lote, 2, 'Etapa 2')->assertCreated()->json('data.id');
+
+        $this->putJson(self::OA.'/etapas/'.$id, ['superficie' => 4.4])->assertOk();
+        $this->putJson(self::OA.'/etapas/'.$id, ['superficie' => 4.41])->assertStatus(422);
+    }
+
     public function test_mover_etapa_a_un_lote_mas_chico_se_rechaza(): void
     {
         $grande = $this->loteConMapa();
