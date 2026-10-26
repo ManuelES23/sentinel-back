@@ -115,7 +115,7 @@ class EtapaController extends Controller
 
         // Validar que la superficie no exceda la disponible en el lote
         $disponible = Etapa::superficieDisponible($validated['lote_id']);
-        if ($validated['superficie'] > $disponible) {
+        if (Etapa::excedeDisponible((float) $validated['superficie'], $disponible)) {
             return response()->json([
                 'status' => 'error',
                 'message' => "La superficie ({$validated['superficie']} ha) excede la disponible en el lote ({$disponible} ha)",
@@ -278,7 +278,7 @@ class EtapaController extends Controller
         $superficie = $validated['superficie'] ?? (float) $etapa->superficie;
         if (isset($validated['superficie']) || $loteId != $etapa->lote_id) {
             $disponible = Etapa::superficieDisponible($loteId, $etapa->id);
-            if ($superficie > $disponible) {
+            if (Etapa::excedeDisponible((float) $superficie, $disponible)) {
                 return response()->json([
                     'status' => 'error',
                     'message' => "La superficie ({$superficie} ha) excede la disponible en el lote ({$disponible} ha)",
@@ -401,13 +401,13 @@ class EtapaController extends Controller
             $queryAsignada->where('id', '!=', $excludeId);
         }
         $superficieAsignada = (float) $queryAsignada->sum('superficie');
-        $superficieDisponible = max(0, $superficieTotal - $superficieAsignada);
+        $superficieDisponible = Etapa::redondearDisponible($superficieTotal - $superficieAsignada);
 
         return response()->json([
             'success' => true,
             'data' => [
-                'superficie_total' => $superficieTotal,
-                'superficie_asignada' => $superficieAsignada,
+                'superficie_total' => round($superficieTotal, 4),
+                'superficie_asignada' => round($superficieAsignada, 4),
                 'superficie_disponible' => $superficieDisponible,
             ],
         ]);
