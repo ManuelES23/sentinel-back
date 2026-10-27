@@ -4,6 +4,7 @@ namespace App\Support\RH;
 
 use App\Models\VacationNotification;
 use App\Models\VacationRequest;
+use App\Models\VacationRequestApproval;
 
 /**
  * Textos fijos de los avisos al empleado, para correo y WhatsApp. Van en código a
@@ -41,6 +42,7 @@ final class TextosVacaciones
             VacationNotification::EVENTO_APROBADA => 'Tus vacaciones fueron aprobadas',
             VacationNotification::EVENTO_RECHAZADA => 'Tu solicitud de vacaciones fue rechazada',
             VacationNotification::EVENTO_CANCELADA_POR_RH => 'Recursos Humanos canceló tu solicitud de vacaciones',
+            VacationNotification::EVENTO_EN_REVISION => 'Tu solicitud de vacaciones avanzó',
             default => 'Recibimos tu solicitud de vacaciones',
         };
     }
@@ -51,6 +53,7 @@ final class TextosVacaciones
             VacationNotification::EVENTO_APROBADA => 'Vacaciones aprobadas',
             VacationNotification::EVENTO_RECHAZADA => 'Solicitud rechazada',
             VacationNotification::EVENTO_CANCELADA_POR_RH => 'Solicitud cancelada',
+            VacationNotification::EVENTO_EN_REVISION => 'Tu solicitud avanzó',
             default => 'Recibimos tu solicitud',
         };
     }
@@ -64,8 +67,22 @@ final class TextosVacaciones
             VacationNotification::EVENTO_APROBADA => [$base, 'Tu solicitud fue aprobada. ¡Disfruta tu descanso!'],
             VacationNotification::EVENTO_RECHAZADA => [$base, 'Motivo del rechazo: '.($solicitud->rejection_reason ?: 'sin motivo registrado').'.'],
             VacationNotification::EVENTO_CANCELADA_POR_RH => [$base, 'Si tienes dudas, acércate a Recursos Humanos.'],
+            VacationNotification::EVENTO_EN_REVISION => [$base, self::avance($solicitud), 'Te avisaremos cuando tenga respuesta.'],
             default => [$base, 'Te avisaremos cuando tenga respuesta.'],
         };
+    }
+
+    /** «Rosa Pérez la aprobó. Ahora la revisa: Usuario: Director General.» (requiere los pasos y quién decidió). */
+    private static function avance(VacationRequest $solicitud): string
+    {
+        $solicitud->loadMissing(['approvals.decider:id,name', 'approvals.decidedByEmployee:id,first_name,last_name,second_last_name']);
+        $aprobado = $solicitud->approvals->where('decision', VacationRequestApproval::APPROVED)->sortBy('step_order')->last();
+        $actual = $solicitud->approvals->firstWhere('step_order', $solicitud->current_step);
+        $quien = $aprobado?->nombreDeQuienDecidio();
+
+        return ($quien ? "{$quien} la aprobó." : 'Un paso de la revisión la aprobó.')
+            // La regla «Usuario específico» se describe «Usuario: Nombre»: al empleado basta el nombre.
+            .($actual ? ' Ahora la revisa: '.preg_replace('/^Usuario: /u', '', $actual->description).'.' : '');
     }
 
     public static function whatsapp(VacationRequest $solicitud, string $evento): string
