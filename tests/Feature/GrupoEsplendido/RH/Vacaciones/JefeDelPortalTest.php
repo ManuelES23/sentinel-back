@@ -392,7 +392,7 @@ class JefeDelPortalTest extends TestCase
             && str_contains($mail->render(), $solicitante->full_name));
     }
 
-    public function test_el_jefe_con_usuario_no_recibe_ese_correo_porque_ya_tiene_la_bandeja(): void
+    public function test_el_jefe_con_usuario_tambien_recibe_un_solo_correo_con_la_bandeja_y_el_portal(): void
     {
         Mail::fake();
         [, , $solicitante] = $this->escenario(true);
@@ -400,7 +400,9 @@ class JefeDelPortalTest extends TestCase
 
         $this->crearSolicitud($solicitante);
 
-        Mail::assertNotSent(VacationReviewMail::class);
+        Mail::assertSent(VacationReviewMail::class, 1);
+        Mail::assertSent(VacationReviewMail::class, fn (VacationReviewMail $mail) => $mail->hasTo('jefe@ejemplo.com')
+            && $mail->via === VacationReviewMail::VIA_PORTAL_O_SENTINEL);
     }
 
     public function test_un_jefe_sin_correo_valido_no_rompe_la_creacion(): void
@@ -424,10 +426,13 @@ class JefeDelPortalTest extends TestCase
         $this->regla(1, ApprovalFlowStep::TYPE_USER, ['user_id' => $director->id]);
         $this->regla(2, ApprovalFlowStep::TYPE_DEPARTMENT_MANAGER);
         $solicitud = $this->crearSolicitud($solicitante);
-        Mail::assertNotSent(VacationReviewMail::class);
+        // Al crear solo le toca al director (paso 1).
+        Mail::assertSent(VacationReviewMail::class, 1);
+        Mail::assertNotSent(VacationReviewMail::class, fn (VacationReviewMail $mail) => $mail->hasTo('jefe@ejemplo.com'));
 
         app(VacationRequestService::class)->aprobarPaso($solicitud, $director);
 
-        Mail::assertSent(VacationReviewMail::class, 1);
+        Mail::assertSent(VacationReviewMail::class, fn (VacationReviewMail $mail) => $mail->hasTo('jefe@ejemplo.com')
+            && $mail->via === VacationReviewMail::VIA_PORTAL);
     }
 }

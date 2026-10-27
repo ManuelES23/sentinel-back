@@ -5,7 +5,6 @@ namespace App\Services\RH;
 use App\Jobs\EnviarCorreoVacacionesJob;
 use App\Mail\RH\VacationReviewMail;
 use App\Mail\RH\VacationStatusMail;
-use App\Models\Employee;
 use App\Models\VacationNotification;
 use App\Models\VacationRequest;
 use Illuminate\Support\Facades\DB;
@@ -43,24 +42,33 @@ class CorreoVacaciones
     }
 
     /**
-     * Aviso al jefe de departamento sin usuario (no ve la bandeja de Sentinel): tiene una solicitud
-     * por revisar en el portal. Nunca lanza; un fallo solo queda en el log.
+     * Aviso a quien le toca revisar el paso (jefe del portal, usuario de la regla o RH): `via` dice
+     * dónde la decide (ver VacationReviewMail). No va a vacation_notifications (esa bitácora es la del
+     * empleado). Nunca lanza; un correo inválido o un fallo solo quedan en el log.
      */
-    public function avisarJefe(VacationRequest $solicitud, Employee $jefe): void
+    public function avisarAprobador(VacationRequest $solicitud, string $correo, ?string $nombre, string $via): void
     {
         try {
-            $correo = trim((string) $jefe->email);
-            if (! filter_var($correo, FILTER_VALIDATE_EMAIL)) {
+            $correo = self::correoValido($correo);
+            if ($correo === null) {
                 return;
             }
 
             $solicitud->loadMissing('employee');
             $envio = Mail::to($correo);
-            $mensaje = new VacationReviewMail($solicitud, $jefe);
+            $mensaje = new VacationReviewMail($solicitud, $nombre, $via);
             config('vacaciones.correo_en_cola') ? $envio->queue($mensaje) : $envio->send($mensaje);
         } catch (Throwable $e) {
-            Log::warning('No se pudo avisar al jefe de departamento', ['solicitud' => $solicitud->id, 'jefe' => $jefe->id, 'error' => $e->getMessage()]);
+            Log::warning('No se pudo avisar al aprobador de vacaciones', ['solicitud' => $solicitud->id, 'via' => $via, 'error' => $e->getMessage()]);
         }
+    }
+
+    /** El correo sin espacios si es válido; null si no. */
+    public static function correoValido(?string $correo): ?string
+    {
+        $correo = trim((string) $correo);
+
+        return filter_var($correo, FILTER_VALIDATE_EMAIL) ? $correo : null;
     }
 
     /** Envía y deja constancia en vacation_notifications (con el error, si hubo). */

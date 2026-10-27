@@ -3,17 +3,20 @@
 namespace App\Services\RH;
 
 use App\Events\VacationRequestUpdated;
+use App\Mail\RH\VacationReviewMail;
 use App\Models\VacationNotification;
 use App\Models\VacationRequest;
+use App\Models\VacationRequestApproval;
 use App\Services\NotificationService;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use App\Support\RH\TextosVacaciones;
 use Throwable;
 
 /**
  * Avisos de vacaciones: internos (aprobadores y empleado con usuario), tiempo real y
- * correo al empleado. Se llaman DESPUÉS de confirmar la transacción. El WhatsApp es
- * manual: lo arma VacationAvisoController.
+ * correo al empleado y a cada aprobador cuando le toca su paso. Se llaman DESPUÉS de
+ * confirmar la transacción. El WhatsApp es manual: lo arma VacationAvisoController.
  */
 class AvisosVacaciones
 {
@@ -40,10 +43,18 @@ class AvisosVacaciones
         }
     }
 
+    /** Cambió algo del paso actual (p. ej. se reprogramaron las fechas): sus aprobadores vuelven a enterarse. */
     public function pasoAvanzado(VacationRequest $solicitud): void
     {
         $this->aislado('emitir (paso avanzado)', fn () => $this->emitir('updated', $solicitud));
         $this->aislado('aprobadores (paso avanzado)', fn () => $this->avisarAprobadoresDelPasoActual($solicitud));
+    }
+
+    /** Un paso intermedio aprobó: avisa al siguiente aprobador y al empleado le dice quién la revisa ahora. */
+    public function pasoAprobado(VacationRequest $solicitud): void
+    {
+        $this->pasoAvanzado($solicitud);
+        $this->aislado('correo (en revisión)', fn () => $this->correo->avisar($solicitud, VacationNotification::EVENTO_EN_REVISION));
     }
 
     /** Ya estaba autorizada fuera del sistema: solo se refrescan las pantallas, sin correo ni avisos. */
@@ -94,7 +105,8 @@ class AvisosVacaciones
         $texto = "{$empleado->full_name} solicitó {$solicitud->days_requested} día(s) de vacaciones del "
             ."{$solicitud->start_date->format('d/m/Y')} al {$solicitud->end_date->format('d/m/Y')}.";
 
-        foreach ($this->aprobador->elegiblesDelPaso($solicitud, $paso) as $usuario) {
+        $elegibles = $this->aprobador->elegiblesDelPaso($solicitud, $paso);
+        foreach ($elegibles as $usuario) {
             $aviso = NotificationService::toUser($usuario)->icon('ClipboardCheck', 'amber')->high();
             if (! $paso->is_rh_final) {
                 $aviso->withAction('/profile?tab=approvals', 'Ver solicitud');
@@ -102,12 +114,41 @@ class AvisosVacaciones
             $aviso->vacation('Solicitud de vacaciones por aprobar', $texto);
         }
 
-        // El jefe sin usuario no ve la bandeja de Sentinel: se le avisa por correo con el enlace al portal.
+        foreach ($this->destinatariosDeCorreo($solicitud, $paso, $elegibles) as $correo => [$nombre, $via]) {
+            $this->aislado('correo al aprobador', fn () => $this->correo->avisarAprobador($solicitud, $correo, $nombre, $via));
+        }
+    }
+
+    /**
+     * A quién se le manda correo en el paso, una vez por dirección: el jefe del portal (su correo de
+     * empleado o, si no tiene, el de su usuario) y cada usuario elegible que no sea ese mismo jefe.
+     *
+     * @return array<string, array{0: ?string, 1: string}> correo => [nombre, vía]
+     */
+    private function destinatariosDeCorreo(VacationRequest $solicitud, VacationRequestApproval $paso, Collection $elegibles): array
+    {
+        $destinos = [];
+        $usuariosDeJefes = [];
+
         foreach ($this->aprobador->jefesDelPortal($solicitud, $paso) as $jefe) {
-            if ($jefe->user_id === null) {
-                $this->aislado('correo al jefe del portal', fn () => $this->correo->avisarJefe($solicitud, $jefe));
+            $correo = CorreoVacaciones::correoValido($jefe->email) ?? CorreoVacaciones::correoValido($jefe->user?->email);
+            if ($jefe->user_id !== null) {
+                $usuariosDeJefes[] = (int) $jefe->user_id;
+            }
+            if ($correo !== null) {
+                $destinos[mb_strtolower($correo)] ??= [$jefe->first_name, $jefe->user_id !== null ? VacationReviewMail::VIA_PORTAL_O_SENTINEL : VacationReviewMail::VIA_PORTAL];
             }
         }
+
+        foreach ($elegibles as $usuario) {
+            $correo = CorreoVacaciones::correoValido($usuario->email);
+            if ($correo === null || in_array((int) $usuario->id, $usuariosDeJefes, true)) {
+                continue;
+            }
+            $destinos[mb_strtolower($correo)] ??= [$usuario->name, $paso->is_rh_final ? VacationReviewMail::VIA_RH : VacationReviewMail::VIA_SENTINEL];
+        }
+
+        return $destinos;
     }
 
     /** Un aviso que falla (Reverb, notificaciones, correo) no debe romper la operación ya confirmada ni los demás avisos. */

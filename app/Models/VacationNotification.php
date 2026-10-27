@@ -20,6 +20,9 @@ class VacationNotification extends Model
 
     public const EVENTO_CANCELADA_POR_RH = 'cancelada_por_rh';
 
+    /** Un paso intermedio aprobó y la solicitud pasó al siguiente. Solo correo: no está en EVENTOS (WhatsApp manual). */
+    public const EVENTO_EN_REVISION = 'en_revision';
+
     public const EVENTOS = [
         self::EVENTO_RECIBIDA,
         self::EVENTO_APROBADA,
