@@ -258,7 +258,7 @@ class VacationRequestService
         });
 
         $solicitud = $solicitud->fresh(['employee.user', 'employee.enterprise', 'approvals']);
-        $terminada ? $this->avisos->resuelta($solicitud) : $this->avisos->pasoAvanzado($solicitud);
+        $terminada ? $this->avisos->resuelta($solicitud) : $this->avisos->pasoAprobado($solicitud);
 
         return $solicitud;
     }
