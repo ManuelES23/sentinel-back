@@ -616,6 +616,8 @@ Route::middleware('auth:sanctum')->group(function () {
             // Módulo Planeación (Programa semanal de corte, empaque, ventas y logística)
             Route::prefix('planeacion')->group(function () {
                 Route::get('programa', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ProgramaSemanalController::class, 'show']);
+                Route::post('programa/{programa}/registrar-junta', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\JuntaProgramaController::class, 'registrar']);
+                Route::put('programa/{programa}/inventario-inicial', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\JuntaProgramaController::class, 'inventarioInicial']);
             });
 
             // Módulo Cosecha
