@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Models\CRM\CrmCliente;
 use App\Models\Enterprise;
 use App\Models\Planeacion\Presentacion;
+use App\Models\Planeacion\ProgramaAcuerdo;
 use App\Models\Planeacion\ProgramaNecesidad;
 use App\Models\Planeacion\ProgramaSemanal;
 use App\Services\Planeacion\ProgramaSemanalService;
@@ -113,6 +114,13 @@ class ProgramaNecesidadController extends Controller
             $despues = $this->instantanea($actual);
             if ($antes != $despues) {
                 $registro->registrar($programa, 'necesidad', $actual->id, 'actualizado', $antes, $despues);
+
+                // Lo que llega a las semanas destino de sus «mover pedido» también pudo cambiar.
+                $movimientos = ProgramaAcuerdo::where('necesidad_id', $actual->id)
+                    ->where('tipo', 'mover_pedido')
+                    ->where('activo', true)
+                    ->get();
+                $this->avisarDestinos($programa, $movimientos, $registro);
             }
 
             $necesidad->setRawAttributes($actual->getAttributes(), true);
@@ -133,6 +141,15 @@ class ProgramaNecesidadController extends Controller
 
         DB::transaction(function () use ($necesidad, $programa, $registro) {
             $antes = $this->instantanea($necesidad);
+
+            // Sus «mover pedido» se borran en cascada: quedan en el historial
+            // y se avisa a las semanas destino antes de borrar el renglón.
+            $movimientos = ProgramaAcuerdo::where('necesidad_id', $necesidad->id)->orderBy('id')->get();
+            foreach ($movimientos as $acuerdo) {
+                $registro->registrar($programa, 'acuerdo', $acuerdo->id, 'borrado', $acuerdo->instantaneaHistorial(), null);
+            }
+            $this->avisarDestinos($programa, $movimientos, $registro);
+
             $necesidad->delete();
             $registro->registrar($programa, 'necesidad', $necesidad->id, 'borrado', $antes, null);
         });
@@ -282,6 +299,31 @@ class ProgramaNecesidadController extends Controller
 
         if (count($grupos) !== 1) {
             throw ValidationException::withMessages(['variedad_ids' => self::MENSAJE_GRUPO]);
+        }
+    }
+
+    /**
+     * Avisa a cada semana destino distinta (de otra semana) de los «mover
+     * pedido» dados. Si el programa destino no existe no hay quién lo tenga abierto.
+     *
+     * @param  iterable<ProgramaAcuerdo>  $movimientos
+     */
+    private function avisarDestinos(ProgramaSemanal $programa, iterable $movimientos, RegistroCambiosPrograma $registro): void
+    {
+        $propio = $programa->lunes->toDateString();
+        $lunes = [];
+        foreach ($movimientos as $acuerdo) {
+            $destino = $acuerdo->destino_lunes?->toDateString();
+            if ($destino !== null && $destino !== $propio) {
+                $lunes[$destino] = true;
+            }
+        }
+
+        foreach (array_keys($lunes) as $fecha) {
+            $destino = ProgramaSemanal::whereDate('lunes', $fecha)->first();
+            if ($destino) {
+                $registro->emitir($destino);
+            }
         }
     }
 

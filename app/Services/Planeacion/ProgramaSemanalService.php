@@ -472,7 +472,7 @@ class ProgramaSemanalService
         if ($a->tipo === 'mover_pedido') {
             $necesidad = $plan->necesidades->firstWhere('id', $a->necesidad_id);
             $grupo = $necesidad ? $plan->grupoDeNecesidad($necesidad) : null;
-            $efecto = ['grupo_id' => $grupo, 'dia' => $a->dia_origen, 'cajas' => $necesidad ? PlanSemana::cajasMovidas($a, $necesidad) : 0];
+            $efecto = ['grupo_id' => $grupo, 'dia' => $a->dia_origen, 'cajas' => $necesidad ? $plan->cajasMovidas($a) : 0];
         } elseif ($plan->sumaProduccion($a)) {
             $efecto = ['grupo_id' => $this->grupoDeVariedad($a->variedad_id), 'dia' => $a->dia, 'cajas' => $plan->cajasDeAcuerdo($a)];
         } else {

@@ -53,6 +53,34 @@ class ProgramaAcuerdo extends Model
         'cajas' => 'integer',
     ];
 
+    /**
+     * Valores del acuerdo para el historial del programa: las mismas llaves
+     * antes y después, en todos los tipos (lo usan el controlador de acuerdos
+     * y el de necesidades al borrar un renglón con acuerdos).
+     *
+     * @return array<string, mixed>
+     */
+    public function instantaneaHistorial(): array
+    {
+        return [
+            'tipo' => $this->tipo,
+            'activo' => (bool) $this->activo,
+            'descripcion' => $this->descripcion,
+            'etapa_id' => $this->etapa_id,
+            'temporada_id' => $this->temporada_id,
+            'variedad_id' => $this->variedad_id,
+            'dia' => $this->dia,
+            'hectareas' => $this->hectareas !== null ? (float) $this->hectareas : null,
+            'necesidad_id' => $this->necesidad_id,
+            'dia_origen' => $this->dia_origen,
+            'destino_lunes' => $this->destino_lunes?->toDateString(),
+            'dia_destino' => $this->dia_destino,
+            'cajas' => $this->cajas,
+            'origen_tipo' => $this->origen_tipo,
+            'origen_texto' => $this->origen_texto,
+        ];
+    }
+
     public function programa(): BelongsTo
     {
         return $this->belongsTo(ProgramaSemanal::class, 'programa_id');

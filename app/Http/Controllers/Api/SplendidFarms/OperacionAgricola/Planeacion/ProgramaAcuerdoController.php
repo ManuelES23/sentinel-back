@@ -452,23 +452,7 @@ class ProgramaAcuerdoController extends Controller
     /** Valores del acuerdo para el historial (mismas llaves antes y después, en todos los tipos). */
     private function instantanea(ProgramaAcuerdo $a): array
     {
-        return [
-            'tipo' => $a->tipo,
-            'activo' => (bool) $a->activo,
-            'descripcion' => $a->descripcion,
-            'etapa_id' => $a->etapa_id,
-            'temporada_id' => $a->temporada_id,
-            'variedad_id' => $a->variedad_id,
-            'dia' => $a->dia,
-            'hectareas' => $a->hectareas !== null ? (float) $a->hectareas : null,
-            'necesidad_id' => $a->necesidad_id,
-            'dia_origen' => $a->dia_origen,
-            'destino_lunes' => $a->destino_lunes?->toDateString(),
-            'dia_destino' => $a->dia_destino,
-            'cajas' => $a->cajas,
-            'origen_tipo' => $a->origen_tipo,
-            'origen_texto' => $a->origen_texto,
-        ];
+        return $a->instantaneaHistorial();
     }
 
     private function payload(ProgramaAcuerdo $a): array

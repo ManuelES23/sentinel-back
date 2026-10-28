@@ -442,10 +442,80 @@ class AcuerdosTest extends TestCase
 
         $this->assertSame(0, ProgramaAcuerdo::count());
         $this->assertSame(6584, $this->blanco()['necesidad'][2]);
+        $this->assertSame(0, $this->blanco('2026-11-30')['necesidad'][0]);
+        $this->assertNull(collect($this->semana('2026-11-30')['necesidades'])->firstWhere('id', -$id));
         $cambio = ProgramaCambio::where('accion', 'borrado')->firstOrFail();
         $this->assertSame('acuerdo', $cambio->entidad);
         $this->assertSame('mover_pedido', $cambio->antes['tipo']);
         $this->assertNull($cambio->despues);
+    }
+
+    // ── El renglón cambia o se borra después de moverlo ─
+
+    public function test_bajar_cajas_del_renglon_topa_lo_movido_en_orden(): void
+    {
+        $this->comoJunta();
+        $primero = $this->postJson($this->url(), $this->movimiento(['cajas' => 4000]))->assertCreated()->json('data.id');
+        $segundo = $this->postJson($this->url(), $this->movimiento([
+            'cajas' => 2584, 'destino_lunes' => '2026-12-07', 'dia_destino' => 1,
+        ]))->assertCreated()->json('data.id');
+        $wk49 = ProgramaSemanal::whereDate('lunes', '2026-11-30')->firstOrFail();
+        $wk50 = ProgramaSemanal::whereDate('lunes', '2026-12-07')->firstOrFail();
+
+        // Ventas baja el miércoles de Vallarta a 3000: avisa también a las dos semanas destino.
+        Sanctum::actingAs($this->usuarioCon(['view', 'acuerdos', 'capturar-ventas']));
+        Event::fake([ProgramaSemanalUpdated::class]);
+        $this->putJson(self::BASE.'/necesidades/'.$this->vallarta()->id, ['dia' => 2, 'cajas' => 3000])->assertOk();
+        foreach ([$this->programa, $wk49, $wk50] as $p) {
+            Event::assertDispatched(ProgramaSemanalUpdated::class, fn ($e) => $e->data['programa_id'] === $p->id);
+        }
+
+        // Origen en 0; el acuerdo más antiguo se lleva las 3000 y el segundo nada.
+        $d48 = $this->semana();
+        $fila = collect($d48['necesidades'])->firstWhere('id', $this->vallarta()->id);
+        $this->assertSame(0, $fila['cajas_efectivas'][2]);
+        $efectos = collect($d48['acuerdos'])->keyBy('id');
+        $this->assertSame(3000, $efectos[$primero]['efecto']['cajas']);
+        $this->assertSame(0, $efectos[$segundo]['efecto']['cajas']);
+
+        $movida49 = collect($this->semana('2026-11-30')['necesidades'])->firstWhere('id', -$primero);
+        $movida50 = collect($this->semana('2026-12-07')['necesidades'])->firstWhere('id', -$segundo);
+        $this->assertSame(3000, $movida49['cajas'][0]);
+        $this->assertSame(0, array_sum($movida50['cajas']));
+
+        // Totales consistentes: lo que sale del origen es lo que llega a los destinos.
+        $blanco48 = $d48['balance'][(string) $this->grupo('Blanco')->id];
+        $this->assertSame(0, $blanco48['necesidad'][2]);
+        $this->assertSame(3000, $this->blanco('2026-11-30')['necesidad'][0]);
+        $this->assertSame(0, $this->blanco('2026-12-07')['necesidad'][1]);
+        // Semana efectiva: la necesidad de WK48 baja 3000 frente al plan sin acuerdos.
+        $this->assertSame($blanco48['final_sin_acuerdos'] + 3000, $blanco48['final']);
+    }
+
+    public function test_borrar_renglon_registra_sus_acuerdos_y_avisa_al_destino(): void
+    {
+        $this->comoJunta();
+        $this->programa->update(['junta_registrada_at' => now(), 'junta_registrada_por' => $this->autor->id]);
+        $id = $this->postJson($this->url(), $this->movimiento())->assertCreated()->json('data.id');
+        $wk49 = ProgramaSemanal::whereDate('lunes', '2026-11-30')->firstOrFail();
+
+        Sanctum::actingAs($this->usuarioCon(['view', 'capturar-ventas']));
+        Event::fake([ProgramaSemanalUpdated::class]);
+        $this->deleteJson(self::BASE.'/necesidades/'.$this->vallarta()->id)->assertOk();
+        Event::assertDispatched(ProgramaSemanalUpdated::class, fn ($e) => $e->data['programa_id'] === $this->programa->id);
+        Event::assertDispatched(ProgramaSemanalUpdated::class, fn ($e) => $e->data['programa_id'] === $wk49->id);
+
+        $this->assertSame(0, ProgramaAcuerdo::count());
+        $cambio = ProgramaCambio::where('entidad', 'acuerdo')->where('accion', 'borrado')->firstOrFail();
+        $this->assertSame($id, $cambio->entidad_id);
+        $this->assertSame('mover_pedido', $cambio->antes['tipo']);
+        $this->assertSame(1000, $cambio->antes['cajas']);
+        $creado = ProgramaCambio::where('entidad', 'acuerdo')->where('accion', 'creado')->firstOrFail();
+        $this->assertSame(array_keys($creado->despues), array_keys($cambio->antes));
+        $this->assertTrue(ProgramaCambio::where('entidad', 'necesidad')->where('accion', 'borrado')->exists());
+
+        $this->assertNull(collect($this->semana('2026-11-30')['necesidades'])->firstWhere('id', -$id));
+        $this->assertSame(0, $this->blanco('2026-11-30')['necesidad'][0]);
     }
 
     public function test_sin_permiso_acuerdos_es_403(): void

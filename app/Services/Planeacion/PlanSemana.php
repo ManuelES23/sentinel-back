@@ -25,6 +25,7 @@ class PlanSemana
      * @param  Collection<int, ProgramaAcuerdo>  $entrantes  «Mover pedido» activos de otras semanas con destino a esta.
      * @param  array<string, ProgramaRendimiento>  $elecciones  "temporada-variedad" => elección.
      * @param  array<string, int>  $inventariosManuales  grupo_clave => cajas.
+     * @param  array<int, int>  $movidasEntrantes  acuerdo_id => cajas que mueve cada entrante, ya repartidas.
      */
     public function __construct(
         public readonly ProgramaSemanal $programa,
@@ -36,7 +37,11 @@ class PlanSemana
         public readonly array $elecciones,
         public readonly array $inventariosManuales,
         private readonly CatalogoPlaneacion $catalogo,
+        private readonly array $movidasEntrantes = [],
     ) {}
+
+    /** @var array<int, int>|null acuerdo_id => cajas que mueve cada «mover pedido» activo de esta semana. */
+    private ?array $movidasPropias = null;
 
     /**
      * Carga varias semanas a la vez (la cadena del arrastre de inventario): el
@@ -65,15 +70,16 @@ class PlanSemana
 
         // «Mover pedido» activos hacia cualquiera de estas semanas, desde otra semana.
         $lunes = $programas->map(fn (ProgramaSemanal $p) => $p->lunes->toDateString());
-        $entrantesPorLunes = ProgramaAcuerdo::with(['necesidad.variedades:id', 'programa:id,lunes'])
+        $entrantes = ProgramaAcuerdo::with(['necesidad.variedades:id', 'programa:id,lunes'])
             ->where('tipo', 'mover_pedido')
             ->where('activo', true)
             ->whereDate('destino_lunes', '>=', $lunes->min())
             ->whereDate('destino_lunes', '<=', $lunes->max())
             ->orderBy('id')
             ->get()
-            ->filter(fn (ProgramaAcuerdo $a) => $a->necesidad !== null && $a->programa !== null)
-            ->groupBy(fn (ProgramaAcuerdo $a) => $a->destino_lunes->toDateString());
+            ->filter(fn (ProgramaAcuerdo $a) => $a->necesidad !== null && $a->programa !== null);
+        $movidasEntrantes = self::movidasDeEntrantes($entrantes);
+        $entrantesPorLunes = $entrantes->groupBy(fn (ProgramaAcuerdo $a) => $a->destino_lunes->toDateString());
 
         $planes = [];
         foreach ($programas as $programa) {
@@ -101,10 +107,40 @@ class PlanSemana
                 $elecciones,
                 $manuales,
                 $catalogo,
+                $movidasEntrantes,
             );
         }
 
         return $planes;
+    }
+
+    /**
+     * Cajas que mueve cada «mover pedido» entrante, repartidas contra todos
+     * los movimientos activos de su renglón (de cualquier semana destino), para
+     * que el destino reciba exactamente lo que sale del origen.
+     *
+     * @param  Collection<int, ProgramaAcuerdo>  $entrantes
+     * @return array<int, int> acuerdo_id => cajas
+     */
+    private static function movidasDeEntrantes(Collection $entrantes): array
+    {
+        if ($entrantes->isEmpty()) {
+            return [];
+        }
+
+        $hermanos = ProgramaAcuerdo::where('tipo', 'mover_pedido')
+            ->where('activo', true)
+            ->whereIn('necesidad_id', $entrantes->pluck('necesidad_id')->unique()->values()->all())
+            ->orderBy('id')
+            ->get(['id', 'necesidad_id', 'dia_origen', 'cajas'])
+            ->groupBy('necesidad_id');
+
+        $movidas = [];
+        foreach ($entrantes->unique('necesidad_id') as $acuerdo) {
+            $movidas += self::repartirMovidas($hermanos->get($acuerdo->necesidad_id, collect()), $acuerdo->necesidad);
+        }
+
+        return $movidas;
     }
 
     public function eleccion(?int $temporadaId, int $variedadId): ?ProgramaRendimiento
@@ -155,15 +191,86 @@ class PlanSemana
         return $valor === null ? 0 : (int) round((float) $acuerdo->hectareas * $valor);
     }
 
-    /** Cajas que un «mover pedido» saca de su renglón: nunca más de las que tiene ese día. */
-    public static function cajasMovidas(ProgramaAcuerdo $acuerdo, ProgramaNecesidad $necesidad): int
+    /**
+     * Reparte las cajas de un renglón entre sus «mover pedido» activos: por
+     * cada día de origen, en orden de id, cada acuerdo se lleva lo que pide o
+     * lo que le queda al renglón ese día. Así, aunque el renglón se baje
+     * después de crear los acuerdos, lo movido nunca pasa de lo que tiene, y
+     * el origen y los destinos usan las mismas cantidades.
+     *
+     * @param  iterable<ProgramaAcuerdo>  $acuerdos  Los «mover pedido» activos del renglón.
+     * @return array<int, int> acuerdo_id => cajas
+     */
+    public static function repartirMovidas(iterable $acuerdos, ProgramaNecesidad $necesidad): array
     {
+        $ordenados = collect($acuerdos)->sortBy('id');
+        $quedan = $necesidad->cajasPorDia();
+
+        $movidas = [];
+        foreach ($ordenados as $acuerdo) {
+            $dia = $acuerdo->dia_origen;
+            if ($dia === null || $dia < 0 || $dia >= CalculadoraBalance::DIAS) {
+                $movidas[$acuerdo->id] = 0;
+
+                continue;
+            }
+
+            $cajas = max(0, min((int) $acuerdo->cajas, $quedan[$dia]));
+            $quedan[$dia] -= $cajas;
+            $movidas[$acuerdo->id] = $cajas;
+        }
+
+        return $movidas;
+    }
+
+    /**
+     * Cajas que mueve un «mover pedido» de esta semana o entrante, ya
+     * repartidas. Para uno inactivo de esta semana, las que movería si se
+     * activara ahora (lo que el renglón tiene ese día menos lo que ya mueven
+     * los activos).
+     */
+    public function cajasMovidas(ProgramaAcuerdo $acuerdo): int
+    {
+        if (isset($this->movidasEntrantes[$acuerdo->id])) {
+            return $this->movidasEntrantes[$acuerdo->id];
+        }
+
+        $propias = $this->movidasPropias();
+        if (isset($propias[$acuerdo->id])) {
+            return $propias[$acuerdo->id];
+        }
+
+        $necesidad = $this->necesidades->firstWhere('id', $acuerdo->necesidad_id);
         $dia = $acuerdo->dia_origen;
-        if ($dia === null || $dia < 0 || $dia > 5) {
+        if (! $necesidad || ! $this->diaValido($dia)) {
             return 0;
         }
 
-        return max(0, min((int) $acuerdo->cajas, (int) $necesidad->{"cajas_{$dia}"}));
+        $yaMovidas = 0;
+        foreach ($this->acuerdosActivos('mover_pedido') as $activo) {
+            if ($activo->necesidad_id === $acuerdo->necesidad_id && $activo->dia_origen === $dia) {
+                $yaMovidas += $propias[$activo->id] ?? 0;
+            }
+        }
+
+        return max(0, min((int) $acuerdo->cajas, (int) $necesidad->{"cajas_{$dia}"} - $yaMovidas));
+    }
+
+    /** @return array<int, int> acuerdo_id => cajas de los «mover pedido» activos de esta semana. */
+    private function movidasPropias(): array
+    {
+        if ($this->movidasPropias === null) {
+            $this->movidasPropias = [];
+            $porNecesidad = $this->necesidades->keyBy('id');
+            foreach ($this->acuerdosActivos('mover_pedido')->groupBy('necesidad_id') as $necesidadId => $acuerdos) {
+                $necesidad = $porNecesidad->get($necesidadId);
+                if ($necesidad) {
+                    $this->movidasPropias += self::repartirMovidas($acuerdos, $necesidad);
+                }
+            }
+        }
+
+        return $this->movidasPropias;
     }
 
     public function grupoDeNecesidad(ProgramaNecesidad $necesidad): ?string
@@ -236,7 +343,7 @@ class PlanSemana
                     continue;
                 }
 
-                $movidas = self::cajasMovidas($acuerdo, $necesidad);
+                $movidas = $this->cajasMovidas($acuerdo);
                 $cajas[$acuerdo->dia_origen] = max(0, $cajas[$acuerdo->dia_origen] - $movidas);
 
                 $mismaSemana = $acuerdo->destino_lunes === null || $acuerdo->destino_lunes->toDateString() === $this->lunes;
@@ -262,7 +369,7 @@ class PlanSemana
                 }
 
                 $cajas = array_fill(0, CalculadoraBalance::DIAS, 0);
-                $cajas[$acuerdo->dia_destino] = self::cajasMovidas($acuerdo, $acuerdo->necesidad);
+                $cajas[$acuerdo->dia_destino] = $this->cajasMovidas($acuerdo);
 
                 $renglones[] = [
                     'id' => -$acuerdo->id,
