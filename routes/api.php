@@ -638,6 +638,12 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::put('programa/{programa}/rendimientos', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ProgramaCorteController::class, 'rendimientos']);
                 Route::put('cortes/{corte}', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ProgramaCorteController::class, 'update']);
                 Route::delete('cortes/{corte}', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ProgramaCorteController::class, 'destroy']);
+
+                // Necesidades de ventas (copiar-anterior va antes que cualquier {necesidad})
+                Route::post('programa/{programa}/necesidades/copiar-anterior', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ProgramaNecesidadController::class, 'copiarAnterior']);
+                Route::post('programa/{programa}/necesidades', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ProgramaNecesidadController::class, 'store']);
+                Route::put('necesidades/{necesidad}', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ProgramaNecesidadController::class, 'update']);
+                Route::delete('necesidades/{necesidad}', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ProgramaNecesidadController::class, 'destroy']);
             });
 
             // Módulo Cosecha
