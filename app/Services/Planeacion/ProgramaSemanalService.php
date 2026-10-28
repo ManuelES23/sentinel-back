@@ -98,6 +98,28 @@ class ProgramaSemanalService
         return $this->etapas->haDisponibles($etapaId, $ignorarCorteId, $ignorarAcuerdoId);
     }
 
+    /** Etapa activa de un lote activo de la temporada (para validar cortes). */
+    public function etapaEnTemporada(int $etapaId, int $temporadaId): bool
+    {
+        return $this->etapas->enTemporada($etapaId, $temporadaId);
+    }
+
+    /** Temporadas abiertas que tocan la semana del programa (lunes a sábado). */
+    public function temporadasDeSemana(ProgramaSemanal $programa): Collection
+    {
+        $lunes = $programa->lunes->toDateString();
+
+        return $this->catalogo->temporadasQueTocan($lunes, $this->masDias($lunes, 5));
+    }
+
+    /** Cultivo de una variedad que existe (no borrada); null si no existe. */
+    public function cultivoDeVariedad(int $variedadId): ?int
+    {
+        $variedad = $this->catalogo->variedades()->get($variedadId);
+
+        return $variedad && $variedad->deleted_at === null ? (int) $variedad->cultivo_id : null;
+    }
+
     /**
      * Balance efectivo (con acuerdos) por grupo de la semana, tal como lo da
      * CalculadoraBalance más `final_sin_acuerdos`.

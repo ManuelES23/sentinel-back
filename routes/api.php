@@ -631,6 +631,13 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::delete('configuracion/{catalogo}/{id}', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ConfiguracionPlaneacionController::class, 'destroy'])->whereNumber('id');
 
                 Route::get('clientes', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ClientesSbpController::class, 'index']);
+
+                // Corte y rendimiento de la semana (repartir va antes que cualquier {corte})
+                Route::post('programa/{programa}/cortes/repartir', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ProgramaCorteController::class, 'repartir']);
+                Route::post('programa/{programa}/cortes', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ProgramaCorteController::class, 'store']);
+                Route::put('programa/{programa}/rendimientos', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ProgramaCorteController::class, 'rendimientos']);
+                Route::put('cortes/{corte}', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ProgramaCorteController::class, 'update']);
+                Route::delete('cortes/{corte}', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ProgramaCorteController::class, 'destroy']);
             });
 
             // Módulo Cosecha

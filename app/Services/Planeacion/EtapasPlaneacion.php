@@ -43,6 +43,24 @@ class EtapasPlaneacion
     }
 
     /**
+     * Si la etapa está activa y su lote, también activo, participa en la
+     * temporada (temporada_lote activo).
+     */
+    public function enTemporada(int $etapaId, int $temporadaId): bool
+    {
+        $etapa = Etapa::with('lote:id,is_active')->whereKey($etapaId)->first(['id', 'lote_id', 'is_active']);
+        if (! $etapa || ! $etapa->is_active || ! $etapa->lote || ! $etapa->lote->is_active) {
+            return false;
+        }
+
+        return DB::table('temporada_lote')
+            ->where('temporada_id', $temporadaId)
+            ->where('lote_id', $etapa->lote_id)
+            ->where('is_active', true)
+            ->exists();
+    }
+
+    /**
      * Etapas activas de lotes activos en las temporadas dadas cuya fecha de
      * cosecha (proyectada, o estimada si no hay) cae en [$desde, $hasta], con
      * sus hectáreas asignadas y disponibles, ordenadas por fecha. Incluye las
