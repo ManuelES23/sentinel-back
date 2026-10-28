@@ -649,6 +649,11 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::post('programa/{programa}/viajes', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ProgramaViajeController::class, 'store']);
                 Route::put('viajes/{viaje}', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ProgramaViajeController::class, 'update']);
                 Route::delete('viajes/{viaje}', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ProgramaViajeController::class, 'destroy']);
+
+                // Acuerdos de la junta (adelantar etapa, mover pedido, conseguir producto)
+                Route::post('programa/{programa}/acuerdos', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ProgramaAcuerdoController::class, 'store']);
+                Route::patch('acuerdos/{acuerdo}/activo', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ProgramaAcuerdoController::class, 'activo']);
+                Route::delete('acuerdos/{acuerdo}', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ProgramaAcuerdoController::class, 'destroy']);
             });
 
             // Módulo Cosecha
