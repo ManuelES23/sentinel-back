@@ -644,6 +644,11 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::post('programa/{programa}/necesidades', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ProgramaNecesidadController::class, 'store']);
                 Route::put('necesidades/{necesidad}', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ProgramaNecesidadController::class, 'update']);
                 Route::delete('necesidades/{necesidad}', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ProgramaNecesidadController::class, 'destroy']);
+
+                // Viajes de logística (Full y Sencillo)
+                Route::post('programa/{programa}/viajes', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ProgramaViajeController::class, 'store']);
+                Route::put('viajes/{viaje}', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ProgramaViajeController::class, 'update']);
+                Route::delete('viajes/{viaje}', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ProgramaViajeController::class, 'destroy']);
             });
 
             // Módulo Cosecha
