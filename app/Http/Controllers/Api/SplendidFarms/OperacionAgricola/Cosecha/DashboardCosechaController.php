@@ -37,7 +37,7 @@ class DashboardCosechaController extends Controller
 
         $etapas = Etapa::with([
             'lote:id,nombre,codigo,superficie,numero_lote,zona_cultivo_id,productor_id',
-            'lote.productor:id,nombre,apellido',
+            'lote.productor:id,nombre,apellido,tipo',
             'lote.zonaCultivo:id,nombre',
             'variedad:id,nombre,cultivo_id',
             'tipoVariedad:id,nombre,variedad_id',
@@ -338,7 +338,7 @@ class DashboardCosechaController extends Controller
             'superficie' => number_format((float) $etapa->superficie, 4, '.', ''),
             'lote' => $lote ? ['id' => $lote->id, 'nombre' => $lote->nombre] : null,
             'productor' => $productor
-                ? ['id' => $productor->id, 'nombre' => trim($productor->nombre.' '.$productor->apellido)]
+                ? ['id' => $productor->id, 'nombre' => trim($productor->nombre.' '.$productor->apellido), 'tipo' => $productor->tipo]
                 : null,
             'zona' => $lote?->zonaCultivo
                 ? ['id' => $lote->zonaCultivo->id, 'nombre' => $lote->zonaCultivo->nombre]

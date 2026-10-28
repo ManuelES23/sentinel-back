@@ -165,7 +165,7 @@ class DashboardCosechaEjecutivoTest extends TestCase
 
         $this->assertSame($etapa->id, $fila['id']);
         $this->assertSame(['id' => $this->lote->id, 'nombre' => 'Lote 1'], $fila['lote']);
-        $this->assertSame(['id' => $this->productorPrincipal->id, 'nombre' => 'Juan Pérez'], $fila['productor']);
+        $this->assertSame(['id' => $this->productorPrincipal->id, 'nombre' => 'Juan Pérez', 'tipo' => 'externo'], $fila['productor']);
         $this->assertSame(['id' => $this->zonaCultivo->id, 'nombre' => 'Zona Norte'], $fila['zona']);
         $this->assertSame(['id' => $this->variedad->id, 'nombre' => 'Ataulfo'], $fila['variedad']);
         $this->assertNull($fila['tipo_variedad']);
