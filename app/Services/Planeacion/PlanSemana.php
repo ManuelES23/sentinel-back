@@ -96,7 +96,7 @@ class PlanSemana
                 $programa->necesidades,
                 $programa->acuerdos,
                 $entrantesPorLunes->get($fecha, collect())
-                    ->filter(fn (ProgramaAcuerdo $a) => $a->programa_id !== $programa->id)
+                    ->filter(fn (ProgramaAcuerdo $a) => (int) $a->programa_id !== (int) $programa->id)
                     ->values(),
                 $elecciones,
                 $manuales,
@@ -125,15 +125,29 @@ class PlanSemana
         return $valor === null ? 0 : (int) round((float) $corte->hectareas * $valor);
     }
 
-    /** Cajas que suma un acuerdo de producción (adelantar etapa o conseguir producto). */
+    /**
+     * Si un acuerdo de producción (adelantar etapa o conseguir producto) puede
+     * sumar cajas: necesita variedad (para saber su grupo) y un día de la semana.
+     */
+    public function sumaProduccion(ProgramaAcuerdo $acuerdo): bool
+    {
+        return in_array($acuerdo->tipo, ['adelantar_etapa', 'conseguir_producto'], true)
+            && $acuerdo->variedad_id
+            && $this->diaValido($acuerdo->dia);
+    }
+
+    /**
+     * Cajas que suma un acuerdo de producción (adelantar etapa o conseguir
+     * producto), activo o no; 0 si no puede contar (sin variedad o sin día).
+     */
     public function cajasDeAcuerdo(ProgramaAcuerdo $acuerdo): int
     {
-        if ($acuerdo->tipo === 'conseguir_producto') {
-            return (int) $acuerdo->cajas;
+        if (! $this->sumaProduccion($acuerdo)) {
+            return 0;
         }
 
-        if ($acuerdo->tipo !== 'adelantar_etapa' || ! $acuerdo->variedad_id) {
-            return 0;
+        if ($acuerdo->tipo === 'conseguir_producto') {
+            return (int) $acuerdo->cajas;
         }
 
         $valor = $this->valorUsado($acuerdo->temporada_id, $acuerdo->variedad_id);
@@ -187,10 +201,7 @@ class PlanSemana
 
         if ($conAcuerdos) {
             foreach ($this->acuerdos as $acuerdo) {
-                if ($acuerdo->activo
-                    && in_array($acuerdo->tipo, ['adelantar_etapa', 'conseguir_producto'], true)
-                    && $acuerdo->variedad_id
-                    && $this->diaValido($acuerdo->dia)) {
+                if ($acuerdo->activo && $this->sumaProduccion($acuerdo)) {
                     $renglones[] = [
                         'grupo' => $this->catalogo->grupoDeVariedad($acuerdo->variedad_id),
                         'temporada_id' => $acuerdo->temporada_id,

@@ -38,13 +38,25 @@ class ProgramaSemanalService
     /** @var array<int, array{plan: PlanSemana, balance: array}> programa_id => semana calculada */
     private array $calculadas = [];
 
-    /** @var array<string, int>|null lunes AAAA-MM-DD => programa_id */
+    /** @var array<string, int>|null lunes AAAA-MM-DD => programa_id, ordenado por lunes */
     private ?array $programasPorLunes = null;
 
     public function __construct(private readonly CatalogoPlaneacion $catalogo)
     {
         $this->etapas = new EtapasPlaneacion($catalogo);
         $this->secciones = new SeccionesSemana($catalogo);
+    }
+
+    /**
+     * Olvida lo calculado y los catálogos leídos en esta petición. Lo llama
+     * quien escribe datos del programa (o de la configuración) antes de volver
+     * a pedir semana() o balanceDe() en la misma petición.
+     */
+    public function olvidar(): void
+    {
+        $this->calculadas = [];
+        $this->programasPorLunes = null;
+        $this->catalogo->olvidar();
     }
 
     /**
@@ -184,9 +196,11 @@ class ProgramaSemanalService
     // ── Balance en cadena ───────────────────────────────
 
     /**
-     * Calcula la semana y, antes, las semanas anteriores contiguas que existan
-     * (el inicial de cada una es el final de la previa). Iterativo y en
-     * memoria: cada programa se calcula una sola vez por petición.
+     * Calcula la semana y, antes, las semanas anteriores que tengan programa:
+     * el inicial de cada una es el final del programa existente más cercano
+     * antes de ella, a cualquier distancia (una semana sin programa no tiene
+     * datos y deja pasar el inventario igual). Iterativo y en memoria: cada
+     * programa se calcula una sola vez por petición.
      *
      * @return array{plan: PlanSemana, balance: array}
      */
@@ -196,16 +210,15 @@ class ProgramaSemanalService
             return $this->calculadas[$programa->id];
         }
 
-        $mapa = $this->programasPorLunes();
+        // Programas previos, del más reciente al más antiguo, hasta el primero ya calculado.
         $pendientes = [];
-        $lunes = $programa->lunes->toDateString();
-        while (true) {
-            $lunes = $this->masDias($lunes, -7);
-            $anteriorId = $mapa[$lunes] ?? null;
-            if ($anteriorId === null || isset($this->calculadas[$anteriorId])) {
+        $base = null;
+        foreach ($this->anteriores($programa->lunes->toDateString()) as $id) {
+            if (isset($this->calculadas[$id])) {
+                $base = $id;
                 break;
             }
-            $pendientes[] = $anteriorId;
+            $pendientes[] = $id;
         }
 
         // Todas las semanas de la cadena se cargan juntas, de la más antigua a esta.
@@ -213,20 +226,24 @@ class ProgramaSemanalService
             ? ProgramaSemanal::whereIn('id', $pendientes)->orderBy('lunes')->get()->push($programa)
             : new EloquentCollection([$programa]);
         $planes = PlanSemana::cargarVarios($programas, $this->catalogo);
+        $anteriorId = $base;
         foreach ($programas as $p) {
-            $this->resolver($planes[$p->id]);
+            $this->resolver($planes[$p->id], $anteriorId);
+            $anteriorId = $p->id;
         }
 
         return $this->calculadas[$programa->id];
     }
 
-    /** @return array{plan: PlanSemana, balance: array} */
-    private function resolver(PlanSemana $plan): array
+    /**
+     * @param  int|null  $anteriorId  Programa existente más cercano antes de esta semana (ya calculado).
+     * @return array{plan: PlanSemana, balance: array}
+     */
+    private function resolver(PlanSemana $plan, ?int $anteriorId): array
     {
         $programa = $plan->programa;
         $lunes = $plan->lunes;
 
-        $anteriorId = $this->programasPorLunes()[$this->masDias($lunes, -7)] ?? null;
         $inicial = [];
         if ($anteriorId !== null && isset($this->calculadas[$anteriorId])) {
             foreach ($this->calculadas[$anteriorId]['balance'] as $clave => $g) {
@@ -279,12 +296,29 @@ class ProgramaSemanalService
     {
         if ($this->programasPorLunes === null) {
             $this->programasPorLunes = [];
-            foreach (ProgramaSemanal::query()->toBase()->get(['id', 'lunes']) as $fila) {
+            foreach (ProgramaSemanal::query()->toBase()->orderBy('lunes')->get(['id', 'lunes']) as $fila) {
                 $this->programasPorLunes[substr((string) $fila->lunes, 0, 10)] = (int) $fila->id;
             }
         }
 
         return $this->programasPorLunes;
+    }
+
+    /**
+     * Programas que existen antes de $lunes, del más reciente al más antiguo.
+     *
+     * @return list<int>
+     */
+    private function anteriores(string $lunes): array
+    {
+        $ids = [];
+        foreach (array_reverse($this->programasPorLunes(), true) as $fecha => $id) {
+            if ($fecha < $lunes) {
+                $ids[] = $id;
+            }
+        }
+
+        return $ids;
     }
 
     // ── Secciones del payload ───────────────────────────
@@ -417,9 +451,11 @@ class ProgramaSemanalService
             $necesidad = $plan->necesidades->firstWhere('id', $a->necesidad_id);
             $grupo = $necesidad ? $plan->grupoDeNecesidad($necesidad) : null;
             $efecto = ['grupo_id' => $grupo, 'dia' => $a->dia_origen, 'cajas' => $necesidad ? PlanSemana::cajasMovidas($a, $necesidad) : 0];
+        } elseif ($plan->sumaProduccion($a)) {
+            $efecto = ['grupo_id' => $this->grupoDeVariedad($a->variedad_id), 'dia' => $a->dia, 'cajas' => $plan->cajasDeAcuerdo($a)];
         } else {
-            $grupo = $a->variedad_id ? $this->grupoDeVariedad($a->variedad_id) : null;
-            $efecto = ['grupo_id' => $grupo, 'dia' => $a->dia, 'cajas' => $plan->cajasDeAcuerdo($a)];
+            // Sin variedad o sin día no suma producción; el efecto lo dice igual.
+            $efecto = ['grupo_id' => null, 'dia' => $a->dia, 'cajas' => 0];
         }
         $efecto['grupo_id'] = $efecto['grupo_id'] !== null ? CatalogoPlaneacion::idPublico($efecto['grupo_id']) : null;
 

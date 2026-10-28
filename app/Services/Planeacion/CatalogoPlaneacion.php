@@ -36,6 +36,17 @@ class CatalogoPlaneacion
     /** @var Collection<int, Temporada>|null */
     private ?Collection $temporadasAbiertas = null;
 
+    /** Descarta lo leído para que la siguiente consulta vuelva a la base de datos. */
+    public function olvidar(): void
+    {
+        $this->variedades = null;
+        $this->grupos = null;
+        $this->grupoPorVariedad = null;
+        $this->rangos = null;
+        $this->recetas = null;
+        $this->temporadasAbiertas = null;
+    }
+
     /** @return Collection<int, Variedad> por id, incluidas las borradas (los renglones viejos las citan). */
     public function variedades(): Collection
     {

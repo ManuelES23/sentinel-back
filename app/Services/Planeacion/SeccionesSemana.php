@@ -101,7 +101,8 @@ class SeccionesSemana
         foreach ($viajes as $viaje) {
             if ($viaje->dia >= 0 && $viaje->dia < CalculadoraBalance::DIAS) {
                 $llave = $fila($viaje->bodega_id, $viaje->cultivo_id);
-                $filas[$llave]['planeado'][$viaje->dia] += (int) $viaje->cajas_caja_1 + (int) $viaje->cajas_caja_2;
+                // Un sencillo lleva una sola caja de tráiler: cajas_caja_2 no cuenta aunque traiga valor.
+                $filas[$llave]['planeado'][$viaje->dia] += (int) $viaje->cajas_caja_1 + ($viaje->tipo === 'full' ? (int) $viaje->cajas_caja_2 : 0);
             }
         }
 

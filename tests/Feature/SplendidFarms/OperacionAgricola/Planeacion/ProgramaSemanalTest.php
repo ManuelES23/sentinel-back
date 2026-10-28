@@ -6,9 +6,11 @@ use App\Models\Planeacion\ProgramaAcuerdo;
 use App\Models\Planeacion\ProgramaInventarioInicial;
 use App\Models\Planeacion\ProgramaRendimiento;
 use App\Models\Planeacion\ProgramaSemanal;
+use App\Models\Planeacion\ProgramaViaje;
 use App\Models\Planeacion\RecetaCombinacion;
 use App\Models\Planeacion\RendimientoVariedad;
 use App\Models\Recipe;
+use App\Services\Planeacion\ProgramaSemanalService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -275,6 +277,65 @@ class ProgramaSemanalTest extends TestCase
         // Cada semana: +700 de producción, −50 que se quedan (100 − 50 movidas) y −50 que llegan de la previa.
         $this->assertSame(650 + 600, $b3['inicial']);
         $this->assertSame(650 + 600 * 10, $b12['inicial']);
+    }
+
+    public function test_una_semana_sin_programa_deja_pasar_el_inventario(): void
+    {
+        $this->wk48();
+        $blanco = $this->idBlanco();
+
+        // WK50 se abre sin que exista WK49: hereda el final de WK48.
+        $this->assertSame(-2893, $this->semana('2026-12-07')->assertOk()->json("data.balance.{$blanco}.inicial"));
+
+        // Abrir WK49 (vacía) no cambia WK50.
+        $this->assertSame(-2893, $this->semana('2026-11-30')->assertOk()->json("data.balance.{$blanco}.inicial"));
+        $this->assertSame(-2893, $this->semana('2026-12-07')->assertOk()->json("data.balance.{$blanco}.inicial"));
+        $this->assertSame(3, ProgramaSemanal::count());
+    }
+
+    public function test_olvidar_descarta_lo_calculado_en_la_peticion(): void
+    {
+        $servicio = app(ProgramaSemanalService::class);
+        $p = $servicio->programaDe('2026-11-23');
+        $blanco = $this->idBlanco();
+
+        $this->assertSame(0, $servicio->balanceDe($p)[$blanco]['final']);
+
+        $this->corte($p, 'Blanco', 0, 1);
+        $this->assertSame(0, $servicio->balanceDe($p)[$blanco]['final']); // memo de la petición
+
+        $servicio->olvidar();
+        $this->assertSame(700, $servicio->balanceDe($p->fresh())[$blanco]['final']);
+    }
+
+    public function test_un_viaje_sencillo_solo_cuenta_su_primera_caja(): void
+    {
+        $p = ProgramaSemanal::create(['lunes' => '2026-11-23']);
+        $base = ['programa_id' => $p->id, 'bodega_id' => $this->bodega('Texas')->id, 'cultivo_id' => $this->cultivo->id];
+        ProgramaViaje::create($base + ['dia' => 0, 'tipo' => 'sencillo', 'cajas_caja_1' => 1000, 'cajas_caja_2' => 999]);
+        ProgramaViaje::create($base + ['dia' => 1, 'tipo' => 'full', 'cajas_caja_1' => 1040, 'cajas_caja_2' => 980]);
+
+        $d = $this->semana('2026-11-23')->assertOk()->json('data');
+
+        $fila = collect($d['logistica'])->firstWhere('bodega_id', $this->bodega('Texas')->id);
+        $this->assertSame([1000, 2020, 0, 0, 0, 0], $fila['planeado']);
+        $this->assertSame([1000], collect($d['viajes'])->firstWhere('dia', 0)['cajas_cajas']);
+    }
+
+    public function test_conseguir_producto_sin_variedad_no_suma_ni_reporta_efecto(): void
+    {
+        $p = $this->wk48();
+        $acuerdo = ProgramaAcuerdo::create([
+            'programa_id' => $p->id, 'tipo' => 'conseguir_producto', 'activo' => true,
+            'variedad_id' => null, 'dia' => 3, 'cajas' => 1000, 'origen_tipo' => 'otro',
+        ]);
+
+        $d = $this->semana('2026-11-23')->assertOk()->json('data');
+
+        $this->assertSame(-2893, $d['balance'][$this->idBlanco()]['final']);
+        $this->assertSame(10635, $d['balance'][$this->idAb()]['final']);
+        $efecto = collect($d['acuerdos'])->firstWhere('id', $acuerdo->id)['efecto'];
+        $this->assertSame(['grupo_id' => null, 'dia' => 3, 'cajas' => 0], $efecto);
     }
 
     public function test_rendimiento_elegido(): void
