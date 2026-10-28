@@ -198,7 +198,19 @@ class SeccionesSemana
             return $partes ? implode('; ', $partes) : 'Sin cambios de valor';
         }
 
-        return ucfirst(str_replace('_', ' ', $c->entidad)).' '.$c->accion;
+        $titulo = ucfirst(str_replace('_', ' ', $c->entidad)).' '.$c->accion;
+
+        // Al crear se muestran los valores con que quedó.
+        if ($c->accion === 'creado' && $despues) {
+            $partes = [];
+            foreach ($despues as $campo => $valor) {
+                $partes[] = "{$campo}: {$texto($valor)}";
+            }
+
+            return $titulo.' ('.implode('; ', $partes).')';
+        }
+
+        return $titulo;
     }
 
     /**

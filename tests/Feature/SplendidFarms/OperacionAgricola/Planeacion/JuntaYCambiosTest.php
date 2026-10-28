@@ -9,8 +9,11 @@ use App\Models\Planeacion\ProgramaJunta;
 use App\Models\Planeacion\ProgramaSemanal;
 use App\Models\User;
 use App\Services\Planeacion\RegistroCambiosPrograma;
+use Illuminate\Broadcasting\BroadcastManager;
+use Illuminate\Broadcasting\Broadcasters\NullBroadcaster;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Testing\TestResponse;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
@@ -208,5 +211,66 @@ class JuntaYCambiosTest extends TestCase
         $this->assertSame('inventario_inicial', $cambio->entidad);
         $this->assertSame('creado', $cambio->accion);
         $this->assertSame(3000, $cambio->despues['cajas']);
+        $this->assertSame(['grupo_clave' => $blanco, 'cajas' => null], $cambio->antes);
+        $this->assertSame(['grupo_clave' => $blanco, 'cajas' => 3000], $cambio->despues);
+
+        // Actualizar: mismas llaves antes y después, y el resumen solo dice lo que cambió.
+        $this->putJson(self::URL.'/'.$this->programa->id.'/inventario-inicial', ['grupo_clave' => $blanco, 'cajas' => 2000])->assertOk();
+        $this->assertSame(2, ProgramaCambio::count());
+        $cambios = $this->getJson(self::URL.'?lunes=2026-11-23')->json('data.cambios');
+        $this->assertSame('cajas: 3000 → 2000', $cambios[0]['resumen']);
+        $this->assertStringContainsString('cajas: 3000', $cambios[1]['resumen']);
+    }
+
+    public function test_inventario_inicial_sin_cambio_de_valor_no_escribe_ni_registra(): void
+    {
+        $this->registrarJunta(['view', 'acuerdos', 'configurar'])->assertOk();
+        $blanco = (string) $this->grupo('Blanco')->id;
+        $url = self::URL.'/'.$this->programa->id.'/inventario-inicial';
+
+        $this->putJson($url, ['grupo_clave' => $blanco, 'cajas' => 3000])->assertOk();
+        Event::fake([ProgramaSemanalUpdated::class]);
+        $this->putJson($url, ['grupo_clave' => $blanco, 'cajas' => 3000])->assertOk()->assertJsonPath('data.cajas', 3000);
+
+        $this->assertSame(1, ProgramaCambio::count());
+        Event::assertNotDispatched(ProgramaSemanalUpdated::class);
+    }
+
+    public function test_inventario_inicial_normaliza_ceros_a_la_izquierda(): void
+    {
+        Sanctum::actingAs($this->usuarioCon(['view', 'configurar']));
+        $blanco = (string) $this->grupo('Blanco')->id;
+        $url = self::URL.'/'.$this->programa->id.'/inventario-inicial';
+
+        $this->putJson($url, ['grupo_clave' => '00'.$blanco, 'cajas' => 3000])
+            ->assertOk()
+            ->assertJsonPath('data.grupo_clave', $blanco);
+
+        $this->assertSame([$blanco], ProgramaInventarioInicial::pluck('grupo_clave')->all());
+        $this->assertSame(3000, $this->getJson(self::URL.'?lunes=2026-11-23')->json('data.balance')[$blanco]['inicial']);
+    }
+
+    public function test_si_la_difusion_falla_la_escritura_responde_200(): void
+    {
+        Log::spy();
+        // Un difusor que siempre falla, como un Reverb caído.
+        config(['broadcasting.default' => 'falla', 'broadcasting.connections.falla' => ['driver' => 'falla']]);
+        app(BroadcastManager::class)->extend('falla', fn () => new class extends NullBroadcaster
+        {
+            public function broadcast(array $channels, $event, array $payload = [])
+            {
+                throw new \RuntimeException('Reverb caído');
+            }
+        });
+
+        $this->registrarJunta(['view', 'acuerdos', 'configurar'])->assertOk();
+        $this->assertNotNull($this->programa->fresh()->junta_registrada_at);
+
+        $this->putJson(self::URL.'/'.$this->programa->id.'/inventario-inicial', ['grupo_clave' => (string) $this->grupo('Blanco')->id, 'cajas' => 10])
+            ->assertOk();
+        $this->assertSame(1, ProgramaInventarioInicial::count());
+        $this->assertSame(1, ProgramaCambio::count());
+        // El fallo sí se intentó emitir y quedó anotado.
+        Log::shouldHaveReceived('warning')->atLeast()->twice();
     }
 }

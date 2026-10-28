@@ -78,28 +78,41 @@ class JuntaProgramaController extends Controller
             'grupo_clave' => ['required', 'string', 'regex:/^(\d+|v\d+)$/'],
             'cajas' => ['required', 'integer', 'min:0', 'max:100000000'],
         ]);
-        $clave = $datos['grupo_clave'];
+        // Sin ceros a la izquierda: «007» y «7» son el mismo grupo.
+        $clave = $this->normalizarClave($datos['grupo_clave']);
+        $cajas = (int) $datos['cajas'];
 
         if (! $this->esGrupoValido($clave, $servicio)) {
             throw ValidationException::withMessages(['grupo_clave' => 'El grupo de variedades no existe.']);
         }
 
-        $existente = ProgramaInventarioInicial::where('programa_id', $programa->id)->where('grupo_clave', $clave)->first();
-        $antes = $existente ? ['cajas' => $existente->cajas] : null;
+        $fila = DB::transaction(function () use ($programa, $clave, $cajas, $registro) {
+            $existente = ProgramaInventarioInicial::where('programa_id', $programa->id)
+                ->where('grupo_clave', $clave)
+                ->lockForUpdate()
+                ->first();
 
-        $fila = ProgramaInventarioInicial::updateOrCreate(
-            ['programa_id' => $programa->id, 'grupo_clave' => $clave],
-            ['cajas' => $datos['cajas']],
-        );
+            // Sin cambio de valor no hay escritura ni historial.
+            if ($existente && $existente->cajas === $cajas) {
+                return $existente;
+            }
 
-        $registro->registrar(
-            $programa,
-            'inventario_inicial',
-            $fila->id,
-            $existente ? 'actualizado' : 'creado',
-            $antes,
-            ['grupo_clave' => $clave, 'cajas' => $fila->cajas],
-        );
+            $fila = ProgramaInventarioInicial::updateOrCreate(
+                ['programa_id' => $programa->id, 'grupo_clave' => $clave],
+                ['cajas' => $cajas],
+            );
+
+            $registro->registrar(
+                $programa,
+                'inventario_inicial',
+                $fila->id,
+                $existente ? 'actualizado' : 'creado',
+                ['grupo_clave' => $clave, 'cajas' => $existente?->cajas],
+                ['grupo_clave' => $clave, 'cajas' => $cajas],
+            );
+
+            return $fila;
+        });
 
         $servicio->olvidar();
 
@@ -112,6 +125,14 @@ class JuntaProgramaController extends Controller
                 'balance' => $servicio->balanceDe($programa)[$clave] ?? null,
             ],
         ]);
+    }
+
+    /** «007» -> «7», «v007» -> «v7» (la clave ya pasó el formato `^(\d+|v\d+)$`). */
+    private function normalizarClave(string $clave): string
+    {
+        return str_starts_with($clave, 'v')
+            ? 'v'.(int) substr($clave, 1)
+            : (string) (int) $clave;
     }
 
     /** Un grupo con id existente, o «v{id}» de una variedad que no pertenece a ningún grupo. */

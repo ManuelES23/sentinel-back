@@ -6,6 +6,8 @@ use App\Events\ProgramaSemanalUpdated;
 use App\Models\Planeacion\ProgramaCambio;
 use App\Models\Planeacion\ProgramaSemanal;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Historial de cambios del Programa semanal y aviso en tiempo real.
@@ -40,9 +42,30 @@ class RegistroCambiosPrograma
         $this->emitir($programa);
     }
 
-    /** Solo avisa: para escrituras que no son cambios del programa (p. ej. registrar la junta). */
+    /**
+     * Solo avisa: para escrituras que no son cambios del programa (p. ej.
+     * registrar la junta). Si hay una transacción abierta, el aviso sale al
+     * confirmarla. Un Reverb caído (o un mensaje demasiado grande) nunca
+     * convierte en 500 una escritura ya guardada: se anota y se sigue (mismo
+     * criterio que `EtapaController::difundir()`).
+     */
     public function emitir(ProgramaSemanal $programa): void
     {
-        ProgramaSemanalUpdated::dispatch($programa->lunes->toDateString(), $programa->id);
+        $lunes = $programa->lunes->toDateString();
+        $programaId = $programa->id;
+
+        DB::afterCommit(function () use ($lunes, $programaId) {
+            try {
+                $pendiente = broadcast(new ProgramaSemanalUpdated($lunes, $programaId));
+                // PendingBroadcast emite al destruirse; forzarlo aquí mantiene
+                // cualquier excepción dentro del try.
+                unset($pendiente);
+            } catch (\Throwable $e) {
+                Log::warning('Programa semanal: no se pudo emitir el evento en tiempo real', [
+                    'programa_id' => $programaId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        });
     }
 }
