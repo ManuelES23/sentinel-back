@@ -618,6 +618,19 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::get('programa', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ProgramaSemanalController::class, 'show']);
                 Route::post('programa/{programa}/registrar-junta', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\JuntaProgramaController::class, 'registrar']);
                 Route::put('programa/{programa}/inventario-inicial', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\JuntaProgramaController::class, 'inventarioInicial']);
+
+                // Configuración (las rutas fijas van antes que {catalogo})
+                Route::get('configuracion', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ConfiguracionPlaneacionController::class, 'show']);
+                Route::put('configuracion/grupos', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ConfiguracionPlaneacionController::class, 'grupos']);
+                Route::put('configuracion/recetas-combinacion', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ConfiguracionPlaneacionController::class, 'guardarRecetasCombinacion']);
+                Route::put('configuracion/rendimientos', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ConfiguracionPlaneacionController::class, 'guardarRendimientos']);
+                Route::post('configuracion/rendimientos/copiar', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ConfiguracionPlaneacionController::class, 'copiarRendimientos']);
+                Route::put('configuracion/cajas-por-carga', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ConfiguracionPlaneacionController::class, 'cajasPorCarga']);
+                Route::post('configuracion/{catalogo}', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ConfiguracionPlaneacionController::class, 'store']);
+                Route::put('configuracion/{catalogo}/{id}', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ConfiguracionPlaneacionController::class, 'update'])->whereNumber('id');
+                Route::delete('configuracion/{catalogo}/{id}', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ConfiguracionPlaneacionController::class, 'destroy'])->whereNumber('id');
+
+                Route::get('clientes', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\ClientesSbpController::class, 'index']);
             });
 
             // Módulo Cosecha
