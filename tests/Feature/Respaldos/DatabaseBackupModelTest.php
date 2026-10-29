@@ -25,7 +25,7 @@ class DatabaseBackupModelTest extends TestCase
             'filename' => 'sentinel_2026-10-10_020000_manual_1.sql.gz',
         ]);
 
-        $this->assertSame('backups/sentinel_2026-10-10_020000_manual_1.sql.gz', $b->rutaRelativa());
+        $this->assertSame('backups/sentinel_2026-10-10_020000_manual_1/sentinel_2026-10-10_020000_manual_1.sql.gz', $b->rutaRelativa());
         $this->assertFalse($b->archivo_disponible);
 
         Storage::disk('local')->put($b->rutaRelativa(), 'x');
@@ -33,6 +33,19 @@ class DatabaseBackupModelTest extends TestCase
 
         $b->update(['status' => DatabaseBackup::ESTADO_FALLIDO]);
         $this->assertFalse($b->fresh()->archivo_disponible);
+    }
+
+    public function test_un_respaldo_anterior_a_las_carpetas_se_sigue_encontrando_suelto(): void
+    {
+        $b = DatabaseBackup::create([
+            'type' => DatabaseBackup::TIPO_MANUAL,
+            'status' => DatabaseBackup::ESTADO_COMPLETADO,
+            'filename' => 'sentinel_2026-10-01_020000_manual_1.sql.gz',
+        ]);
+        Storage::disk('local')->put('backups/sentinel_2026-10-01_020000_manual_1.sql.gz', 'x');
+
+        $this->assertSame('backups/sentinel_2026-10-01_020000_manual_1.sql.gz', $b->rutaRelativa());
+        $this->assertTrue($b->archivo_disponible);
     }
 
     public function test_duracion_y_en_curso(): void

@@ -39,8 +39,11 @@ class DatabaseBackupServiceTest extends TestCase
 
         $this->assertSame(DatabaseBackup::ESTADO_COMPLETADO, $b->status);
         $this->assertMatchesRegularExpression('/^sentinel_\d{4}-\d{2}-\d{2}_\d{6}_manual_'.$b->id.'\.sql\.gz$/', $b->filename);
+        $this->assertSame('backups/'.$b->carpeta().'/'.$b->filename, $b->rutaRelativa());
+        $this->assertStringNotContainsString('.sql', $b->carpeta());
         $ruta = Storage::disk('local')->path($b->rutaRelativa());
         $this->assertFileExists($ruta);
+        $this->assertSame(Storage::disk('local')->path($b->carpetaRelativa()), dirname($ruta));
         $this->assertFileDoesNotExist($ruta.'.partial');
         $this->assertSame(filesize($ruta), $b->size_bytes);
         $this->assertSame(hash_file('sha256', $ruta), $b->checksum);
@@ -61,6 +64,8 @@ class DatabaseBackupServiceTest extends TestCase
         $this->assertSame('No se pudo generar el respaldo. Revisa el log del servidor para más detalle.', $b->error);
         $this->assertStringNotContainsString('secreta', $b->error);
         $this->assertFileDoesNotExist(Storage::disk('local')->path($b->rutaRelativa()).'.partial');
+        $this->assertDirectoryDoesNotExist(Storage::disk('local')->path($b->carpetaRelativa()));
+        $this->assertDirectoryExists(Storage::disk('local')->path('backups'));
         $this->assertNotNull($b->finished_at);
     }
 

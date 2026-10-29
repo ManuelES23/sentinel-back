@@ -159,6 +159,7 @@ class CicloRespaldos
 
                 return false;
             }
+            $this->borrarCarpetaVacia($ruta);
         }
         $backup->delete();
 
@@ -181,6 +182,15 @@ class CicloRespaldos
     protected function borrarArchivo(string $rutaRelativa): void
     {
         Storage::disk('local')->delete($rutaRelativa);
+    }
+
+    /** Quita la carpeta propia del respaldo si quedó vacía; los respaldos sueltos (anteriores) no tienen. */
+    private function borrarCarpetaVacia(string $rutaRelativa): void
+    {
+        $carpeta = dirname($rutaRelativa);
+        if ($carpeta !== DatabaseBackup::DIRECTORIO) {
+            @rmdir(Storage::disk('local')->path($carpeta));
+        }
     }
 
     private function hayProgramadoEl(Carbon $dia): bool
