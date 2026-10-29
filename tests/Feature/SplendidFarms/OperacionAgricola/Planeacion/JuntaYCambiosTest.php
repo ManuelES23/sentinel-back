@@ -175,6 +175,57 @@ class JuntaYCambiosTest extends TestCase
         $this->assertSame(1, ProgramaInventarioInicial::where('programa_id', $this->programa->id)->count());
     }
 
+    public function test_quitar_el_inventario_inicial_manual_vuelve_al_arrastre(): void
+    {
+        $blanco = (string) $this->grupo('Blanco')->id;
+        $wk49 = ProgramaSemanal::create(['lunes' => '2026-11-30']);
+        $url = self::URL.'/'.$wk49->id.'/inventario-inicial';
+        $balanceWk49 = fn () => $this->getJson(self::URL.'?lunes=2026-11-30')->assertOk()->json("data.balance.{$blanco}");
+
+        Sanctum::actingAs($this->usuarioCon(['view', 'acuerdos', 'configurar']));
+        $this->postJson(self::URL.'/'.$wk49->id.'/registrar-junta')->assertOk();
+
+        // Sin captura: arrastra el final de WK48.
+        $g = $balanceWk49();
+        $this->assertSame('arrastrado', $g['inicial_origen']);
+        $this->assertSame(-2893, $g['inicial']);
+        $this->assertSame(-2893, $g['inicial_arrastrado']);
+
+        // Capturado a mano: fija el inicial y sigue diciendo cuánto se arrastraría.
+        $this->putJson($url, ['grupo_clave' => $blanco, 'cajas' => 0])->assertOk()
+            ->assertJsonPath('data.balance.inicial_origen', 'capturado');
+        $g = $balanceWk49();
+        $this->assertSame('capturado', $g['inicial_origen']);
+        $this->assertSame(0, $g['inicial']);
+        $this->assertSame(-2893, $g['inicial_arrastrado']);
+
+        // Quitarlo (cajas null): se borra el renglón y vuelve a arrastrar.
+        Event::fake([ProgramaSemanalUpdated::class]);
+        $this->putJson($url, ['grupo_clave' => $blanco, 'cajas' => null])->assertOk()
+            ->assertJsonPath('data.cajas', null)
+            ->assertJsonPath('data.balance.inicial', -2893)
+            ->assertJsonPath('data.balance.inicial_origen', 'arrastrado');
+        $this->assertSame(0, ProgramaInventarioInicial::where('programa_id', $wk49->id)->count());
+        $this->assertSame('arrastrado', $balanceWk49()['inicial_origen']);
+        Event::assertDispatchedTimes(ProgramaSemanalUpdated::class, 1);
+
+        // Queda en el historial de la semana.
+        $cambio = ProgramaCambio::where('programa_id', $wk49->id)->latest('id')->firstOrFail();
+        $this->assertSame('borrado', $cambio->accion);
+        $this->assertSame(['grupo_clave' => $blanco, 'cajas' => 0], $cambio->antes);
+        $this->assertNull($cambio->despues);
+
+        // Quitar otra vez no escribe ni avisa.
+        $this->putJson($url, ['grupo_clave' => $blanco, 'cajas' => null])->assertOk();
+        $this->assertSame(2, ProgramaCambio::where('programa_id', $wk49->id)->count());
+        Event::assertDispatchedTimes(ProgramaSemanalUpdated::class, 1);
+
+        // `cajas` debe venir (null para quitar), y quitar también exige `configurar`.
+        $this->putJson($url, ['grupo_clave' => $blanco])->assertStatus(422);
+        Sanctum::actingAs($this->usuarioCon(['view', 'capturar-corte']));
+        $this->putJson($url, ['grupo_clave' => $blanco, 'cajas' => null])->assertForbidden();
+    }
+
     public function test_inventario_inicial_rechaza_variedad_con_grupo(): void
     {
         Sanctum::actingAs($this->usuarioCon(['view', 'configurar']));

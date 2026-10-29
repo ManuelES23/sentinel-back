@@ -69,22 +69,30 @@ class JuntaProgramaController extends Controller
         ]);
     }
 
-    /** Inventario inicial manual de un grupo en esta semana (crea o actualiza). */
+    /**
+     * Inventario inicial manual de un grupo en esta semana (crea o actualiza).
+     * Con `cajas: null` se quita y el grupo vuelve a arrastrar el final del
+     * programa anterior.
+     */
     public function inventarioInicial(Request $request, ProgramaSemanal $programa, ProgramaSemanalService $servicio, RegistroCambiosPrograma $registro): JsonResponse
     {
         $this->exigirPermiso('configurar');
 
         $datos = $request->validate([
             'grupo_clave' => ['required', 'string', 'regex:/^(\d+|v\d+)$/'],
-            'cajas' => ['required', 'integer', 'min:0', 'max:100000000'],
+            'cajas' => ['present', 'nullable', 'integer', 'min:0', 'max:100000000'],
         ]);
         // Sin ceros a la izquierda: «007» y «7» son el mismo grupo.
         $clave = $this->normalizarClave($datos['grupo_clave']);
-        $cajas = (int) $datos['cajas'];
 
         if (! $this->esGrupoValido($clave, $servicio)) {
             throw ValidationException::withMessages(['grupo_clave' => 'El grupo de variedades no existe.']);
         }
+
+        if ($datos['cajas'] === null) {
+            return $this->quitarInventarioInicial($programa, $clave, $servicio, $registro);
+        }
+        $cajas = (int) $datos['cajas'];
 
         $fila = DB::transaction(function () use ($programa, $clave, $cajas, $registro) {
             $existente = ProgramaInventarioInicial::where('programa_id', $programa->id)
@@ -122,6 +130,44 @@ class JuntaProgramaController extends Controller
             'data' => [
                 'grupo_clave' => $clave,
                 'cajas' => $fila->cajas,
+                'balance' => $servicio->balanceDe($programa)[$clave] ?? null,
+            ],
+        ]);
+    }
+
+    /** Borra el inventario manual del grupo (si lo hay): queda en el historial y se avisa. */
+    private function quitarInventarioInicial(ProgramaSemanal $programa, string $clave, ProgramaSemanalService $servicio, RegistroCambiosPrograma $registro): JsonResponse
+    {
+        DB::transaction(function () use ($programa, $clave, $registro) {
+            $existente = ProgramaInventarioInicial::where('programa_id', $programa->id)
+                ->where('grupo_clave', $clave)
+                ->lockForUpdate()
+                ->first();
+
+            // Ya se arrastraba: no hay escritura ni historial.
+            if (! $existente) {
+                return;
+            }
+
+            $existente->delete();
+            $registro->registrar(
+                $programa,
+                'inventario_inicial',
+                $existente->id,
+                'borrado',
+                ['grupo_clave' => $clave, 'cajas' => $existente->cajas],
+                null,
+            );
+        });
+
+        $servicio->olvidar();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Inventario inicial quitado: vuelve a arrastrarse de la semana anterior.',
+            'data' => [
+                'grupo_clave' => $clave,
+                'cajas' => null,
                 'balance' => $servicio->balanceDe($programa)[$clave] ?? null,
             ],
         ]);

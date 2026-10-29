@@ -276,6 +276,7 @@ class ProgramaSemanalService
                 $inicial[$clave] = $g['final'];
             }
         }
+        $arrastrado = $inicial;
         foreach ($plan->inventariosManuales as $clave => $cajas) {
             $inicial[$clave] = $cajas;
         }
@@ -312,6 +313,10 @@ class ProgramaSemanalService
         );
         foreach ($balance as $clave => $g) {
             $balance[$clave]['final_sin_acuerdos'] = $sinAcuerdos[$clave]['final'] ?? $g['inicial'];
+            // Capturado a mano o arrastrado del programa anterior; con el valor
+            // que se arrastraría para poder volver a él.
+            $balance[$clave]['inicial_origen'] = array_key_exists((string) $clave, $plan->inventariosManuales) ? 'capturado' : 'arrastrado';
+            $balance[$clave]['inicial_arrastrado'] = $arrastrado[$clave] ?? 0;
         }
 
         return $this->calculadas[$programa->id] = ['plan' => $plan, 'balance' => $balance];
