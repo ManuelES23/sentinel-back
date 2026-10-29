@@ -42,9 +42,32 @@ class DatabaseBackup extends Model
         return $this->belongsTo(User::class, 'created_by');
     }
 
+    /** Carpeta propia del respaldo: el nombre del archivo sin la extensión. */
+    public function carpeta(): ?string
+    {
+        return $this->filename ? preg_replace('/\.sql\.gz$/', '', $this->filename) : null;
+    }
+
+    public function carpetaRelativa(): ?string
+    {
+        return $this->filename ? self::DIRECTORIO.'/'.$this->carpeta() : null;
+    }
+
+    /**
+     * Ruta del archivo: backups/{carpeta}/{archivo}. Los respaldos anteriores a las
+     * carpetas viven sueltos en backups/{archivo}; si el archivo solo existe ahí, se usa esa ruta.
+     */
     public function rutaRelativa(): ?string
     {
-        return $this->filename ? self::DIRECTORIO.'/'.$this->filename : null;
+        if (! $this->filename) {
+            return null;
+        }
+
+        $nueva = $this->carpetaRelativa().'/'.$this->filename;
+        $suelta = self::DIRECTORIO.'/'.$this->filename;
+        $disco = Storage::disk('local');
+
+        return ! $disco->exists($nueva) && $disco->exists($suelta) ? $suelta : $nueva;
     }
 
     public static function hayEnCurso(): bool

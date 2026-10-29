@@ -100,13 +100,13 @@ class EjecutarRespaldosCommandTest extends TestCase
         $this->a('2026-10-10 12:00:00');
         $viejo = DatabaseBackup::create(['type' => 'manual', 'status' => 'en_proceso', 'filename' => 'v.sql.gz', 'started_at' => now()->subMinutes(121)]);
         $reciente = DatabaseBackup::create(['type' => 'manual', 'status' => 'en_proceso', 'filename' => 'r.sql.gz', 'started_at' => now()->subMinutes(30)]);
-        Storage::disk('local')->put('backups/v.sql.gz.partial', 'x');
+        Storage::disk('local')->put('backups/v/v.sql.gz.partial', 'x');
 
         $this->artisan('respaldos:ejecutar');
 
         $this->assertSame('fallido', $viejo->fresh()->status);
         $this->assertSame('El proceso de respaldo se interrumpió (tiempo excedido).', $viejo->fresh()->error);
-        Storage::disk('local')->assertMissing('backups/v.sql.gz.partial');
+        Storage::disk('local')->assertMissing('backups/v/v.sql.gz.partial');
         $this->assertSame('en_proceso', $reciente->fresh()->status);
     }
 

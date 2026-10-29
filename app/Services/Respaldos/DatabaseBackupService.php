@@ -30,8 +30,14 @@ class DatabaseBackupService
             // No usar makeDirectory: Flysystem hace chmod 0700 en cada corrida y deja la carpeta ilegible para el usuario web.
             File::ensureDirectoryExists($disco->path(DatabaseBackup::DIRECTORIO), 0775);
 
+            $backup->filename = sprintf('sentinel_%s_%s_%d.sql.gz', now()->format('Y-m-d_His'), $backup->type, $backup->id);
+
+            // Carpeta propia de este respaldo; el umask la dejaría 0755 y el usuario web no podría borrar su archivo.
+            $carpeta = $disco->path($backup->carpetaRelativa());
+            File::ensureDirectoryExists($carpeta, 0775);
+            @chmod($carpeta, 02775);
+
             $backup->forceFill([
-                'filename' => sprintf('sentinel_%s_%s_%d.sql.gz', now()->format('Y-m-d_His'), $backup->type, $backup->id),
                 'status' => DatabaseBackup::ESTADO_EN_PROCESO,
                 'started_at' => now(),
                 'finished_at' => null,
@@ -79,6 +85,8 @@ class DatabaseBackupService
     {
         if ($backup->rutaRelativa()) {
             @unlink(Storage::disk('local')->path($backup->rutaRelativa()).'.partial');
+            // Solo la carpeta propia (nunca backups/ en sí) y solo si quedó vacía.
+            @rmdir(Storage::disk('local')->path($backup->carpetaRelativa()));
         }
 
         $backup->forceFill([

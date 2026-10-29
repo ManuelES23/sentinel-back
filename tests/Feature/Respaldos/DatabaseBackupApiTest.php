@@ -182,6 +182,20 @@ class DatabaseBackupApiTest extends TestCase
         $this->get($relativa)->assertNotFound();
     }
 
+    public function test_eliminar_quita_tambien_la_carpeta_propia_del_respaldo(): void
+    {
+        $b = DatabaseBackup::create([
+            'type' => 'manual', 'status' => 'completado', 'filename' => 'sentinel_c.sql.gz', 'created_by' => $this->superadmin->id,
+        ]);
+        Storage::disk('local')->put('backups/sentinel_c/sentinel_c.sql.gz', 'gz!');
+        Sanctum::actingAs($this->superadmin);
+
+        $this->deleteJson("/api/admin/backups/{$b->id}")->assertOk();
+
+        $this->assertDirectoryDoesNotExist(Storage::disk('local')->path('backups/sentinel_c'));
+        $this->assertDirectoryExists(Storage::disk('local')->path('backups'));
+    }
+
     public function test_eliminar(): void
     {
         $b = $this->completado();

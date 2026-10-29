@@ -655,6 +655,7 @@ DB_PASSWORD=MasterKey
 - **No usa la cola a propósito:** `retry_after` (90 s) relanzaría en paralelo un volcado largo.
 - Volcado: `App\Contracts\VolcadorBaseDatos` → `MysqlDumpPhpVolcador` (druidfi/mysqldump-php, PHP puro). Las pruebas lo sustituyen por `Tests\Support\VolcadorFalso` porque corren en SQLite; la prueba real es `@group mysql` con `BACKUP_TEST_DB_*`.
 - Las claves `backups.*` de `SettingsService` están reservadas: el endpoint general `/admin/settings` (nivel admin) no las lee ni las escribe.
+- Cada respaldo se guarda en su propia carpeta `backups/{nombre sin .sql.gz}/{nombre}.sql.gz` (`DatabaseBackup::rutaRelativa()`; los sueltos anteriores se resuelven por compatibilidad). El servicio crea la carpeta con `chmod 02775` para que el usuario web pueda borrar su archivo.
 - Descarga: `POST admin/backups/{id}/download-url` → URL firmada **relativa** de 5 min a `GET api/backups/{id}/download` (`signed:relative`, sin Sanctum).
 - Guía de restauración y despliegue: `docs/respaldos.md`.
 

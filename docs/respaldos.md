@@ -5,7 +5,7 @@
 - El superadmin genera respaldos desde **/admin/backups** (Respaldos) y los descarga.
 - Hay un respaldo automático diario a la hora configurada, con retención de los últimos N.
 - Los manuales no se borran solos.
-- Archivos: `storage/app/private/backups/sentinel_YYYY-MM-DD_HHmmss_{manual|programado}_{id}.sql.gz`.
+- Archivos: cada respaldo vive en su propia carpeta, `storage/app/private/backups/sentinel_YYYY-MM-DD_HHmmss_{manual|programado}_{id}/sentinel_YYYY-MM-DD_HHmmss_{manual|programado}_{id}.sql.gz`. Los respaldos hechos antes de las carpetas siguen sueltos en `backups/` y el panel los encuentra igual; al eliminar un respaldo se quita también su carpeta.
 - Formato: SQL estándar comprimido (gzip), generado con `druidfi/mysqldump-php` en una sola transacción.
 - Incluye `DROP TABLE IF EXISTS`, triggers y rutinas.
 - `jobs`, `failed_jobs`, `job_batches`, `cache`, `cache_locks` y `sessions` van solo con estructura.
