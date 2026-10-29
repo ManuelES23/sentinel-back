@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\SplendidFarms\OperacionAgricola\Planeacion;
 
+use App\Models\Lote;
 use App\Models\Planeacion\ProgramaAcuerdo;
 use App\Models\Planeacion\ProgramaInventarioInicial;
 use App\Models\Planeacion\ProgramaRendimiento;
@@ -10,6 +11,7 @@ use App\Models\Planeacion\ProgramaViaje;
 use App\Models\Planeacion\RecetaCombinacion;
 use App\Models\Planeacion\RendimientoVariedad;
 use App\Models\Recipe;
+use App\Models\Temporada;
 use App\Services\Planeacion\ProgramaSemanalService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
@@ -446,6 +448,63 @@ class ProgramaSemanalTest extends TestCase
         $this->assertSame('Vallarta', $blanco['pedidos'][0]['cliente_nombre']);
         $this->assertSame(6584, $blanco['pedidos'][0]['cajas']);
         $this->assertCount(1, $blanco['pedidos']);
+    }
+
+    public function test_opciones_de_falta_solo_con_etapas_de_temporadas_de_la_semana(): void
+    {
+        $this->wk48();
+        $propia = $this->crearEtapa('Blanco', 4, ['fecha_cosecha_estimada' => '2026-11-30']);
+
+        // Otra temporada del elote, abierta, que empieza después del sábado: no toca WK48.
+        $bajio = Temporada::create([
+            'cultivo_id' => $this->cultivo->id,
+            'nombre' => 'Bajío 2026-2027',
+            'locacion' => 'Bajío',
+            'folio_temporada' => $this->cultivo->id.'-002',
+            'año_inicio' => 2026,
+            'año_fin' => 2027,
+            'fecha_inicio' => '2026-12-01',
+            'fecha_fin' => '2027-04-30',
+            'estado' => 'abierta',
+            'user_id' => $this->autor->id,
+        ]);
+        $lote = Lote::create([
+            'productor_id' => $this->lote->productor_id,
+            'zona_cultivo_id' => $this->lote->zona_cultivo_id,
+            'nombre' => 'La Loma',
+            'superficie' => 100,
+            'is_active' => true,
+        ]);
+        $bajio->lotes()->attach($lote->id, ['cultivo_id' => $this->cultivo->id, 'is_active' => true]);
+        $this->crearEtapa('Blanco', 5, ['lote_id' => $lote->id, 'fecha_cosecha_estimada' => '2026-12-02']);
+
+        $etapas = $this->semana('2026-11-23')->assertOk()->json("data.opciones_falta.{$this->idBlanco()}.etapas");
+
+        // Guardar un adelanto de la otra temporada daría 422: no se ofrece.
+        $this->assertSame([$propia->id], array_column($etapas, 'etapa_id'));
+        $this->assertSame([$this->temporada->id], array_column($etapas, 'temporada_id'));
+    }
+
+    public function test_opciones_de_falta_no_proponen_mas_cajas_de_las_movibles(): void
+    {
+        $p = $this->wk48();
+        $shapiro = $p->necesidades()->where('cliente_nombre', 'Shapiro')->firstOrFail();
+        $vallarta = $p->necesidades()->where('cliente_nombre', 'Vallarta')->firstOrFail();
+        // Shapiro pasa 1,000 cajas del jueves al miércoles: el miércoles tiene 1,000 efectivas, pero ninguna capturada.
+        ProgramaAcuerdo::create([
+            'programa_id' => $p->id, 'tipo' => 'mover_pedido', 'activo' => true, 'necesidad_id' => $shapiro->id,
+            'dia_origen' => 3, 'destino_lunes' => '2026-11-23', 'dia_destino' => 2, 'cajas' => 1000,
+        ]);
+        // Vallarta ya manda 2,000 del miércoles a WK49: le quedan 4,584 por mover.
+        ProgramaAcuerdo::create([
+            'programa_id' => $p->id, 'tipo' => 'mover_pedido', 'activo' => true, 'necesidad_id' => $vallarta->id,
+            'dia_origen' => 2, 'destino_lunes' => '2026-11-30', 'dia_destino' => 0, 'cajas' => 2000,
+        ]);
+
+        $blanco = $this->semana('2026-11-23')->assertOk()->json("data.opciones_falta.{$this->idBlanco()}");
+
+        $this->assertSame(2, $blanco['dia']);
+        $this->assertSame([['necesidad_id' => $vallarta->id, 'cliente_nombre' => 'Vallarta', 'cajas' => 4584]], $blanco['pedidos']);
     }
 
     public function test_adelantar_etapa_suma_produccion_y_cuenta_como_asignada(): void

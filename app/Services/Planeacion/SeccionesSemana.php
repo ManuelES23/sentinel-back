@@ -111,11 +111,24 @@ class SeccionesSemana
 
     /**
      * Para cada grupo con falta, en su primer día con falta: etapas de sus
-     * variedades que cosechan del domingo a 14 días después y que se podrían
-     * adelantar, y los pedidos más grandes de ese día que se podrían mover.
+     * variedades que cosechan del domingo a 14 días después, de una temporada
+     * abierta en esta semana, y que se podrían adelantar; y los pedidos más
+     * grandes de ese día que se podrían mover, con lo que todavía se puede
+     * mover (lo capturado menos lo que ya mueven otros acuerdos activos, el
+     * mismo tope que revisa el alta del acuerdo).
+     *
+     * @param  list<int>  $temporadasSemana  Ids de las temporadas abiertas que tocan la semana.
+     * @param  Collection<int, \App\Models\Planeacion\ProgramaAcuerdo>  $movimientos  «Mover pedido» activos de la semana.
      */
-    public function opcionesFalta(array $balance, array $necesidades, array $candidatas, string $desde, string $hasta): array
+    public function opcionesFalta(array $balance, array $necesidades, array $candidatas, string $desde, string $hasta, array $temporadasSemana, Collection $movimientos): array
     {
+        $temporadas = array_flip($temporadasSemana);
+        $yaMovidas = [];
+        foreach ($movimientos as $acuerdo) {
+            $llave = $acuerdo->necesidad_id.'|'.$acuerdo->dia_origen;
+            $yaMovidas[$llave] = ($yaMovidas[$llave] ?? 0) + (int) $acuerdo->cajas;
+        }
+
         $opciones = [];
         foreach ($balance as $clave => $g) {
             if ($g['estado'] !== 'falta') {
@@ -127,17 +140,24 @@ class SeccionesSemana
 
             $etapas = array_values(array_filter($candidatas, fn ($e) => $e['variedad_id'] !== null
                 && $this->catalogo->grupoDeVariedad($e['variedad_id']) === $clave
+                && isset($temporadas[$e['temporada_id']])
                 && $e['fecha_cosecha'] >= $desde
                 && $e['fecha_cosecha'] <= $hasta
                 && $e['ha_disponibles'] > 0));
 
             $pedidos = [];
             foreach ($necesidades as $renglon) {
-                if ($renglon['id'] > 0 && $renglon['grupo'] === $clave && $renglon['cajas'][$dia] > 0) {
+                if ($renglon['id'] <= 0 || $renglon['grupo'] !== $clave) {
+                    continue;
+                }
+                // Las efectivas pueden incluir lo que otro acuerdo trajo a este día: eso no se mueve.
+                $movibles = max(0, $renglon['base'][$dia] - ($yaMovidas[$renglon['id'].'|'.$dia] ?? 0));
+                $cajas = min($renglon['cajas'][$dia], $movibles);
+                if ($cajas > 0) {
                     $pedidos[] = [
                         'necesidad_id' => $renglon['id'],
                         'cliente_nombre' => $renglon['necesidad']->cliente_nombre,
-                        'cajas' => $renglon['cajas'][$dia],
+                        'cajas' => $cajas,
                     ];
                 }
             }

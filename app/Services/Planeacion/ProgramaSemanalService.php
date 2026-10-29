@@ -209,7 +209,11 @@ class ProgramaSemanalService
             'balance' => $balance,
             'empaque' => $this->secciones->empaque($necesidades),
             'logistica' => $this->secciones->logistica($necesidades, $viajes),
-            'opciones_falta' => $this->secciones->opcionesFalta($balance, $necesidades, $candidatas, $domingo, $hasta),
+            'opciones_falta' => $this->secciones->opcionesFalta(
+                $balance, $necesidades, $candidatas, $domingo, $hasta,
+                $temporadas->pluck('id')->map(fn ($id) => (int) $id)->all(),
+                $plan->acuerdosActivos('mover_pedido'),
+            ),
             'cambios' => $this->secciones->cambios($programa),
             'clientes_previos' => $this->secciones->clientesPrevios($lunes, $necesidades),
         ];
