@@ -42,8 +42,8 @@ class EmployeeController extends Controller
             $query->where('status', $request->status);
         }
 
-        // Búsqueda
-        if ($request->has('search')) {
+        // Búsqueda (cada palabra en cualquier campo: nombre completo, número, CURP, clave…)
+        if (is_string($request->search) && trim($request->search) !== '') {
             $query->search($request->search);
         }
 
@@ -52,10 +52,15 @@ class EmployeeController extends Controller
             $query->active();
         }
 
-        $query->orderBy('last_name')->orderBy('first_name');
+        // Eliminados (borrado lógico): no salen en la lista normal, pero siguen ocupando su CURP y su clave.
+        if ($request->boolean('eliminados', false)) {
+            $query->onlyTrashed();
+        }
 
-        // Paginación
-        $perPage = $request->get('per_page', 15);
+        $query->orderBy('last_name')->orderBy('first_name')->orderBy('id');
+
+        // Paginación (1 a 1000)
+        $perPage = is_numeric($request->get('per_page')) ? min(1000, max(1, (int) $request->get('per_page'))) : 15;
         $employees = $query->paginate($perPage);
 
         return response()->json([
@@ -76,10 +81,10 @@ class EmployeeController extends Controller
             'second_last_name' => 'nullable|string|max:100',
             'birth_date' => 'nullable|date|before:today',
             'gender' => 'nullable|in:male,female,other',
-            'curp' => 'nullable|string|size:18|unique:employees,curp',
+            'curp' => 'nullable|string|size:18',
             'rfc' => 'nullable|string|max:13',
             'nss' => 'nullable|string|max:11',
-            'checker_key' => 'nullable|string|max:50|unique:employees,checker_key',
+            'checker_key' => 'nullable|string|max:50',
             'email' => 'nullable|email|max:255',
             'phone' => 'nullable|string|max:20',
             'mobile' => 'nullable|string|max:20',
@@ -105,6 +110,10 @@ class EmployeeController extends Controller
             'notes' => 'nullable|string',
             'photo' => 'nullable|image|mimes:jpeg,jpg,png|max:2048',
         ]);
+
+        if ($duplicado = $this->duplicado($validated)) {
+            return $duplicado;
+        }
 
         // Generar número de empleado y códigos
         $validated['employee_number'] = Employee::generateEmployeeNumber($validated['enterprise_id']);
@@ -165,10 +174,10 @@ class EmployeeController extends Controller
             'second_last_name' => 'nullable|string|max:100',
             'birth_date' => 'nullable|date|before:today',
             'gender' => 'nullable|in:male,female,other',
-            'curp' => 'nullable|string|size:18|unique:employees,curp,' . $employee->id,
+            'curp' => 'nullable|string|size:18',
             'rfc' => 'nullable|string|max:13',
             'nss' => 'nullable|string|max:11',
-            'checker_key' => 'nullable|string|max:50|unique:employees,checker_key,' . $employee->id,
+            'checker_key' => 'nullable|string|max:50',
             'email' => 'nullable|email|max:255',
             'phone' => 'nullable|string|max:20',
             'mobile' => 'nullable|string|max:20',
@@ -196,6 +205,10 @@ class EmployeeController extends Controller
             'notes' => 'nullable|string',
             'photo' => 'nullable|image|mimes:jpeg,jpg,png|max:2048',
         ]);
+
+        if ($duplicado = $this->duplicado($validated, $employee->id)) {
+            return $duplicado;
+        }
 
         // No puede ser su propio supervisor
         if (isset($validated['reports_to']) && $validated['reports_to'] == $employee->id) {
@@ -240,6 +253,58 @@ class EmployeeController extends Controller
             'success' => true,
             'message' => 'Empleado eliminado exitosamente',
         ]);
+    }
+
+    /** Restaura un empleado eliminado (borrado lógico) con sus datos e historial; conserva su estado. */
+    public function restore(int $id): JsonResponse
+    {
+        $employee = Employee::onlyTrashed()->findOrFail($id);
+        $employee->restore();
+        $employee->load(['enterprise', 'department', 'position', 'supervisor']);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Empleado restaurado',
+            'data' => $employee,
+        ]);
+    }
+
+    /**
+     * CURP y clave de checador son únicas en la tabla, también contra los eliminados (el índice no
+     * distingue). Si ya las tiene otro, 422 con el nombre y número de quien la tiene y, en
+     * `existente`, si está eliminado (para ofrecer restaurarlo). La CURP se compara sin mayúsculas.
+     */
+    private function duplicado(array $datos, ?int $ignorarId = null): ?JsonResponse
+    {
+        $campos = ['curp' => 'La CURP', 'checker_key' => 'La clave de checador'];
+
+        foreach ($campos as $campo => $etiqueta) {
+            $valor = trim((string) ($datos[$campo] ?? ''));
+            if ($valor === '') {
+                continue;
+            }
+
+            $otro = Employee::withTrashed()
+                ->whereRaw("UPPER({$campo}) = ?", [mb_strtoupper($valor)])
+                ->when($ignorarId, fn ($q) => $q->whereKeyNot($ignorarId))
+                ->first();
+            if (! $otro) {
+                continue;
+            }
+
+            $eliminado = $otro->trashed();
+            $mensaje = "{$etiqueta} ya está registrada para {$otro->full_name} ({$otro->employee_number})."
+                .($eliminado ? ' Ese empleado está eliminado: restáuralo desde «Eliminados» en lugar de darlo de alta otra vez.' : '');
+
+            return response()->json([
+                'success' => false,
+                'message' => $mensaje,
+                'errors' => [$campo => [$mensaje]],
+                'existente' => ['id' => $otro->id, 'nombre' => $otro->full_name, 'numero' => $otro->employee_number, 'eliminado' => $eliminado],
+            ], 422);
+        }
+
+        return null;
     }
 
     /**

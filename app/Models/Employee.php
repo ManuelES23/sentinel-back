@@ -299,16 +299,26 @@ class Employee extends Model
         return $query->where('department_id', $departmentId);
     }
 
+    /**
+     * Cada palabra del texto debe aparecer en algún campo: así «Fernando Figueroa» encuentra a
+     * FERNANDO FRANCISCO / FIGUEROA VALENZUELA aunque los apellidos vengan juntos. `%` y `_` se
+     * buscan literalmente (ESCAPE '!', válido en MySQL y SQLite).
+     */
     public function scopeSearch($query, $term)
     {
-        return $query->where(function ($q) use ($term) {
-            $q->where('employee_number', 'like', "%{$term}%")
-              ->orWhere('first_name', 'like', "%{$term}%")
-              ->orWhere('last_name', 'like', "%{$term}%")
-              ->orWhere('email', 'like', "%{$term}%")
-                            ->orWhere('curp', 'like', "%{$term}%")
-                            ->orWhere('checker_key', 'like', "%{$term}%");
-        });
+        $palabras = preg_split('/\s+/u', trim((string) $term), -1, PREG_SPLIT_NO_EMPTY);
+        $campos = ['employee_number', 'first_name', 'last_name', 'second_last_name', 'email', 'curp', 'checker_key'];
+
+        foreach ($palabras as $palabra) {
+            $patron = '%'.str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $palabra).'%';
+            $query->where(function ($q) use ($campos, $patron) {
+                foreach ($campos as $campo) {
+                    $q->orWhereRaw("{$campo} LIKE ? ESCAPE '!'", [$patron]);
+                }
+            });
+        }
+
+        return $query;
     }
 
     // ==================== MÉTODOS ====================

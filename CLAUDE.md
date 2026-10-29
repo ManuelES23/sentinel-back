@@ -519,6 +519,12 @@ Despliegue de Organización en empresas nuevas (back antes que el front): `php a
 ## Acceso cruzado de entidades (cross-enterprise)
 Tabla pivot `enterprise_entity` (`enterprise_id`, `entity_id`, `access_level: read|write`) — permite que una empresa acceda a bodegas/plantas de otra. Ver `EntityAccessController` (Admin).
 
+## RH · Empleados (lista, búsqueda, duplicados)
+
+- `GET grupoesplendido/rh/empleados`: `search` divide el texto en palabras y cada una debe aparecer en algún campo (`Employee::scopeSearch`: número, nombre, apellido, segundo apellido, email, CURP, clave de checador; `%` y `_` literales con `ESCAPE '!'`). Así «Fernando Figueroa» encuentra a FERNANDO FRANCISCO / FIGUEROA VALENZUELA (los dos apellidos suelen venir juntos en `last_name`). `per_page` de 1 a 1000 (no numérico = 15); `eliminados=1` lista solo los borrados lógicos.
+- `POST empleados/{id}/restaurar` restaura un eliminado (404 si no lo está) con su estado de antes.
+- CURP y clave de checador son únicas en la tabla también contra los eliminados (índice único). Alta y edición ya no usan la regla `unique`: `EmployeeController::duplicado` responde 422 en español con quién la tiene («La CURP ya está registrada para Rosa Pérez (GE-0007).», más «Ese empleado está eliminado: restáuralo…» si aplica), `errors.{campo}` y `existente {id, nombre, numero, eliminado}`. La CURP se compara sin mayúsculas. Pruebas: `EmpleadosBusquedaYDuplicadosTest`.
+
 ## Vacaciones (RH Grupo Espléndido)
 
 - Reglas en `App\Services\RH\VacationRequestService` (crear, calcular, reprogramar, cancelar, aprobarPaso, rechazar, resolverComoRh). Lo usan `VacationController` (RH), `ProfileController` y `PendingApprovalController`; ningún controlador repite reglas. Las fallas lanzan `App\Exceptions\RH\VacacionesException` (se responde sola: 422 o 403).
