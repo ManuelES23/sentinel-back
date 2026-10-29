@@ -384,6 +384,22 @@ class CortesTest extends TestCase
         Event::assertDispatchedTimes(ProgramaSemanalUpdated::class, 4);
     }
 
+    public function test_repartir_en_varios_dias_emite_un_solo_evento(): void
+    {
+        Event::fake([ProgramaSemanalUpdated::class]);
+        $this->comoCapturista();
+        $etapa = $this->crearEtapa('Amarillo', 10);
+
+        $this->postJson($this->urlCortes(null, '/repartir'), [
+            'temporada_id' => $this->temporada->id,
+            'etapa_id' => $etapa->id,
+            'reparto' => [['dia' => 0, 'hectareas' => 2], ['dia' => 1, 'hectareas' => 2], ['dia' => 2, 'hectareas' => 2]],
+        ])->assertCreated();
+
+        $this->assertSame(3, ProgramaCorte::count());
+        Event::assertDispatchedTimes(ProgramaSemanalUpdated::class, 1);
+    }
+
     public function test_sin_permiso_capturar_corte_es_403(): void
     {
         Sanctum::actingAs($this->usuarioCon(['view', 'capturar-ventas']));

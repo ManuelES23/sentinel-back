@@ -350,6 +350,25 @@ class NecesidadesTest extends TestCase
         Event::assertDispatchedTimes(ProgramaSemanalUpdated::class, 3);
     }
 
+    public function test_copiar_semana_anterior_emite_un_solo_evento(): void
+    {
+        $this->comoVendedor();
+        $anterior = ProgramaSemanal::create(['lunes' => '2026-11-16']);
+        $this->cargarWk48($anterior); // 12 renglones
+        Event::fake([ProgramaSemanalUpdated::class]);
+
+        $this->postJson($this->url(null, '/copiar-anterior'))->assertOk()->assertJsonPath('data.copiadas', 12);
+
+        // Un aviso por programa y petición, no uno por renglón.
+        Event::assertDispatchedTimes(ProgramaSemanalUpdated::class, 1);
+        Event::assertDispatched(ProgramaSemanalUpdated::class, fn ($e) => $e->data['programa_id'] === $this->programa->id);
+
+        // La siguiente escritura vuelve a avisar.
+        $id = ProgramaNecesidad::where('programa_id', $this->programa->id)->value('id');
+        $this->putJson(self::BASE.'/necesidades/'.$id, ['dia' => 1, 'cajas' => 9])->assertOk();
+        Event::assertDispatchedTimes(ProgramaSemanalUpdated::class, 2);
+    }
+
     public function test_sin_permiso_capturar_ventas_es_403(): void
     {
         Sanctum::actingAs($this->usuarioCon(['view', 'capturar-corte']));
