@@ -93,7 +93,7 @@ class CortesTest extends TestCase
             'temporada_id' => $this->temporada->id, 'etapa_id' => $etapa->id, 'dia' => 1, 'hectareas' => 5,
         ])->assertUnprocessable()
             ->assertJsonValidationErrors('hectareas')
-            ->assertJsonPath('errors.hectareas.0', 'La etapa tiene 4.0 ha disponibles');
+            ->assertJsonPath('errors.hectareas.0', 'La etapa tiene 4.00 ha disponibles');
 
         $this->assertSame(1, ProgramaCorte::count());
 
@@ -101,6 +101,21 @@ class CortesTest extends TestCase
         $this->postJson($this->urlCortes($siguiente), [
             'temporada_id' => $this->temporada->id, 'etapa_id' => $etapa->id, 'dia' => 1, 'hectareas' => 4,
         ])->assertCreated();
+    }
+
+    public function test_mensaje_de_ha_disponibles_usa_dos_decimales(): void
+    {
+        $this->comoCapturista();
+        $etapa = $this->crearEtapa('Amarillo', 10);
+        $this->corte($this->programa, 'Amarillo', 0, 2.15, $etapa);
+        $base = ['temporada_id' => $this->temporada->id, 'etapa_id' => $etapa->id, 'dia' => 1];
+
+        // Con 1 decimal diría 7.9 y escribir 7.9 volvería a dar 422.
+        $this->postJson($this->urlCortes(), $base + ['hectareas' => 7.9])
+            ->assertUnprocessable()
+            ->assertJsonPath('errors.hectareas.0', 'La etapa tiene 7.85 ha disponibles');
+
+        $this->postJson($this->urlCortes(), $base + ['hectareas' => 7.85])->assertCreated();
     }
 
     public function test_editar_un_corte_no_cuenta_sus_propias_hectareas(): void
@@ -121,7 +136,7 @@ class CortesTest extends TestCase
 
         $this->putJson(self::BASE.'/cortes/'.$corte->id, [
             'temporada_id' => $this->temporada->id, 'etapa_id' => $etapa->id, 'dia' => 2, 'hectareas' => 10.5,
-        ])->assertUnprocessable()->assertJsonPath('errors.hectareas.0', 'La etapa tiene 10.0 ha disponibles');
+        ])->assertUnprocessable()->assertJsonPath('errors.hectareas.0', 'La etapa tiene 10.00 ha disponibles');
     }
 
     public function test_corte_sin_etapa_requiere_variedad_del_cultivo(): void
@@ -207,7 +222,7 @@ class CortesTest extends TestCase
 
         // La suma (11) rebasa las 10 ha aunque cada parte quepa sola.
         $this->postJson($this->urlCortes(null, '/repartir'), $datos([['dia' => 0, 'hectareas' => 6], ['dia' => 1, 'hectareas' => 5]]))
-            ->assertUnprocessable()->assertJsonPath('errors.hectareas.0', 'La etapa tiene 10.0 ha disponibles');
+            ->assertUnprocessable()->assertJsonPath('errors.hectareas.0', 'La etapa tiene 10.00 ha disponibles');
         $this->assertSame(0, ProgramaCorte::count());
 
         $this->postJson($this->urlCortes(null, '/repartir'), $datos([['dia' => 0, 'hectareas' => 6], ['dia' => 1, 'hectareas' => 4]]))

@@ -326,7 +326,7 @@ class ProgramaAcuerdoController extends Controller
 
         if (round($hectareas, 2) - $disponibles > 0.004) {
             throw ValidationException::withMessages([
-                'hectareas' => 'La etapa tiene '.number_format(max(0.0, $disponibles), 1, '.', '').' ha disponibles',
+                'hectareas' => 'La etapa tiene '.number_format(max(0.0, $disponibles), 2, '.', '').' ha disponibles',
             ]);
         }
     }

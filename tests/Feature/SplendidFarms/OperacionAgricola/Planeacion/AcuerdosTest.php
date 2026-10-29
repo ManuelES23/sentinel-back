@@ -141,7 +141,7 @@ class AcuerdosTest extends TestCase
 
         $this->postJson($this->url(), $this->adelanto($etapa, ['hectareas' => 4.5]))
             ->assertUnprocessable()
-            ->assertJsonPath('errors.hectareas.0', 'La etapa tiene 4.0 ha disponibles');
+            ->assertJsonPath('errors.hectareas.0', 'La etapa tiene 4.00 ha disponibles');
 
         // Un corte de la etapa en WK49 cuenta contra el adelanto.
         $wk49 = ProgramaSemanal::create(['lunes' => '2026-11-30']);
@@ -150,10 +150,24 @@ class AcuerdosTest extends TestCase
         $this->postJson($this->url(), $this->adelanto($etapa, ['hectareas' => 2]))->assertCreated();
         $this->postJson($this->url(), $this->adelanto($etapa, ['hectareas' => 1]))
             ->assertUnprocessable()
-            ->assertJsonPath('errors.hectareas.0', 'La etapa tiene 0.5 ha disponibles');
+            ->assertJsonPath('errors.hectareas.0', 'La etapa tiene 0.50 ha disponibles');
         $this->postJson($this->url(), $this->adelanto($etapa, ['hectareas' => 0.5]))->assertCreated();
 
         $this->assertSame(2, ProgramaAcuerdo::count());
+    }
+
+    public function test_mensaje_de_ha_disponibles_del_adelanto_usa_dos_decimales(): void
+    {
+        $this->comoJunta();
+        $etapa = $this->etapaWk49(10);
+        $wk49 = ProgramaSemanal::create(['lunes' => '2026-11-30']);
+        $this->corte($wk49, 'Blanco', 0, 2.15, $etapa);
+
+        $this->postJson($this->url(), $this->adelanto($etapa, ['hectareas' => 7.9]))
+            ->assertUnprocessable()
+            ->assertJsonPath('errors.hectareas.0', 'La etapa tiene 7.85 ha disponibles');
+
+        $this->postJson($this->url(), $this->adelanto($etapa, ['hectareas' => 7.85]))->assertCreated();
     }
 
     public function test_adelantar_etapa_de_esta_semana_es_422(): void
@@ -418,7 +432,7 @@ class AcuerdosTest extends TestCase
 
         $this->patchJson($this->urlActivo($id), ['activo' => true])
             ->assertUnprocessable()
-            ->assertJsonPath('errors.hectareas.0', 'La etapa tiene 2.0 ha disponibles');
+            ->assertJsonPath('errors.hectareas.0', 'La etapa tiene 2.00 ha disponibles');
         $this->assertFalse(ProgramaAcuerdo::findOrFail($id)->activo);
         $this->assertSame(-2893, $this->blanco()['final']);
 
