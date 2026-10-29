@@ -350,6 +350,33 @@ class NecesidadesTest extends TestCase
         Event::assertDispatchedTimes(ProgramaSemanalUpdated::class, 3);
     }
 
+    public function test_semana_sin_temporada_abierta_del_cultivo_es_422(): void
+    {
+        $this->comoVendedor();
+        // WK47: la temporada OI empieza el 23 nov.
+        $wk47 = ProgramaSemanal::create(['lunes' => '2026-11-16']);
+        $mensaje = 'El cultivo no tiene una temporada abierta en esta semana.';
+
+        $this->postJson($this->url($wk47), $this->datos())
+            ->assertUnprocessable()
+            ->assertJsonPath('errors.presentacion_id.0', $mensaje);
+
+        // Un renglón que ya estaba ahí tampoco se edita.
+        $viejo = $this->necesidad($wk47, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [1, 0, 0, 0, 0, 0]);
+        $this->putJson(self::BASE.'/necesidades/'.$viejo->id, ['dia' => 0, 'cajas' => 5])->assertUnprocessable();
+        $this->putJson(self::BASE.'/necesidades/'.$viejo->id, ['cajas' => [5, 0, 0, 0, 0, 0]])->assertUnprocessable();
+        $this->assertSame(1, $viejo->fresh()->cajas_0);
+
+        // Copiar la WK46 a la WK47 tampoco.
+        $wk46 = ProgramaSemanal::create(['lunes' => '2026-11-09']);
+        $this->necesidad($wk46, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [1, 0, 0, 0, 0, 0]);
+        $viejo->delete();
+        $this->postJson($this->url($wk47, '/copiar-anterior'))
+            ->assertUnprocessable()
+            ->assertJsonPath('errors.semana.0', $mensaje);
+        $this->assertSame(0, ProgramaNecesidad::where('programa_id', $wk47->id)->count());
+    }
+
     public function test_copiar_semana_anterior_emite_un_solo_evento(): void
     {
         $this->comoVendedor();

@@ -45,6 +45,7 @@ class ProgramaNecesidadController extends Controller
         $this->exigirPermiso('capturar-ventas');
 
         $datos = $this->validarCompleto($request, $servicio);
+        $this->exigirTemporadaAbierta($programa, $datos['cultivo_id'], $servicio);
 
         $necesidad = DB::transaction(function () use ($programa, $datos, $registro) {
             $necesidad = ProgramaNecesidad::create($this->atributos($datos) + [
@@ -88,6 +89,7 @@ class ProgramaNecesidadController extends Controller
             $datos = $request->validate($this->reglasCajas());
             $modo = 'cajas';
         }
+        $this->exigirTemporadaAbierta($programa, $modo === 'completo' ? $datos['cultivo_id'] : (int) $necesidad->cultivo_id, $servicio);
 
         DB::transaction(function () use ($necesidad, $programa, $datos, $modo, $registro) {
             // Se relee con bloqueo: dos celdas editadas a la vez no se pisan.
@@ -159,13 +161,14 @@ class ProgramaNecesidadController extends Controller
 
     /**
      * Copia los renglones de la semana anterior (la que empieza 7 días antes)
-     * con sus cajas y variedades. Solo si esta semana aún no tiene renglones.
+     * con sus cajas y variedades. Solo si esta semana aún no tiene renglones
+     * y si cada cultivo copiado tiene una temporada abierta en esta semana.
      */
-    public function copiarAnterior(ProgramaSemanal $programa, RegistroCambiosPrograma $registro): JsonResponse
+    public function copiarAnterior(ProgramaSemanal $programa, ProgramaSemanalService $servicio, RegistroCambiosPrograma $registro): JsonResponse
     {
         $this->exigirPermiso('capturar-ventas');
 
-        $copiadas = DB::transaction(function () use ($programa, $registro) {
+        $copiadas = DB::transaction(function () use ($programa, $servicio, $registro) {
             // Se bloquea el programa para que dos copias a la vez no dupliquen renglones.
             ProgramaSemanal::whereKey($programa->id)->lockForUpdate()->value('id');
 
@@ -180,6 +183,9 @@ class ProgramaNecesidadController extends Controller
                 : collect();
             if ($origen->isEmpty()) {
                 throw ValidationException::withMessages(['semana' => 'La semana anterior no tiene necesidades']);
+            }
+            foreach ($origen->pluck('cultivo_id')->unique() as $cultivoId) {
+                $this->exigirTemporadaAbierta($programa, (int) $cultivoId, $servicio, 'semana');
             }
 
             foreach ($origen as $o) {
@@ -264,6 +270,18 @@ class ProgramaNecesidadController extends Controller
             'variedad_ids' => $variedadIds,
             'cajas' => array_map('intval', array_values($datos['cajas'])),
         ];
+    }
+
+    /**
+     * El cultivo del renglón debe tener una temporada abierta que toque la
+     * semana (como en los viajes): una necesidad en una semana sin producción
+     * arrastraría su negativo al inventario inicial de las siguientes.
+     */
+    private function exigirTemporadaAbierta(ProgramaSemanal $programa, int $cultivoId, ProgramaSemanalService $servicio, string $campo = 'presentacion_id'): void
+    {
+        if (! $servicio->temporadasDeSemana($programa)->contains(fn ($t) => (int) $t->cultivo_id === $cultivoId)) {
+            throw ValidationException::withMessages([$campo => 'El cultivo no tiene una temporada abierta en esta semana.']);
+        }
     }
 
     /** Nombre del cliente del CRM de Splendid by Porvenir; 422 si no es de esa empresa. */
