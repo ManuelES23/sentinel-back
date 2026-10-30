@@ -188,19 +188,23 @@ class OportunidadController extends CrmBaseController
         $conProductos = CrmConfiguracionComercial::productosEnOportunidad($empresaId);
 
         $validated = $request->validate([
-            'cliente_id' => ['nullable', 'integer', 'required_without:prospecto_id', 'prohibits:prospecto_id', $this->existeEnEmpresa('crm_clientes', $empresaId)],
-            'prospecto_id' => ['nullable', 'integer', $this->existeEnEmpresa('crm_prospectos', $empresaId)],
+            'cliente_id' => ['nullable', 'integer', 'required_without:prospecto_id', 'prohibits:prospecto_id', $this->existeEnEmpresa('crm_clientes', $empresaId)->whereNull('deleted_at')],
+            'prospecto_id' => ['nullable', 'integer', $this->existeEnEmpresa('crm_prospectos', $empresaId)->whereNull('deleted_at')],
             'vendedor_id' => ['nullable', 'integer'],
             'monto_esperado' => 'nullable|numeric|min:0|max:'.CrmOportunidad::MONTO_MAXIMO,
             'tipo_producto' => $this->apertura->reglasTipoProducto($empresaId, $conProductos),
         ], [
             'cliente_id.required_without' => 'Elige un cliente o un prospecto.',
             'cliente_id.prohibits' => 'Elige un cliente o un prospecto, no los dos.',
+            'cliente_id.exists' => 'El cliente no existe o fue eliminado.',
+            'prospecto_id.exists' => 'El prospecto no existe o fue eliminado.',
         ]);
 
         $entidad = isset($validated['cliente_id'])
             ? CrmCliente::where('empresa_id', $empresaId)->find($validated['cliente_id'])
             : CrmProspecto::where('empresa_id', $empresaId)->find($validated['prospecto_id']);
+        // Red de seguridad: la validación ya excluye lo eliminado, pero una carrera no debe terminar en 500.
+        abort_unless($entidad, 404, 'El cliente o prospecto no existe o fue eliminado.');
 
         $oportunidad = DB::transaction(fn () => $this->apertura->abrir(
             $empresaId,

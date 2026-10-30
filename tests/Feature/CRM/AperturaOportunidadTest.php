@@ -159,6 +159,23 @@ class AperturaOportunidadTest extends TestCase
         $this->rapida(['cliente_id' => $ajeno->id])->assertStatus(422)->assertJsonValidationErrors('cliente_id');
     }
 
+    public function test_cliente_o_prospecto_eliminado_responde_422_sin_crear_nada(): void
+    {
+        $this->permisos();
+        $prospecto = $this->prospecto();
+        $this->cliente->delete();
+        $prospecto->delete();
+
+        $this->rapida(['cliente_id' => $this->cliente->id])
+            ->assertStatus(422)
+            ->assertJsonPath('errors.cliente_id.0', 'El cliente no existe o fue eliminado.');
+        $this->rapida(['prospecto_id' => $prospecto->id])
+            ->assertStatus(422)
+            ->assertJsonPath('errors.prospecto_id.0', 'El prospecto no existe o fue eliminado.');
+
+        $this->assertSame(0, CrmOportunidad::count());
+    }
+
     public function test_tipo_producto_sigue_la_regla_de_commodities(): void
     {
         $this->permisos();
