@@ -9,7 +9,7 @@ use Illuminate\Broadcasting\PrivateChannel;
  *
  * El canal es fijo, no sale de las cabeceras `X-*`: el programa solo existe en
  * Splendid Farms y el front escucha en el módulo `planeacion` de
- * `operacion-agricola` (lo autoriza `ModuleChannel`).
+ * `administration` (lo autoriza `ModuleChannel`).
  *
  * El payload es mínimo a propósito (Reverb rechaza mensajes de más de 10 KB):
  * `data.lunes` y `data.programa_id`. El front, si es su semana, vuelve a pedir
@@ -18,7 +18,7 @@ use Illuminate\Broadcasting\PrivateChannel;
 class ProgramaSemanalUpdated extends ModelBroadcastEvent
 {
     public const ENTERPRISE = 'splendidfarms';
-    public const APPLICATION = 'operacion-agricola';
+    public const APPLICATION = 'administration';
     public const MODULO = 'planeacion';
 
     public function __construct(string $lunes, int $programaId)

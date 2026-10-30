@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\Concerns;
+namespace App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\Concerns;
 
 use App\Models\Enterprise;
 use App\Models\UserSubmodulePermission;
@@ -8,7 +8,7 @@ use App\Support\PermisoSubmodulo;
 use Illuminate\Support\Facades\Auth;
 
 /**
- * Permisos del submódulo Splendid Farms → Operación agrícola → Planeación →
+ * Permisos del submódulo Splendid Farms → Administración → Planeación →
  * Programa semanal. Cada endpoint exige el suyo (view, capturar-corte,
  * capturar-ventas, capturar-logistica, acuerdos, configurar).
  */
@@ -42,7 +42,7 @@ trait PermisoProgramaSemanal
     protected function exigirPermiso(string $permiso): void
     {
         abort_unless(
-            PermisoSubmodulo::tiene(Auth::id(), $this->empresaSf(), 'operacion-agricola', 'planeacion', 'programa-semanal', $permiso),
+            PermisoSubmodulo::tiene(Auth::id(), $this->empresaSf(), 'administration', 'planeacion', 'programa-semanal', $permiso),
             403,
             self::MENSAJE_SIN_PERMISO,
         );
@@ -58,7 +58,7 @@ trait PermisoProgramaSemanal
     {
         $salida = array_fill_keys(array_values(self::PERMISOS_PROGRAMA), false);
 
-        $submodulo = PermisoSubmodulo::submodulo($this->empresaSf(), 'operacion-agricola', 'planeacion', 'programa-semanal');
+        $submodulo = PermisoSubmodulo::submodulo($this->empresaSf(), 'administration', 'planeacion', 'programa-semanal');
         if (! $submodulo || ! Auth::id()) {
             return $salida;
         }

@@ -1,6 +1,6 @@
 <?php
 
-namespace Tests\Feature\SplendidFarms\OperacionAgricola\Planeacion;
+namespace Tests\Feature\SplendidFarms\Administration\Planeacion;
 
 use App\Models\Application;
 use App\Models\Cultivo;
@@ -138,7 +138,7 @@ trait ConstruyePrograma
 
     /**
      * Usuario con los permisos indicados (slugs de submodule_permission_types)
-     * sobre Splendid Farms → Operación agrícola → Planeación → Programa semanal.
+     * sobre Splendid Farms → Administración → Planeación → Programa semanal.
      *
      * @param  string[]  $permisos
      */
@@ -149,7 +149,12 @@ trait ConstruyePrograma
             ['slug' => 'operacion-agricola', 'enterprise_id' => $empresaId],
             ['name' => 'Operación Agrícola', 'description' => 'Operaciones agrícolas', 'icon' => 'Tractor', 'path' => '/splendidfarms/operacion-agricola', 'is_active' => true],
         );
-        $this->correrMigracion('2026_10_28_100200_add_planeacion_programa_semanal_submodule.php');
+        // La migración del submódulo crea en Operación Agrícola y la siguiente lo pasa a
+        // Administración; correrla otra vez dejaría un segundo módulo en la aplicación vieja.
+        if (! DB::table('modules')->where('slug', 'planeacion')->exists()) {
+            $this->correrMigracion('2026_10_28_100200_add_planeacion_programa_semanal_submodule.php');
+            $this->correrMigracion('2026_10_30_100000_mover_planeacion_a_administracion.php');
+        }
 
         $submoduloId = DB::table('submodules')->where('slug', 'programa-semanal')->value('id');
         $usuario = User::factory()->create();

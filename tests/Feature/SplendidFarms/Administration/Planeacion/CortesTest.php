@@ -1,6 +1,6 @@
 <?php
 
-namespace Tests\Feature\SplendidFarms\OperacionAgricola\Planeacion;
+namespace Tests\Feature\SplendidFarms\Administration\Planeacion;
 
 use App\Events\ProgramaSemanalUpdated;
 use App\Models\Cultivo;
@@ -25,7 +25,7 @@ class CortesTest extends TestCase
     use ConstruyePrograma;
     use RefreshDatabase;
 
-    private const BASE = '/api/splendidfarms/operacion-agricola/planeacion';
+    private const BASE = '/api/splendidfarms/administration/planeacion';
 
     private ProgramaSemanal $programa;
 

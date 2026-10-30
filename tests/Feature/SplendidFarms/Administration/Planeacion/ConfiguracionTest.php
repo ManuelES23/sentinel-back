@@ -1,6 +1,6 @@
 <?php
 
-namespace Tests\Feature\SplendidFarms\OperacionAgricola\Planeacion;
+namespace Tests\Feature\SplendidFarms\Administration\Planeacion;
 
 use App\Events\ProgramaSemanalUpdated;
 use App\Models\CRM\CrmCliente;
@@ -34,7 +34,7 @@ class ConfiguracionTest extends TestCase
     use ConstruyePrograma;
     use RefreshDatabase;
 
-    private const URL = '/api/splendidfarms/operacion-agricola/planeacion';
+    private const URL = '/api/splendidfarms/administration/planeacion';
 
     protected function setUp(): void
     {
