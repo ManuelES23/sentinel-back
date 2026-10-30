@@ -244,6 +244,14 @@ Despliegue de Organización en empresas nuevas (back antes que el front): `php a
 - El front pide como máximo 200 (`OportunidadFormModal`), así que ninguna pantalla existente cambia.
 - `SincronizarDialpadCommand` solo busca la entidad por teléfono (`resolverEntidad`, 3 consultas) al crear la actividad, no al re-sincronizar una llamada que ya existe.
 
+## CRM · Monto de la oportunidad y cotizaciones
+
+- Con `productos_en_oportunidad = false` la cotización reemplaza al estimado: `MontoOportunidadService` (`alGuardar`, `alRechazar`, `alAprobar`) lo llama `CotizacionController` dentro de la transacción y con la oportunidad bloqueada (`lockForUpdate`). El monto es `CrmCotizacion::baseConDescuento()` (base tras descuento, sin impuestos). Con `true` el monto sigue saliendo de las líneas de la oportunidad y el servicio no hace nada.
+- Abierta: guardar/editar toma el monto; rechazar vuelve a la más reciente vigente (ni rechazada ni superada). Ganada: un borrador no cambia el monto, aprobar sí (flujo «superado», que conserva `fecha_cierre_real` y `estado_cobro`). Perdida: no cambia. Guardar una cotización nunca cambia la etapa.
+- `PUT crm/oportunidades` solo acepta un `monto_esperado` distinto en oportunidades abiertas cuyo monto no venga de una cotización; si no, 422 en `monto_esperado` (el mismo valor al centavo se ignora).
+- `CrmOportunidad::montoOrigen()` (`cotizacion` con folio, `estimado`, `sin_monto`) es la fuente única; sale como `monto_origen` vía `conMontoOrigen()` (listado, detalle, alta, edición, cambio de etapa y eventos). `RELACIONES_API` carga `cotizaciones` con columnas mínimas para no hacer una consulta por fila, y `conMontoOrigen()` la oculta del JSON.
+- Una cotización cuya base o total con impuestos pase de `CrmOportunidad::MONTO_MAXIMO` responde 422 antes de escribir nada.
+
 ## CRM · Visibilidad de oportunidades, agenda y cotizaciones
 
 ### Oportunidades

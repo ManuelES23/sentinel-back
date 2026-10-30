@@ -5,11 +5,13 @@ namespace App\Http\Controllers\Api\CRM;
 use App\Events\CRM\CotizacionUpdated;
 use App\Events\CRM\OportunidadUpdated;
 use App\Models\CRM\CrmConfiguracionComercial;
+use App\Models\CRM\CrmConfiguracionImpuesto;
 use App\Models\CRM\CrmCotizacion;
 use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmOportunidadProducto;
 use App\Models\CRM\CrmProducto;
 use App\Services\CRM\CotizacionCalculoService;
+use App\Services\CRM\MontoOportunidadService;
 use App\Services\CRM\VisibilidadOportunidades;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
@@ -39,6 +41,7 @@ class CotizacionController extends CrmBaseController
 
     public function __construct(
         private readonly CotizacionCalculoService $calculo,
+        private readonly MontoOportunidadService $monto,
         private readonly VisibilidadOportunidades $visibilidad,
     ) {}
 
@@ -136,7 +139,16 @@ class CotizacionController extends CrmBaseController
             return $this->jsonError('Esta empresa no tiene habilitado el descuento global en cotizaciones.', 422);
         }
 
-        $cotizacion = DB::transaction(function () use ($validated, $oportunidad, $empresaId, $descuento) {
+        // Antes de escribir nada: lo que no cabe en las columnas responde 422, no 500.
+        $excede = $this->mensajeSiExcedeElLimite($validated['lineas'], (float) $descuento, $empresaId);
+        if ($excede !== null) {
+            return $this->jsonError($excede, 422);
+        }
+
+        [$cotizacion, $oportunidad] = DB::transaction(function () use ($validated, $oportunidad, $empresaId, $descuento) {
+            // Bloquea la oportunidad antes de leer o cambiar su monto.
+            $oportunidad = CrmOportunidad::whereKey($oportunidad->id)->lockForUpdate()->firstOrFail();
+
             $cotizacion = CrmCotizacion::create([
                 'empresa_id' => $empresaId,
                 'oportunidad_id' => $oportunidad->id,
@@ -160,9 +172,13 @@ class CotizacionController extends CrmBaseController
                 ]);
             }
 
-            return $this->calculo->recalcular($cotizacion);
+            $cotizacion = $this->calculo->recalcular($cotizacion);
+            $this->monto->alGuardar($oportunidad, $cotizacion);
+
+            return [$cotizacion, $oportunidad];
         });
 
+        $this->difundirMontoSiCambio($oportunidad);
         $this->difundir(new CotizacionUpdated('created', $cotizacion->toArray()));
 
         return $this->jsonSuccess($cotizacion, 'Cotización creada correctamente', 201);
@@ -204,7 +220,16 @@ class CotizacionController extends CrmBaseController
             return $this->jsonError('Esta empresa no tiene habilitado el descuento global en cotizaciones.', 422);
         }
 
-        $cotizacion = DB::transaction(function () use ($validated, $cotizacion, $empresaId, $descuentoNuevo) {
+        $lineasFinales = $validated['lineas'] ?? $cotizacion->lineas()->get(['cantidad', 'precio_unitario'])->toArray();
+        $excede = $this->mensajeSiExcedeElLimite($lineasFinales, $descuentoNuevo, $empresaId);
+        if ($excede !== null) {
+            return $this->jsonError($excede, 422);
+        }
+
+        [$cotizacion, $oportunidad] = DB::transaction(function () use ($validated, $cotizacion, $empresaId, $descuentoNuevo) {
+            // Bloquea la oportunidad (si sigue existiendo) antes de tocar su monto.
+            $oportunidad = CrmOportunidad::whereKey($cotizacion->oportunidad_id)->lockForUpdate()->first();
+
             $datos = collect($validated)->except(['lineas', 'descuento_global_pct'])->all();
             $datos['descuento_global_pct'] = $descuentoNuevo;
             $cotizacion->update($datos);
@@ -224,9 +249,15 @@ class CotizacionController extends CrmBaseController
                 }
             }
 
-            return $this->calculo->recalcular($cotizacion);
+            $cotizacion = $this->calculo->recalcular($cotizacion);
+            if ($oportunidad) {
+                $this->monto->alGuardar($oportunidad, $cotizacion);
+            }
+
+            return [$cotizacion, $oportunidad];
         });
 
+        $this->difundirMontoSiCambio($oportunidad);
         $this->difundir(new CotizacionUpdated('updated', $cotizacion->toArray()));
 
         return $this->jsonSuccess($cotizacion, 'Cotización actualizada correctamente');
@@ -257,8 +288,20 @@ class CotizacionController extends CrmBaseController
         if ($cotizacion->estado !== 'enviado') {
             return $this->jsonError('Solo una cotización enviada se puede rechazar.', 422);
         }
-        $cotizacion->update(['estado' => 'rechazado']);
 
+        $oportunidad = DB::transaction(function () use ($cotizacion) {
+            // Bloquea la oportunidad (si sigue existiendo) antes de tocar su monto.
+            $oportunidad = CrmOportunidad::whereKey($cotizacion->oportunidad_id)->lockForUpdate()->first();
+
+            $cotizacion->update(['estado' => 'rechazado']);
+            if ($oportunidad) {
+                $this->monto->alRechazar($oportunidad);
+            }
+
+            return $oportunidad;
+        });
+
+        $this->difundirMontoSiCambio($oportunidad);
         $this->difundir(new CotizacionUpdated('updated', $cotizacion->toArray()));
 
         return $this->jsonSuccess($cotizacion, 'Cotización rechazada');
@@ -306,9 +349,16 @@ class CotizacionController extends CrmBaseController
 
             $cotizacion->update(['estado' => 'aprobado']);
 
+            // Si ya estaba ganada («superado») la venta conserva su fecha de
+            // cierre, para que no cambie de mes; el estado de cobro tampoco se toca.
+            $yaGanada = $oportunidad->etapa === 'cerrado_ganado';
             $oportunidad->etapa = 'cerrado_ganado';
-            $oportunidad->fecha_cierre_real = now();
+            if (! $yaGanada) {
+                $oportunidad->fecha_cierre_real = now();
+            }
             $oportunidad->save();
+
+            $this->monto->alAprobar($oportunidad, $cotizacion);
 
             return $oportunidad;
         });
@@ -322,11 +372,54 @@ class CotizacionController extends CrmBaseController
 
         // El tablero Kanban se alimenta de este canal: sin este broadcast la
         // tarjeta no se movería a "cerrado ganado" hasta un refresh manual.
-        $this->difundir(new OportunidadUpdated('updated', $oportunidad->load(CrmOportunidad::RELACIONES_API)->toArray()));
+        $this->difundirOportunidad($oportunidad);
 
         $this->difundir(new CotizacionUpdated('updated', $cotizacion->fresh()->toArray()));
 
         return $this->jsonSuccess($cotizacion->fresh(), 'Cotización aprobada — la oportunidad se cerró como ganada');
+    }
+
+    /** Difunde la oportunidad con su forma de API (incluye `monto_origen`). */
+    private function difundirOportunidad(CrmOportunidad $oportunidad): void
+    {
+        $this->difundir(new OportunidadUpdated(
+            'updated',
+            $oportunidad->load(CrmOportunidad::RELACIONES_API)->conMontoOrigen()->toArray()
+        ));
+    }
+
+    /** El tablero muestra el monto: si la cotización lo movió, se avisa. */
+    private function difundirMontoSiCambio(?CrmOportunidad $oportunidad): void
+    {
+        if ($oportunidad?->wasChanged('monto_esperado')) {
+            $this->difundirOportunidad($oportunidad);
+        }
+    }
+
+    /**
+     * Mensaje de error si la cotización no cabe en las columnas decimal(12,2)
+     * (subtotal, base o total con impuestos); null si cabe. Se evalúa antes de
+     * escribir para responder 422 en lugar de un 500 de MySQL estricto.
+     *
+     * @param  iterable<int, array{cantidad: mixed, precio_unitario: mixed}>  $lineas
+     */
+    private function mensajeSiExcedeElLimite(iterable $lineas, float $descuento, int $empresaId): ?string
+    {
+        $subtotal = 0.0;
+        foreach ($lineas as $linea) {
+            $subtotal += round((float) $linea['cantidad'], 4) * round((float) $linea['precio_unitario'], 2);
+        }
+        $subtotal = round($subtotal, 2);
+        $base = round($subtotal * (1 - $descuento / 100), 2);
+
+        $tasas = (float) CrmConfiguracionImpuesto::where('empresa_id', $empresaId)->activos()->sum('tasa');
+        $total = round($base * (1 + $tasas / 100), 2);
+
+        if ($subtotal > CrmOportunidad::MONTO_MAXIMO || $total > CrmOportunidad::MONTO_MAXIMO) {
+            return 'El total de la cotización excede el máximo permitido.';
+        }
+
+        return null;
     }
 
     /**

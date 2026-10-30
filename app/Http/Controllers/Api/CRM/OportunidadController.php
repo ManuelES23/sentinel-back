@@ -27,9 +27,6 @@ class OportunidadController extends CrmBaseController
 
     private const RELACIONES = CrmOportunidad::RELACIONES_API;
 
-    /** Máximo que cabe en monto_esperado (decimal(12,2)). */
-    private const MONTO_MAXIMO = 9999999999.99;
-
     public function __construct(
         private readonly VisibilidadOportunidades $visibilidad,
         private readonly OportunidadProductosService $productos,
@@ -57,6 +54,8 @@ class OportunidadController extends CrmBaseController
 
         $perPage = $this->perPage($request, 100);
         $paginated = $query->paginate($perPage);
+        // Las cotizaciones ya vienen cargadas (RELACIONES): sin consulta por fila.
+        $paginated->getCollection()->each->conMontoOrigen();
 
         return $this->jsonPaginated($paginated);
     }
@@ -94,7 +93,7 @@ class OportunidadController extends CrmBaseController
     {
         $this->verificarEmpresa($oportunidad);
         $this->visibilidad->exigirVisible((int) $oportunidad->empresa_id, $oportunidad);
-        $oportunidad->load(self::RELACIONES);
+        $oportunidad->load(self::RELACIONES)->conMontoOrigen();
 
         return $this->jsonSuccess($oportunidad);
     }
@@ -156,7 +155,7 @@ class OportunidadController extends CrmBaseController
 
             return $oportunidad;
         });
-        $oportunidad->load(self::RELACIONES);
+        $oportunidad->load(self::RELACIONES)->conMontoOrigen();
 
         $this->difundir(new OportunidadUpdated('created', $oportunidad->toArray()));
 
@@ -205,6 +204,15 @@ class OportunidadController extends CrmBaseController
         }
         unset($validated['productos']);
 
+        if (! $conProductos && array_key_exists('monto_esperado', $validated)) {
+            if (round((float) $validated['monto_esperado'], 2) === round((float) $oportunidad->monto_esperado, 2)) {
+                // Mismo valor al centavo: no es un cambio, no se escribe.
+                unset($validated['monto_esperado']);
+            } else {
+                $this->exigirMontoEditable($oportunidad);
+            }
+        }
+
         // Reasignar a otro vendedor es decisión de gerencia: sin equipo solo
         // se acepta el vendedor propio (el actual, porque solo edita las suyas).
         abort_if(
@@ -232,7 +240,7 @@ class OportunidadController extends CrmBaseController
                 $this->productos->reemplazar($oportunidad, $lineas);
             }
         });
-        $oportunidad->load(self::RELACIONES);
+        $oportunidad->load(self::RELACIONES)->conMontoOrigen();
 
         $this->difundir(new OportunidadUpdated('updated', $oportunidad->toArray()));
 
@@ -283,9 +291,29 @@ class OportunidadController extends CrmBaseController
      */
     private function exigirTotalDentroDeLimite(array $lineas): void
     {
-        if ($this->productos->monto($lineas) > self::MONTO_MAXIMO) {
+        if ($this->productos->monto($lineas) > CrmOportunidad::MONTO_MAXIMO) {
             throw ValidationException::withMessages([
                 'productos' => 'El total de la oportunidad excede el máximo permitido.',
+            ]);
+        }
+    }
+
+    /**
+     * El monto se edita a mano solo en oportunidades abiertas cuyo monto no
+     * viene de una cotización (spec 2026-10-30 §7); si no, 422 en `monto_esperado`.
+     */
+    private function exigirMontoEditable(CrmOportunidad $oportunidad): void
+    {
+        if ($oportunidad->estaCerrada()) {
+            throw ValidationException::withMessages([
+                'monto_esperado' => 'La oportunidad está cerrada; su monto ya no se puede cambiar.',
+            ]);
+        }
+
+        $cotizacion = $oportunidad->cotizacionDelMonto();
+        if ($cotizacion !== null) {
+            throw ValidationException::withMessages([
+                'monto_esperado' => "El monto viene de la cotización {$cotizacion->folio}; para cambiarlo edita o crea una cotización.",
             ]);
         }
     }
@@ -419,7 +447,7 @@ class OportunidadController extends CrmBaseController
             $oportunidad->fecha_cierre_real = now();
         }
         $oportunidad->save();
-        $oportunidad->load(self::RELACIONES);
+        $oportunidad->load(self::RELACIONES)->conMontoOrigen();
 
         $this->difundir(new OportunidadUpdated('updated', $oportunidad->toArray()));
 
