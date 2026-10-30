@@ -226,6 +226,98 @@ class MontoOportunidadTest extends TestCase
         $this->assertSame(5000.0, $this->monto());
     }
 
+    // ------------------------------------- Con productos_en_oportunidad = true
+
+    /** Con el flag encendido la cotización nunca mueve el monto (viene de las líneas de la oportunidad). */
+    public function test_con_productos_en_oportunidad_editar_rechazar_y_aprobar_no_tocan_el_monto(): void
+    {
+        CrmConfiguracionComercial::paraEmpresa($this->enterprise->id)->update(['productos_en_oportunidad' => true]);
+
+        $editable = $this->cotizar(111)->assertCreated()->json('data.id');
+        $this->withHeaders($this->crmHeaders())->putJson("/api/crm/cotizaciones/{$editable}", [
+            'lineas' => [['producto_id' => $this->producto->id, 'cantidad' => 3, 'precio_unitario' => 222]],
+        ])->assertOk();
+        $this->assertSame(5000.0, $this->monto());
+
+        $aRechazar = $this->cotizar(333)->json('data.id');
+        $this->enviar($aRechazar);
+        $this->withHeaders($this->crmHeaders())->patchJson("/api/crm/cotizaciones/{$aRechazar}/rechazar")->assertOk();
+        $this->assertSame(5000.0, $this->monto());
+
+        $aAprobar = $this->cotizar(444)->json('data.id');
+        $this->enviar($aAprobar);
+        $this->aprobar($aAprobar)->assertOk();
+
+        $oportunidad = $this->oportunidad->fresh();
+        $this->assertSame('cerrado_ganado', $oportunidad->etapa);
+        $this->assertSame(5000.0, (float) $oportunidad->monto_esperado);
+    }
+
+    /** Camino legado: el monto que manda el cliente se ignora siempre cuando las líneas calculan el monto. */
+    public function test_con_productos_en_oportunidad_el_monto_manual_se_ignora_como_antes(): void
+    {
+        CrmConfiguracionComercial::paraEmpresa($this->enterprise->id)->update(['productos_en_oportunidad' => true]);
+
+        // Abierta: 200 sin 422, el monto no cambia.
+        $this->withHeaders($this->crmHeaders())
+            ->putJson("/api/crm/oportunidades/{$this->oportunidad->id}", ['monto_esperado' => 1234, 'nombre' => 'Abierta'])
+            ->assertOk();
+        $this->assertSame('Abierta', $this->oportunidad->fresh()->nombre);
+        $this->assertSame(5000.0, $this->monto());
+
+        // Ganada: tampoco 422 (la regla nueva no aplica) y el monto no cambia.
+        $ganada = $this->nuevaOportunidad(['monto_esperado' => 700, 'etapa' => 'cerrado_ganado', 'fecha_cierre_real' => now()]);
+        $this->withHeaders($this->crmHeaders())
+            ->putJson("/api/crm/oportunidades/{$ganada->id}", ['monto_esperado' => 800])
+            ->assertOk();
+        $this->assertSame(700.0, $this->monto($ganada));
+    }
+
+    // ----------------------- Cotización vigente que no es la más reciente
+
+    public function test_ganada_con_borrador_posterior_de_otro_monto_sigue_atribuida_a_la_aprobada(): void
+    {
+        $primera = $this->cotizar(900)->assertCreated();
+        $this->enviar($primera->json('data.id'));
+        $this->aprobar($primera->json('data.id'))->assertOk();
+
+        // Borrador MÁS NUEVO con otro monto: la ganada conserva el monto de la aprobada.
+        $this->cotizar(5000)->assertCreated();
+        $this->assertSame(900.0, $this->monto());
+
+        $this->withHeaders($this->crmHeaders())->getJson("/api/crm/oportunidades/{$this->oportunidad->id}")
+            ->assertOk()
+            ->assertJsonPath('data.monto_origen', ['tipo' => 'cotizacion', 'folio' => $primera->json('data.folio')]);
+
+        $this->withHeaders($this->crmHeaders())
+            ->putJson("/api/crm/oportunidades/{$this->oportunidad->id}", ['monto_esperado' => 1234])
+            ->assertStatus(422)->assertJsonValidationErrors('monto_esperado');
+        $this->assertSame(900.0, $this->monto());
+    }
+
+    public function test_editar_la_cotizacion_mas_antigua_la_vuelve_el_origen_del_monto(): void
+    {
+        $antigua = $this->cotizar(100)->assertCreated();
+        $reciente = $this->cotizar(200)->assertCreated();
+        $this->assertSame(200.0, $this->monto());
+
+        // Editar la más vieja (no la última) fija el monto a la base de ESA cotización.
+        $this->withHeaders($this->crmHeaders())->putJson("/api/crm/cotizaciones/{$antigua->json('data.id')}", [
+            'lineas' => [['producto_id' => $this->producto->id, 'cantidad' => 1, 'precio_unitario' => 300]],
+        ])->assertOk();
+
+        $this->assertSame(300.0, $this->monto());
+        $this->withHeaders($this->crmHeaders())->getJson("/api/crm/oportunidades/{$this->oportunidad->id}")
+            ->assertOk()
+            ->assertJsonPath('data.monto_origen', ['tipo' => 'cotizacion', 'folio' => $antigua->json('data.folio')]);
+        $this->assertNotSame($antigua->json('data.folio'), $reciente->json('data.folio'));
+
+        $this->withHeaders($this->crmHeaders())
+            ->putJson("/api/crm/oportunidades/{$this->oportunidad->id}", ['monto_esperado' => 999])
+            ->assertStatus(422)->assertJsonValidationErrors('monto_esperado');
+        $this->assertSame(300.0, $this->monto());
+    }
+
     // ------------------------------------------------- Edición manual del monto
 
     public function test_cerrada_no_edita_monto_a_mano(): void
