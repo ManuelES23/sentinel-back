@@ -7,6 +7,7 @@ use App\Events\CRM\AgendaUpdated;
 use App\Models\CRM\CrmActividad;
 use App\Models\CRM\CrmAgenda;
 use App\Models\CRM\CrmCliente;
+use App\Models\CRM\CrmEtiquetaActividad;
 use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmVendedor;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -38,6 +39,8 @@ class EntidadOportunidadAjenaTest extends TestCase
 
     private CrmOportunidad $ajena;
 
+    private CrmEtiquetaActividad $etiqueta;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -57,6 +60,10 @@ class EntidadOportunidadAjenaTest extends TestCase
             'empresa_id' => $this->enterprise->id, 'cliente_id' => $this->cliente->id,
             'vendedor_id' => $this->vendedor->id, 'nombre' => 'Ajena', 'etapa' => 'calificado',
         ]);
+
+        // Sobre una oportunidad la etiqueta es obligatoria: todos los cuerpos la mandan para que
+        // la visibilidad sea lo único que distinga una respuesta de otra.
+        $this->etiqueta = CrmEtiquetaActividad::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Seguimiento']);
 
         // Perfil vendedor: ve oportunidades (solo las suyas), sin equipo.
         $this->otorgarPermisosCrm('oportunidades', 'oportunidades', ['ver']);
@@ -97,7 +104,7 @@ class EntidadOportunidadAjenaTest extends TestCase
             'tipo' => 'visita', 'titulo' => 'Nuevo evento',
             'fecha_inicio' => now()->addDay()->toDateTimeString(),
             'fecha_fin' => now()->addDay()->addHour()->toDateTimeString(),
-            'vendedor_id' => $this->propio->id,
+            'vendedor_id' => $this->propio->id, 'etiqueta_id' => $this->etiqueta->id,
         ], $datos));
     }
 
@@ -144,6 +151,7 @@ class EntidadOportunidadAjenaTest extends TestCase
         return $this->enviar('POST', 'actividades', [
             'entidad_tipo' => 'oportunidad', 'entidad_id' => $oportunidadId, 'tipo' => 'llamada',
             'descripcion' => 'Llamada', 'fecha_actividad' => now()->toDateTimeString(),
+            'etiqueta_id' => $this->etiqueta->id,
         ]);
     }
 
@@ -177,8 +185,14 @@ class EntidadOportunidadAjenaTest extends TestCase
     {
         return $this->enviar('POST', 'seguimientos', [
             'entidad_tipo' => 'oportunidad', 'entidad_id' => $oportunidadId,
-            'actividad' => ['tipo' => 'llamada', 'descripcion' => 'Llamé', 'fecha_actividad' => now()->subMinute()->toDateTimeString()],
-            'siguiente' => ['tipo' => 'llamada', 'titulo' => 'Volver a llamar', 'fecha_inicio' => now()->addDay()->toDateTimeString()],
+            'actividad' => [
+                'tipo' => 'llamada', 'descripcion' => 'Llamé', 'fecha_actividad' => now()->subMinute()->toDateTimeString(),
+                'etiqueta_id' => $this->etiqueta->id,
+            ],
+            'siguiente' => [
+                'tipo' => 'llamada', 'titulo' => 'Volver a llamar', 'fecha_inicio' => now()->addDay()->toDateTimeString(),
+                'etiqueta_id' => $this->etiqueta->id,
+            ],
         ]);
     }
 

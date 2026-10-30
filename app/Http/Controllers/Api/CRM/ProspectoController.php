@@ -154,7 +154,7 @@ class ProspectoController extends CrmBaseController
             ],
             'notas' => 'nullable|string|max:2000',
             'vendedor_id' => 'nullable|integer',
-        ], $this->seguimientos->reglasSiguiente('primer_contacto')), array_merge(
+        ], $this->seguimientos->reglasSiguiente('primer_contacto', $empresaId)), array_merge(
             ['email.unique' => 'Ya existe un prospecto con este correo.'],
             $this->seguimientos->mensajesSiguiente('primer_contacto'),
         ));

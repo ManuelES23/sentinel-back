@@ -6,12 +6,14 @@ use App\Models\CRM\CrmActividad;
 use App\Models\CRM\CrmAgenda;
 use App\Models\CRM\CrmCliente;
 use App\Models\CRM\CrmEmpresaExterna;
+use App\Models\CRM\CrmEtiquetaActividad;
 use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmProspecto;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 /**
  * Registrar lo que pasó y programar el siguiente paso en una sola acción
@@ -42,8 +44,21 @@ class SeguimientoService
 
     public const DURACION_POR_DEFECTO = 30;
 
-    /** Reglas de validación de un siguiente paso anidado bajo $prefijo. */
-    public function reglasSiguiente(string $prefijo): array
+    public const MENSAJE_ETIQUETA = 'Elige una etiqueta válida.';
+
+    /**
+     * Entidades cuya captura sigue sin oportunidad (spec 2026-10-30 §7): una
+     * empresa externa no puede tener oportunidades. Los eventos sin entidad
+     * (juntas internas, Outlook) tampoco la necesitan.
+     */
+    public const ENTIDADES_SIN_OPORTUNIDAD = ['empresa_externa'];
+
+    /**
+     * Reglas de validación de un siguiente paso anidado bajo $prefijo. La
+     * etiqueta es obligatoria cuando el siguiente paso cuelga de una
+     * oportunidad ($exigeEtiqueta) y opcional (pero validada) en lo demás.
+     */
+    public function reglasSiguiente(string $prefijo, int $empresaId, bool $exigeEtiqueta = false): array
     {
         return [
             $prefijo => 'nullable|array',
@@ -52,12 +67,62 @@ class SeguimientoService
             "{$prefijo}.descripcion" => 'nullable|string|max:2000',
             "{$prefijo}.fecha_inicio" => "required_with:{$prefijo}|date|after:now",
             "{$prefijo}.duracion_minutos" => 'nullable|integer|min:5|max:480',
+            "{$prefijo}.etiqueta_id" => [
+                $exigeEtiqueta ? "required_with:{$prefijo}" : 'nullable',
+                ...$this->reglaEtiqueta($empresaId),
+            ],
         ];
     }
 
     public function mensajesSiguiente(string $prefijo): array
     {
-        return ["{$prefijo}.fecha_inicio.after" => 'El siguiente paso debe programarse en el futuro.'];
+        return [
+            "{$prefijo}.fecha_inicio.after" => 'El siguiente paso debe programarse en el futuro.',
+        ] + $this->mensajesEtiqueta("{$prefijo}.etiqueta_id");
+    }
+
+    /**
+     * Reglas de un `etiqueta_id`: entero de una etiqueta ACTIVA de la empresa.
+     * El que llama decide si es `required` o `nullable`.
+     *
+     * @return array<int, mixed>
+     */
+    public function reglaEtiqueta(int $empresaId): array
+    {
+        return [
+            'integer',
+            Rule::exists((new CrmEtiquetaActividad)->getTable(), 'id')
+                ->where(fn ($q) => $q->where('empresa_id', $empresaId)->where('activo', true)),
+        ];
+    }
+
+    /** Mensajes de reglaEtiqueta() (y de su `required`) para el campo `$campo`. */
+    public function mensajesEtiqueta(string $campo): array
+    {
+        return [
+            "{$campo}.required" => self::MENSAJE_ETIQUETA,
+            "{$campo}.required_with" => self::MENSAJE_ETIQUETA,
+            "{$campo}.integer" => self::MENSAJE_ETIQUETA,
+            "{$campo}.exists" => self::MENSAJE_ETIQUETA,
+        ];
+    }
+
+    /**
+     * Toda captura nueva vive dentro de una oportunidad: ligarla directo a un
+     * cliente o prospecto responde 422 en `$campo`. Pasan la oportunidad, la
+     * empresa externa y la ausencia de entidad.
+     *
+     * @throws ValidationException
+     */
+    public function exigirCapturaConOportunidad(?string $entidadTipo, string $campo = 'entidad_tipo'): void
+    {
+        if (! in_array($entidadTipo, ['cliente', 'prospecto'], true)) {
+            return;
+        }
+
+        throw ValidationException::withMessages([
+            $campo => "Elige una oportunidad o abre una nueva para este {$entidadTipo}.",
+        ]);
     }
 
     public function buscarEntidad(int $empresaId, string $tipo, int $id): ?Model
@@ -79,6 +144,7 @@ class SeguimientoService
             'resultado' => $datos['resultado'] ?? null,
             'fecha_actividad' => $datos['fecha_actividad'] ?? now(),
             'fuente' => $datos['fuente'] ?? 'manual',
+            'etiqueta_id' => $datos['etiqueta_id'] ?? null,
         ]);
     }
 
@@ -98,6 +164,7 @@ class SeguimientoService
             'fecha_inicio' => $inicio,
             'fecha_fin' => $inicio->addMinutes($duracion),
             'completado' => false,
+            'etiqueta_id' => $datos['etiqueta_id'] ?? null,
         ]);
     }
 

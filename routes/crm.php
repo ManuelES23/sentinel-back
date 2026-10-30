@@ -142,6 +142,8 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     // -------------------------------------------------
     // Antes del apiResource: si no, "resumen" se toma como {oportunidad}.
     Route::get('oportunidades/resumen', [App\Http\Controllers\Api\CRM\OportunidadController::class, 'resumen']);
+    // Abrir una oportunidad para un cliente o prospecto con lo mínimo (Nueva actividad).
+    Route::post('oportunidades/rapida', [App\Http\Controllers\Api\CRM\OportunidadController::class, 'rapida']);
     Route::patch('oportunidades/{oportunidad}/cambiar-etapa', [
         App\Http\Controllers\Api\CRM\OportunidadController::class, 'cambiarEtapa'
     ]);
@@ -232,6 +234,10 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     // -------------------------------------------------
     Route::patch('agenda/{agenda}/completar', [
         App\Http\Controllers\Api\CRM\AgendaController::class, 'completar'
+    ]);
+    // Ligar un evento viejo (cliente, prospecto, interno u Outlook) a una oportunidad.
+    Route::post('agenda/{agenda}/ligar', [
+        App\Http\Controllers\Api\CRM\AgendaController::class, 'ligar'
     ]);
     Route::get('agenda', [
         App\Http\Controllers\Api\CRM\AgendaController::class, 'index'

@@ -8,9 +8,12 @@ use App\Events\CRM\OportunidadUpdated;
 use App\Models\CRM\CrmActividad;
 use App\Models\CRM\CrmAgenda;
 use App\Models\CRM\CrmCategoriaRechazo;
+use App\Models\CRM\CrmCliente;
 use App\Models\CRM\CrmConfiguracionComercial;
 use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmProducto;
+use App\Models\CRM\CrmProspecto;
+use App\Services\CRM\AperturaOportunidadService;
 use App\Services\CRM\DashboardResumenService;
 use App\Services\CRM\EmbudoService;
 use App\Services\CRM\OportunidadProductosService;
@@ -37,6 +40,7 @@ class OportunidadController extends CrmBaseController
     public function __construct(
         private readonly VisibilidadOportunidades $visibilidad,
         private readonly OportunidadProductosService $productos,
+        private readonly AperturaOportunidadService $apertura,
     ) {}
 
     /** GET /crm/oportunidades */
@@ -123,7 +127,7 @@ class OportunidadController extends CrmBaseController
             'probabilidad' => 'nullable|integer|min:0|max:100',
             'fecha_cierre_esperada' => 'nullable|date',
             'notas' => 'nullable|string',
-            'tipo_producto' => $this->reglasTipoProducto($empresaId, $conProductos),
+            'tipo_producto' => $this->apertura->reglasTipoProducto($empresaId, $conProductos),
         ] + $this->reglasProductos($empresaId, $conProductos, 'required'));
 
         // Asignarla a otro vendedor es decisión de gerencia (misma regla que
@@ -170,6 +174,47 @@ class OportunidadController extends CrmBaseController
         return $this->jsonSuccess($oportunidad, 'Oportunidad creada correctamente', 201);
     }
 
+    /**
+     * POST /crm/oportunidades/rapida -- abre una oportunidad para un cliente o
+     * un prospecto con lo mínimo (spec 2026-10-30 §5.3). La regla de dueño y
+     * de prospecto convertido vive en AperturaOportunidadService.
+     */
+    public function rapida(Request $request): JsonResponse
+    {
+        $empresaId = $this->getEmpresaId();
+        abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
+        $this->exigirPermisoSubmodulo($empresaId, 'oportunidades', 'oportunidades', 'crear', 'No tienes permiso para crear oportunidades.');
+
+        $conProductos = CrmConfiguracionComercial::productosEnOportunidad($empresaId);
+
+        $validated = $request->validate([
+            'cliente_id' => ['nullable', 'integer', 'required_without:prospecto_id', 'prohibits:prospecto_id', $this->existeEnEmpresa('crm_clientes', $empresaId)],
+            'prospecto_id' => ['nullable', 'integer', $this->existeEnEmpresa('crm_prospectos', $empresaId)],
+            'vendedor_id' => ['nullable', 'integer'],
+            'monto_esperado' => 'nullable|numeric|min:0|max:'.CrmOportunidad::MONTO_MAXIMO,
+            'tipo_producto' => $this->apertura->reglasTipoProducto($empresaId, $conProductos),
+        ], [
+            'cliente_id.required_without' => 'Elige un cliente o un prospecto.',
+            'cliente_id.prohibits' => 'Elige un cliente o un prospecto, no los dos.',
+        ]);
+
+        $entidad = isset($validated['cliente_id'])
+            ? CrmCliente::where('empresa_id', $empresaId)->find($validated['cliente_id'])
+            : CrmProspecto::where('empresa_id', $empresaId)->find($validated['prospecto_id']);
+
+        $oportunidad = DB::transaction(fn () => $this->apertura->abrir(
+            $empresaId,
+            $entidad,
+            $validated,
+            isset($validated['vendedor_id']) ? (int) $validated['vendedor_id'] : null,
+        ));
+        $oportunidad->load(self::RELACIONES)->conMontoOrigen();
+
+        $this->difundir(new OportunidadUpdated('created', $oportunidad->toArray()));
+
+        return $this->jsonSuccess($oportunidad, 'Oportunidad creada correctamente', 201);
+    }
+
     /** PUT /crm/oportunidades/{oportunidad} */
     public function update(Request $request, CrmOportunidad $oportunidad): JsonResponse
     {
@@ -189,7 +234,7 @@ class OportunidadController extends CrmBaseController
             'probabilidad' => 'sometimes|nullable|integer|min:0|max:100',
             'fecha_cierre_esperada' => 'sometimes|nullable|date',
             'notas' => 'sometimes|nullable|string',
-            'tipo_producto' => $this->reglasTipoProducto($empresaId, $conProductos, $oportunidad),
+            'tipo_producto' => $this->apertura->reglasTipoProducto($empresaId, $conProductos, $oportunidad),
         ] + $this->reglasProductos($empresaId, $conProductos, 'sometimes'));
         $this->exigirTipoProductoNoVacio($empresaId, $conProductos, $oportunidad, $validated);
 
@@ -567,38 +612,6 @@ class OportunidadController extends CrmBaseController
         foreach ($eventos as $evento) {
             $this->difundir(new AgendaUpdated($accion, $evento->toArray()));
         }
-    }
-
-    /**
-     * Reglas de `tipo_producto`. Si la empresa tiene commodities y no captura
-     * productos en la oportunidad, es obligatorio en el alta y debe ser uno de
-     * ellos; en la edición solo se valida si cambia (un valor viejo ya guardado
-     * no se revalida). Sin commodities, o con productos en la oportunidad, es
-     * texto libre opcional.
-     *
-     * @return array<int, mixed>
-     */
-    private function reglasTipoProducto(int $empresaId, bool $conProductos, ?CrmOportunidad $actual = null): array
-    {
-        $reglas = $actual ? ['sometimes', 'nullable'] : ['nullable'];
-        $reglas[] = 'string';
-        $reglas[] = 'max:100';
-
-        $commodities = CrmProducto::commoditiesDe($empresaId);
-        if ($commodities->isEmpty() || $conProductos) {
-            return $reglas;
-        }
-
-        if ($actual === null) {
-            $reglas[0] = 'required';
-        }
-        $reglas[] = function (string $atributo, mixed $valor, \Closure $fail) use ($commodities, $actual) {
-            if ($valor !== $actual?->tipo_producto && ! $commodities->contains($valor)) {
-                $fail('El tipo de producto debe ser uno de los productos de la empresa.');
-            }
-        };
-
-        return $reglas;
     }
 
     /**

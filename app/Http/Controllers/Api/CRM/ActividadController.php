@@ -8,6 +8,7 @@ use App\Models\CRM\CrmCliente;
 use App\Models\CRM\CrmEmpresaExterna;
 use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmProspecto;
+use App\Services\CRM\SeguimientoService;
 use App\Services\CRM\VisibilidadOportunidades;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
@@ -50,9 +51,12 @@ class ActividadController extends CrmBaseController
      */
     protected const TIPOS_ACTIVIDAD = ['llamada', 'whatsapp', 'correo', 'visita', 'reunion', 'nota'];
 
-    public const RELACIONES = ['vendedor:id,nombre,email'];
+    public const RELACIONES = ['vendedor:id,nombre,email', 'etiqueta:id,nombre'];
 
-    public function __construct(private readonly VisibilidadOportunidades $visibilidad) {}
+    public function __construct(
+        private readonly VisibilidadOportunidades $visibilidad,
+        private readonly SeguimientoService $seguimientos,
+    ) {}
 
     /**
      * GET /crm/actividades?entidad_tipo=&entidad_id=&tipo=&vendedor_id=&search=
@@ -180,7 +184,15 @@ class ActividadController extends CrmBaseController
             'vendedor_id'      => 'nullable|integer|exists:crm_vendedores,id',
             'duracion_minutos' => 'nullable|integer|min:0',
             'resultado'        => 'nullable|string',
-        ]);
+            // Obligatoria cuando la actividad cuelga de una oportunidad; opcional (pero válida) en lo demás.
+            'etiqueta_id'      => [
+                $request->input('entidad_tipo') === 'oportunidad' ? 'required' : 'nullable',
+                ...$this->seguimientos->reglaEtiqueta($empresaId),
+            ],
+        ], $this->seguimientos->mensajesEtiqueta('etiqueta_id'));
+
+        // Una actividad nueva no se liga directo a un cliente o prospecto: se elige o se abre una oportunidad.
+        $this->seguimientos->exigirCapturaConOportunidad($validated['entidad_tipo']);
 
         $modelClass = self::TIPOS[$validated['entidad_tipo']];
         // Una oportunidad que el usuario no puede ver responde igual que una inexistente.
@@ -202,6 +214,7 @@ class ActividadController extends CrmBaseController
             'duracion_minutos' => $validated['duracion_minutos'] ?? null,
             'resultado'        => $validated['resultado'] ?? null,
             'fuente'           => 'manual',
+            'etiqueta_id'      => $validated['etiqueta_id'] ?? null,
         ]);
 
         $actividad->load(self::RELACIONES);
