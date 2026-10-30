@@ -212,6 +212,10 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('mi-dia', [
         App\Http\Controllers\Api\CRM\MiDiaController::class, 'index'
     ]);
+    // Detalle de una oportunidad para el panel de Mi día (solo exige mi-dia.ver).
+    Route::get('mi-dia/oportunidades/{oportunidad}', [
+        App\Http\Controllers\Api\CRM\MiDiaController::class, 'oportunidad'
+    ]);
 
     Route::post('seguimientos', [
         App\Http\Controllers\Api\CRM\SeguimientoController::class, 'store'

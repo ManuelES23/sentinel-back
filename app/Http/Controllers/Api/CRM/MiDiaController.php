@@ -3,7 +3,9 @@
 namespace App\Http\Controllers\Api\CRM;
 
 use App\Exceptions\CRM\VendedorNoVinculadoException;
+use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmVendedor;
+use App\Services\CRM\MiDiaDetalleService;
 use App\Services\CRM\MiDiaService;
 use App\Services\CRM\MiMesService;
 use App\Services\CRM\VendedorActualService;
@@ -13,7 +15,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
-/** GET /crm/mi-dia — pantalla de inicio del vendedor (CRM fase 2). */
+/** GET /crm/mi-dia y GET /crm/mi-dia/oportunidades/{oportunidad} — pantalla de inicio del vendedor. */
 class MiDiaController extends CrmBaseController
 {
     use FiltraPorEmpresa;
@@ -23,6 +25,7 @@ class MiDiaController extends CrmBaseController
         private readonly VendedorActualService $vendedores,
         private readonly MiDiaService $miDia,
         private readonly MiMesService $miMes,
+        private readonly MiDiaDetalleService $detalle,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -59,5 +62,26 @@ class MiDiaController extends CrmBaseController
                 'mi_mes' => $this->miMes->para($empresaId, $vendedor),
             ] + $this->miDia->resumen($empresaId, $vendedor, CarbonImmutable::now()),
         );
+    }
+
+    /**
+     * Detalle de una oportunidad para el panel de Mi día. Solo exige `mi-dia.ver`:
+     * Mi día ya muestra las oportunidades propias sin `oportunidades.ver`.
+     */
+    public function oportunidad(Request $request, CrmOportunidad $oportunidad): JsonResponse
+    {
+        $empresaId = $this->getEmpresaId();
+        $this->exigirPermisoSubmodulo($empresaId, 'mi-dia', 'mi-dia', 'ver', 'No tienes permiso para ver Mi día.');
+        abort_unless((int) $oportunidad->empresa_id === (int) $empresaId, 404, 'Oportunidad no encontrada');
+
+        $validated = $request->validate(['vendedor_id' => 'nullable|integer']);
+        $solicitado = isset($validated['vendedor_id']) ? (int) $validated['vendedor_id'] : null;
+        $vendedor = $this->vendedores->resolver($empresaId, $request->user(), $solicitado);
+
+        return $this->jsonSuccess($this->detalle->para(
+            $vendedor,
+            $oportunidad,
+            $this->tienePermisoSubmodulo($empresaId, 'cotizaciones', 'cotizaciones', 'ver'),
+        ));
     }
 }

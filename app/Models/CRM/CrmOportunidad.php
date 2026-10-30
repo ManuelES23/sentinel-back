@@ -61,7 +61,7 @@ class CrmOportunidad extends Model
     private const COTIZACION_FUERA_DEL_MONTO = ['rechazado', 'superado'];
 
     /** Solo lo que necesita montoOrigen(): evita cargar líneas o impuestos. */
-    private const CARGA_COTIZACIONES = 'cotizaciones:id,oportunidad_id,folio,estado,subtotal,descuento_global_pct,created_at';
+    public const CARGA_COTIZACIONES = 'cotizaciones:id,oportunidad_id,folio,estado,subtotal,descuento_global_pct,created_at';
 
     /**
      * Relaciones que la API expone junto a una oportunidad. Centralizado aquí
