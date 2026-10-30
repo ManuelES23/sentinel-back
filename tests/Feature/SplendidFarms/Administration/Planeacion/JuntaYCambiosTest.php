@@ -1,6 +1,6 @@
 <?php
 
-namespace Tests\Feature\SplendidFarms\OperacionAgricola\Planeacion;
+namespace Tests\Feature\SplendidFarms\Administration\Planeacion;
 
 use App\Events\ProgramaSemanalUpdated;
 use App\Models\Planeacion\ProgramaCambio;
@@ -27,7 +27,7 @@ class JuntaYCambiosTest extends TestCase
     use ConstruyePrograma;
     use RefreshDatabase;
 
-    private const URL = '/api/splendidfarms/operacion-agricola/planeacion/programa';
+    private const URL = '/api/splendidfarms/administration/planeacion/programa';
 
     private ProgramaSemanal $programa;
 
@@ -148,7 +148,7 @@ class JuntaYCambiosTest extends TestCase
 
         $this->assertSame('programa.updated', $evento->broadcastAs());
         $this->assertSame(
-            'private-module.splendidfarms.operacion-agricola.planeacion',
+            'private-module.splendidfarms.administration.planeacion',
             $evento->broadcastOn()[0]->name,
         );
         $this->assertSame(['lunes' => '2026-11-23', 'programa_id' => 12345], $evento->broadcastWith()['data']);

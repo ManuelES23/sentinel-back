@@ -1,6 +1,6 @@
 <?php
 
-namespace Tests\Feature\SplendidFarms\OperacionAgricola\Planeacion;
+namespace Tests\Feature\SplendidFarms\Administration\Planeacion;
 
 use App\Models\Application;
 use App\Models\Cultivo;
@@ -14,6 +14,7 @@ use App\Models\Planeacion\TipoEmpaque;
 use App\Models\Temporada;
 use App\Models\User;
 use App\Models\Variedad;
+use App\Support\PermisoSubmodulo;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
@@ -29,6 +30,7 @@ class EsquemaYSubmoduloTest extends TestCase
     use RefreshDatabase;
 
     private const MIGRACION_SUBMODULO = '2026_10_28_100200_add_planeacion_programa_semanal_submodule.php';
+    private const MIGRACION_MOVER = '2026_10_30_100000_mover_planeacion_a_administracion.php';
     private const MIGRACION_CATALOGOS = '2026_10_28_100300_seed_planeacion_catalogos_elote.php';
 
     private const PERMISOS = [
@@ -95,6 +97,64 @@ class EsquemaYSubmoduloTest extends TestCase
 
         $this->assertSame(1, DB::table('user_submodule_access')->where('user_id', $admin->id)->where('submodule_id', $submoduloId)->count());
         $this->assertSame(1, DB::table('user_module_access')->where('user_id', $admin->id)->where('module_id', $modulos[0]->id)->count());
+    }
+
+    public function test_planeacion_pasa_a_administracion_sin_perder_accesos(): void
+    {
+        $this->sembrarEstructuraSf();
+        $admin = User::factory()->create(['email' => 'admin@sentinel.com']);
+        $gerente = User::factory()->create();
+        $sinAcceso = User::factory()->create();
+
+        $this->correr(self::MIGRACION_SUBMODULO);
+
+        $oa = DB::table('applications')->where('slug', 'operacion-agricola')->value('id');
+        $modulo = DB::table('modules')->where('application_id', $oa)->where('slug', 'planeacion')->first();
+        $submoduloId = DB::table('submodules')->where('module_id', $modulo->id)->value('id');
+        $view = DB::table('submodule_permission_types')->where('submodule_id', $submoduloId)->where('slug', 'view')->value('id');
+
+        // Un usuario con el módulo activo y permiso concedido; otro con el acceso apagado.
+        DB::table('user_module_access')->insert([
+            ['user_id' => $gerente->id, 'module_id' => $modulo->id, 'is_active' => true, 'granted_at' => now(), 'created_at' => now(), 'updated_at' => now()],
+            ['user_id' => $sinAcceso->id, 'module_id' => $modulo->id, 'is_active' => false, 'granted_at' => null, 'created_at' => now(), 'updated_at' => now()],
+        ]);
+        DB::table('user_submodule_permissions')->insert([
+            'user_id' => $gerente->id, 'submodule_id' => $submoduloId, 'permission_type_id' => $view,
+            'is_granted' => true, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+
+        $this->correr(self::MIGRACION_MOVER);
+        $this->correr(self::MIGRACION_MOVER);
+
+        $administracion = DB::table('applications')->where('slug', 'administration')->first();
+        $this->assertNotNull($administracion);
+        $this->assertSame(0, DB::table('modules')->where('application_id', $oa)->where('slug', 'planeacion')->count());
+
+        // Se mueve la misma fila: los permisos cuelgan de estos ids.
+        $movido = DB::table('modules')->where('application_id', $administracion->id)->where('slug', 'planeacion')->get();
+        $this->assertCount(1, $movido);
+        $this->assertSame($modulo->id, $movido[0]->id);
+        $this->assertSame($modulo->id, DB::table('submodules')->where('id', $submoduloId)->value('module_id'));
+
+        $this->assertTrue(PermisoSubmodulo::tiene($gerente->id, $administracion->enterprise_id, 'administration', 'planeacion', 'programa-semanal', 'view'));
+        $this->assertTrue(PermisoSubmodulo::tiene($admin->id, $administracion->enterprise_id, 'administration', 'planeacion', 'programa-semanal', 'configurar'));
+
+        // El acceso al menú no viaja solo: se abre Administración a quien ya tenía el módulo.
+        foreach ([$admin, $gerente] as $usuario) {
+            $this->assertSame(1, DB::table('user_application_access')
+                ->where('user_id', $usuario->id)->where('application_id', $administracion->id)->where('is_active', true)->count());
+        }
+        $this->assertSame(0, DB::table('user_application_access')
+            ->where('user_id', $sinAcceso->id)->where('application_id', $administracion->id)->count());
+    }
+
+    public function test_mover_planeacion_sin_modulo_no_falla(): void
+    {
+        $this->sembrarEstructuraSf();
+
+        $this->correr(self::MIGRACION_MOVER);
+
+        $this->assertSame(0, DB::table('modules')->where('slug', 'planeacion')->count());
     }
 
     public function test_submodulo_sin_aplicacion_no_falla(): void

@@ -1,6 +1,6 @@
 <?php
 
-namespace Tests\Feature\SplendidFarms\OperacionAgricola\Planeacion;
+namespace Tests\Feature\SplendidFarms\Administration\Planeacion;
 
 use App\Models\Lote;
 use App\Models\Planeacion\ProgramaAcuerdo;
@@ -30,7 +30,7 @@ class ProgramaSemanalTest extends TestCase
     use ConstruyePrograma;
     use RefreshDatabase;
 
-    private const URL = '/api/splendidfarms/operacion-agricola/planeacion/programa';
+    private const URL = '/api/splendidfarms/administration/planeacion/programa';
 
     protected function setUp(): void
     {
