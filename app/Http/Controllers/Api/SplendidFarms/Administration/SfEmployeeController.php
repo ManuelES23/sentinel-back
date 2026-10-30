@@ -154,14 +154,15 @@ class SfEmployeeController extends Controller
      */
     private function validateData(Request $request, ?int $ignoreId = null, bool $partial = false): array
     {
-        $request->merge([
-            'curp' => $this->normalizeUpperString($request->input('curp')),
-            'rfc' => $this->normalizeUpperString($request->input('rfc')),
-            'nss' => $this->normalizeUpperString($request->input('nss')),
-            'checker_key' => $this->normalizeUpperString($request->input('checker_key')),
-        ]);
+        // Solo las llaves recibidas: una agregada aquí en null llegaría a
+        // validated y el update borraría el valor guardado.
+        foreach (['curp', 'rfc', 'nss', 'checker_key'] as $field) {
+            if ($request->has($field)) {
+                $request->merge([$field => $this->normalizeUpperString($request->input($field))]);
+            }
+        }
 
-        $req = $partial ? 'sometimes|required' : 'required';
+        $req =$partial ? 'sometimes|required' : 'required';
         $opt = 'sometimes';
 
         return $request->validate([

@@ -107,4 +107,80 @@ class SfEmployeeCamposVaciosTest extends TestCase
 
         $this->assertSame('Ana', $empleado->fresh()->first_name);
     }
+
+    private function empleadoConIdentificadores(int $empresaId): SfEmployee
+    {
+        return $this->createSfEmployee($empresaId, [
+            'curp' => 'PUVA900520MSRRGN09',
+            'rfc' => 'PUVA900520AB1',
+            'nss' => '12345678901',
+            'checker_key' => 'SF-42',
+        ]);
+    }
+
+    public function test_un_guardado_parcial_conserva_curp_rfc_nss_y_llave_de_checador(): void
+    {
+        [, $empresa] = $this->createAuthenticatedUserWithEnterprise();
+        $empleado = $this->empleadoConIdentificadores($empresa->id);
+
+        $this->guardar($empleado->id, ['notes' => 'Otra nota'])->assertOk();
+
+        $empleado->refresh();
+        $this->assertSame('Otra nota', $empleado->notes);
+        $this->assertSame('PUVA900520MSRRGN09', $empleado->curp);
+        $this->assertSame('PUVA900520AB1', $empleado->rfc);
+        $this->assertSame('12345678901', $empleado->nss);
+        $this->assertSame('SF-42', $empleado->checker_key);
+    }
+
+    public function test_curp_rfc_nss_y_llave_de_checador_en_vacio_se_borran(): void
+    {
+        [, $empresa] = $this->createAuthenticatedUserWithEnterprise();
+        $empleado = $this->empleadoConIdentificadores($empresa->id);
+
+        $this->guardar($empleado->id, ['curp' => '', 'rfc' => '', 'nss' => '', 'checker_key' => ''])->assertOk();
+
+        $empleado->refresh();
+        $this->assertNull($empleado->curp);
+        $this->assertNull($empleado->rfc);
+        $this->assertNull($empleado->nss);
+        $this->assertNull($empleado->checker_key);
+    }
+
+    public function test_curp_rfc_nss_y_llave_de_checador_recibidos_se_normalizan(): void
+    {
+        [, $empresa] = $this->createAuthenticatedUserWithEnterprise();
+        $empleado = $this->createSfEmployee($empresa->id);
+
+        $this->guardar($empleado->id, [
+            'curp' => 'puva900520msrrgn09',
+            'rfc' => ' puva900520ab1 ',
+            'nss' => '12345678901',
+            'checker_key' => 'sf-42',
+        ])->assertOk();
+
+        $empleado->refresh();
+        $this->assertSame('PUVA900520MSRRGN09', $empleado->curp);
+        $this->assertSame('PUVA900520AB1', $empleado->rfc);
+        $this->assertSame('12345678901', $empleado->nss);
+        $this->assertSame('SF-42', $empleado->checker_key);
+    }
+
+    public function test_el_alta_sin_identificadores_los_deja_vacios(): void
+    {
+        [, $empresa] = $this->createAuthenticatedUserWithEnterprise();
+
+        $id = $this->post(self::BASE, [
+            'enterprise_id' => $empresa->id,
+            'first_name' => 'Luis',
+            'last_name' => 'Nuevo',
+            'hire_date' => '2026-10-01',
+        ], ['Accept' => 'application/json'])->assertCreated()->json('data.id');
+
+        $empleado = SfEmployee::findOrFail($id);
+        $this->assertNull($empleado->curp);
+        $this->assertNull($empleado->rfc);
+        $this->assertNull($empleado->nss);
+        $this->assertNull($empleado->checker_key);
+    }
 }
