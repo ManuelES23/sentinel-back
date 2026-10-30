@@ -145,6 +145,9 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::patch('oportunidades/{oportunidad}/cambiar-etapa', [
         App\Http\Controllers\Api\CRM\OportunidadController::class, 'cambiarEtapa'
     ]);
+    Route::patch('oportunidades/{oportunidad}/cobro', [
+        App\Http\Controllers\Api\CRM\OportunidadController::class, 'cobro'
+    ]);
     Route::apiResource('oportunidades', App\Http\Controllers\Api\CRM\OportunidadController::class)
         ->parameters(['oportunidades' => 'oportunidad']);
 

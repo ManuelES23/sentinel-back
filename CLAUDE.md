@@ -252,6 +252,14 @@ Despliegue de Organización en empresas nuevas (back antes que el front): `php a
 - `CrmOportunidad::montoOrigen()` (`cotizacion` con folio, `estimado`, `sin_monto`) es la fuente única; sale como `monto_origen` vía `conMontoOrigen()` (listado, detalle, alta, edición, cambio de etapa y eventos). `RELACIONES_API` carga `cotizaciones` con columnas mínimas para no hacer una consulta por fila, y `conMontoOrigen()` la oculta del JSON.
 - Una cotización cuya base o total con impuestos pase de `CrmOportunidad::MONTO_MAXIMO` responde 422 antes de escribir nada.
 
+## CRM · Cierre, cobro, reasignar y convertir
+
+- `PATCH crm/oportunidades/{id}/cobro` (`{estado: por_cobrar|cobrada|rechazada, motivo?}`): orden tenant (404), `oportunidades.cobro` (403), visibilidad (403) y validación (solo ganadas; `motivo` obligatorio con `rechazada`). El mismo estado es un 200 sin cambios, actividad ni eventos. Un cambio real guarda `estado_cobro`, `cobro_actualizado_at/por` y crea una nota de sistema en la oportunidad («Cobro: Cobrada», «Cobro rechazado: {motivo}») en la misma transacción; no toca etapa, `fecha_cierre_real` ni monto.
+- `cambiar-etapa`: `cerrado_perdido` exige `oportunidades.editar` (el vendedor puede perder un trato); `cerrado_ganado` sigue exigiendo `cerrar`. Al perder, los eventos de agenda pendientes de la oportunidad pasan a `completado = true` en la misma transacción, sin actividad ni siguiente paso, y se emite `AgendaUpdated('completed')` por cada uno.
+- `PUT crm/oportunidades` con otro `vendedor_id`: los eventos pendientes de esa oportunidad pasan al vendedor nuevo (`AgendaUpdated('updated')`); los completados se quedan con quien los hizo.
+- `POST crm/prospectos/{id}/convertir-cliente` mueve al cliente las oportunidades abiertas y ganadas del prospecto (`cliente_id` y `prospecto_id = null` juntos) y emite `OportunidadUpdated('updated')` por cada una; las perdidas se quedan en el prospecto.
+- `tipo_producto` (`POST`/`PUT crm/oportunidades`, texto de hasta 100): con commodities en la empresa (`CrmProducto::commoditiesDe`) y `productos_en_oportunidad = false` es obligatorio al crear y debe ser uno de ellos; al editar solo se valida si cambia (un valor viejo ya guardado no se revalida) y no se puede borrar. Sin commodities, o con el interruptor encendido, es texto libre opcional.
+
 ## CRM · Visibilidad de oportunidades, agenda y cotizaciones
 
 ### Oportunidades

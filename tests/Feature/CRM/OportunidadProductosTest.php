@@ -372,13 +372,15 @@ class OportunidadProductosTest extends TestCase
         CrmConfiguracionComercial::paraEmpresa($this->enterprise->id)->update(['productos_en_oportunidad' => false]);
         $a = $this->producto();
 
-        $datos = $this->payload([]);
+        // La empresa tiene el commodity «Mango» y no captura productos: desde la
+        // Task 4 del CRM «oportunidad como eje» el tipo de producto es obligatorio.
+        $datos = $this->payload([], ['tipo_producto' => 'Mango']);
         unset($datos['productos']);
         $this->withHeaders($this->crmHeaders())->postJson(self::BASE_URL, $datos + ['monto_esperado' => 5000])
             ->assertCreated()->assertJsonPath('data.monto_esperado', '5000.00');
 
         $antes = CrmOportunidad::count();
-        $this->withHeaders($this->crmHeaders())->postJson(self::BASE_URL, $this->payload([$this->linea($a, 1, 1)]))
+        $this->withHeaders($this->crmHeaders())->postJson(self::BASE_URL, $this->payload([$this->linea($a, 1, 1)], ['tipo_producto' => 'Mango']))
             ->assertStatus(422)->assertJsonValidationErrors('productos');
         $this->assertSame($antes, CrmOportunidad::count());
         $this->assertSame(0, CrmOportunidadProducto::count());
