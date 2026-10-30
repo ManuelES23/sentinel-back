@@ -46,6 +46,12 @@ class CrmOportunidad extends Model
     public const ETAPAS_TERMINALES = ['cerrado_ganado', 'cerrado_perdido'];
 
     /**
+     * Estado de cobro de una oportunidad ganada. Nulo mientras no se gana;
+     * al ganarse el observer lo pone en `por_cobrar`.
+     */
+    public const ESTADOS_COBRO = ['por_cobrar', 'cobrada', 'rechazada'];
+
+    /**
      * Relaciones que la API expone junto a una oportunidad. Centralizado aquí
      * para que todos los emisores del evento OportunidadUpdated manden la
      * misma forma de payload (OportunidadController y CotizacionController).
@@ -73,9 +79,14 @@ class CrmOportunidad extends Model
         'motivo_perdida',
         'motivo_rechazo_id',
         'fecha_cierre_real',
+        'tipo_producto',
+        'estado_cobro',
+        'cobro_actualizado_at',
+        'cobro_actualizado_por',
     ];
 
     protected $casts = [
+        'cobro_actualizado_at'  => 'datetime',
         'monto_esperado'        => 'decimal:2',
         'probabilidad'          => 'integer',
         'fecha_cierre_esperada' => 'date',

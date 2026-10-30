@@ -42,6 +42,7 @@ class DatabaseSeeder extends Seeder
         $this->call([
             CrmPermisosSeeder::class,
             CrmPlantillasWhatsappSeeder::class,
+            CrmEtiquetasActividadSeeder::class,
         ]);
     }
 }

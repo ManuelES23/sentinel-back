@@ -29,6 +29,7 @@ class ConfiguracionComercialController extends CrmBaseController
             'moneda' => $config->moneda,
             'productos_en_oportunidad' => $config->productos_en_oportunidad,
             'impuestos' => $impuestos,
+            'oportunidad_eje' => true,
         ]);
     }
 

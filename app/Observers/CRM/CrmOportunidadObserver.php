@@ -19,6 +19,21 @@ class CrmOportunidadObserver
         $this->registrar($oportunidad, null, $oportunidad->created_at ?? now());
     }
 
+    /**
+     * Al ganarse una oportunidad sin estado de cobro, queda «por cobrar».
+     * Un estado que ya existe (p. ej. capturado junto con la etapa) no se pisa.
+     */
+    public function updating(CrmOportunidad $oportunidad): void
+    {
+        if ($oportunidad->isDirty('etapa')
+            && $oportunidad->etapa === 'cerrado_ganado'
+            && $oportunidad->estado_cobro === null) {
+            $oportunidad->estado_cobro = 'por_cobrar';
+            $oportunidad->cobro_actualizado_at = now();
+            $oportunidad->cobro_actualizado_por = Auth::id();
+        }
+    }
+
     public function updated(CrmOportunidad $oportunidad): void
     {
         if (! $oportunidad->wasChanged('etapa')) {

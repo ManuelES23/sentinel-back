@@ -29,7 +29,7 @@ class SeguimientoService
 
     public const TIPOS_ACTIVIDAD = ['llamada', 'whatsapp', 'correo', 'visita', 'reunion', 'nota'];
 
-    public const TIPOS_AGENDA = ['llamada', 'visita', 'reunion', 'tarea', 'correo'];
+    public const TIPOS_AGENDA = ['llamada', 'visita', 'reunion', 'tarea', 'correo', 'whatsapp'];
 
     /**
      * El vendedor declara que envió el mensaje desde el botón de WhatsApp

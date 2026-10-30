@@ -43,7 +43,7 @@ class AgendaController extends CrmBaseController
         'empresa_externa' => CrmEmpresaExterna::class,
     ];
 
-    protected const TIPOS_AGENDA = ['llamada', 'visita', 'reunion', 'tarea', 'correo'];
+    protected const TIPOS_AGENDA = ['llamada', 'visita', 'reunion', 'tarea', 'correo', 'whatsapp'];
 
     /** Tope de pendientes vencidos devueltos de una vez (los más antiguos primero). */
     protected const LIMITE_VENCIDOS = 100;
@@ -54,6 +54,7 @@ class AgendaController extends CrmBaseController
         'visita' => 'visita',
         'reunion' => 'reunion',
         'correo' => 'correo',
+        'whatsapp' => 'whatsapp',
         'tarea' => 'nota',
     ];
 
