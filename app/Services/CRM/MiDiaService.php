@@ -182,8 +182,9 @@ class MiDiaService
 
         return [
             'vencidas' => $mapear($pendientes()->where('fecha_fin', '<', $ahora)),
+            // Sin cota inferior: un evento de varios días que empezó antes de hoy y sigue en curso cuenta como de hoy.
             'hoy' => $mapear($pendientes()
-                ->whereBetween('fecha_inicio', [$ahora->startOfDay(), $ahora->endOfDay()])
+                ->where('fecha_inicio', '<=', $ahora->endOfDay())
                 ->where('fecha_fin', '>=', $ahora)),
             'proximas' => $mapear($pendientes()
                 ->where('fecha_inicio', '>=', $ahora->addDay()->startOfDay())

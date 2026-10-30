@@ -162,6 +162,40 @@ class MiDiaOportunidadEjeTest extends TestCase
         $this->assertSame([], $agenda['vencidas']);
     }
 
+    public function test_evento_de_varios_dias_en_curso_sale_solo_en_hoy(): void
+    {
+        $enCurso = $this->evento([
+            'titulo' => 'Feria',
+            'fecha_inicio' => $this->ahora->subDay(),
+            'fecha_fin' => $this->ahora->addDay(),
+        ]);
+        $deHoy = $this->evento(['titulo' => 'Llamada', 'fecha_inicio' => $this->ahora->addHour(), 'fecha_fin' => $this->ahora->addHours(2)]);
+
+        $json = $this->miDia()->assertOk()->json('data');
+        $agenda = $json['agenda'];
+
+        // Ordenado por fecha de inicio: el que empezó ayer va primero.
+        $this->assertSame([$enCurso->id, $deHoy->id], array_column($agenda['hoy'], 'id'));
+        $this->assertSame([], $agenda['vencidas']);
+        $this->assertSame([], $agenda['proximas']);
+        // La clave clásica `hoy` no cambia: solo los que inician hoy.
+        $this->assertSame([$deHoy->id], array_column($json['hoy'], 'id'));
+    }
+
+    public function test_evento_que_empezo_ayer_y_ya_termino_sale_solo_en_vencidas(): void
+    {
+        $terminado = $this->evento([
+            'fecha_inicio' => $this->ahora->subDay(),
+            'fecha_fin' => $this->ahora->subHour(),
+        ]);
+
+        $agenda = $this->miDia()->assertOk()->json('data.agenda');
+
+        $this->assertSame([$terminado->id], array_column($agenda['vencidas'], 'id'));
+        $this->assertSame([], $agenda['hoy']);
+        $this->assertSame([], $agenda['proximas']);
+    }
+
     public function test_evento_con_oportunidad_trae_oportunidad_y_etiqueta(): void
     {
         $etiqueta = CrmEtiquetaActividad::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Seguimiento']);
