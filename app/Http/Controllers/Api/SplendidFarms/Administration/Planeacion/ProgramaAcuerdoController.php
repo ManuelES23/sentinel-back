@@ -1,8 +1,8 @@
 <?php
 
-namespace App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion;
+namespace App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion;
 
-use App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Planeacion\Concerns\PermisoProgramaSemanal;
+use App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\Concerns\PermisoProgramaSemanal;
 use App\Http\Controllers\Controller;
 use App\Models\Etapa;
 use App\Models\Planeacion\ProgramaAcuerdo;
