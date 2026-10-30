@@ -77,6 +77,13 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::put('motivos-rechazo/{motivo}', [App\Http\Controllers\Api\CRM\MotivoRechazoController::class, 'update']);
     Route::delete('motivos-rechazo/{motivo}', [App\Http\Controllers\Api\CRM\MotivoRechazoController::class, 'destroy']);
 
+    // Etiquetas de actividad por empresa (spec 2026-10-30 §8). Lectura abierta
+    // dentro del tenant; escribir exige catalogos.etiquetas-actividad.
+    Route::get('etiquetas-actividad', [App\Http\Controllers\Api\CRM\EtiquetaActividadController::class, 'index']);
+    Route::post('etiquetas-actividad', [App\Http\Controllers\Api\CRM\EtiquetaActividadController::class, 'store']);
+    Route::put('etiquetas-actividad/{etiqueta}', [App\Http\Controllers\Api\CRM\EtiquetaActividadController::class, 'update']);
+    Route::delete('etiquetas-actividad/{etiqueta}', [App\Http\Controllers\Api\CRM\EtiquetaActividadController::class, 'destroy']);
+
     // -------------------------------------------------
     // PROSPECTOS
     // CRUD + convertir-cliente + asignar-vendedor
