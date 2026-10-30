@@ -10,7 +10,7 @@ use Carbon\CarbonPeriod;
 
 /**
  * Días de un rango que se descuentan del saldo de vacaciones: los que el
- * empleado trabajaría según su horario y que no son festivo para su empresa.
+ * empleado trabajaría según su horario y que no son festivo para él (EmpresaDeFestivos).
  * El domingo no se trabaja: nunca se descuenta, aunque el horario lo marque
  * (el «Mexicano» lo trae para el checador). Horario: el propio; si no tiene, el
  * predeterminado de su empresa (enterprise_work_schedule.is_default); si no
@@ -18,6 +18,8 @@ use Carbon\CarbonPeriod;
  */
 class WorkingDaysCalculator
 {
+    public function __construct(private EmpresaDeFestivos $empresaDeFestivos) {}
+
     /** @return array{descontables: list<string>, excluidos: list<array{fecha: string, motivo: string}>} */
     public function calcular(Employee $empleado, Carbon $inicio, Carbon $fin): array
     {
@@ -30,7 +32,8 @@ class WorkingDaysCalculator
         }
 
         $horario = $this->horarioDe($empleado);
-        $festivos = Holiday::paraEmpresa($empleado->enterprise_id)
+        // Los festivos de su empresa, de la que esta sigue o de su excepción (EmpresaDeFestivos).
+        $festivos = Holiday::paraEmpresa($this->empresaDeFestivos->deEmpleado($empleado))
             ->whereBetween('date', [$inicio->format('Y-m-d'), $fin->format('Y-m-d')])
             ->get()
             ->mapWithKeys(fn (Holiday $festivo) => [$festivo->date => $festivo->name])

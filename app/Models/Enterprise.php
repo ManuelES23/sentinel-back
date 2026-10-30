@@ -25,6 +25,7 @@ class Enterprise extends Model
         'telefono',
         'description',
         'logo',
+        'holiday_source_enterprise_id',
         'domain',
         'color',
         'config',
@@ -100,6 +101,12 @@ class Enterprise extends Model
     public function activeApplications(): HasMany
     {
         return $this->applications()->where('is_active', true);
+    }
+
+    /** Festivos propios de la empresa (ver holiday_source_enterprise_id para los que sigue). */
+    public function holidays(): HasMany
+    {
+        return $this->hasMany(Holiday::class);
     }
 
     /**

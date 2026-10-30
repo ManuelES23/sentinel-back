@@ -10,6 +10,7 @@ use App\Models\VacationBalance;
 use App\Models\VacationRequest;
 use App\Models\VacationRequestApproval;
 use App\Services\RH\AprobadorVacaciones;
+use App\Services\RH\EmpresaDeFestivos;
 use App\Services\RH\SaldosVacaciones;
 use App\Services\RH\VacationRequestService;
 use App\Services\VacationCalculatorService;
@@ -251,10 +252,10 @@ class VacationController extends Controller
 
     /**
      * Festivos entre dos fechas para el calendario del equipo. Con `view` de Vacaciones
-     * (la API de Festivos pide su propio permiso). Con `enterprise_id`, los generales y los
-     * de esa empresa; sin él, todos.
+     * (la API de Festivos pide su propio permiso). Con `enterprise_id`, los que usa esa empresa
+     * (los suyos o los de la empresa que sigue); sin él, los de todas con el nombre de su empresa.
      */
-    public function festivosRango(Request $request): JsonResponse
+    public function festivosRango(Request $request, EmpresaDeFestivos $empresaDeFestivos): JsonResponse
     {
         $this->exigir('view');
 
@@ -267,12 +268,17 @@ class VacationController extends Controller
             throw ValidationException::withMessages(['hasta' => 'El rango no puede pasar de 400 días.']);
         }
 
-        $festivos = Holiday::whereBetween('date', [$datos['desde'], $datos['hasta']])
-            ->when($datos['enterprise_id'] ?? null, fn ($q, $empresa) => $q->where(
-                fn ($q) => $q->whereNull('enterprise_id')->orWhere('enterprise_id', $empresa),
-            ))
+        $festivos = Holiday::with('enterprise:id,name')
+            ->whereBetween('date', [$datos['desde'], $datos['hasta']])
+            ->when($datos['enterprise_id'] ?? null, fn ($q, $empresa) => $q->paraEmpresa($empresaDeFestivos->deEmpresa((int) $empresa)))
             ->orderBy('date')->orderBy('id')
-            ->get(['date', 'name', 'enterprise_id']);
+            ->get(['date', 'name', 'enterprise_id'])
+            ->map(fn (Holiday $festivo) => [
+                'date' => $festivo->date,
+                'name' => $festivo->name,
+                'enterprise_id' => $festivo->enterprise_id,
+                'empresa' => $festivo->enterprise?->name,
+            ]);
 
         return response()->json(['success' => true, 'data' => $festivos]);
     }
