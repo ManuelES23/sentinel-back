@@ -10,11 +10,14 @@ use App\Services\RH\FestivosOficiales;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
 /**
  * Catálogo de días festivos (spec §4.4) con los permisos del submódulo RH → Gestión → Festivos.
- * Un cambio solo afecta las solicitudes NUEVAS: las existentes conservan los días que ya se les descontaron.
+ * Cada festivo es de una empresa; cada empresa usa los suyos o los de otra (`empresas`), y el
+ * empleado puede tener su excepción (ver EmpresaDeFestivos). Un cambio solo afecta las solicitudes
+ * NUEVAS: las existentes conservan los días que ya se les descontaron.
  */
 class HolidayController extends Controller
 {
@@ -32,6 +35,7 @@ class HolidayController extends Controller
             'success' => true,
             'data' => Holiday::with('enterprise:id,name')
                 ->whereBetween('date', ["{$anio}-01-01", "{$anio}-12-31"])
+                ->when($request->filled('enterprise_id'), fn ($q) => $q->where('enterprise_id', (int) $request->enterprise_id))
                 ->orderBy('date')->orderBy('id')
                 ->get(),
             'meta' => ['year' => $anio],
@@ -61,7 +65,7 @@ class HolidayController extends Controller
         $datos = $this->validar($request);
         $this->exigirUnico($datos['date'], $datos['enterprise_id'] ?? null, $holiday->id);
 
-        $holiday->update($datos + ['enterprise_id' => null]);
+        $holiday->update($datos);
 
         return response()->json([
             'success' => true,
@@ -83,14 +87,76 @@ class HolidayController extends Controller
     {
         $this->exigir('create');
 
-        $anio = (int) $request->validate(['year' => 'required|integer|min:2000|max:2100'])['year'];
-        $creados = $oficiales->cargar($anio);
-        $existentes = count($oficiales->paraAnio($anio)) - $creados;
+        $datos = $request->validate([
+            'year' => 'required|integer|min:2000|max:2100',
+            'enterprise_id' => 'required|integer|exists:enterprises,id',
+            'pais' => ['nullable', Rule::in(FestivosOficiales::PAISES)],
+        ]);
+        $anio = (int) $datos['year'];
+        $pais = $datos['pais'] ?? FestivosOficiales::MEXICO;
+        $creados = $oficiales->cargar($anio, (int) $datos['enterprise_id'], $pais);
+        $existentes = count($oficiales->paraAnio($anio, $pais)) - $creados;
 
         return response()->json([
             'success' => true,
             'message' => "Festivos oficiales {$anio}: {$creados} nuevos, {$existentes} ya existían.",
             'data' => ['creados' => $creados, 'existentes' => $existentes],
+        ]);
+    }
+
+    /** Empresas activas con la empresa cuyos festivos siguen y cuántos festivos propios tienen en el año. */
+    public function empresas(Request $request): JsonResponse
+    {
+        $this->exigir('view');
+
+        $anio = (int) ($request->validate(['year' => 'nullable|integer|min:2000|max:2100'])['year'] ?? now()->year);
+
+        $empresas = Enterprise::where('is_active', true)->orderBy('name')
+            ->withCount(['holidays as festivos_propios' => fn ($q) => $q->whereBetween('date', ["{$anio}-01-01", "{$anio}-12-31"])])
+            ->get(['id', 'name', 'slug', 'holiday_source_enterprise_id']);
+
+        return response()->json([
+            'success' => true,
+            'data' => $empresas->map(fn (Enterprise $empresa) => [
+                'id' => $empresa->id,
+                'name' => $empresa->name,
+                'slug' => $empresa->slug,
+                'holiday_source_enterprise_id' => $empresa->holiday_source_enterprise_id,
+                'festivos_propios' => (int) $empresa->festivos_propios,
+            ])->values(),
+            'meta' => ['year' => $anio],
+        ]);
+    }
+
+    /**
+     * Qué festivos sigue una empresa: null = los suyos. Sin cadenas (a un solo nivel): no se sigue
+     * a sí misma, no sigue a una que ya sigue a otra, y no puede seguir a otra mientras alguien la sigue.
+     */
+    public function actualizarEmpresa(Request $request, Enterprise $enterprise): JsonResponse
+    {
+        $this->exigir('edit');
+
+        $fuente = $request->validate(['holiday_source_enterprise_id' => 'present|nullable|integer|exists:enterprises,id'])['holiday_source_enterprise_id'];
+        $fuente = $fuente !== null ? (int) $fuente : null;
+
+        if ($fuente !== null) {
+            $error = match (true) {
+                $fuente === $enterprise->id => 'Una empresa no puede seguirse a sí misma: elige «Los suyos».',
+                Enterprise::whereKey($fuente)->whereNotNull('holiday_source_enterprise_id')->exists() => 'Esa empresa ya sigue los festivos de otra: elige una con festivos propios.',
+                Enterprise::where('holiday_source_enterprise_id', $enterprise->id)->exists() => "Otras empresas siguen los festivos de {$enterprise->name}: cámbialas primero.",
+                default => null,
+            };
+            if ($error) {
+                throw ValidationException::withMessages(['holiday_source_enterprise_id' => [$error]]);
+            }
+        }
+
+        $enterprise->update(['holiday_source_enterprise_id' => $fuente]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Festivos de la empresa actualizados.',
+            'data' => ['id' => $enterprise->id, 'holiday_source_enterprise_id' => $fuente],
         ]);
     }
 
@@ -111,7 +177,7 @@ class HolidayController extends Controller
         return $request->validate([
             'date' => 'required|date_format:Y-m-d|after_or_equal:2000-01-01|before_or_equal:2100-12-31',
             'name' => 'required|string|max:100',
-            'enterprise_id' => 'nullable|integer|exists:enterprises,id',
+            'enterprise_id' => 'required|integer|exists:enterprises,id',
         ]);
     }
 

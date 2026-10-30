@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\GrupoEsplendido\RH\Vacaciones;
 
+use App\Models\Enterprise;
 use App\Models\Holiday;
 use App\Services\RH\FestivosOficiales;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -29,11 +30,13 @@ class FestivosOficialesTest extends TestCase
 
     public function test_el_comando_carga_los_oficiales_sin_duplicar(): void
     {
+        // Sin --empresa los mexicanos van a Splendid Farms.
+        $sf = Enterprise::create(['name' => 'Splendid Farms', 'slug' => 'splendidfarms', 'description' => 'Agrícola', 'is_active' => true]);
         $this->artisan('vacaciones:festivos', ['anio' => 2026])->assertSuccessful();
         $this->artisan('vacaciones:festivos', ['anio' => 2026])->assertSuccessful();
 
         $this->assertSame(7, Holiday::count());
-        $this->assertTrue(Holiday::where('date', '2026-09-16')->whereNull('enterprise_id')->where('is_official', true)->exists());
+        $this->assertTrue(Holiday::where('date', '2026-09-16')->where('enterprise_id', $sf->id)->where('is_official', true)->exists());
     }
 
     public function test_el_comando_rechaza_un_anio_invalido(): void

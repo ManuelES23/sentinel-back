@@ -49,15 +49,15 @@ class FestivosApiTest extends TestCase
     public function test_alta_edicion_y_baja_cada_una_con_su_permiso(): void
     {
         $this->concederFestivos($this->rh, 'create');
-        $id = $this->postJson(self::BASE, ['date' => '2026-11-05', 'name' => 'Festivo local'])
+        $id = $this->postJson(self::BASE, ['date' => '2026-11-05', 'name' => 'Festivo local', 'enterprise_id' => $this->empresa->id])
             ->assertCreated()
             ->assertJsonPath('data.date', '2026-11-05')
             ->assertJsonPath('data.is_official', false)
             ->json('data.id');
 
-        $this->putJson(self::BASE."/{$id}", ['date' => '2026-11-06', 'name' => 'Festivo local'])->assertForbidden();
+        $this->putJson(self::BASE."/{$id}", ['date' => '2026-11-06', 'name' => 'Festivo local', 'enterprise_id' => $this->empresa->id])->assertForbidden();
         $this->concederFestivos($this->rh, 'edit');
-        $this->putJson(self::BASE."/{$id}", ['date' => '2026-11-06', 'name' => 'Festivo movido'])
+        $this->putJson(self::BASE."/{$id}", ['date' => '2026-11-06', 'name' => 'Festivo movido', 'enterprise_id' => $this->empresa->id])
             ->assertOk()
             ->assertJsonPath('data.date', '2026-11-06')
             ->assertJsonPath('data.name', 'Festivo movido');
@@ -68,26 +68,23 @@ class FestivosApiTest extends TestCase
         $this->assertDatabaseMissing('holidays', ['id' => $id]);
     }
 
-    public function test_no_permite_repetir_la_fecha_general_ni_la_de_una_empresa(): void
+    public function test_no_permite_repetir_la_fecha_en_la_misma_empresa(): void
     {
         $this->concederFestivos($this->rh, 'create', 'edit');
-        Holiday::create(['date' => '2026-12-25', 'name' => 'Navidad']);
         Holiday::create(['date' => '2026-12-25', 'name' => 'Navidad SF', 'enterprise_id' => $this->empresa->id]);
 
-        $this->postJson(self::BASE, ['date' => '2026-12-25', 'name' => 'Otra Navidad'])
-            ->assertStatus(422)->assertJsonValidationErrors('date');
         $this->postJson(self::BASE, ['date' => '2026-12-25', 'name' => 'Otra Navidad SF', 'enterprise_id' => $this->empresa->id])
             ->assertStatus(422)->assertJsonValidationErrors('date');
-        $this->assertSame(2, Holiday::count());
+        $this->assertSame(1, Holiday::count());
     }
 
     public function test_la_misma_fecha_en_otra_empresa_si_se_permite_y_editarse_a_si_mismo_tambien(): void
     {
         $this->concederFestivos($this->rh, 'create', 'edit');
-        $general = Holiday::create(['date' => '2026-12-25', 'name' => 'Navidad']);
+        $deSf = Holiday::create(['date' => '2026-12-25', 'name' => 'Navidad SF', 'enterprise_id' => $this->empresa->id]);
 
-        $this->postJson(self::BASE, ['date' => '2026-12-25', 'name' => 'Navidad SF', 'enterprise_id' => $this->empresa->id])->assertCreated();
-        $this->putJson(self::BASE."/{$general->id}", ['date' => '2026-12-25', 'name' => 'Navidad (nuevo nombre)'])->assertOk();
+        $this->postJson(self::BASE, ['date' => '2026-12-25', 'name' => 'Navidad GE', 'enterprise_id' => $this->corporativo->id])->assertCreated();
+        $this->putJson(self::BASE."/{$deSf->id}", ['date' => '2026-12-25', 'name' => 'Navidad (nuevo nombre)', 'enterprise_id' => $this->empresa->id])->assertOk();
     }
 
     public function test_valida_el_formato_de_la_fecha_y_el_nombre(): void
@@ -105,13 +102,14 @@ class FestivosApiTest extends TestCase
     {
         $this->concederFestivos($this->rh, 'create');
 
-        $this->postJson(self::BASE.'/cargar-oficiales', ['year' => 2027])
+        $cuerpo = ['year' => 2027, 'enterprise_id' => $this->empresa->id];
+        $this->postJson(self::BASE.'/cargar-oficiales', $cuerpo)
             ->assertOk()->assertJsonPath('data.creados', 7)->assertJsonPath('data.existentes', 0);
-        $this->postJson(self::BASE.'/cargar-oficiales', ['year' => 2027])
+        $this->postJson(self::BASE.'/cargar-oficiales', $cuerpo)
             ->assertOk()->assertJsonPath('data.creados', 0)->assertJsonPath('data.existentes', 7);
 
-        $this->assertSame(7, Holiday::whereNull('enterprise_id')->where('is_official', true)->count());
-        $this->postJson(self::BASE.'/cargar-oficiales', ['year' => 1999])->assertStatus(422);
+        $this->assertSame(7, Holiday::where('enterprise_id', $this->empresa->id)->where('is_official', true)->count());
+        $this->postJson(self::BASE.'/cargar-oficiales', ['year' => 1999, 'enterprise_id' => $this->empresa->id])->assertStatus(422);
     }
 
     public function test_mis_permisos(): void
