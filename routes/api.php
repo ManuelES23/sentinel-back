@@ -1116,6 +1116,8 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::prefix('festivos')->group(function () {
                 Route::get('mis-permisos', [App\Http\Controllers\Api\GrupoEsplendido\RH\HolidayController::class, 'misPermisos']);
                 Route::post('cargar-oficiales', [App\Http\Controllers\Api\GrupoEsplendido\RH\HolidayController::class, 'cargarOficiales']);
+                Route::get('empresas', [App\Http\Controllers\Api\GrupoEsplendido\RH\HolidayController::class, 'empresas']);
+                Route::put('empresas/{enterprise}', [App\Http\Controllers\Api\GrupoEsplendido\RH\HolidayController::class, 'actualizarEmpresa']);
             });
             Route::apiResource('festivos', App\Http\Controllers\Api\GrupoEsplendido\RH\HolidayController::class)
                 ->parameters(['festivos' => 'holiday'])

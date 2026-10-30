@@ -105,6 +105,8 @@ class EmployeeController extends Controller
             'contract_type' => 'nullable|in:permanent,temporary,contractor,intern',
             'work_shift' => 'nullable|in:morning,afternoon,night,mixed,flexible',
             'work_schedule_id' => 'nullable|exists:work_schedules,id',
+            // Excepción de festivos: los de otra empresa (nulo = los de la suya).
+            'holiday_source_enterprise_id' => 'nullable|integer|exists:enterprises,id',
             'salary' => 'nullable|numeric|min:0',
             'payment_frequency' => 'nullable|in:weekly,biweekly,monthly',
             'notes' => 'nullable|string',
@@ -114,6 +116,7 @@ class EmployeeController extends Controller
         if ($duplicado = $this->duplicado($validated)) {
             return $duplicado;
         }
+        $validated = $this->sinExcepcionPropia($validated, (int) $validated['enterprise_id']);
 
         // Generar número de empleado y códigos
         $validated['employee_number'] = Employee::generateEmployeeNumber($validated['enterprise_id']);
@@ -199,6 +202,7 @@ class EmployeeController extends Controller
             'contract_type' => 'nullable|in:permanent,temporary,contractor,intern',
             'work_shift' => 'nullable|in:morning,afternoon,night,mixed,flexible',
             'work_schedule_id' => 'nullable|exists:work_schedules,id',
+            'holiday_source_enterprise_id' => 'nullable|integer|exists:enterprises,id',
             'salary' => 'nullable|numeric|min:0',
             'payment_frequency' => 'nullable|in:weekly,biweekly,monthly',
             'status' => 'nullable|in:active,inactive,on_leave,terminated',
@@ -209,6 +213,7 @@ class EmployeeController extends Controller
         if ($duplicado = $this->duplicado($validated, $employee->id)) {
             return $duplicado;
         }
+        $validated = $this->sinExcepcionPropia($validated, (int) ($validated['enterprise_id'] ?? $employee->enterprise_id));
 
         // No puede ser su propio supervisor
         if (isset($validated['reports_to']) && $validated['reports_to'] == $employee->id) {
@@ -267,6 +272,16 @@ class EmployeeController extends Controller
             'message' => 'Empleado restaurado',
             'data' => $employee,
         ]);
+    }
+
+    /** Elegir los festivos de su propia empresa no es una excepción: se guarda nulo. */
+    private function sinExcepcionPropia(array $datos, int $empresaId): array
+    {
+        if (array_key_exists('holiday_source_enterprise_id', $datos) && (int) $datos['holiday_source_enterprise_id'] === $empresaId) {
+            $datos['holiday_source_enterprise_id'] = null;
+        }
+
+        return $datos;
     }
 
     /**

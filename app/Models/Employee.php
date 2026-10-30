@@ -49,6 +49,7 @@ class Employee extends Model
         'qr_code',
         'pin',
         'checker_key',
+        'holiday_source_enterprise_id',
         'status',
         'photo',
         'notes',
