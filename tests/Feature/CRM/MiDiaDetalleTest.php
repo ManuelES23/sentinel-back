@@ -243,6 +243,45 @@ class MiDiaDetalleTest extends TestCase
         $this->assertNull($seg[1]['etiqueta']);
     }
 
+    public function test_perdida_trae_motivo_del_catalogo_y_texto_libre(): void
+    {
+        $categoria = \App\Models\CRM\CrmCategoriaRechazo::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Precio']);
+        $motivo = \App\Models\CRM\CrmMotivoRechazo::create(['categoria_id' => $categoria->id, 'nombre' => 'Muy caro']);
+        $op = $this->oportunidad($this->propio, ['etapa' => 'cerrado_perdido']);
+        $op->forceFill(['motivo_rechazo_id' => $motivo->id, 'motivo_perdida' => 'Compró con la competencia'])->saveQuietly();
+
+        $json = $this->detalle($op)->assertOk()->json('data.oportunidad');
+
+        $this->assertSame('Compró con la competencia', $json['motivo_perdida']);
+        $this->assertSame(
+            ['id' => $motivo->id, 'nombre' => 'Muy caro', 'categoria' => ['id' => $categoria->id, 'nombre' => 'Precio']],
+            $json['motivo_rechazo'],
+        );
+    }
+
+    public function test_perdida_solo_con_texto_libre(): void
+    {
+        $op = $this->oportunidad($this->propio, ['etapa' => 'cerrado_perdido']);
+        $op->forceFill(['motivo_perdida' => 'Ya no le interesó'])->saveQuietly();
+
+        $json = $this->detalle($op)->assertOk()->json('data.oportunidad');
+
+        $this->assertSame('Ya no le interesó', $json['motivo_perdida']);
+        $this->assertNull($json['motivo_rechazo']);
+    }
+
+    public function test_abierta_trae_motivos_nulos(): void
+    {
+        $op = $this->oportunidad($this->propio);
+
+        $json = $this->detalle($op)->assertOk()->json('data.oportunidad');
+
+        $this->assertArrayHasKey('motivo_perdida', $json);
+        $this->assertArrayHasKey('motivo_rechazo', $json);
+        $this->assertNull($json['motivo_perdida']);
+        $this->assertNull($json['motivo_rechazo']);
+    }
+
     public function test_seguimiento_tope_30(): void
     {
         $op = $this->oportunidad();

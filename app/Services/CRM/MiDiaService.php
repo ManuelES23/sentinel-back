@@ -34,8 +34,17 @@ class MiDiaService
     /** Columnas del tablero, en orden: las etapas abiertas y Ganada. */
     public const ETAPAS_TABLERO = ['prospecto', 'calificado', 'propuesta', 'negociacion', 'cerrado_ganado'];
 
-    /** Lo que necesita OportunidadMiDia: entidad y cotizaciones (columnas mínimas) para el origen del monto. */
-    public const CARGA_OPORTUNIDAD = ['cliente:id,nombre', 'prospecto:id,nombre', CrmOportunidad::CARGA_COTIZACIONES];
+    /**
+     * Lo que necesita OportunidadMiDia (columnas mínimas): entidad, cotizaciones para el
+     * origen del monto y el motivo de rechazo con su categoría (solo hay en las perdidas).
+     */
+    public const CARGA_OPORTUNIDAD = [
+        'cliente:id,nombre',
+        'prospecto:id,nombre',
+        CrmOportunidad::CARGA_COTIZACIONES,
+        'motivoRechazo:id,categoria_id,nombre',
+        'motivoRechazo.categoria:id,nombre',
+    ];
 
     private const CARGA_EVENTO = ['etiqueta:id,nombre', 'entidad'];
 
@@ -156,6 +165,15 @@ class MiDiaService
             'monto_origen' => $op->montoOrigen(),
             'estado_cobro' => $op->estado_cobro,
             'entidad' => $this->entidad($op->cliente ?? $op->prospecto),
+            // Solo las perdidas los tienen; null en el resto.
+            'motivo_perdida' => $op->motivo_perdida,
+            'motivo_rechazo' => $op->motivoRechazo ? [
+                'id' => $op->motivoRechazo->id,
+                'nombre' => $op->motivoRechazo->nombre,
+                'categoria' => $op->motivoRechazo->categoria
+                    ? ['id' => $op->motivoRechazo->categoria->id, 'nombre' => $op->motivoRechazo->categoria->nombre]
+                    : null,
+            ] : null,
         ];
     }
 

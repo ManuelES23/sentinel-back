@@ -225,6 +225,8 @@ class MiDiaOportunidadEjeTest extends TestCase
             'monto_origen' => ['tipo' => 'cotizacion', 'folio' => 'COT-0139'],
             'estado_cobro' => $op->fresh()->estado_cobro,
             'entidad' => ['tipo' => 'cliente', 'id' => $op->cliente_id, 'nombre' => $op->cliente->nombre],
+            'motivo_perdida' => null,
+            'motivo_rechazo' => null,
         ], $item['oportunidad']);
         // Forma clásica del evento intacta.
         $this->assertSame('oportunidad', $item['entidad']['tipo']);
