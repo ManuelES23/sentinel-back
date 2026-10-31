@@ -36,6 +36,10 @@ class OportunidadController extends CrmBaseController
     use VerificaPermisoSubmodulo;
 
     private const RELACIONES = CrmOportunidad::RELACIONES_API;
+    private const PREFIJO_COBRO_RECHAZADO = 'Cobro rechazado: ';
+
+    /** Mensaje del 422 cuando monto_esperado no cabe en decimal(12,2). */
+    private const MENSAJE_MONTO_MAXIMO = ['monto_esperado.max' => 'El monto es demasiado grande.'];
 
     public function __construct(
         private readonly VisibilidadOportunidades $visibilidad,
@@ -95,7 +99,7 @@ class OportunidadController extends CrmBaseController
         return $termino === '' ? null : $termino;
     }
 
-    /** GET /crm/oportunidades/resumen --cifras de la cabecera del tablero (spec 2026-10-08 §6.4). */
+    /** GET /crm/oportunidades/resumen -- cifras de la cabecera del tablero (spec 2026-10-08 §6.4). */
     public function resumen(Request $request, EmbudoService $embudos, DashboardResumenService $metricas): JsonResponse
     {
         $empresaId = $this->getEmpresaId();
@@ -147,12 +151,12 @@ class OportunidadController extends CrmBaseController
             'cliente_id' => ['nullable', 'integer', $this->existeEnEmpresa('crm_clientes', $empresaId)],
             'vendedor_id' => ['required', 'integer', $this->existeEnEmpresa('crm_vendedores', $empresaId)],
             'nombre' => 'required|string|max:255',
-            'monto_esperado' => 'nullable|numeric|min:0',
+            'monto_esperado' => ['nullable', 'numeric', 'min:0', 'max:'.CrmOportunidad::MONTO_MAXIMO],
             'probabilidad' => 'nullable|integer|min:0|max:100',
             'fecha_cierre_esperada' => 'nullable|date',
             'notas' => 'nullable|string',
             'tipo_producto' => $this->apertura->reglasTipoProducto($empresaId, $conProductos),
-        ] + $this->reglasProductos($empresaId, $conProductos, 'required'));
+        ] + $this->reglasProductos($empresaId, $conProductos, 'required'), self::MENSAJE_MONTO_MAXIMO);
 
         // Asignarla a otro vendedor es decisión de gerencia (misma regla que
         // update): sin equipo solo al CrmVendedor activo propio.
@@ -258,12 +262,12 @@ class OportunidadController extends CrmBaseController
             'cliente_id' => ['sometimes', 'nullable', 'integer', $this->existeEnEmpresa('crm_clientes', $empresaId)],
             'vendedor_id' => ['sometimes', 'required', 'integer', $this->existeEnEmpresa('crm_vendedores', $empresaId)],
             'nombre' => 'sometimes|required|string|max:255',
-            'monto_esperado' => 'sometimes|nullable|numeric|min:0',
+            'monto_esperado' => ['sometimes', 'nullable', 'numeric', 'min:0', 'max:'.CrmOportunidad::MONTO_MAXIMO],
             'probabilidad' => 'sometimes|nullable|integer|min:0|max:100',
             'fecha_cierre_esperada' => 'sometimes|nullable|date',
             'notas' => 'sometimes|nullable|string',
             'tipo_producto' => $this->apertura->reglasTipoProducto($empresaId, $conProductos, $oportunidad),
-        ] + $this->reglasProductos($empresaId, $conProductos, 'sometimes'));
+        ] + $this->reglasProductos($empresaId, $conProductos, 'sometimes'), self::MENSAJE_MONTO_MAXIMO);
         $this->exigirTipoProductoNoVacio($empresaId, $conProductos, $oportunidad, $validated);
 
         $lineas = null;
@@ -575,52 +579,70 @@ class OportunidadController extends CrmBaseController
             'motivo' => ['required_if:estado,rechazada', 'nullable', 'string', 'max:1000'],
         ]);
 
-        if ($oportunidad->etapa !== 'cerrado_ganado') {
-            throw ValidationException::withMessages([
-                'estado' => 'Solo las oportunidades ganadas tienen estado de cobro.',
-            ]);
-        }
-
         $estado = $validated['estado'];
-        if ($oportunidad->estado_cobro === $estado) {
-            // Mismo estado: no hay cambio, no se escribe ni se avisa a nadie.
-            $oportunidad->load(self::RELACIONES)->conMontoOrigen();
+        $motivo = trim((string) ($validated['motivo'] ?? ''));
 
-            return $this->jsonSuccess($oportunidad, 'Estado de cobro actualizado correctamente');
-        }
+        // Se relee la fila con bloqueo: dos clics o dos gerentes a la vez no duplican
+        // la nota ni pisan quién y cuándo cambió el cobro (de ahí salen las comisiones).
+        [$oportunidad, $actividad] = DB::transaction(function () use ($oportunidad, $estado, $motivo) {
+            $fila = CrmOportunidad::whereKey($oportunidad->id)->lockForUpdate()->firstOrFail();
 
-        $descripcion = match ($estado) {
-            'por_cobrar' => 'Cobro: Por cobrar',
-            'cobrada' => 'Cobro: Cobrada',
-            'rechazada' => 'Cobro rechazado: '.$validated['motivo'],
-        };
+            if ($fila->etapa !== 'cerrado_ganado') {
+                throw ValidationException::withMessages([
+                    'estado' => 'Solo las oportunidades ganadas tienen estado de cobro.',
+                ]);
+            }
 
-        $actividad = DB::transaction(function () use ($oportunidad, $estado, $descripcion) {
-            $oportunidad->update([
+            if ($fila->estado_cobro === $estado && ($estado !== 'rechazada' || $this->ultimoMotivoDeRechazo($fila) === $motivo)) {
+                // Sin cambio real: no se escribe ni se avisa a nadie.
+                return [$fila, null];
+            }
+
+            $fila->update([
                 'estado_cobro' => $estado,
                 'cobro_actualizado_at' => now(),
                 'cobro_actualizado_por' => Auth::id(),
             ]);
 
-            return CrmActividad::create([
-                'empresa_id' => $oportunidad->empresa_id,
+            return [$fila, CrmActividad::create([
+                'empresa_id' => $fila->empresa_id,
                 'tipo' => 'nota',
                 'entidad_type' => CrmOportunidad::class,
-                'entidad_id' => $oportunidad->id,
-                'vendedor_id' => $oportunidad->vendedor_id,
-                'descripcion' => $descripcion,
+                'entidad_id' => $fila->id,
+                'vendedor_id' => $fila->vendedor_id,
+                'descripcion' => match ($estado) {
+                    'por_cobrar' => 'Cobro: Por cobrar',
+                    'cobrada' => 'Cobro: Cobrada',
+                    'rechazada' => self::PREFIJO_COBRO_RECHAZADO.$motivo,
+                },
                 'fecha_actividad' => now(),
                 'fuente' => 'sistema',
-            ]);
+            ])];
         });
         $oportunidad->load(self::RELACIONES)->conMontoOrigen();
-        $actividad->load(ActividadController::RELACIONES);
-        $actividad->entidad_tipo = 'oportunidad';
 
-        $this->difundir(new OportunidadUpdated('updated', $oportunidad->toArray()));
-        $this->difundir(new ActividadUpdated('created', $actividad->toArray()));
+        if ($actividad !== null) {
+            $actividad->load(ActividadController::RELACIONES);
+            $actividad->entidad_tipo = 'oportunidad';
+
+            $this->difundir(new OportunidadUpdated('updated', $oportunidad->toArray()));
+            $this->difundir(new ActividadUpdated('created', $actividad->toArray()));
+        }
 
         return $this->jsonSuccess($oportunidad, 'Estado de cobro actualizado correctamente');
+    }
+
+    /** Motivo de la última nota «Cobro rechazado: …» de la oportunidad (el motivo solo vive en la nota). */
+    private function ultimoMotivoDeRechazo(CrmOportunidad $oportunidad): ?string
+    {
+        $descripcion = CrmActividad::where('entidad_type', CrmOportunidad::class)
+            ->where('entidad_id', $oportunidad->id)
+            ->where('fuente', 'sistema')
+            ->where('descripcion', 'like', self::PREFIJO_COBRO_RECHAZADO.'%')
+            ->orderByDesc('id')
+            ->value('descripcion');
+
+        return $descripcion === null ? null : substr($descripcion, strlen(self::PREFIJO_COBRO_RECHAZADO));
     }
 
     /** Eventos de agenda aún pendientes ligados a la oportunidad (de cualquier vendedor). */
@@ -636,7 +658,7 @@ class OportunidadController extends CrmBaseController
     /** Emite AgendaUpdated por evento, con el vendedor cargado como los demás emisores de agenda. */
     private function difundirEventos(string $accion, Collection $eventos): void
     {
-        $eventos->load('vendedor:id,nombre');
+        $eventos->load(['vendedor:id,nombre', 'etiqueta:id,nombre']);
         foreach ($eventos as $evento) {
             $this->difundir(new AgendaUpdated($accion, $evento->toArray()));
         }

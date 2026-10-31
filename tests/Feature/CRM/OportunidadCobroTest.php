@@ -9,6 +9,7 @@ use App\Models\CRM\CrmCliente;
 use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmVendedor;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Laravel\Sanctum\Sanctum;
 use Tests\Concerns\CreatesCrmFixtures;
@@ -207,6 +208,57 @@ class OportunidadCobroTest extends TestCase
         $this->assertNull($this->ganada->fresh()->cobro_actualizado_por);
         Event::assertNotDispatched(OportunidadUpdated::class);
         Event::assertNotDispatched(ActividadUpdated::class);
+    }
+
+    public function test_dos_llamadas_iguales_dejan_una_sola_nota_y_un_solo_sello(): void
+    {
+        $this->permisos();
+
+        $this->cobro($this->ganada, ['estado' => 'cobrada'])->assertOk();
+        $sello = $this->ganada->fresh()->cobro_actualizado_at;
+        $this->travel(5)->minutes();
+        $this->cobro($this->ganada, ['estado' => 'cobrada'])->assertOk();
+
+        $this->assertSame(1, $this->actividadesDe($this->ganada)->count());
+        $this->assertTrue($sello->equalTo($this->ganada->fresh()->cobro_actualizado_at));
+    }
+
+    public function test_instancia_vieja_se_revalida_contra_la_fila_bloqueada(): void
+    {
+        $this->permisos();
+        $id = $this->ganada->id;
+        $otroGerente = \App\Models\User::factory()->create()->id;
+        $una = false;
+        // Simula a otro gerente: cambia el cobro justo después de cargar la oportunidad
+        // (la instancia del controlador queda vieja) y antes de tomar el bloqueo.
+        CrmOportunidad::retrieved(function (CrmOportunidad $op) use (&$una, $id, $otroGerente) {
+            if (! $una && $op->id === $id) {
+                $una = true;
+                DB::table('crm_oportunidades')->where('id', $id)->update([
+                    'estado_cobro' => 'cobrada', 'cobro_actualizado_por' => $otroGerente,
+                ]);
+            }
+        });
+
+        $this->cobro($this->ganada, ['estado' => 'cobrada'])->assertOk()->assertJsonPath('data.estado_cobro', 'cobrada');
+
+        $this->assertSame(0, $this->actividadesDe($this->ganada)->count(), 'No hay cambio real: ninguna nota.');
+        $this->assertSame($otroGerente, (int) $this->ganada->fresh()->cobro_actualizado_por, 'El sello del otro gerente no se pisa.');
+    }
+
+    public function test_rechazada_con_otro_motivo_es_un_cambio_real(): void
+    {
+        $this->permisos();
+        $this->cobro($this->ganada, ['estado' => 'rechazada', 'motivo' => 'Sin factura'])->assertOk();
+        $this->cobro($this->ganada, ['estado' => 'rechazada', 'motivo' => 'Sin factura'])->assertOk();
+        $this->assertSame(1, $this->actividadesDe($this->ganada)->count(), 'Mismo estado y mismo motivo: no-op.');
+
+        $this->cobro($this->ganada, ['estado' => 'rechazada', 'motivo' => 'Monto incorrecto'])->assertOk();
+
+        $this->assertSame(
+            ['Cobro rechazado: Sin factura', 'Cobro rechazado: Monto incorrecto'],
+            $this->actividadesDe($this->ganada)->orderBy('id')->pluck('descripcion')->all(),
+        );
     }
 
     public function test_ajena_sin_equipo_403(): void

@@ -167,6 +167,19 @@ class OportunidadCierreYMovimientosTest extends TestCase
         });
     }
 
+    public function test_el_aviso_de_agenda_al_perder_lleva_la_etiqueta(): void
+    {
+        $this->permisos(['ver', 'editar']);
+        $etiqueta = \App\Models\CRM\CrmEtiquetaActividad::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Seguimiento']);
+        $pendiente = $this->evento($this->propia, $this->propio->id);
+        $pendiente->update(['etiqueta_id' => $etiqueta->id]);
+        Event::fake([AgendaUpdated::class, OportunidadUpdated::class]);
+
+        $this->cambiarEtapa($this->propia, ['etapa' => 'cerrado_perdido', 'motivo_perdida' => 'Precio'])->assertOk();
+
+        Event::assertDispatched(AgendaUpdated::class, fn (AgendaUpdated $e) => ($e->data['etiqueta']['nombre'] ?? null) === 'Seguimiento');
+    }
+
     public function test_ganar_no_toca_los_eventos_pendientes(): void
     {
         $this->permisos(['ver', 'editar', 'cerrar']);
