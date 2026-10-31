@@ -39,7 +39,7 @@ class MiDiaService
      * origen del monto y el motivo de rechazo con su categoría (solo hay en las perdidas).
      */
     public const CARGA_OPORTUNIDAD = [
-        'cliente:id,nombre',
+        'cliente:id,nombre,prospecto_id',
         'prospecto:id,nombre',
         CrmOportunidad::CARGA_COTIZACIONES,
         'motivoRechazo:id,categoria_id,nombre',
@@ -300,11 +300,19 @@ class MiDiaService
             ->where('entidad_type', $clase)
             ->whereColumn('entidad_id', "crm_oportunidades.{$columna}");
 
+        // El prospecto es el propio de la oportunidad o, si ya se convirtió (prospecto_id = null),
+        // aquel del que salió su cliente: el historial capturado en el prospecto no se pierde.
+        $ultimaActividadDelProspecto = CrmActividad::query()
+            ->selectRaw('MAX(fecha_actividad)')
+            ->where('crm_actividades.empresa_id', $empresaId)
+            ->where('entidad_type', CrmProspecto::class)
+            ->whereRaw('entidad_id = COALESCE(crm_oportunidades.prospecto_id, (SELECT crm_clientes.prospecto_id FROM crm_clientes WHERE crm_clientes.id = crm_oportunidades.cliente_id))');
+
         return CrmOportunidad::query()
             ->select('crm_oportunidades.*')
             ->selectSub($ultimaActividad(CrmOportunidad::class, 'id'), 'ultima_act_oportunidad')
             ->selectSub($ultimaActividad(CrmCliente::class, 'cliente_id'), 'ultima_act_cliente')
-            ->selectSub($ultimaActividad(CrmProspecto::class, 'prospecto_id'), 'ultima_act_prospecto')
+            ->selectSub($ultimaActividadDelProspecto, 'ultima_act_prospecto')
             ->with(['cliente:id,nombre', 'prospecto:id,nombre'])
             ->where('crm_oportunidades.empresa_id', $empresaId)
             ->where('vendedor_id', $vendedorId)

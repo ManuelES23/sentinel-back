@@ -103,7 +103,8 @@ class MiDiaDetalleService
         $fuentes = array_filter([
             CrmOportunidad::class => $oportunidad->id,
             CrmCliente::class => $oportunidad->cliente_id,
-            CrmProspecto::class => $oportunidad->prospecto_id,
+            // Una oportunidad movida al cliente al convertir el prospecto conserva su historial.
+            CrmProspecto::class => $oportunidad->prospecto_id ?? $oportunidad->cliente?->prospecto_id,
         ]);
 
         return CrmActividad::with('etiqueta:id,nombre')

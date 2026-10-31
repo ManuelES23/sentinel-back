@@ -282,6 +282,36 @@ class MiDiaDetalleTest extends TestCase
         $this->assertNull($json['motivo_rechazo']);
     }
 
+    public function test_convertir_el_prospecto_no_pierde_su_historial_en_seguimiento_ni_en_tratos_detenidos(): void
+    {
+        $this->otorgarPermisosCrm('clientes', 'clientes', ['crear']);
+        $prospecto = CrmProspecto::create([
+            'empresa_id' => $this->enterprise->id, 'nombre' => 'Prospecto P', 'estatus' => 'nuevo',
+            'vendedor_id' => $this->propio->id,
+        ]);
+        $op = $this->oportunidad($this->propio, ['cliente_id' => null, 'prospecto_id' => $prospecto->id]);
+        $op->forceFill(['created_at' => $this->ahora->subDays(30)])->saveQuietly();
+        $primerContacto = $this->actividad(CrmProspecto::class, $prospecto->id, $this->ahora->subDays(20), ['descripcion' => 'Primer contacto']);
+
+        $this->withHeaders($this->crmHeaders())
+            ->postJson("/api/crm/prospectos/{$prospecto->id}/convertir-cliente")
+            ->assertSuccessful();
+        $op->refresh();
+        $this->assertNull($op->prospecto_id);
+        $this->assertNotNull($op->cliente_id);
+        // La nota de auditoría de la conversión queda vieja y una llamada reciente (p. ej. Dialpad)
+        // se registra todavía en el prospecto.
+        CrmActividad::where('entidad_type', CrmCliente::class)->update(['fecha_actividad' => $this->ahora->subDays(20)]);
+        $llamada = $this->actividad(CrmProspecto::class, $prospecto->id, $this->ahora->subDays(2), ['descripcion' => 'Llamada Dialpad']);
+
+        $seguimiento = $this->detalle($op)->assertOk()->json('data.seguimiento');
+        $delProspecto = collect($seguimiento)->where('origen', 'prospecto')->pluck('id')->all();
+        $this->assertEqualsCanonicalizing([$llamada->id, $primerContacto->id], $delProspecto);
+
+        $tratos = $this->withHeaders($this->crmHeaders())->getJson('/api/crm/mi-dia')->assertOk()->json('data.tratos_detenidos');
+        $this->assertNotContains($op->id, array_column($tratos, 'id'), 'La llamada reciente del prospecto evita que salga como detenido.');
+    }
+
     public function test_seguimiento_tope_30(): void
     {
         $op = $this->oportunidad();
