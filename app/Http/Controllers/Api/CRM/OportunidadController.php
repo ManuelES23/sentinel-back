@@ -61,6 +61,17 @@ class OportunidadController extends CrmBaseController
             // de prospecto, para listar solo las de ese registro.
             ->when($request->cliente_id, fn ($q, $id) => $q->where('cliente_id', $id))
             ->when($request->prospecto_id, fn ($q, $id) => $q->where('prospecto_id', $id))
+            // Buscador de Mi día: solo abiertas y por nombre (oportunidad, cliente o prospecto).
+            ->when($request->boolean('abiertas'), fn ($q) => $q->activas())
+            ->when($this->terminoDeBusqueda($request), function ($q, string $termino) {
+                $like = '%'.str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $termino).'%';
+                // Agrupado: el OR no debe romper los demás filtros ni la visibilidad.
+                $q->where(function ($sub) use ($like) {
+                    $sub->whereRaw("crm_oportunidades.nombre LIKE ? ESCAPE '!'", [$like])
+                        ->orWhereHas('cliente', fn ($c) => $c->whereRaw("nombre LIKE ? ESCAPE '!'", [$like]))
+                        ->orWhereHas('prospecto', fn ($p) => $p->whereRaw("nombre LIKE ? ESCAPE '!'", [$like]));
+                });
+            })
             ->orderByDesc('created_at');
 
         $perPage = $this->perPage($request, 100);
@@ -71,7 +82,20 @@ class OportunidadController extends CrmBaseController
         return $this->jsonPaginated($paginated);
     }
 
-    /** GET /crm/oportunidades/resumen -- cifras de la cabecera del tablero (spec 2026-10-08 §6.4). */
+    /** `search` del listado: solo texto (un arreglo se ignora), recortado a 100; en blanco no filtra. */
+    private function terminoDeBusqueda(Request $request): ?string
+    {
+        $search = $request->query('search');
+        if (! is_string($search)) {
+            return null;
+        }
+
+        $termino = mb_substr(trim($search), 0, 100);
+
+        return $termino === '' ? null : $termino;
+    }
+
+    /** GET /crm/oportunidades/resumen --cifras de la cabecera del tablero (spec 2026-10-08 §6.4). */
     public function resumen(Request $request, EmbudoService $embudos, DashboardResumenService $metricas): JsonResponse
     {
         $empresaId = $this->getEmpresaId();

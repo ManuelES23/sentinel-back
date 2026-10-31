@@ -259,6 +259,7 @@ Despliegue de Organización en empresas nuevas (back antes que el front): `php a
 - `PUT crm/oportunidades` con otro `vendedor_id`: los eventos pendientes de esa oportunidad pasan al vendedor nuevo (`AgendaUpdated('updated')`); los completados se quedan con quien los hizo.
 - `POST crm/prospectos/{id}/convertir-cliente` mueve al cliente las oportunidades abiertas y ganadas del prospecto (`cliente_id` y `prospecto_id = null` juntos) y emite `OportunidadUpdated('updated')` por cada una; las perdidas se quedan en el prospecto.
 - `tipo_producto` (`POST`/`PUT crm/oportunidades`, texto de hasta 100): con commodities en la empresa (`CrmProducto::commoditiesDe`) y `productos_en_oportunidad = false` es obligatorio al crear y debe ser uno de ellos; al editar solo se valida si cambia (un valor viejo ya guardado no se revalida) y no se puede borrar. Sin commodities, o con el interruptor encendido, es texto libre opcional.
+- `GET crm/oportunidades` acepta además `search` (texto de hasta 100, sin distinguir mayúsculas, `%` y `_` literales, por nombre de la oportunidad, del cliente o del prospecto; un valor no texto se ignora) y `abiertas=1` (solo etapas no terminales); componen con los demás filtros, con la visibilidad por vendedor y con `per_page`.
 
 ## CRM · Captura ligada a una oportunidad (spec 2026-10-30)
 
