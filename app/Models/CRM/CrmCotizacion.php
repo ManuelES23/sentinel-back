@@ -48,4 +48,14 @@ class CrmCotizacion extends Model
     {
         return $this->hasMany(CrmCotizacionImpuesto::class, 'cotizacion_id');
     }
+
+    /**
+     * Base de la cotización después del descuento global y sin impuestos:
+     * round(subtotal × (1 − descuento / 100), 2). Es el monto que toma la
+     * oportunidad (`total` incluye impuestos y no se usa para eso).
+     */
+    public function baseConDescuento(): float
+    {
+        return round((float) $this->subtotal * (1 - (float) $this->descuento_global_pct / 100), 2);
+    }
 }

@@ -4,6 +4,8 @@ namespace Tests\Feature\CRM;
 
 use App\Models\CRM\CrmAgenda;
 use App\Models\CRM\CrmCliente;
+use App\Models\CRM\CrmEtiquetaActividad;
+use App\Models\CRM\CrmOportunidad;
 use App\Models\UserSubmodulePermission;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
@@ -81,15 +83,30 @@ class AgendaCompletarSeguimientoTest extends TestCase
 
     public function test_con_siguiente_paso_crea_el_evento_con_la_misma_entidad_y_vendedor(): void
     {
-        $respuesta = $this->completar($this->evento(), ['siguiente' => [
-            'tipo' => 'visita', 'titulo' => 'Visita a Cliente X', 'fecha_inicio' => '2026-09-16 11:00:00', 'duracion_minutos' => 60,
+        // El siguiente paso solo se programa sobre una oportunidad (un evento viejo de un
+        // cliente se completa sin siguiente: ver CapturaExigeOportunidadTest).
+        $oportunidad = CrmOportunidad::create([
+            'empresa_id' => $this->enterprise->id, 'cliente_id' => $this->cliente->id,
+            'vendedor_id' => $this->vendedor->id, 'nombre' => 'Cliente X · Pepper',
+        ]);
+        $etiqueta = CrmEtiquetaActividad::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Seguimiento']);
+        $evento = CrmAgenda::create([
+            'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
+            'entidad_type' => CrmOportunidad::class, 'entidad_id' => $oportunidad->id,
+            'tipo' => 'tarea', 'titulo' => 'Dar seguimiento', 'etiqueta_id' => $etiqueta->id,
+            'fecha_inicio' => '2026-09-14 09:00:00', 'fecha_fin' => '2026-09-14 09:30:00',
+        ]);
+
+        $respuesta = $this->completar($evento, ['siguiente' => [
+            'tipo' => 'visita', 'titulo' => 'Visita a Cliente X', 'fecha_inicio' => '2026-09-16 11:00:00',
+            'duracion_minutos' => 60, 'etiqueta_id' => $etiqueta->id,
         ]])->assertOk();
 
         $respuesta->assertJsonPath('data.siguiente_evento.titulo', 'Visita a Cliente X');
         $this->assertDatabaseHas('crm_agenda', [
             'titulo' => 'Visita a Cliente X', 'vendedor_id' => $this->vendedor->id,
-            'entidad_type' => CrmCliente::class, 'entidad_id' => $this->cliente->id,
-            'fecha_fin' => '2026-09-16 12:00:00', 'completado' => false,
+            'entidad_type' => CrmOportunidad::class, 'entidad_id' => $oportunidad->id,
+            'fecha_fin' => '2026-09-16 12:00:00', 'completado' => false, 'etiqueta_id' => $etiqueta->id,
         ]);
     }
 

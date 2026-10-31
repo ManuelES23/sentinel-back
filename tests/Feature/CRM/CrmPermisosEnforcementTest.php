@@ -232,17 +232,13 @@ class CrmPermisosEnforcementTest extends TestCase
         $this->assertSame('rechazado', CrmCotizacion::find($id)->estado);
     }
 
-    public function test_cerrar_una_oportunidad_exige_el_permiso_cerrar_aunque_tenga_editar(): void
+    // Ajustado en la Task 4 del CRM «oportunidad como eje» (spec 2026-10-30 §9):
+    // perder pasó a exigir `editar`; solo ganar a mano sigue exigiendo `cerrar`.
+    public function test_ganar_una_oportunidad_exige_el_permiso_cerrar_aunque_tenga_editar(): void
     {
         // ver + equipo: cambiar la etapa exige poder ver la oportunidad, que
         // es de otro vendedor (ver OportunidadEscrituraVisibilidadTest).
         $this->otorgarPermisosCrm('oportunidades', 'oportunidades', ['ver', 'equipo', 'editar']);
-
-        $this->withHeaders($this->crmHeaders())
-            ->patchJson("/api/crm/oportunidades/{$this->oportunidad->id}/cambiar-etapa", [
-                'etapa' => 'cerrado_perdido', 'motivo_perdida' => 'Precio',
-            ])->assertStatus(403);
-        $this->assertSame('calificado', $this->oportunidad->fresh()->etapa);
 
         $this->withHeaders($this->crmHeaders())
             ->patchJson("/api/crm/oportunidades/{$this->oportunidad->id}/cambiar-etapa", [
@@ -255,6 +251,25 @@ class CrmPermisosEnforcementTest extends TestCase
             ->assertOk();
 
         $this->otorgarPermisosCrm('oportunidades', 'oportunidades', ['cerrar']);
+
+        $this->withHeaders($this->crmHeaders())
+            ->patchJson("/api/crm/oportunidades/{$this->oportunidad->id}/cambiar-etapa", [
+                'etapa' => 'cerrado_ganado', 'forzar' => true,
+            ])->assertOk();
+        $this->assertSame('cerrado_ganado', $this->oportunidad->fresh()->etapa);
+    }
+
+    public function test_perder_una_oportunidad_exige_editar_no_basta_cerrar(): void
+    {
+        $this->otorgarPermisosCrm('oportunidades', 'oportunidades', ['ver', 'equipo', 'cerrar']);
+
+        $this->withHeaders($this->crmHeaders())
+            ->patchJson("/api/crm/oportunidades/{$this->oportunidad->id}/cambiar-etapa", [
+                'etapa' => 'cerrado_perdido', 'motivo_perdida' => 'Precio',
+            ])->assertStatus(403);
+        $this->assertSame('calificado', $this->oportunidad->fresh()->etapa);
+
+        $this->otorgarPermisosCrm('oportunidades', 'oportunidades', ['editar']);
 
         $this->withHeaders($this->crmHeaders())
             ->patchJson("/api/crm/oportunidades/{$this->oportunidad->id}/cambiar-etapa", [

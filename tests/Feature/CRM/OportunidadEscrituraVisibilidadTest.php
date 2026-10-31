@@ -253,7 +253,8 @@ class OportunidadEscrituraVisibilidadTest extends TestCase
 
     public function test_sin_equipo_cerrar_una_ajena_responde_403(): void
     {
-        $this->permisos(['ver', 'cerrar']);
+        // Perder exige `editar` (Task 4): se concede para que el 403 sea por visibilidad.
+        $this->permisos(['ver', 'editar', 'cerrar']);
 
         $this->cambiarEtapa($this->ajena, ['etapa' => 'cerrado_perdido', 'motivo_perdida' => 'Precio'])->assertForbidden();
         $this->cambiarEtapa($this->ajena, ['etapa' => 'cerrado_ganado', 'forzar' => true])->assertForbidden();

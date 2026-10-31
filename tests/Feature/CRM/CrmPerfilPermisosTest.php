@@ -210,6 +210,27 @@ class CrmPerfilPermisosTest extends TestCase
         $this->aplicar('director')->assertStatus(422);
     }
 
+    public function test_gerencia_recibe_cobro_y_vendedor_no(): void
+    {
+        $this->aplicar('gerencia')->assertOk();
+        $this->assertTrue($this->tienePermiso('oportunidades', 'oportunidades', 'cobro'));
+        $this->assertFalse($this->tienePermiso('catalogos', 'etiquetas-actividad', 'ver'));
+
+        $this->aplicar('vendedor')->assertOk();
+        $this->assertFalse($this->tienePermiso('oportunidades', 'oportunidades', 'cobro'));
+        $this->assertFalse($this->tienePermiso('catalogos', 'etiquetas-actividad', 'ver'));
+    }
+
+    public function test_administracion_gestiona_las_etiquetas_de_actividad(): void
+    {
+        $this->aplicar('administracion')->assertOk();
+
+        foreach (['ver', 'crear', 'editar', 'eliminar'] as $permiso) {
+            $this->assertTrue($this->tienePermiso('catalogos', 'etiquetas-actividad', $permiso));
+        }
+        $this->assertFalse($this->tienePermiso('oportunidades', 'oportunidades', 'cobro'));
+    }
+
     public function test_solo_administracion_gestiona_las_plantillas_de_whatsapp(): void
     {
         $this->aplicar('administracion')->assertOk();

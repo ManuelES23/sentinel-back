@@ -6,6 +6,9 @@ use App\Models\Application;
 use App\Models\CRM\CrmActividad;
 use App\Models\CRM\CrmAgenda;
 use App\Models\CRM\CrmCliente;
+use App\Models\CRM\CrmEmpresaExterna;
+use App\Models\CRM\CrmEtiquetaActividad;
+use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmVendedor;
 use App\Models\Module;
 use App\Models\Submodule;
@@ -138,32 +141,43 @@ class AgendaControllerTest extends TestCase
 
     public function test_crea_evento_ligado_a_una_entidad(): void
     {
+        // Un evento nuevo cuelga de una oportunidad (no directo de un cliente) y lleva etiqueta.
         $this->otorgarPermisosAgenda(['ver', 'crear', 'equipo']);
+        $this->otorgarPermisosCrm('oportunidades', 'oportunidades', ['ver', 'equipo']);
         $cliente = CrmCliente::create([
             'empresa_id' => $this->enterprise->id, 'vendedor_id' => $this->vendedor->id,
             'nombre' => 'Cliente X', 'email' => 'cliente@x.com',
         ]);
+        $oportunidad = CrmOportunidad::create([
+            'empresa_id' => $this->enterprise->id, 'cliente_id' => $cliente->id,
+            'vendedor_id' => $this->vendedor->id, 'nombre' => 'Cliente X',
+        ]);
+        $etiqueta = CrmEtiquetaActividad::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Seguimiento']);
 
         $response = $this->withHeaders($this->crmHeaders())->postJson('/api/crm/agenda', [
             'tipo' => 'visita', 'titulo' => 'Visitar cliente',
             'fecha_inicio' => now()->addDay()->toDateTimeString(),
             'fecha_fin' => now()->addDay()->addHour()->toDateTimeString(),
             'vendedor_id' => $this->vendedor->id,
-            'entidad_tipo' => 'cliente', 'entidad_id' => $cliente->id,
+            'entidad_tipo' => 'oportunidad', 'entidad_id' => $oportunidad->id,
+            'etiqueta_id' => $etiqueta->id,
         ]);
 
         $response->assertCreated();
         $this->assertDatabaseHas('crm_agenda', [
-            'entidad_type' => CrmCliente::class, 'entidad_id' => $cliente->id,
+            'entidad_type' => CrmOportunidad::class, 'entidad_id' => $oportunidad->id,
+            'etiqueta_id' => $etiqueta->id,
         ]);
     }
 
     public function test_rechaza_entidad_relacionada_de_otra_empresa(): void
     {
         $this->otorgarPermisosAgenda(['ver', 'crear', 'equipo']);
+        // Con una empresa externa (la entidad que sigue aceptando captura directa): el cliente
+        // directo ya no llega a la búsqueda, responde 422 antes.
         $otraEmpresa = $this->crearOtraEmpresa();
-        $clienteAjeno = CrmCliente::create([
-            'empresa_id' => $otraEmpresa->id, 'nombre' => 'Ajeno', 'email' => 'a@a.com',
+        $externaAjena = CrmEmpresaExterna::create([
+            'empresa_id' => $otraEmpresa->id, 'razon_social' => 'Ajena SA',
         ]);
 
         $response = $this->withHeaders($this->crmHeaders())->postJson('/api/crm/agenda', [
@@ -171,7 +185,7 @@ class AgendaControllerTest extends TestCase
             'fecha_inicio' => now()->addDay()->toDateTimeString(),
             'fecha_fin' => now()->addDay()->addHour()->toDateTimeString(),
             'vendedor_id' => $this->vendedor->id,
-            'entidad_tipo' => 'cliente', 'entidad_id' => $clienteAjeno->id,
+            'entidad_tipo' => 'empresa_externa', 'entidad_id' => $externaAjena->id,
         ]);
 
         $response->assertStatus(404);

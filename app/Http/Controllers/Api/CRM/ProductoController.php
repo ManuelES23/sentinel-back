@@ -90,13 +90,7 @@ class ProductoController extends CrmBaseController
     {
         $empresaId = $this->getEmpresaId($request);
 
-        $commodities = CrmProducto::where('empresa_id', $empresaId)
-            ->whereNotNull('commodity')
-            ->where('commodity', '!=', '')
-            ->distinct()
-            ->orderBy('commodity')
-            ->pluck('commodity')
-            ->values();
+        $commodities = CrmProducto::commoditiesDe($empresaId);
 
         return $this->jsonSuccess($commodities);
     }
