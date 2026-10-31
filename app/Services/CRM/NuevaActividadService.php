@@ -45,7 +45,7 @@ class NuevaActividadService
 
         return DB::transaction(function () use ($empresaId, $datos, $vendedor) {
             $prospecto = null;
-            $nueva = empty($datos['oportunidad_id']);
+            $nueva = ! isset($datos['oportunidad_id']);
 
             if ($nueva) {
                 if (! empty($datos['prospecto_nuevo'])) {

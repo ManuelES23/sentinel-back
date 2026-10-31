@@ -370,6 +370,66 @@ class MiDiaNuevaActividadTest extends TestCase
         $this->sinNadaCreado();
     }
 
+    public function test_bloque_evento_vacio_cuenta_como_ausente_y_no_salta_permisos(): void
+    {
+        // Sin agenda.crear: un `evento: {}` no puede colarse como «sin registro» con 201.
+        $this->permisosVendedor(['agenda.crear']);
+
+        $this->crear(['cliente_id' => $this->cliente->id, 'evento' => []])
+            ->assertUnprocessable()->assertJsonValidationErrors(['registro']);
+        $this->crear(['cliente_id' => $this->cliente->id, 'evento' => new \stdClass])
+            ->assertUnprocessable()->assertJsonValidationErrors(['registro']);
+
+        $this->sinNadaCreado();
+    }
+
+    public function test_bloque_actividad_vacio_cuenta_como_ausente(): void
+    {
+        $this->permisosVendedor(['actividades.crear']);
+
+        $this->crear(['cliente_id' => $this->cliente->id, 'actividad' => new \stdClass])
+            ->assertUnprocessable()->assertJsonValidationErrors(['registro']);
+
+        $this->sinNadaCreado();
+    }
+
+    public function test_bloque_prospecto_nuevo_vacio_cuenta_como_ausente(): void
+    {
+        $this->permisosVendedor();
+
+        $this->crear(['prospecto_nuevo' => new \stdClass, 'evento' => $this->evento()])
+            ->assertUnprocessable()->assertJsonValidationErrors(['origen']);
+        $this->crear(['prospecto_nuevo' => new \stdClass, 'cliente_id' => $this->cliente->id, 'evento' => $this->evento()])
+            ->assertCreated()->assertJsonPath('data.prospecto', null);
+
+        $this->assertSame(0, CrmProspecto::count());
+        $this->assertSame(1, CrmOportunidad::count());
+    }
+
+    public function test_bloques_con_campos_pero_sin_lo_obligatorio_422(): void
+    {
+        $this->permisosVendedor();
+
+        $this->crear(['cliente_id' => $this->cliente->id, 'evento' => ['tipo' => 'llamada']])
+            ->assertUnprocessable()->assertJsonValidationErrors(['evento.titulo', 'evento.fecha_inicio', 'evento.etiqueta_id']);
+        $this->crear(['cliente_id' => $this->cliente->id, 'actividad' => ['resultado' => 'x']])
+            ->assertUnprocessable()->assertJsonValidationErrors(['actividad.tipo', 'actividad.descripcion', 'actividad.etiqueta_id']);
+
+        $this->sinNadaCreado();
+    }
+
+    public function test_oportunidad_id_cero_422_no_500(): void
+    {
+        $this->permisosVendedor();
+
+        foreach ([0, '0'] as $id) {
+            $this->crear(['oportunidad_id' => $id, 'evento' => $this->evento()])
+                ->assertUnprocessable()->assertJsonValidationErrors(['oportunidad_id']);
+        }
+
+        $this->sinNadaCreado();
+    }
+
     public function test_oportunidad_perdida_422(): void
     {
         $this->permisosVendedor();

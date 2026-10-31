@@ -119,7 +119,7 @@ class MiDiaController extends CrmBaseController
             $this->exigirPermisoSubmodulo($empresaId, 'actividades', 'actividades', 'crear', 'No tienes permiso para registrar actividades.');
         }
         // Una oportunidad existente no se abre: solo lo nuevo exige crear.
-        if (empty($validated['oportunidad_id'])) {
+        if (! isset($validated['oportunidad_id'])) {
             $this->exigirPermisoSubmodulo($empresaId, 'oportunidades', 'oportunidades', 'crear', 'No tienes permiso para crear oportunidades.');
         }
         if (! empty($validated['prospecto_nuevo'])) {
@@ -154,6 +154,18 @@ class MiDiaController extends CrmBaseController
     }
 
     /**
+     * Si el cuerpo trae el campo: un bloque (`evento`, `actividad`, `prospecto_nuevo`)
+     * cuenta solo si no está vacío (`{}` es como no mandarlo) y un id si no es
+     * nulo ni cadena vacía (un 0 cuenta, para que la regla `min:1` lo rechace).
+     */
+    private function dado(Request $request, string $campo): bool
+    {
+        $valor = $request->input($campo);
+
+        return is_array($valor) ? $valor !== [] : filled($valor);
+    }
+
+    /**
      * Valida el cuerpo de crearActividad: exactamente un origen y exactamente un
      * registro. Las reglas del evento son las de `siguiente` de POST
      * crm/seguimientos y las de la actividad, las de su `actividad`.
@@ -162,7 +174,7 @@ class MiDiaController extends CrmBaseController
      */
     private function validarNuevaActividad(Request $request, int $empresaId): array
     {
-        $abreOportunidad = ! $request->filled('oportunidad_id');
+        $abreOportunidad = ! $this->dado($request, 'oportunidad_id');
         $conProductos = CrmConfiguracionComercial::productosEnOportunidad($empresaId);
 
         $reglas = [
@@ -178,7 +190,7 @@ class MiDiaController extends CrmBaseController
             ],
             'cliente_id' => ['nullable', 'integer', $this->existeEnEmpresa('crm_clientes', $empresaId)->whereNull('deleted_at')],
             'prospecto_id' => ['nullable', 'integer', $this->existeEnEmpresa('crm_prospectos', $empresaId)->whereNull('deleted_at')],
-            'oportunidad_id' => 'nullable|integer',
+            'oportunidad_id' => 'nullable|integer|min:1',
             // Solo se usan al abrir una oportunidad nueva.
             'monto_esperado' => 'nullable|numeric|min:0|max:'.CrmOportunidad::MONTO_MAXIMO,
             'tipo_producto' => $abreOportunidad
@@ -208,14 +220,14 @@ class MiDiaController extends CrmBaseController
         return Validator::make($request->all(), $reglas, $mensajes)
             ->after(function ($validador) use ($request) {
                 $origenes = collect(['prospecto_nuevo', 'cliente_id', 'prospecto_id', 'oportunidad_id'])
-                    ->filter(fn (string $campo) => $request->filled($campo))
+                    ->filter(fn (string $campo) => $this->dado($request, $campo))
                     ->count();
                 if ($origenes !== 1) {
                     $validador->errors()->add('origen', 'Elige un solo origen: prospecto nuevo, cliente, prospecto u oportunidad.');
                 }
 
                 $registros = collect(['evento', 'actividad'])
-                    ->filter(fn (string $campo) => $request->filled($campo))
+                    ->filter(fn (string $campo) => $this->dado($request, $campo))
                     ->count();
                 if ($registros !== 1) {
                     $validador->errors()->add('registro', 'Programa un evento o registra una actividad ya hecha, no ambos ni ninguno.');
