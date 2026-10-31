@@ -8,6 +8,7 @@ use App\Models\CRM\CrmCliente;
 use App\Models\CRM\CrmEmpresaExterna;
 use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmProspecto;
+use App\Services\CRM\ActividadesDeFicha;
 use App\Services\CRM\SeguimientoService;
 use App\Services\CRM\VisibilidadOportunidades;
 use App\Traits\CRM\FiltraPorEmpresa;
@@ -56,6 +57,7 @@ class ActividadController extends CrmBaseController
     public function __construct(
         private readonly VisibilidadOportunidades $visibilidad,
         private readonly SeguimientoService $seguimientos,
+        private readonly ActividadesDeFicha $fichas,
     ) {}
 
     /**
@@ -88,6 +90,10 @@ class ActividadController extends CrmBaseController
      * ordenado por fecha descendente y paginado a 15 registros fijos.
      * Incluye también las notas automáticas del sistema (fuente = 'sistema'),
      * como las de asignación de vendedor, porque viven en la misma tabla.
+     *
+     * El de un cliente o prospecto trae también las actividades de sus
+     * oportunidades que el usuario ve (ActividadesDeFicha); cada fila lleva
+     * `oportunidad` {id, nombre} o null. El de una oportunidad no cambia.
      */
     public function historial(Request $request, string $entidad_type, int $entidad_id): JsonResponse
     {
@@ -97,12 +103,23 @@ class ActividadController extends CrmBaseController
 
         $empresaId = $this->getEmpresaId($request);
 
-        $query = $this->construirQuery($empresaId, [
+        $deFicha = in_array($entidad_type, ['cliente', 'prospecto'], true);
+
+        $query = $this->construirQuery($empresaId, $deFicha ? [] : [
             'entidad_tipo' => $entidad_type,
             'entidad_id'   => $entidad_id,
         ]);
 
-        return $this->respuestaPaginada($query->paginate(15));
+        if ($deFicha) {
+            $this->fichas->limitar(
+                $query,
+                self::TIPOS[$entidad_type],
+                $entidad_id,
+                $this->visibilidad->alcance((int) $empresaId),
+            );
+        }
+
+        return $this->respuestaPaginada($query->paginate(15), conOportunidad: true);
     }
 
     /**
@@ -133,10 +150,15 @@ class ActividadController extends CrmBaseController
 
     /**
      * Serializa un paginador de CrmActividad al formato estándar
-     * { success, message, data, meta }, agregando el alias entidad_tipo.
+     * { success, message, data, meta }, agregando el alias entidad_tipo (y,
+     * en el historial, la oportunidad de cada fila).
      */
-    private function respuestaPaginada($paginated): JsonResponse
+    private function respuestaPaginada($paginated, bool $conOportunidad = false): JsonResponse
     {
+        if ($conOportunidad) {
+            $this->fichas->adjuntarOportunidad($paginated->items());
+        }
+
         $items = collect($paginated->items())->map(function ($a) {
             $a->entidad_tipo = $this->aliasEntidadTipo($a->entidad_type);
             return $a;

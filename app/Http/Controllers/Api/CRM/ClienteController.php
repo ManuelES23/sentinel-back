@@ -6,6 +6,7 @@ use App\Events\CRM\ClienteUpdated;
 use App\Events\CRM\VendedorAsignado;
 use App\Models\CRM\CrmActividad;
 use App\Models\CRM\CrmCliente;
+use App\Services\CRM\ActividadesDeFicha;
 use App\Services\CRM\VisibilidadOportunidades;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
@@ -24,7 +25,10 @@ class ClienteController extends CrmBaseController
         'prospecto:id,nombre',
     ];
 
-    public function __construct(private readonly VisibilidadOportunidades $visibilidad) {}
+    public function __construct(
+        private readonly VisibilidadOportunidades $visibilidad,
+        private readonly ActividadesDeFicha $fichas,
+    ) {}
 
     /**
      * GET /crm/clientes
@@ -87,7 +91,6 @@ class ClienteController extends CrmBaseController
         $cliente->loadCount([
             'contactos',
             'oportunidades' => fn ($q) => $alcance->aplicar($q),
-            'actividades',
         ]);
 
         $oportunidades = $alcance->aplicar($cliente->oportunidades())
@@ -96,11 +99,18 @@ class ClienteController extends CrmBaseController
             ->limit(10)
             ->get();
 
-        $actividadesRecientes = $cliente->actividades()
+        // Las del cliente y las de sus oportunidades visibles (spec 2026-10-30 §5.4).
+        $actividadesDelCliente = fn () => $this->fichas->limitar(
+            CrmActividad::query(), CrmCliente::class, (int) $cliente->id, $alcance,
+        );
+
+        $actividadesRecientes = $actividadesDelCliente()
             ->select('id', 'entidad_id', 'entidad_type', 'tipo', 'descripcion', 'created_at')
             ->orderByDesc('created_at')
+            ->orderByDesc('id')
             ->limit(10)
             ->get();
+        $this->fichas->adjuntarOportunidad($actividadesRecientes);
 
         $resumen = [
             'cliente' => $cliente->only([
@@ -110,7 +120,7 @@ class ClienteController extends CrmBaseController
             'metricas' => [
                 'contactos'    => $cliente->contactos_count,
                 'oportunidades' => $cliente->oportunidades_count,
-                'actividades'   => $cliente->actividades_count,
+                'actividades'   => $actividadesDelCliente()->count(),
                 'valor_pipeline' => (float) $alcance->aplicar($cliente->oportunidades())
                     ->whereNotIn('etapa', ['cerrado_ganado', 'cerrado_perdido'])
                     ->sum('monto_esperado'),
