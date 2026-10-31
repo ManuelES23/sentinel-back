@@ -119,7 +119,7 @@ class ActividadController extends CrmBaseController
             );
         }
 
-        return $this->respuestaPaginada($query->paginate(15), conOportunidad: true);
+        return $this->respuestaPaginada($query->paginate(15), conOportunidad: $deFicha);
     }
 
     /**

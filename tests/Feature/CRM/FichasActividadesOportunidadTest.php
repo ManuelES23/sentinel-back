@@ -4,6 +4,7 @@ namespace Tests\Feature\CRM;
 
 use App\Models\CRM\CrmActividad;
 use App\Models\CRM\CrmCliente;
+use App\Models\CRM\CrmEmpresaExterna;
 use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmProspecto;
 use App\Models\CRM\CrmVendedor;
@@ -181,6 +182,34 @@ class FichasActividadesOportunidadTest extends TestCase
 
         $this->assertSame(['propia'], $this->descripciones($this->historial('oportunidad', $this->opPropia->id)));
         $this->assertSame([], $this->descripciones($this->historial('oportunidad', $this->opAjena->id)));
+    }
+
+    public function test_con_equipo_la_ficha_excluye_las_de_oportunidades_eliminadas(): void
+    {
+        $this->otorgarPermisosCrm('oportunidades', 'oportunidades', ['ver', 'equipo']);
+        $eliminada = $this->oportunidad('Eliminada', $this->vendedor->id, ['cliente_id' => $this->cliente->id]);
+        $this->actividad('de eliminada', CrmOportunidad::class, $eliminada->id);
+        $this->actividad('propia', CrmOportunidad::class, $this->opPropia->id);
+        $eliminada->delete();
+
+        $this->assertSame(['propia'], $this->descripciones($this->historial('cliente', $this->cliente->id)));
+        $this->assertSame(1, $this->resumen()->json('data.metricas.actividades'));
+    }
+
+    public function test_el_historial_de_oportunidad_y_de_empresa_externa_no_traen_la_clave_oportunidad(): void
+    {
+        $this->otorgarPermisosCrm('oportunidades', 'oportunidades', ['ver']);
+        $externa = CrmEmpresaExterna::create(['empresa_id' => $this->enterprise->id, 'razon_social' => 'Externa SA']);
+        $this->actividad('de la oportunidad', CrmOportunidad::class, $this->opPropia->id);
+        $this->actividad('de la externa', CrmEmpresaExterna::class, $externa->id);
+
+        $deOportunidad = $this->historial('oportunidad', $this->opPropia->id)->assertOk();
+        $deExterna = $this->historial('empresa_externa', $externa->id)->assertOk();
+
+        $this->assertSame(['de la oportunidad'], collect($deOportunidad->json('data'))->pluck('descripcion')->all());
+        $this->assertSame(['de la externa'], collect($deExterna->json('data'))->pluck('descripcion')->all());
+        $this->assertArrayNotHasKey('oportunidad', $deOportunidad->json('data.0'));
+        $this->assertArrayNotHasKey('oportunidad', $deExterna->json('data.0'));
     }
 
     public function test_el_listado_general_no_cambia(): void

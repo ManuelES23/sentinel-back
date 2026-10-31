@@ -45,8 +45,8 @@ class ActividadesDeFicha
 
     /**
      * Pone `oportunidad` {id, nombre} (o null) en cada actividad con UNA sola
-     * consulta, sea cual sea el número de filas. Incluye oportunidades
-     * eliminadas: el nombre de una actividad ya visible no debe perderse.
+     * consulta, sea cual sea el número de filas. Las oportunidades eliminadas
+     * no llegan aquí: `limitar` solo deja las visibles.
      *
      * @param  iterable<CrmActividad>  $actividades
      */
@@ -62,7 +62,7 @@ class ActividadesDeFicha
 
         $nombres = $ids->isEmpty()
             ? collect()
-            : CrmOportunidad::withTrashed()->whereIn('id', $ids)->pluck('nombre', 'id');
+            : CrmOportunidad::query()->whereIn('id', $ids)->pluck('nombre', 'id');
 
         foreach ($actividades as $actividad) {
             $esDeOportunidad = $actividad->entidad_type === CrmOportunidad::class && $nombres->has($actividad->entidad_id);
