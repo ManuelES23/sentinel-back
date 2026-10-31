@@ -4,6 +4,8 @@ namespace Tests\Feature\CRM;
 
 use App\Events\CRM\ActividadUpdated;
 use App\Models\CRM\CrmCliente;
+use App\Models\CRM\CrmEtiquetaActividad;
+use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmVendedor;
 use App\Models\UserSubmodulePermission;
 use App\Services\CRM\SeguimientoService;
@@ -24,6 +26,8 @@ class SeguimientoControllerTest extends TestCase
 
     private CrmVendedor $propio;
     private CrmCliente $cliente;
+    private CrmOportunidad $oportunidad;
+    private CrmEtiquetaActividad $etiqueta;
 
     protected function setUp(): void
     {
@@ -34,12 +38,19 @@ class SeguimientoControllerTest extends TestCase
 
         $this->otorgarPermisosCrm('actividades', 'actividades', ['crear']);
         $this->otorgarPermisosCrm('agenda', 'agenda', ['crear']);
+        // Toda captura nueva vive dentro de una oportunidad: se necesita poder verla.
+        $this->otorgarPermisosCrm('oportunidades', 'oportunidades', ['ver']);
 
         $this->propio = CrmVendedor::create([
             'empresa_id' => $this->enterprise->id, 'user_id' => $this->actingUser->id,
             'nombre' => 'Vendedor propio', 'activo' => true,
         ]);
         $this->cliente = CrmCliente::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Cliente A']);
+        $this->oportunidad = CrmOportunidad::create([
+            'empresa_id' => $this->enterprise->id, 'cliente_id' => $this->cliente->id,
+            'vendedor_id' => $this->propio->id, 'nombre' => 'Cliente A · Pepper',
+        ]);
+        $this->etiqueta = CrmEtiquetaActividad::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Seguimiento']);
     }
 
     protected function tearDown(): void
@@ -48,11 +59,30 @@ class SeguimientoControllerTest extends TestCase
         parent::tearDown();
     }
 
+    /**
+     * Cuerpo sobre la oportunidad del cliente. Sobre una oportunidad la etiqueta es
+     * obligatoria (salvo en lo registrado desde el botón de WhatsApp), así que cada
+     * bloque que no la traiga recibe la de prueba: estos casos no hablan de la etiqueta
+     * (eso vive en CapturaExigeOportunidadTest).
+     */
     private function payload(array $overrides = []): array
     {
-        return array_merge([
-            'entidad_tipo' => 'cliente',
-            'entidad_id' => $this->cliente->id,
+        $payload = array_merge($this->base(), $overrides);
+        foreach (['actividad', 'siguiente'] as $bloque) {
+            if (is_array($payload[$bloque] ?? null) && ! array_key_exists('etiqueta_id', $payload[$bloque])
+                && ($payload[$bloque]['fuente'] ?? null) !== SeguimientoService::FUENTE_WHATSAPP_ENLACE) {
+                $payload[$bloque]['etiqueta_id'] = $this->etiqueta->id;
+            }
+        }
+
+        return $payload;
+    }
+
+    private function base(): array
+    {
+        return [
+            'entidad_tipo' => 'oportunidad',
+            'entidad_id' => $this->oportunidad->id,
             'actividad' => [
                 'tipo' => 'llamada',
                 'descripcion' => 'Llamé para revisar la propuesta',
@@ -64,7 +94,7 @@ class SeguimientoControllerTest extends TestCase
                 'titulo' => 'Seguimiento: Cliente A',
                 'fecha_inicio' => '2026-09-15 09:00:00',
             ],
-        ], $overrides);
+        ];
     }
 
     private function enviar(array $payload)
@@ -80,11 +110,11 @@ class SeguimientoControllerTest extends TestCase
             ->assertJsonPath('data.evento.titulo', 'Seguimiento: Cliente A');
 
         $this->assertDatabaseHas('crm_actividades', [
-            'entidad_type' => CrmCliente::class, 'entidad_id' => $this->cliente->id,
+            'entidad_type' => CrmOportunidad::class, 'entidad_id' => $this->oportunidad->id,
             'vendedor_id' => $this->propio->id, 'tipo' => 'llamada', 'fuente' => 'manual',
         ]);
         $this->assertDatabaseHas('crm_agenda', [
-            'entidad_type' => CrmCliente::class, 'entidad_id' => $this->cliente->id,
+            'entidad_type' => CrmOportunidad::class, 'entidad_id' => $this->oportunidad->id,
             'vendedor_id' => $this->propio->id, 'completado' => false,
             'fecha_inicio' => '2026-09-15 09:00:00', 'fecha_fin' => '2026-09-15 09:30:00',
         ]);
@@ -136,7 +166,9 @@ class SeguimientoControllerTest extends TestCase
 
     public function test_entidad_de_otra_empresa_da_422(): void
     {
-        $ajeno = CrmCliente::create(['empresa_id' => $this->crearOtraEmpresa()->id, 'nombre' => 'Ajeno']);
+        $ajeno = CrmOportunidad::create([
+            'empresa_id' => $this->crearOtraEmpresa()->id, 'vendedor_id' => $this->vendedor->id, 'nombre' => 'Ajena',
+        ]);
 
         $this->enviar($this->payload(['entidad_id' => $ajeno->id]))
             ->assertStatus(422)
@@ -170,7 +202,7 @@ class SeguimientoControllerTest extends TestCase
         ]))->assertCreated();
 
         $this->assertDatabaseHas('crm_actividades', [
-            'entidad_type' => CrmCliente::class, 'entidad_id' => $this->cliente->id,
+            'entidad_type' => CrmOportunidad::class, 'entidad_id' => $this->oportunidad->id,
             'vendedor_id' => $this->propio->id, 'tipo' => 'whatsapp', 'fuente' => 'whatsapp_enlace',
             'fecha_actividad' => '2026-09-14 10:00:00',
         ]);
@@ -307,8 +339,9 @@ class SeguimientoControllerTest extends TestCase
     public function test_post_actividades_sigue_forzando_la_fuente_manual(): void
     {
         $this->withHeaders($this->crmHeaders())->postJson('/api/crm/actividades', [
-            'entidad_tipo' => 'cliente', 'entidad_id' => $this->cliente->id, 'tipo' => 'whatsapp',
+            'entidad_tipo' => 'oportunidad', 'entidad_id' => $this->oportunidad->id, 'tipo' => 'whatsapp',
             'descripcion' => 'Hola', 'fecha_actividad' => '2026-09-14 09:59:00', 'fuente' => 'whatsapp_enlace',
+            'etiqueta_id' => $this->etiqueta->id,
         ])->assertCreated();
 
         $this->assertDatabaseHas('crm_actividades', ['tipo' => 'whatsapp', 'fuente' => 'manual']);

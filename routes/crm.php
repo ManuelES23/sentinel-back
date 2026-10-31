@@ -77,6 +77,13 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::put('motivos-rechazo/{motivo}', [App\Http\Controllers\Api\CRM\MotivoRechazoController::class, 'update']);
     Route::delete('motivos-rechazo/{motivo}', [App\Http\Controllers\Api\CRM\MotivoRechazoController::class, 'destroy']);
 
+    // Etiquetas de actividad por empresa (spec 2026-10-30 §8). Lectura abierta
+    // dentro del tenant; escribir exige catalogos.etiquetas-actividad.
+    Route::get('etiquetas-actividad', [App\Http\Controllers\Api\CRM\EtiquetaActividadController::class, 'index']);
+    Route::post('etiquetas-actividad', [App\Http\Controllers\Api\CRM\EtiquetaActividadController::class, 'store']);
+    Route::put('etiquetas-actividad/{etiqueta}', [App\Http\Controllers\Api\CRM\EtiquetaActividadController::class, 'update']);
+    Route::delete('etiquetas-actividad/{etiqueta}', [App\Http\Controllers\Api\CRM\EtiquetaActividadController::class, 'destroy']);
+
     // -------------------------------------------------
     // PROSPECTOS
     // CRUD + convertir-cliente + asignar-vendedor
@@ -135,8 +142,13 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     // -------------------------------------------------
     // Antes del apiResource: si no, "resumen" se toma como {oportunidad}.
     Route::get('oportunidades/resumen', [App\Http\Controllers\Api\CRM\OportunidadController::class, 'resumen']);
+    // Abrir una oportunidad para un cliente o prospecto con lo mínimo (Nueva actividad).
+    Route::post('oportunidades/rapida', [App\Http\Controllers\Api\CRM\OportunidadController::class, 'rapida']);
     Route::patch('oportunidades/{oportunidad}/cambiar-etapa', [
         App\Http\Controllers\Api\CRM\OportunidadController::class, 'cambiarEtapa'
+    ]);
+    Route::patch('oportunidades/{oportunidad}/cobro', [
+        App\Http\Controllers\Api\CRM\OportunidadController::class, 'cobro'
     ]);
     Route::apiResource('oportunidades', App\Http\Controllers\Api\CRM\OportunidadController::class)
         ->parameters(['oportunidades' => 'oportunidad']);
@@ -200,6 +212,14 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('mi-dia', [
         App\Http\Controllers\Api\CRM\MiDiaController::class, 'index'
     ]);
+    // Detalle de una oportunidad para el panel de Mi día (solo exige mi-dia.ver).
+    Route::get('mi-dia/oportunidades/{oportunidad}', [
+        App\Http\Controllers\Api\CRM\MiDiaController::class, 'oportunidad'
+    ]);
+    // «Nueva actividad»: prospecto + oportunidad + evento o actividad en una transacción.
+    Route::post('mi-dia/actividades', [
+        App\Http\Controllers\Api\CRM\MiDiaController::class, 'crearActividad'
+    ]);
 
     Route::post('seguimientos', [
         App\Http\Controllers\Api\CRM\SeguimientoController::class, 'store'
@@ -222,6 +242,10 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     // -------------------------------------------------
     Route::patch('agenda/{agenda}/completar', [
         App\Http\Controllers\Api\CRM\AgendaController::class, 'completar'
+    ]);
+    // Ligar un evento viejo (cliente, prospecto, interno u Outlook) a una oportunidad.
+    Route::post('agenda/{agenda}/ligar', [
+        App\Http\Controllers\Api\CRM\AgendaController::class, 'ligar'
     ]);
     Route::get('agenda', [
         App\Http\Controllers\Api\CRM\AgendaController::class, 'index'

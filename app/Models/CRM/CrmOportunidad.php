@@ -46,6 +46,24 @@ class CrmOportunidad extends Model
     public const ETAPAS_TERMINALES = ['cerrado_ganado', 'cerrado_perdido'];
 
     /**
+     * Estado de cobro de una oportunidad ganada. Nulo mientras no se gana;
+     * al ganarse el observer lo pone en `por_cobrar`.
+     */
+    public const ESTADOS_COBRO = ['por_cobrar', 'cobrada', 'rechazada'];
+
+    /** Máximo que cabe en monto_esperado (decimal(12,2)). */
+    public const MONTO_MAXIMO = 9999999999.99;
+
+    /**
+     * Las cotizaciones con estos estados ya no representan lo que se vende:
+     * no cuentan como origen del monto.
+     */
+    private const COTIZACION_FUERA_DEL_MONTO = ['rechazado', 'superado'];
+
+    /** Solo lo que necesita montoOrigen(): evita cargar líneas o impuestos. */
+    public const CARGA_COTIZACIONES = 'cotizaciones:id,oportunidad_id,folio,estado,subtotal,descuento_global_pct,created_at';
+
+    /**
      * Relaciones que la API expone junto a una oportunidad. Centralizado aquí
      * para que todos los emisores del evento OportunidadUpdated manden la
      * misma forma de payload (OportunidadController y CotizacionController).
@@ -57,6 +75,8 @@ class CrmOportunidad extends Model
         'productos.producto:id,nombre,commodity,unidad_medida',
         'motivoRechazo:id,categoria_id,nombre',
         'motivoRechazo.categoria:id,nombre',
+        // Solo sirve para montoOrigen(); no sale en el JSON (ver conMontoOrigen()).
+        self::CARGA_COTIZACIONES,
     ];
 
     protected $fillable = [
@@ -73,9 +93,14 @@ class CrmOportunidad extends Model
         'motivo_perdida',
         'motivo_rechazo_id',
         'fecha_cierre_real',
+        'tipo_producto',
+        'estado_cobro',
+        'cobro_actualizado_at',
+        'cobro_actualizado_por',
     ];
 
     protected $casts = [
+        'cobro_actualizado_at'  => 'datetime',
         'monto_esperado'        => 'decimal:2',
         'probabilidad'          => 'integer',
         'fecha_cierre_esperada' => 'date',
@@ -190,5 +215,61 @@ class CrmOportunidad extends Model
         $ordenNuevo  = self::ORDEN_ETAPAS[$nuevaEtapa] ?? -1;
 
         return $ordenNuevo > $ordenActual;
+    }
+
+    /**
+     * Cotización de la que viene `monto_esperado`: la más reciente que no esté
+     * rechazada ni superada y cuya base (después de descuento, sin impuestos)
+     * coincida con el monto a menos de medio centavo. Nulo si el monto es un
+     * estimado (nunca hubo cotización, o ya no coincide con ninguna vigente).
+     * Usa la relación `cotizaciones` si ya está cargada (sin consulta extra).
+     */
+    public function cotizacionDelMonto(): ?CrmCotizacion
+    {
+        $cotizaciones = $this->relationLoaded('cotizaciones')
+            ? $this->cotizaciones
+            : $this->cotizaciones()->get(['id', 'oportunidad_id', 'folio', 'estado', 'subtotal', 'descuento_global_pct', 'created_at']);
+
+        $monto = (float) $this->monto_esperado;
+
+        return $cotizaciones
+            ->reject(fn (CrmCotizacion $c) => in_array($c->estado, self::COTIZACION_FUERA_DEL_MONTO, true))
+            ->sort(fn (CrmCotizacion $a, CrmCotizacion $b) => [$b->created_at?->getTimestamp(), $b->id] <=> [$a->created_at?->getTimestamp(), $a->id])
+            ->first(fn (CrmCotizacion $c) => abs($c->baseConDescuento() - $monto) < 0.005);
+    }
+
+    /**
+     * Origen del monto, fuente única para el panel de la oportunidad y Mi día:
+     * `['tipo' => 'cotizacion', 'folio' => …]`, `['tipo' => 'estimado']` o
+     * `['tipo' => 'sin_monto']` (monto nulo o 0 sin cotización que lo explique).
+     *
+     * @return array{tipo: string, folio?: string}
+     */
+    public function montoOrigen(): array
+    {
+        $cotizacion = $this->cotizacionDelMonto();
+        if ($cotizacion !== null) {
+            return ['tipo' => 'cotizacion', 'folio' => $cotizacion->folio];
+        }
+
+        return (float) $this->monto_esperado > 0 ? ['tipo' => 'estimado'] : ['tipo' => 'sin_monto'];
+    }
+
+    /** Atributo `monto_origen`: solo sale en el JSON tras conMontoOrigen(). */
+    public function getMontoOrigenAttribute(): array
+    {
+        return $this->montoOrigen();
+    }
+
+    /**
+     * Prepara la oportunidad para salir por la API o por un evento: carga las
+     * cotizaciones que falten (columnas mínimas), agrega `monto_origen` al JSON
+     * y oculta la relación `cotizaciones`, que solo sirve para calcularlo.
+     */
+    public function conMontoOrigen(): static
+    {
+        $this->loadMissing(self::CARGA_COTIZACIONES);
+
+        return $this->append('monto_origen')->makeHidden('cotizaciones');
     }
 }

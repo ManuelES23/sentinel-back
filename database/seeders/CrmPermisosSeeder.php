@@ -67,6 +67,9 @@ class CrmPermisosSeeder extends Seeder
             // CRM · categorías de rechazo (spec 2026-10-23 §4.5). La migración
             // 2026_10_23_100300 lo agrega a las empresas ya sembradas; mantener ambos iguales.
             ['slug' => 'categorias-rechazo', 'name' => 'Categorías de rechazo', 'icon' => 'ThumbsDown', 'order' => 8, 'permisos' => $this->permisosBase()],
+            // CRM · etiquetas de actividad (spec 2026-10-30 §9). La migración
+            // 2026_10_30_100400 lo agrega a las empresas ya sembradas; mantener ambos iguales.
+            ['slug' => 'etiquetas-actividad', 'name' => 'Etiquetas de actividad', 'icon' => 'Tag', 'order' => 9, 'permisos' => $this->permisosBase()],
         ]);
 
         $this->crearModulo($app, 'prospectos', 'Prospectos', 'UserPlus', 4, [
@@ -100,6 +103,8 @@ class CrmPermisosSeeder extends Seeder
                 [
                     ['slug' => 'cerrar', 'name' => 'Cerrar oportunidad', 'order' => 5],
                     ['slug' => 'equipo', 'name' => 'Ver las oportunidades de otros vendedores', 'order' => 6],
+                    // La migración 2026_10_30_100400 lo agrega a las empresas ya sembradas.
+                    ['slug' => 'cobro', 'name' => 'Marcar cobro', 'order' => 7],
                 ]
             )],
         ]);

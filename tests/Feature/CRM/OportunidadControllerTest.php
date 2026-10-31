@@ -244,4 +244,25 @@ class OportunidadControllerTest extends TestCase
         $response->assertStatus(422)->assertJsonValidationErrors('cliente_id');
         $this->assertNotEquals($clienteAjeno->id, $oportunidad->fresh()->cliente_id);
     }
+
+    public function test_monto_esperado_mayor_al_maximo_responde_422_al_crear_y_al_editar(): void
+    {
+        $cliente = $this->crearCliente();
+
+        $this->withHeaders($this->crmHeaders())->postJson(self::BASE_URL, [
+            'cliente_id' => $cliente->id,
+            'vendedor_id' => $this->vendedor->id,
+            'nombre' => 'Enorme',
+            'monto_esperado' => 10000000000,
+        ])->assertStatus(422)->assertJsonValidationErrors('monto_esperado');
+
+        $oportunidad = CrmOportunidad::create([
+            'empresa_id' => $this->enterprise->id, 'cliente_id' => $cliente->id,
+            'vendedor_id' => $this->vendedor->id, 'nombre' => 'Normal', 'monto_esperado' => 100,
+        ]);
+        $this->withHeaders($this->crmHeaders())
+            ->putJson(self::BASE_URL."/{$oportunidad->id}", ['monto_esperado' => 10000000000])
+            ->assertStatus(422)->assertJsonValidationErrors('monto_esperado');
+        $this->assertSame('100.00', (string) $oportunidad->fresh()->monto_esperado);
+    }
 }

@@ -280,11 +280,16 @@ class AgendaVisibilidadTest extends TestCase
         ]);
         $this->eventoPropio->update(['entidad_type' => CrmOportunidad::class, 'entidad_id' => $oportunidad->id]);
         $this->permisos(['ver', 'crear', 'editar']);
+        // El siguiente paso sobre una oportunidad lleva etiqueta.
+        $etiqueta = \App\Models\CRM\CrmEtiquetaActividad::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Seguimiento']);
 
         $response = $this->withHeaders($this->crmHeaders())
             ->patchJson("/api/crm/agenda/{$this->eventoPropio->id}/completar", [
                 'resultado' => 'Pidió la propuesta',
-                'siguiente' => ['tipo' => 'llamada', 'titulo' => 'Llamar de nuevo', 'fecha_inicio' => now()->addDays(2)->toDateTimeString()],
+                'siguiente' => [
+                    'tipo' => 'llamada', 'titulo' => 'Llamar de nuevo', 'fecha_inicio' => now()->addDays(2)->toDateTimeString(),
+                    'etiqueta_id' => $etiqueta->id,
+                ],
             ]);
 
         $response->assertOk();

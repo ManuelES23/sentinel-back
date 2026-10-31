@@ -28,6 +28,7 @@ class CrmActividad extends Model
         'archivos_adjuntos',
         'fuente',
         'dialpad_call_id',
+        'etiqueta_id',
     ];
 
     protected $casts = [
@@ -43,6 +44,11 @@ class CrmActividad extends Model
     public function vendedor(): BelongsTo
     {
         return $this->belongsTo(CrmVendedor::class, 'vendedor_id');
+    }
+
+    public function etiqueta(): BelongsTo
+    {
+        return $this->belongsTo(CrmEtiquetaActividad::class, 'etiqueta_id');
     }
 
     public function entidad(): MorphTo

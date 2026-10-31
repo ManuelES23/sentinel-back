@@ -32,6 +32,12 @@ class SeguimientoController extends CrmBaseController
         $empresaId = $this->getEmpresaId();
         abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
 
+        // Sobre una oportunidad la etiqueta es obligatoria, salvo en lo registrado desde el
+        // botón de WhatsApp. En lo demás es opcional (pero válida si viene).
+        $esOportunidad = $request->input('entidad_tipo') === 'oportunidad';
+        $exigeEtiquetaActividad = $esOportunidad
+            && $request->input('actividad.fuente') !== SeguimientoService::FUENTE_WHATSAPP_ENLACE;
+
         $validated = $request->validate(array_merge([
             'entidad_tipo' => ['required', Rule::in(array_keys(SeguimientoService::TIPOS_ENTIDAD))],
             'entidad_id' => 'required|integer',
@@ -60,8 +66,13 @@ class SeguimientoController extends CrmBaseController
                 'before_or_equal:'.now()->addMinutes(5)->toDateTimeString(),
             ],
             'actividad.fuente' => ['nullable', Rule::in(SeguimientoService::FUENTES_REGISTRO)],
-        ], $this->seguimientos->reglasSiguiente('siguiente')), array_merge(
+            'actividad.etiqueta_id' => [
+                $exigeEtiquetaActividad ? 'required_with:actividad' : 'nullable',
+                ...$this->seguimientos->reglaEtiqueta($empresaId),
+            ],
+        ], $this->seguimientos->reglasSiguiente('siguiente', $empresaId, $esOportunidad)), array_merge(
             $this->seguimientos->mensajesSiguiente('siguiente'),
+            $this->seguimientos->mensajesEtiqueta('actividad.etiqueta_id'),
             ['actividad.fuente.in' => 'La fuente de la actividad no es válida.'],
         ));
 
@@ -89,6 +100,9 @@ class SeguimientoController extends CrmBaseController
         if (! empty($siguiente)) {
             $this->exigirPermisoSubmodulo($empresaId, 'agenda', 'agenda', 'crear', 'No tienes permiso para programar eventos de agenda.');
         }
+
+        // Todo seguimiento nuevo vive dentro de una oportunidad (cliente y prospecto directo, 422).
+        $this->seguimientos->exigirCapturaConOportunidad($validated['entidad_tipo']);
 
         // Una oportunidad que el usuario no puede ver responde igual que una inexistente.
         $entidad = $this->visibilidad->entidadVisible(
@@ -118,7 +132,7 @@ class SeguimientoController extends CrmBaseController
             $this->difundir(new ActividadUpdated('created', $resultado['actividad']->load(ActividadController::RELACIONES)->toArray()));
         }
         if ($resultado['evento']) {
-            $this->difundir(new AgendaUpdated('created', $resultado['evento']->load('vendedor:id,nombre')->toArray()));
+            $this->difundir(new AgendaUpdated('created', $resultado['evento']->load(['vendedor:id,nombre', 'etiqueta:id,nombre'])->toArray()));
         }
 
         return $this->jsonSuccess($resultado, 'Seguimiento registrado correctamente', 201);

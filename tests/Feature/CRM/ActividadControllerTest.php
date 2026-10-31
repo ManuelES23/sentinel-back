@@ -4,6 +4,8 @@ namespace Tests\Feature\CRM;
 
 use App\Models\CRM\CrmActividad;
 use App\Models\CRM\CrmCliente;
+use App\Models\CRM\CrmEtiquetaActividad;
+use App\Models\CRM\CrmOportunidad;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Tests\Concerns\CreatesCrmFixtures;
@@ -28,19 +30,29 @@ class ActividadControllerTest extends TestCase
         $this->cliente = CrmCliente::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Cliente de prueba']);
     }
 
-    public function test_puede_registrar_una_actividad_para_un_cliente(): void
+    public function test_puede_registrar_una_actividad_en_la_oportunidad_de_un_cliente(): void
     {
+        // Toda actividad nueva vive dentro de una oportunidad (spec 2026-10-30): la del
+        // cliente se captura sobre una oportunidad suya y lleva etiqueta.
+        $oportunidad = CrmOportunidad::create([
+            'empresa_id' => $this->enterprise->id, 'cliente_id' => $this->cliente->id,
+            'vendedor_id' => $this->vendedor->id, 'nombre' => 'Cliente de prueba',
+        ]);
+        $etiqueta = CrmEtiquetaActividad::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Seguimiento']);
+
         $response = $this->withHeaders($this->crmHeaders())->postJson(self::BASE_URL, [
-            'entidad_tipo' => 'cliente',
-            'entidad_id' => $this->cliente->id,
+            'entidad_tipo' => 'oportunidad',
+            'entidad_id' => $oportunidad->id,
             'tipo' => 'llamada',
             'descripcion' => 'Llamada de seguimiento',
             'fecha_actividad' => now()->toDateTimeString(),
             'vendedor_id' => $this->vendedor->id,
+            'etiqueta_id' => $etiqueta->id,
         ]);
 
         $response->assertCreated()
-            ->assertJsonPath('data.entidad_tipo', 'cliente')
+            ->assertJsonPath('data.entidad_tipo', 'oportunidad')
+            ->assertJsonPath('data.etiqueta.nombre', 'Seguimiento')
             ->assertJsonPath('data.tipo', 'llamada')
             ->assertJsonPath('data.fuente', 'manual');
     }

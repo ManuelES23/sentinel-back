@@ -2,11 +2,18 @@
 
 namespace App\Http\Controllers\Api\CRM;
 
+use App\Events\CRM\ActividadUpdated;
+use App\Events\CRM\AgendaUpdated;
 use App\Events\CRM\OportunidadUpdated;
+use App\Models\CRM\CrmActividad;
+use App\Models\CRM\CrmAgenda;
 use App\Models\CRM\CrmCategoriaRechazo;
+use App\Models\CRM\CrmCliente;
 use App\Models\CRM\CrmConfiguracionComercial;
 use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmProducto;
+use App\Models\CRM\CrmProspecto;
+use App\Services\CRM\AperturaOportunidadService;
 use App\Services\CRM\DashboardResumenService;
 use App\Services\CRM\EmbudoService;
 use App\Services\CRM\OportunidadProductosService;
@@ -14,8 +21,11 @@ use App\Services\CRM\VisibilidadOportunidades;
 use App\Support\CRM\RangoDashboard;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
@@ -26,13 +36,15 @@ class OportunidadController extends CrmBaseController
     use VerificaPermisoSubmodulo;
 
     private const RELACIONES = CrmOportunidad::RELACIONES_API;
+    private const PREFIJO_COBRO_RECHAZADO = 'Cobro rechazado: ';
 
-    /** Máximo que cabe en monto_esperado (decimal(12,2)). */
-    private const MONTO_MAXIMO = 9999999999.99;
+    /** Mensaje del 422 cuando monto_esperado no cabe en decimal(12,2). */
+    private const MENSAJE_MONTO_MAXIMO = ['monto_esperado.max' => 'El monto es demasiado grande.'];
 
     public function __construct(
         private readonly VisibilidadOportunidades $visibilidad,
         private readonly OportunidadProductosService $productos,
+        private readonly AperturaOportunidadService $apertura,
     ) {}
 
     /** GET /crm/oportunidades */
@@ -53,12 +65,38 @@ class OportunidadController extends CrmBaseController
             // de prospecto, para listar solo las de ese registro.
             ->when($request->cliente_id, fn ($q, $id) => $q->where('cliente_id', $id))
             ->when($request->prospecto_id, fn ($q, $id) => $q->where('prospecto_id', $id))
+            // Buscador de Mi día: solo abiertas y por nombre (oportunidad, cliente o prospecto).
+            ->when($request->boolean('abiertas'), fn ($q) => $q->activas())
+            ->when($this->terminoDeBusqueda($request), function ($q, string $termino) {
+                $like = '%'.str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $termino).'%';
+                // Agrupado: el OR no debe romper los demás filtros ni la visibilidad.
+                $q->where(function ($sub) use ($like) {
+                    $sub->whereRaw("crm_oportunidades.nombre LIKE ? ESCAPE '!'", [$like])
+                        ->orWhereHas('cliente', fn ($c) => $c->whereRaw("nombre LIKE ? ESCAPE '!'", [$like]))
+                        ->orWhereHas('prospecto', fn ($p) => $p->whereRaw("nombre LIKE ? ESCAPE '!'", [$like]));
+                });
+            })
             ->orderByDesc('created_at');
 
         $perPage = $this->perPage($request, 100);
         $paginated = $query->paginate($perPage);
+        // Las cotizaciones ya vienen cargadas (RELACIONES): sin consulta por fila.
+        $paginated->getCollection()->each->conMontoOrigen();
 
         return $this->jsonPaginated($paginated);
+    }
+
+    /** `search` del listado: solo texto (un arreglo se ignora), recortado a 100; en blanco no filtra. */
+    private function terminoDeBusqueda(Request $request): ?string
+    {
+        $search = $request->query('search');
+        if (! is_string($search)) {
+            return null;
+        }
+
+        $termino = mb_substr(trim($search), 0, 100);
+
+        return $termino === '' ? null : $termino;
     }
 
     /** GET /crm/oportunidades/resumen -- cifras de la cabecera del tablero (spec 2026-10-08 §6.4). */
@@ -94,7 +132,7 @@ class OportunidadController extends CrmBaseController
     {
         $this->verificarEmpresa($oportunidad);
         $this->visibilidad->exigirVisible((int) $oportunidad->empresa_id, $oportunidad);
-        $oportunidad->load(self::RELACIONES);
+        $oportunidad->load(self::RELACIONES)->conMontoOrigen();
 
         return $this->jsonSuccess($oportunidad);
     }
@@ -113,11 +151,12 @@ class OportunidadController extends CrmBaseController
             'cliente_id' => ['nullable', 'integer', $this->existeEnEmpresa('crm_clientes', $empresaId)],
             'vendedor_id' => ['required', 'integer', $this->existeEnEmpresa('crm_vendedores', $empresaId)],
             'nombre' => 'required|string|max:255',
-            'monto_esperado' => 'nullable|numeric|min:0',
+            'monto_esperado' => ['nullable', 'numeric', 'min:0', 'max:'.CrmOportunidad::MONTO_MAXIMO],
             'probabilidad' => 'nullable|integer|min:0|max:100',
             'fecha_cierre_esperada' => 'nullable|date',
             'notas' => 'nullable|string',
-        ] + $this->reglasProductos($empresaId, $conProductos, 'required'));
+            'tipo_producto' => $this->apertura->reglasTipoProducto($empresaId, $conProductos),
+        ] + $this->reglasProductos($empresaId, $conProductos, 'required'), self::MENSAJE_MONTO_MAXIMO);
 
         // Asignarla a otro vendedor es decisión de gerencia (misma regla que
         // update): sin equipo solo al CrmVendedor activo propio.
@@ -156,7 +195,52 @@ class OportunidadController extends CrmBaseController
 
             return $oportunidad;
         });
-        $oportunidad->load(self::RELACIONES);
+        $oportunidad->load(self::RELACIONES)->conMontoOrigen();
+
+        $this->difundir(new OportunidadUpdated('created', $oportunidad->toArray()));
+
+        return $this->jsonSuccess($oportunidad, 'Oportunidad creada correctamente', 201);
+    }
+
+    /**
+     * POST /crm/oportunidades/rapida -- abre una oportunidad para un cliente o
+     * un prospecto con lo mínimo (spec 2026-10-30 §5.3). La regla de dueño y
+     * de prospecto convertido vive en AperturaOportunidadService.
+     */
+    public function rapida(Request $request): JsonResponse
+    {
+        $empresaId = $this->getEmpresaId();
+        abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
+        $this->exigirPermisoSubmodulo($empresaId, 'oportunidades', 'oportunidades', 'crear', 'No tienes permiso para crear oportunidades.');
+
+        $conProductos = CrmConfiguracionComercial::productosEnOportunidad($empresaId);
+
+        $validated = $request->validate([
+            'cliente_id' => ['nullable', 'integer', 'required_without:prospecto_id', 'prohibits:prospecto_id', $this->existeEnEmpresa('crm_clientes', $empresaId)->whereNull('deleted_at')],
+            'prospecto_id' => ['nullable', 'integer', $this->existeEnEmpresa('crm_prospectos', $empresaId)->whereNull('deleted_at')],
+            'vendedor_id' => ['nullable', 'integer'],
+            'monto_esperado' => 'nullable|numeric|min:0|max:'.CrmOportunidad::MONTO_MAXIMO,
+            'tipo_producto' => $this->apertura->reglasTipoProducto($empresaId, $conProductos),
+        ], [
+            'cliente_id.required_without' => 'Elige un cliente o un prospecto.',
+            'cliente_id.prohibits' => 'Elige un cliente o un prospecto, no los dos.',
+            'cliente_id.exists' => 'El cliente no existe o fue eliminado.',
+            'prospecto_id.exists' => 'El prospecto no existe o fue eliminado.',
+        ]);
+
+        $entidad = isset($validated['cliente_id'])
+            ? CrmCliente::where('empresa_id', $empresaId)->find($validated['cliente_id'])
+            : CrmProspecto::where('empresa_id', $empresaId)->find($validated['prospecto_id']);
+        // Red de seguridad: la validación ya excluye lo eliminado, pero una carrera no debe terminar en 500.
+        abort_unless($entidad, 404, 'El cliente o prospecto no existe o fue eliminado.');
+
+        $oportunidad = DB::transaction(fn () => $this->apertura->abrir(
+            $empresaId,
+            $entidad,
+            $validated,
+            isset($validated['vendedor_id']) ? (int) $validated['vendedor_id'] : null,
+        ));
+        $oportunidad->load(self::RELACIONES)->conMontoOrigen();
 
         $this->difundir(new OportunidadUpdated('created', $oportunidad->toArray()));
 
@@ -178,11 +262,13 @@ class OportunidadController extends CrmBaseController
             'cliente_id' => ['sometimes', 'nullable', 'integer', $this->existeEnEmpresa('crm_clientes', $empresaId)],
             'vendedor_id' => ['sometimes', 'required', 'integer', $this->existeEnEmpresa('crm_vendedores', $empresaId)],
             'nombre' => 'sometimes|required|string|max:255',
-            'monto_esperado' => 'sometimes|nullable|numeric|min:0',
+            'monto_esperado' => ['sometimes', 'nullable', 'numeric', 'min:0', 'max:'.CrmOportunidad::MONTO_MAXIMO],
             'probabilidad' => 'sometimes|nullable|integer|min:0|max:100',
             'fecha_cierre_esperada' => 'sometimes|nullable|date',
             'notas' => 'sometimes|nullable|string',
-        ] + $this->reglasProductos($empresaId, $conProductos, 'sometimes'));
+            'tipo_producto' => $this->apertura->reglasTipoProducto($empresaId, $conProductos, $oportunidad),
+        ] + $this->reglasProductos($empresaId, $conProductos, 'sometimes'), self::MENSAJE_MONTO_MAXIMO);
+        $this->exigirTipoProductoNoVacio($empresaId, $conProductos, $oportunidad, $validated);
 
         $lineas = null;
         if ($conProductos) {
@@ -205,6 +291,15 @@ class OportunidadController extends CrmBaseController
         }
         unset($validated['productos']);
 
+        if (! $conProductos && array_key_exists('monto_esperado', $validated)) {
+            if (round((float) $validated['monto_esperado'], 2) === round((float) $oportunidad->monto_esperado, 2)) {
+                // Mismo valor al centavo: no es un cambio, no se escribe.
+                unset($validated['monto_esperado']);
+            } else {
+                $this->exigirMontoEditable($oportunidad);
+            }
+        }
+
         // Reasignar a otro vendedor es decisión de gerencia: sin equipo solo
         // se acepta el vendedor propio (el actual, porque solo edita las suyas).
         abort_if(
@@ -226,15 +321,26 @@ class OportunidadController extends CrmBaseController
             }
         }
 
-        DB::transaction(function () use ($oportunidad, $validated, $lineas) {
+        $cambiaVendedor = array_key_exists('vendedor_id', $validated)
+            && (int) $validated['vendedor_id'] !== (int) $oportunidad->vendedor_id;
+        $eventosMovidos = new Collection;
+
+        DB::transaction(function () use ($oportunidad, $validated, $lineas, $cambiaVendedor, &$eventosMovidos) {
             $oportunidad->update($validated);
             if ($lineas !== null) {
                 $this->productos->reemplazar($oportunidad, $lineas);
             }
+            if ($cambiaVendedor) {
+                // Los eventos pendientes siguen a la oportunidad; los ya
+                // completados se quedan con quien los hizo.
+                $eventosMovidos = $this->eventosPendientesDe($oportunidad)->get();
+                $eventosMovidos->each->update(['vendedor_id' => (int) $validated['vendedor_id']]);
+            }
         });
-        $oportunidad->load(self::RELACIONES);
+        $oportunidad->load(self::RELACIONES)->conMontoOrigen();
 
         $this->difundir(new OportunidadUpdated('updated', $oportunidad->toArray()));
+        $this->difundirEventos('updated', $eventosMovidos);
 
         return $this->jsonSuccess($oportunidad, 'Oportunidad actualizada correctamente');
     }
@@ -283,9 +389,29 @@ class OportunidadController extends CrmBaseController
      */
     private function exigirTotalDentroDeLimite(array $lineas): void
     {
-        if ($this->productos->monto($lineas) > self::MONTO_MAXIMO) {
+        if ($this->productos->monto($lineas) > CrmOportunidad::MONTO_MAXIMO) {
             throw ValidationException::withMessages([
                 'productos' => 'El total de la oportunidad excede el máximo permitido.',
+            ]);
+        }
+    }
+
+    /**
+     * El monto se edita a mano solo en oportunidades abiertas cuyo monto no
+     * viene de una cotización (spec 2026-10-30 §7); si no, 422 en `monto_esperado`.
+     */
+    private function exigirMontoEditable(CrmOportunidad $oportunidad): void
+    {
+        if ($oportunidad->estaCerrada()) {
+            throw ValidationException::withMessages([
+                'monto_esperado' => 'La oportunidad está cerrada; su monto ya no se puede cambiar.',
+            ]);
+        }
+
+        $cotizacion = $oportunidad->cotizacionDelMonto();
+        if ($cotizacion !== null) {
+            throw ValidationException::withMessages([
+                'monto_esperado' => "El monto viene de la cotización {$cotizacion->folio}; para cambiarlo edita o crea una cotización.",
             ]);
         }
     }
@@ -373,9 +499,9 @@ class OportunidadController extends CrmBaseController
 
         $nuevaEtapa = $validated['etapa'];
 
-        // Mover entre etapas activas es editar; llevarla a una etapa terminal
-        // (ganada o perdida) es cerrarla y exige el permiso específico.
-        if (in_array($nuevaEtapa, ['cerrado_ganado', 'cerrado_perdido'], true)) {
+        // Mover entre etapas y perder es editar (el vendedor puede perder un
+        // trato); ganarlo a mano es decisión de gerencia y exige `cerrar`.
+        if ($nuevaEtapa === 'cerrado_ganado') {
             $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'oportunidades', 'oportunidades', 'cerrar', 'No tienes permiso para cerrar oportunidades.');
         } else {
             $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'oportunidades', 'oportunidades', 'editar', 'No tienes permiso para editar oportunidades.');
@@ -418,11 +544,144 @@ class OportunidadController extends CrmBaseController
         } elseif ($nuevaEtapa === 'cerrado_ganado') {
             $oportunidad->fecha_cierre_real = now();
         }
-        $oportunidad->save();
-        $oportunidad->load(self::RELACIONES);
+        $eventosCerrados = new Collection;
+        DB::transaction(function () use ($oportunidad, $nuevaEtapa, &$eventosCerrados) {
+            $oportunidad->save();
+
+            if ($nuevaEtapa === 'cerrado_perdido') {
+                // Una perdida ya no tiene nada que hacer: sus eventos pendientes
+                // se cierran solos, sin actividad ni siguiente paso.
+                $eventosCerrados = $this->eventosPendientesDe($oportunidad)->get();
+                $eventosCerrados->each->update(['completado' => true]);
+            }
+        });
+        $oportunidad->load(self::RELACIONES)->conMontoOrigen();
 
         $this->difundir(new OportunidadUpdated('updated', $oportunidad->toArray()));
+        $this->difundirEventos('completed', $eventosCerrados);
 
         return $this->jsonSuccess($oportunidad, 'Etapa actualizada correctamente');
+    }
+
+    /**
+     * PATCH /crm/oportunidades/{oportunidad}/cobro
+     * Estado de cobro de una oportunidad ganada (spec 2026-10-30 §7). No toca
+     * etapa, fecha de cierre ni monto; deja una actividad de sistema.
+     */
+    public function cobro(Request $request, CrmOportunidad $oportunidad): JsonResponse
+    {
+        $this->verificarEmpresa($oportunidad);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'oportunidades', 'oportunidades', 'cobro', 'No tienes permiso para cambiar el estado de cobro.');
+        $this->visibilidad->exigirVisible((int) $oportunidad->empresa_id, $oportunidad, VisibilidadOportunidades::MENSAJE_MODIFICAR_AJENA);
+
+        $validated = $request->validate([
+            'estado' => ['required', Rule::in(CrmOportunidad::ESTADOS_COBRO)],
+            'motivo' => ['required_if:estado,rechazada', 'nullable', 'string', 'max:1000'],
+        ]);
+
+        $estado = $validated['estado'];
+        $motivo = trim((string) ($validated['motivo'] ?? ''));
+
+        // Se relee la fila con bloqueo: dos clics o dos gerentes a la vez no duplican
+        // la nota ni pisan quién y cuándo cambió el cobro (de ahí salen las comisiones).
+        [$oportunidad, $actividad] = DB::transaction(function () use ($oportunidad, $estado, $motivo) {
+            $fila = CrmOportunidad::whereKey($oportunidad->id)->lockForUpdate()->firstOrFail();
+
+            if ($fila->etapa !== 'cerrado_ganado') {
+                throw ValidationException::withMessages([
+                    'estado' => 'Solo las oportunidades ganadas tienen estado de cobro.',
+                ]);
+            }
+
+            if ($fila->estado_cobro === $estado && ($estado !== 'rechazada' || $this->ultimoMotivoDeRechazo($fila) === $motivo)) {
+                // Sin cambio real: no se escribe ni se avisa a nadie.
+                return [$fila, null];
+            }
+
+            $fila->update([
+                'estado_cobro' => $estado,
+                'cobro_actualizado_at' => now(),
+                'cobro_actualizado_por' => Auth::id(),
+            ]);
+
+            return [$fila, CrmActividad::create([
+                'empresa_id' => $fila->empresa_id,
+                'tipo' => 'nota',
+                'entidad_type' => CrmOportunidad::class,
+                'entidad_id' => $fila->id,
+                'vendedor_id' => $fila->vendedor_id,
+                'descripcion' => match ($estado) {
+                    'por_cobrar' => 'Cobro: Por cobrar',
+                    'cobrada' => 'Cobro: Cobrada',
+                    'rechazada' => self::PREFIJO_COBRO_RECHAZADO.$motivo,
+                },
+                'fecha_actividad' => now(),
+                'fuente' => 'sistema',
+            ])];
+        });
+        $oportunidad->load(self::RELACIONES)->conMontoOrigen();
+
+        if ($actividad !== null) {
+            $actividad->load(ActividadController::RELACIONES);
+            $actividad->entidad_tipo = 'oportunidad';
+
+            $this->difundir(new OportunidadUpdated('updated', $oportunidad->toArray()));
+            $this->difundir(new ActividadUpdated('created', $actividad->toArray()));
+        }
+
+        return $this->jsonSuccess($oportunidad, 'Estado de cobro actualizado correctamente');
+    }
+
+    /** Motivo de la última nota «Cobro rechazado: …» de la oportunidad (el motivo solo vive en la nota). */
+    private function ultimoMotivoDeRechazo(CrmOportunidad $oportunidad): ?string
+    {
+        $descripcion = CrmActividad::where('entidad_type', CrmOportunidad::class)
+            ->where('entidad_id', $oportunidad->id)
+            ->where('fuente', 'sistema')
+            ->where('descripcion', 'like', self::PREFIJO_COBRO_RECHAZADO.'%')
+            ->orderByDesc('id')
+            ->value('descripcion');
+
+        return $descripcion === null ? null : substr($descripcion, strlen(self::PREFIJO_COBRO_RECHAZADO));
+    }
+
+    /** Eventos de agenda aún pendientes ligados a la oportunidad (de cualquier vendedor). */
+    private function eventosPendientesDe(CrmOportunidad $oportunidad): Builder
+    {
+        return CrmAgenda::query()
+            ->where('empresa_id', $oportunidad->empresa_id)
+            ->where('entidad_type', CrmOportunidad::class)
+            ->where('entidad_id', $oportunidad->id)
+            ->where('completado', false);
+    }
+
+    /** Emite AgendaUpdated por evento, con el vendedor cargado como los demás emisores de agenda. */
+    private function difundirEventos(string $accion, Collection $eventos): void
+    {
+        $eventos->load(['vendedor:id,nombre', 'etiqueta:id,nombre']);
+        foreach ($eventos as $evento) {
+            $this->difundir(new AgendaUpdated($accion, $evento->toArray()));
+        }
+    }
+
+    /**
+     * Con tipo obligatorio, una edición no puede borrar el que ya tiene la
+     * oportunidad (una vieja sin tipo sí se guarda sin él).
+     *
+     * @param  array<string, mixed>  $validated
+     */
+    private function exigirTipoProductoNoVacio(int $empresaId, bool $conProductos, CrmOportunidad $oportunidad, array $validated): void
+    {
+        if ($conProductos
+            || ! array_key_exists('tipo_producto', $validated)
+            || $validated['tipo_producto'] !== null
+            || blank($oportunidad->tipo_producto)
+            || CrmProducto::commoditiesDe($empresaId)->isEmpty()) {
+            return;
+        }
+
+        throw ValidationException::withMessages([
+            'tipo_producto' => 'El tipo de producto es obligatorio.',
+        ]);
     }
 }

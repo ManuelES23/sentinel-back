@@ -3,16 +3,19 @@
 namespace App\Http\Controllers\Api\CRM;
 
 use App\Events\CRM\AgendaUpdated;
+use App\Events\CRM\OportunidadUpdated;
 use App\Events\CRM\ProspectoUpdated;
 use App\Events\CRM\VendedorAsignado;
 use App\Models\CRM\CrmActividad;
 use App\Models\CRM\CrmCliente;
+use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmProspecto;
 use App\Services\CRM\SeguimientoService;
 use App\Services\CRM\VendedorActualService;
 use App\Services\CRM\VisibilidadOportunidades;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -23,7 +26,7 @@ class ProspectoController extends CrmBaseController
     use FiltraPorEmpresa;
     use VerificaPermisoSubmodulo;
 
-    private const RELACIONES = [
+    public const RELACIONES = [
         'vendedor:id,nombre,email',
         'region:id,nombre',
         'zona:id,nombre',
@@ -151,7 +154,7 @@ class ProspectoController extends CrmBaseController
             ],
             'notas' => 'nullable|string|max:2000',
             'vendedor_id' => 'nullable|integer',
-        ], $this->seguimientos->reglasSiguiente('primer_contacto')), array_merge(
+        ], $this->seguimientos->reglasSiguiente('primer_contacto', $empresaId)), array_merge(
             ['email.unique' => 'Ya existe un prospecto con este correo.'],
             $this->seguimientos->mensajesSiguiente('primer_contacto'),
         ));
@@ -257,7 +260,9 @@ class ProspectoController extends CrmBaseController
         // Convertir crea un cliente: se exige el permiso de crear clientes.
         $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'clientes', 'clientes', 'crear', 'No tienes permiso para convertir prospectos en clientes.');
 
-        return DB::transaction(function () use ($prospecto) {
+        $movidas = new Collection;
+
+        $cliente = DB::transaction(function () use ($prospecto, &$movidas) {
             $cliente = CrmCliente::create([
                 'empresa_id'   => $prospecto->empresa_id,
                 'prospecto_id' => $prospecto->id,
@@ -286,12 +291,29 @@ class ProspectoController extends CrmBaseController
                 'fuente'          => 'sistema',
             ]);
 
+            // Las oportunidades abiertas y ganadas siguen al cliente (el modelo solo
+            // admite prospecto O cliente, así que el par cambia junto). Las perdidas
+            // se quedan en el prospecto como historia.
+            $movidas = CrmOportunidad::query()
+                ->where('empresa_id', $prospecto->empresa_id)
+                ->where('prospecto_id', $prospecto->id)
+                ->where('etapa', '!=', 'cerrado_perdido')
+                ->get();
+            $movidas->each->update(['cliente_id' => $cliente->id, 'prospecto_id' => null]);
+
             $cliente->load(['vendedor:id,nombre', 'region:id,nombre', 'prospecto:id,nombre']);
 
-            $this->difundir(new ProspectoUpdated('updated', $prospecto->fresh()->toArray()));
-
-            return $this->jsonSuccess($cliente, 'Prospecto convertido a cliente exitosamente', 201);
+            return $cliente;
         });
+
+        $this->difundir(new ProspectoUpdated('updated', $prospecto->fresh()->toArray()));
+
+        $movidas->load(CrmOportunidad::RELACIONES_API)->each->conMontoOrigen();
+        foreach ($movidas as $oportunidad) {
+            $this->difundir(new OportunidadUpdated('updated', $oportunidad->toArray()));
+        }
+
+        return $this->jsonSuccess($cliente, 'Prospecto convertido a cliente exitosamente', 201);
     }
 
     /**
