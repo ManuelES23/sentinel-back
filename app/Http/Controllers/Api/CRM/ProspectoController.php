@@ -26,7 +26,7 @@ class ProspectoController extends CrmBaseController
     use FiltraPorEmpresa;
     use VerificaPermisoSubmodulo;
 
-    private const RELACIONES = [
+    public const RELACIONES = [
         'vendedor:id,nombre,email',
         'region:id,nombre',
         'zona:id,nombre',

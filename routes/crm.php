@@ -216,6 +216,10 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('mi-dia/oportunidades/{oportunidad}', [
         App\Http\Controllers\Api\CRM\MiDiaController::class, 'oportunidad'
     ]);
+    // «Nueva actividad»: prospecto + oportunidad + evento o actividad en una transacción.
+    Route::post('mi-dia/actividades', [
+        App\Http\Controllers\Api\CRM\MiDiaController::class, 'crearActividad'
+    ]);
 
     Route::post('seguimientos', [
         App\Http\Controllers\Api\CRM\SeguimientoController::class, 'store'
