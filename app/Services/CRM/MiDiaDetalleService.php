@@ -9,6 +9,7 @@ use App\Models\CRM\CrmCotizacion;
 use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmProspecto;
 use App\Models\CRM\CrmVendedor;
+use Carbon\CarbonImmutable;
 
 /**
  * Detalle de una oportunidad para el panel de Mi día (spec 2026-10-30 §5.2):
@@ -30,7 +31,10 @@ class MiDiaDetalleService
     public function __construct(private readonly MiDiaService $miDia) {}
 
     /**
-     * La oportunidad es del vendedor, o él tiene un evento (en cualquier estado) sobre ella.
+     * La oportunidad es del vendedor, o él tiene un evento pendiente sobre ella, o uno completado
+     * desde el inicio de hoy (el panel se recarga justo después de «Completar»). Un evento
+     * completado antes de hoy no da acceso: al reasignar la oportunidad, el vendedor anterior
+     * conserva sus eventos completados y no debe seguir leyéndola (VisibilidadOportunidades).
      */
     public function puedeAbrir(CrmVendedor $vendedor, CrmOportunidad $oportunidad): bool
     {
@@ -42,6 +46,7 @@ class MiDiaDetalleService
             ->where('vendedor_id', $vendedor->id)
             ->where('entidad_type', CrmOportunidad::class)
             ->where('entidad_id', $oportunidad->id)
+            ->where(fn ($q) => $q->where('completado', false)->orWhere('updated_at', '>=', CarbonImmutable::now()->startOfDay()))
             ->exists();
     }
 

@@ -12,6 +12,7 @@ use App\Models\CRM\CrmProspecto;
 use App\Models\CRM\CrmVendedor;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Laravel\Sanctum\Sanctum;
 use Tests\Concerns\CreatesCrmFixtures;
 use Tests\TestCase;
@@ -163,14 +164,46 @@ class MiDiaDetalleTest extends TestCase
         $this->assertSame([$mio->id], array_column($json['eventos'], 'id'));
     }
 
-    public function test_evento_completado_mio_tambien_da_acceso(): void
+    public function test_evento_completado_hoy_da_acceso(): void
     {
+        // Justo después de «Completar» el panel se recarga: no puede dar 403.
         $op = $this->oportunidad($this->otro);
         $this->evento($op, $this->propio, ['completado' => true]);
 
         $json = $this->detalle($op)->assertOk()->json('data');
 
         $this->assertSame([], $json['eventos']);
+    }
+
+    public function test_evento_completado_antes_de_hoy_ya_no_da_acceso(): void
+    {
+        $op = $this->oportunidad($this->otro);
+        $evento = $this->evento($op, $this->propio, ['completado' => true]);
+        DB::table('crm_agenda')->where('id', $evento->id)->update(['updated_at' => $this->ahora->subDays(2)]);
+
+        $this->detalle($op)->assertForbidden();
+    }
+
+    public function test_reasignada_el_vendedor_anterior_pierde_el_acceso_con_sus_eventos_completados(): void
+    {
+        $op = $this->oportunidad($this->propio);
+        $evento = $this->evento($op, $this->propio, ['completado' => true]);
+        DB::table('crm_agenda')->where('id', $evento->id)->update(['updated_at' => $this->ahora->subDays(3)]);
+        $this->detalle($op)->assertOk();
+
+        // Se reasigna al otro vendedor: lo pendiente se mueve con ella, lo completado se queda atrás.
+        $op->update(['vendedor_id' => $this->otro->id]);
+
+        $this->detalle($op)->assertForbidden();
+    }
+
+    public function test_evento_pendiente_da_acceso_aunque_sea_viejo(): void
+    {
+        $op = $this->oportunidad($this->otro);
+        $evento = $this->evento($op, $this->propio);
+        DB::table('crm_agenda')->where('id', $evento->id)->update(['updated_at' => $this->ahora->subDays(30)]);
+
+        $this->detalle($op)->assertOk();
     }
 
     public function test_ajena_sin_evento_403(): void
