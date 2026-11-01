@@ -23,6 +23,14 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::apiResource('vendedores', App\Http\Controllers\Api\CRM\VendedorController::class)
         ->parameters(['vendedores' => 'vendedor']);
 
+    // Equipo comercial (spec 2026-11-01): roles que se suman + ficha de vendedor.
+    // Las rutas de `vendedores` de arriba se quedan para el front anterior.
+    Route::get('equipo', [App\Http\Controllers\Api\CRM\EquipoController::class, 'index']);
+    Route::put('equipo', [App\Http\Controllers\Api\CRM\EquipoController::class, 'guardar']);
+    Route::post('equipo/fichas/{vendedor}/ligar', [
+        App\Http\Controllers\Api\CRM\EquipoController::class, 'ligar'
+    ])->whereNumber('vendedor');
+
     // Regiones → Zonas → Bodegas (jerarquía geográfica)
     Route::apiResource('regiones', App\Http\Controllers\Api\CRM\RegionController::class)
         ->parameters(['regiones' => 'region']);
@@ -334,5 +342,16 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     ]);
     Route::post('perfiles/usuarios/{user}', [
         App\Http\Controllers\Api\CRM\PerfilPermisosController::class, 'aplicar'
+    ])->whereNumber('user');
+    // Roles del Equipo comercial por persona y resumen para la columna CRM
+    // del panel (spec 2026-11-01 §7). Solo administradores.
+    Route::get('perfiles/resumen', [
+        App\Http\Controllers\Api\CRM\PerfilPermisosController::class, 'resumen'
+    ]);
+    Route::get('perfiles/usuarios/{user}/roles', [
+        App\Http\Controllers\Api\CRM\PerfilPermisosController::class, 'roles'
+    ])->whereNumber('user');
+    Route::put('perfiles/usuarios/{user}/roles', [
+        App\Http\Controllers\Api\CRM\PerfilPermisosController::class, 'guardarRoles'
     ])->whereNumber('user');
 });

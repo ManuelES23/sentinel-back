@@ -52,7 +52,7 @@ class CrmPermisosSeeder extends Seeder
         // 2026_09_12_100000_reorder_crm_modules_by_seller_workflow aplica el
         // mismo orden a las empresas ya sembradas; mantener ambos iguales.
         $this->crearModulo($app, 'catalogos', 'Catálogos', 'Settings2', 10, [
-            ['slug' => 'vendedores',  'name' => 'Vendedores',  'icon' => 'UserCheck',  'order' => 1, 'permisos' => $this->permisosBase()],
+            ['slug' => 'vendedores',  'name' => 'Equipo comercial', 'icon' => 'UserCheck',  'order' => 1, 'permisos' => $this->permisosBase()],
             ['slug' => 'regiones',    'name' => 'Regiones',    'icon' => 'Map',         'order' => 2, 'permisos' => $this->permisosBase()],
             ['slug' => 'zonas',       'name' => 'Zonas',       'icon' => 'MapPin',      'order' => 3, 'permisos' => $this->permisosBase()],
             ['slug' => 'bodegas',     'name' => 'Bodegas',     'icon' => 'Warehouse',   'order' => 4, 'permisos' => $this->permisosBase()],
