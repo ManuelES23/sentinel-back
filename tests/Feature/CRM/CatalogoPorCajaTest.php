@@ -188,6 +188,44 @@ class CatalogoPorCajaTest extends TestCase
         $this->api('GET', 'presentaciones')->assertOk()->assertJsonCount(3, 'data');
     }
 
+    public function test_mover_una_presentacion_de_commodity_sin_mandar_nombre_no_choca_con_otra(): void
+    {
+        $id = $this->enterprise->id;
+        $mango = CrmPresentacion::create(['empresa_id' => $id, 'commodity' => 'Mango', 'nombre' => 'Caja 4 kg']);
+        CrmPresentacion::create(['empresa_id' => $id, 'commodity' => 'Corn', 'nombre' => 'Caja 4 kg']);
+
+        $this->api('PUT', "presentaciones/{$mango->id}", ['commodity' => 'Corn'])
+            ->assertStatus(422)->assertJsonValidationErrors('nombre');
+        $this->assertSame('Mango', $mango->fresh()->commodity);
+
+        // Sin choque, mover solo el commodity sí funciona y conserva el nombre.
+        $this->api('PUT', "presentaciones/{$mango->id}", ['commodity' => ' Aguacate '])
+            ->assertOk()
+            ->assertJsonPath('data.commodity', 'Aguacate')
+            ->assertJsonPath('data.nombre', 'Caja 4 kg');
+    }
+
+    public function test_un_nombre_que_no_es_texto_responde_422_y_no_500(): void
+    {
+        $producto = $this->producto();
+        $calibre = $producto->calibresPropios()->create(['nombre' => 'Calibre 40']);
+        $presentacion = CrmPresentacion::create(['empresa_id' => $this->enterprise->id, 'commodity' => 'Mango', 'nombre' => 'Caja']);
+
+        $this->api('POST', "productos/{$producto->id}/calibres", ['nombre' => ['x']])
+            ->assertStatus(422)->assertJsonValidationErrors('nombre');
+        $this->api('PUT', "productos/{$producto->id}/calibres/{$calibre->id}", ['nombre' => ['x']])
+            ->assertStatus(422)->assertJsonValidationErrors('nombre');
+        $this->api('POST', 'presentaciones', ['commodity' => 'Mango', 'nombre' => ['x']])
+            ->assertStatus(422)->assertJsonValidationErrors('nombre');
+        $this->api('POST', 'presentaciones', ['commodity' => ['Mango'], 'nombre' => 'Nueva'])
+            ->assertStatus(422)->assertJsonValidationErrors('commodity');
+        $this->api('PUT', "presentaciones/{$presentacion->id}", ['nombre' => ['x']])
+            ->assertStatus(422)->assertJsonValidationErrors('nombre');
+
+        // Un filtro que no es texto se ignora en lugar de romper.
+        $this->api('GET', 'presentaciones?commodity[]=Mango')->assertOk()->assertJsonCount(1, 'data');
+    }
+
     public function test_una_presentacion_de_otra_empresa_responde_404(): void
     {
         $ajena = CrmPresentacion::create(['empresa_id' => $this->crearOtraEmpresa()->id, 'commodity' => 'Mango', 'nombre' => 'Ajena']);

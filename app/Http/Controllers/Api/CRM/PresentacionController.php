@@ -39,7 +39,8 @@ class PresentacionController extends CrmBaseController
 
         $presentaciones = CrmPresentacion::query()
             ->where('empresa_id', $empresaId)
-            ->when($request->filled('commodity'), fn ($q) => $q->where('commodity', trim((string) $request->query('commodity'))))
+            ->when(is_string($request->query('commodity')) && trim($request->query('commodity')) !== '',
+                fn ($q) => $q->where('commodity', trim($request->query('commodity'))))
             ->orderBy('commodity')->orderBy('orden')->orderBy('nombre')
             ->get();
 
@@ -86,14 +87,22 @@ class PresentacionController extends CrmBaseController
     private function reglas(Request $request, int $empresaId, ?CrmPresentacion $presentacion = null): array
     {
         // Commodity y nombre se recortan antes de validar para que la unicidad compare el texto real.
+        // Un valor que no es texto (p. ej. un arreglo) se deja tal cual: la regla `string` lo rechaza con 422.
         foreach (['commodity', 'nombre'] as $campo) {
-            if ($request->has($campo)) {
-                $request->merge([$campo => trim((string) $request->input($campo))]);
+            if (is_string($request->input($campo))) {
+                $request->merge([$campo => trim($request->input($campo))]);
             }
         }
 
+        // Al editar sin mandar nombre vale el actual, para que la unicidad corra siempre
+        // (mover una presentación de commodity no debe chocar con el índice único en BD).
+        if ($presentacion && ! $request->has('nombre')) {
+            $request->merge(['nombre' => $presentacion->nombre]);
+        }
+
         // La unicidad es por empresa + commodity; al editar sin mandar commodity vale el actual.
-        $commodity = $request->has('commodity') ? (string) $request->input('commodity') : (string) $presentacion?->commodity;
+        $commodity = $request->has('commodity') ? $request->input('commodity') : $presentacion?->commodity;
+        $commodity = is_string($commodity) ? $commodity : '';
 
         $unico = Rule::unique('crm_presentaciones', 'nombre')
             ->where('empresa_id', $empresaId)

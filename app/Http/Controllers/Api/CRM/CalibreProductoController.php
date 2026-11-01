@@ -93,8 +93,9 @@ class CalibreProductoController extends CrmBaseController
     private function reglas(Request $request, CrmProducto $producto, ?CrmProductoCalibre $calibre = null): array
     {
         // El nombre se recorta antes de validar para que la unicidad compare el texto real.
-        if ($request->has('nombre')) {
-            $request->merge(['nombre' => trim((string) $request->input('nombre'))]);
+        // Un valor que no es texto (p. ej. un arreglo) se deja tal cual: la regla `string` lo rechaza con 422.
+        if (is_string($request->input('nombre'))) {
+            $request->merge(['nombre' => trim($request->input('nombre'))]);
         }
 
         $unico = Rule::unique('crm_producto_calibres', 'nombre')->where('producto_id', $producto->id);
