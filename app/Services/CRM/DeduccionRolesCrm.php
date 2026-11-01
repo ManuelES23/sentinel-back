@@ -62,7 +62,10 @@ class DeduccionRolesCrm
             $aviso = 'ficha_inactiva';
         }
 
-        $ajustado = array_diff($reales, $esperado) !== [] || array_diff($esperado, $reales) !== [];
+        // Sin permisos reales no hay nada «a mano» que conservar (p. ej. una
+        // ficha sin usuario): nunca es ajustado.
+        $ajustado = $reales !== []
+            && (array_diff($reales, $esperado) !== [] || array_diff($esperado, $reales) !== []);
 
         return [
             'vende' => $vende,

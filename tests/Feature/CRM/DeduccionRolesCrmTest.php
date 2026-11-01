@@ -193,6 +193,17 @@ class DeduccionRolesCrmTest extends TestCase
         $this->assertTrue($r['ajustado']);
     }
 
+    public function test_ficha_activa_sin_permisos_reales_no_es_ajustada(): void
+    {
+        $d = $this->defs();
+
+        $r = DeduccionRolesCrm::deducir([], $d, true, true);
+
+        $this->assertTrue($r['vende']);
+        $this->assertFalse($r['ajustado']);
+        $this->assertNull($r['aviso']);
+    }
+
     public function test_rol_con_definicion_vacia_no_se_deduce(): void
     {
         $d = $this->defs();
@@ -349,6 +360,8 @@ class DeduccionRolesCrmTest extends TestCase
         $this->assertSame('Ana Sin Usuario', $fSin['nombre']);
         $this->assertSame(['vende' => true, 'gerencia' => false, 'catalogos' => false], $fSin['roles']);
         $this->assertTrue($fSin['ficha_activa']);
+        $this->assertFalse($fSin['ajustado']);
+        $this->assertNull($fSin['aviso']);
 
         $fVend = $this->fila($filas, $vendedor->id);
         $this->assertSame($fichaVendedor->id, $fVend['vendedor_id']);
@@ -392,6 +405,7 @@ class DeduccionRolesCrmTest extends TestCase
 
         $this->assertNotNull($fila);
         $this->assertSame('sin_acceso', $fila['aviso']);
+        $this->assertFalse($fila['ajustado']);
         $this->assertSame('sin_acceso', $this->deduccion->dePersona($sinAcceso, $this->enterprise)['aviso']);
     }
 
