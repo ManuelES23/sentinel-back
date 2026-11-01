@@ -97,6 +97,50 @@ class CrmPerfilPermisosService
         ];
     }
 
+    /**
+     * Roles del Equipo comercial. Se suman: los permisos de una persona son la
+     * unión de las definiciones de sus roles. No se guardan, se deducen
+     * (ver DeduccionRolesCrm).
+     */
+    public const ROLES = ['vende', 'gerencia', 'catalogos'];
+
+    /**
+     * Unión de las definiciones de los roles pedidos, con la forma de
+     * definiciones(): vende → base de venta, gerencia → perfil gerencia
+     * (base + extras) y catalogos → administración.
+     *
+     * @param  string[]  $roles  subconjunto de ROLES
+     * @return array<string, array<string, string[]>>
+     *
+     * @throws InvalidArgumentException si algún rol no existe.
+     */
+    public static function definicionRoles(array $roles): array
+    {
+        $definiciones = self::definiciones();
+        $porRol = [
+            'vende' => $definiciones['vendedor'],
+            'gerencia' => $definiciones['gerencia'],
+            'catalogos' => $definiciones['administracion'],
+        ];
+
+        $union = [];
+        foreach (array_unique($roles) as $rol) {
+            if (! isset($porRol[$rol])) {
+                throw new InvalidArgumentException("El rol \"{$rol}\" no existe.");
+            }
+            foreach ($porRol[$rol] as $modulo => $submodulos) {
+                foreach ($submodulos as $submodulo => $permisos) {
+                    $union[$modulo][$submodulo] = array_values(array_unique(array_merge(
+                        $union[$modulo][$submodulo] ?? [],
+                        $permisos,
+                    )));
+                }
+            }
+        }
+
+        return $union;
+    }
+
     /** @return string[] */
     public static function slugs(): array
     {
@@ -126,8 +170,41 @@ class CrmPerfilPermisosService
         if (! array_key_exists($perfil, $definiciones)) {
             throw new InvalidArgumentException("El perfil \"{$perfil}\" no existe.");
         }
-        $definicion = $definiciones[$perfil];
 
+        return ['perfil' => $perfil] + $this->reemplazar($usuario, $empresa, $definiciones[$perfil]);
+    }
+
+    /**
+     * Reemplaza los accesos del usuario en el CRM de la empresa por la UNIÓN
+     * de los roles marcados (vende, gerencia, catalogos), con la misma
+     * mecánica de aplicar(). Con `$roles === []` la persona pierde el acceso
+     * a la aplicación CRM de esa empresa; su acceso a la empresa y a otras
+     * aplicaciones no cambia. No toca la ficha de vendedor.
+     *
+     * @param  string[]  $roles  subconjunto de ROLES
+     * @return array{modulos_activos: int, permisos_otorgados: int}
+     *
+     * @throws InvalidArgumentException si algún rol no existe o la empresa no tiene CRM.
+     */
+    public function aplicarRoles(User $usuario, Enterprise $empresa, array $roles): array
+    {
+        return $this->reemplazar($usuario, $empresa, self::definicionRoles($roles));
+    }
+
+    /**
+     * Reemplaza todos los accesos y permisos del usuario dentro de la
+     * aplicación `crm` de la empresa por la definición dada (módulo →
+     * submódulo → permisos). Lo que está en la definición queda activo y todo
+     * lo demás del CRM queda inactivo; con una definición vacía también se
+     * apaga el acceso a la aplicación. Nada fuera de ese CRM se toca.
+     *
+     * @param  array<string, array<string, string[]>>  $definicion
+     * @return array{modulos_activos: int, permisos_otorgados: int}
+     *
+     * @throws InvalidArgumentException si la empresa no tiene CRM.
+     */
+    private function reemplazar(User $usuario, Enterprise $empresa, array $definicion): array
+    {
         $app = Application::where('enterprise_id', $empresa->id)
             ->where('slug', 'crm')
             ->with('modules.submodules.permissionTypes')
@@ -137,14 +214,15 @@ class CrmPerfilPermisosService
             throw new InvalidArgumentException('La empresa no tiene el CRM Comercial configurado.');
         }
 
-        return DB::transaction(function () use ($usuario, $app, $definicion, $perfil) {
+        return DB::transaction(function () use ($usuario, $app, $definicion) {
             $ahora = now();
             $modulosActivos = 0;
             $permisosOtorgados = 0;
 
+            $aplicacionActiva = $definicion !== [];
             UserApplicationAccess::updateOrCreate(
                 ['user_id' => $usuario->id, 'application_id' => $app->id],
-                ['is_active' => true, 'granted_at' => $ahora],
+                ['is_active' => $aplicacionActiva] + ($aplicacionActiva ? ['granted_at' => $ahora] : []),
             );
 
             foreach ($app->modules as $modulo) {
@@ -183,7 +261,6 @@ class CrmPerfilPermisosService
             }
 
             return [
-                'perfil' => $perfil,
                 'modulos_activos' => $modulosActivos,
                 'permisos_otorgados' => $permisosOtorgados,
             ];
