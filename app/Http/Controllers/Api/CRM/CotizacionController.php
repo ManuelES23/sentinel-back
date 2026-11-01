@@ -100,7 +100,17 @@ class CotizacionController extends CrmBaseController
         $this->verificarEmpresa($cotizacion);
         $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'cotizaciones', 'cotizaciones', 'ver', self::MENSAJE_SIN_VER);
         $this->exigirOportunidadVisible($cotizacion, self::MENSAJE_LEER_AJENA);
-        $cotizacion->load(['lineas.producto:id,nombre', 'impuestos']);
+        // Para el detalle: commodity, nombres de cliente/prospecto/vendedor y datos de la empresa.
+        // `oportunidad` queda en null si está eliminada (soft delete); la carga anidada lo tolera.
+        $cotizacion->load([
+            'lineas.producto:id,nombre,commodity',
+            'impuestos',
+            'oportunidad:id,nombre,cliente_id,prospecto_id,vendedor_id',
+            'oportunidad.cliente:id,nombre',
+            'oportunidad.prospecto:id,nombre',
+            'oportunidad.vendedor:id,nombre',
+            'empresa:id,name,razon_social,direccion,ciudad,pais,telefono,logo',
+        ]);
 
         return $this->jsonSuccess($cotizacion);
     }
@@ -122,6 +132,7 @@ class CotizacionController extends CrmBaseController
             return $this->jsonError('No se puede crear una cotización sobre una oportunidad cerrada como perdida.', 422);
         }
 
+        $this->normalizarTextosDeLineas($request);
         $validated = $request->validate([
             'fecha_emision' => 'required|date',
             'vigencia_dias' => 'nullable|integer|min:1',
@@ -129,6 +140,8 @@ class CotizacionController extends CrmBaseController
             'notas' => 'nullable|string',
             'lineas' => 'required|array|min:1',
             'lineas.*.producto_id' => ['required', 'integer', $this->existeEnEmpresa('crm_productos', $empresaId)],
+            'lineas.*.calibre' => 'nullable|string|max:100',
+            'lineas.*.presentacion' => 'nullable|string|max:150',
             'lineas.*.cantidad' => 'required|numeric|min:0.0001',
             'lineas.*.precio_unitario' => 'required|numeric|min:0',
         ]);
@@ -160,17 +173,7 @@ class CotizacionController extends CrmBaseController
                 'notas' => $validated['notas'] ?? null,
             ]);
 
-            foreach ($validated['lineas'] as $linea) {
-                $producto = CrmProducto::where('empresa_id', $empresaId)->find($linea['producto_id']);
-                CrmOportunidadProducto::create([
-                    'oportunidad_id' => $oportunidad->id,
-                    'cotizacion_id' => $cotizacion->id,
-                    'producto_id' => $linea['producto_id'],
-                    'descripcion' => $producto?->nombre ?? '',
-                    'cantidad' => $linea['cantidad'],
-                    'precio_unitario' => $linea['precio_unitario'],
-                ]);
-            }
+            $this->crearLineas($cotizacion, $validated['lineas'], $empresaId);
 
             $cotizacion = $this->calculo->recalcular($cotizacion);
             $this->monto->alGuardar($oportunidad, $cotizacion);
@@ -196,6 +199,7 @@ class CotizacionController extends CrmBaseController
         }
 
         $empresaId = $this->getEmpresaId();
+        $this->normalizarTextosDeLineas($request);
         $validated = $request->validate([
             'fecha_emision' => 'sometimes|required|date',
             'vigencia_dias' => 'nullable|integer|min:1',
@@ -203,6 +207,8 @@ class CotizacionController extends CrmBaseController
             'notas' => 'nullable|string',
             'lineas' => 'sometimes|required|array|min:1',
             'lineas.*.producto_id' => ['required_with:lineas', 'integer', $this->existeEnEmpresa('crm_productos', $empresaId)],
+            'lineas.*.calibre' => 'nullable|string|max:100',
+            'lineas.*.presentacion' => 'nullable|string|max:150',
             'lineas.*.cantidad' => 'required_with:lineas|numeric|min:0.0001',
             'lineas.*.precio_unitario' => 'required_with:lineas|numeric|min:0',
         ]);
@@ -236,17 +242,7 @@ class CotizacionController extends CrmBaseController
 
             if (isset($validated['lineas'])) {
                 $cotizacion->lineas()->delete();
-                foreach ($validated['lineas'] as $linea) {
-                    $producto = CrmProducto::where('empresa_id', $empresaId)->find($linea['producto_id']);
-                    CrmOportunidadProducto::create([
-                        'oportunidad_id' => $cotizacion->oportunidad_id,
-                        'cotizacion_id' => $cotizacion->id,
-                        'producto_id' => $linea['producto_id'],
-                        'descripcion' => $producto?->nombre ?? '',
-                        'cantidad' => $linea['cantidad'],
-                        'precio_unitario' => $linea['precio_unitario'],
-                    ]);
-                }
+                $this->crearLineas($cotizacion, $validated['lineas'], $empresaId);
             }
 
             $cotizacion = $this->calculo->recalcular($cotizacion);
@@ -394,6 +390,57 @@ class CotizacionController extends CrmBaseController
         if ($oportunidad?->wasChanged('monto_esperado')) {
             $this->difundirOportunidad($oportunidad);
         }
+    }
+
+    /**
+     * Crea los renglones de la cotización. `descripcion` guarda el nombre actual
+     * del producto; calibre y presentación son texto libre y opcionales (sin
+     * catálogo obligatorio, para que una pestaña vieja siga funcionando).
+     *
+     * @param  array<int, array<string, mixed>>  $lineas
+     */
+    private function crearLineas(CrmCotizacion $cotizacion, array $lineas, int $empresaId): void
+    {
+        foreach ($lineas as $linea) {
+            $producto = CrmProducto::where('empresa_id', $empresaId)->find($linea['producto_id']);
+            CrmOportunidadProducto::create([
+                'oportunidad_id' => $cotizacion->oportunidad_id,
+                'cotizacion_id' => $cotizacion->id,
+                'producto_id' => $linea['producto_id'],
+                'descripcion' => $producto?->nombre ?? '',
+                'calibre' => $linea['calibre'] ?? null,
+                'presentacion' => $linea['presentacion'] ?? null,
+                'cantidad' => $linea['cantidad'],
+                'precio_unitario' => $linea['precio_unitario'],
+            ]);
+        }
+    }
+
+    /**
+     * Recorta calibre y presentación y convierte vacío en null, antes de
+     * validar. Solo toca los textos: un valor que no es texto se deja como
+     * viene para que la regla `string` responda 422 (no un 500).
+     */
+    private function normalizarTextosDeLineas(Request $request): void
+    {
+        $lineas = $request->input('lineas');
+        if (! is_array($lineas)) {
+            return;
+        }
+
+        foreach ($lineas as $i => $linea) {
+            if (! is_array($linea)) {
+                continue;
+            }
+            foreach (['calibre', 'presentacion'] as $campo) {
+                if (isset($linea[$campo]) && is_string($linea[$campo])) {
+                    $recortado = trim($linea[$campo]);
+                    $lineas[$i][$campo] = $recortado === '' ? null : $recortado;
+                }
+            }
+        }
+
+        $request->merge(['lineas' => $lineas]);
     }
 
     /**
