@@ -97,6 +97,50 @@ class CrmPerfilPermisosService
         ];
     }
 
+    /**
+     * Roles del Equipo comercial. Se suman: los permisos de una persona son la
+     * unión de las definiciones de sus roles. No se guardan, se deducen
+     * (ver DeduccionRolesCrm).
+     */
+    public const ROLES = ['vende', 'gerencia', 'catalogos'];
+
+    /**
+     * Unión de las definiciones de los roles pedidos, con la forma de
+     * definiciones(): vende → base de venta, gerencia → perfil gerencia
+     * (base + extras) y catalogos → administración.
+     *
+     * @param  string[]  $roles  subconjunto de ROLES
+     * @return array<string, array<string, string[]>>
+     *
+     * @throws InvalidArgumentException si algún rol no existe.
+     */
+    public static function definicionRoles(array $roles): array
+    {
+        $definiciones = self::definiciones();
+        $porRol = [
+            'vende' => $definiciones['vendedor'],
+            'gerencia' => $definiciones['gerencia'],
+            'catalogos' => $definiciones['administracion'],
+        ];
+
+        $union = [];
+        foreach (array_unique($roles) as $rol) {
+            if (! isset($porRol[$rol])) {
+                throw new InvalidArgumentException("El rol \"{$rol}\" no existe.");
+            }
+            foreach ($porRol[$rol] as $modulo => $submodulos) {
+                foreach ($submodulos as $submodulo => $permisos) {
+                    $union[$modulo][$submodulo] = array_values(array_unique(array_merge(
+                        $union[$modulo][$submodulo] ?? [],
+                        $permisos,
+                    )));
+                }
+            }
+        }
+
+        return $union;
+    }
+
     /** @return string[] */
     public static function slugs(): array
     {
