@@ -20,6 +20,7 @@ class CrmProducto extends Model
         'empresa_id',
         'nombre',
         'commodity',
+        'variedad_id',
         'descripcion',
         'precio',
         'unidad_medida',
@@ -39,6 +40,11 @@ class CrmProducto extends Model
     public function oportunidadProductos(): HasMany
     {
         return $this->hasMany(CrmOportunidadProducto::class, 'producto_id');
+    }
+
+    public function calibresPropios(): HasMany
+    {
+        return $this->hasMany(CrmProductoCalibre::class, 'producto_id');
     }
 
     public function scopeActivo($query)
