@@ -114,6 +114,42 @@ class OpcionesCotizacionTest extends TestCase
         $this->assertSame(['Clamshell'], $productos[1]['presentaciones']);
     }
 
+    public function test_sin_acceso_a_la_empresa_del_header_responde_403_y_no_500(): void
+    {
+        $sinAcceso = $this->crearOtraEmpresa();
+
+        $this->withHeaders($this->crmHeaders($sinAcceso->id))->getJson(self::RUTA)->assertForbidden();
+    }
+
+    public function test_el_commodity_se_junta_sin_distinguir_mayusculas_ni_espacios(): void
+    {
+        $id = $this->enterprise->id;
+        $this->producto('Kent Mango', 'Mango');
+        $this->producto('Tommy Mango', 'mango ');
+        $this->producto('Uva A', 'Uva');
+        CrmPresentacion::create(['empresa_id' => $id, 'commodity' => 'mango', 'nombre' => 'Caja 9 LBS', 'orden' => 1]);
+        CrmPresentacion::create(['empresa_id' => $id, 'commodity' => 'UVA ', 'nombre' => 'Clamshell', 'orden' => 1]);
+
+        $productos = $this->opciones();
+
+        $this->assertSame(['Mango', 'Uva'], array_column($productos, 'commodity'));
+        $this->assertSame(['Kent Mango', 'Tommy Mango'], array_column($productos[0]['variedades'], 'nombre'));
+        $this->assertSame(['Caja 9 LBS'], $productos[0]['presentaciones']);
+        $this->assertSame(['Clamshell'], $productos[1]['presentaciones']);
+    }
+
+    public function test_otros_se_reconoce_sin_importar_mayusculas(): void
+    {
+        $this->producto('Zeta', null);
+        $this->producto('Uva A', 'Uva');
+        $this->producto('Raro', 'otros');
+
+        $productos = $this->opciones();
+
+        $this->assertSame(['Uva', 'Otros'], array_column($productos, 'commodity'));
+        $this->assertSame(['Raro', 'Zeta'], array_column($productos[1]['variedades'], 'nombre'));
+    }
+
     public function test_sin_permiso_de_escritura_tambien_puede_leer_las_opciones(): void
     {
         $this->producto('Kent Mango', 'Mango');

@@ -103,7 +103,10 @@ class ProductoController extends CrmBaseController
      */
     public function opcionesCotizacion(Request $request, OpcionesCotizacionService $opciones): JsonResponse
     {
-        return $this->jsonSuccess($opciones->paraEmpresa($this->getEmpresaId($request)));
+        $empresaId = $this->getEmpresaId($request);
+        abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
+
+        return $this->jsonSuccess($opciones->paraEmpresa($empresaId));
     }
 
     /**

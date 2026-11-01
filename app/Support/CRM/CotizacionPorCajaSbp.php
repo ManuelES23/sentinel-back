@@ -2,6 +2,7 @@
 
 namespace App\Support\CRM;
 
+use App\Models\Calibre;
 use App\Models\CRM\CrmConfiguracionComercial;
 use App\Models\CRM\CrmPresentacion;
 use App\Models\CRM\CrmProducto;
@@ -59,14 +60,19 @@ class CotizacionPorCajaSbp
     private static function renombrar(int $empresaId): void
     {
         foreach (self::RENOMBRAR as $viejo => $nuevo) {
-            $producto = CrmProducto::where('empresa_id', $empresaId)->where('nombre', $viejo)->first();
-            if ($producto === null) {
-                continue;
-            }
+            $productos = CrmProducto::where('empresa_id', $empresaId)->where('nombre', $viejo)->orderBy('id')->get();
 
             // Si el nombre destino ya existe, el viejo no se renombra: se desactiva.
+            // Con duplicados a mano solo el primero toma el nombre nuevo; los demás se desactivan.
             $yaExiste = CrmProducto::where('empresa_id', $empresaId)->where('nombre', $nuevo)->exists();
-            $producto->update($yaExiste ? ['activo' => false] : ['nombre' => $nuevo]);
+            foreach ($productos as $producto) {
+                if ($yaExiste) {
+                    $producto->update(['activo' => false]);
+                } else {
+                    $producto->update(['nombre' => $nuevo]);
+                    $yaExiste = true;
+                }
+            }
         }
     }
 
@@ -90,15 +96,20 @@ class CotizacionPorCajaSbp
             }
 
             // Sin cultivo/variedad (o borrados) la liga queda vacía; no es un error.
-            $variedadId = Variedad::where('nombre', $variedad)
+            // Con nombres repetidos gana la que tiene calibres activos y luego la de menor id.
+            $variedadModelo = Variedad::where('nombre', $variedad)
                 ->whereHas('cultivo', fn ($q) => $q->where('nombre', $cultivo))
-                ->value('id');
-            if ($variedadId === null) {
+                ->orderByDesc(Calibre::query()->where('is_active', true)
+                    ->whereColumn('calibres.variedad_id', 'variedades.id')
+                    ->selectRaw('count(*)'))
+                ->orderBy('id')
+                ->first();
+            if ($variedadModelo === null) {
                 continue;
             }
 
             foreach ($productos as $producto) {
-                $producto->update(['variedad_id' => $variedadId]);
+                $producto->update(['variedad_id' => $variedadModelo->id]);
             }
         }
     }

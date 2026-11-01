@@ -4,7 +4,6 @@ namespace App\Services\CRM;
 
 use App\Models\Calibre;
 use App\Models\CRM\CrmPresentacion;
-use App\Models\CRM\CrmProCalibre;
 use App\Models\CRM\CrmProducto;
 use App\Models\CRM\CrmProductoCalibre;
 
@@ -33,13 +32,14 @@ class OpcionesCotizacionService
             ->where('activo', true)
             ->orderBy('orden')->orderBy('nombre')
             ->get(['commodity', 'nombre'])
-            ->groupBy('commodity');
+            ->groupBy(fn (CrmPresentacion $p) => self::clave($p->commodity));
 
-        $porCommodity = $productos->groupBy(fn (CrmProducto $p) => trim((string) $p->commodity) ?: self::OTROS);
+        // Misma regla que MySQL (sin distinguir mayúsculas ni espacios); se muestra la escritura del producto.
+        $porCommodity = $productos->groupBy(fn (CrmProducto $p) => self::clave($p->commodity));
 
-        $grupos = $porCommodity->map(fn ($variedades, string $commodity) => [
-            'commodity'      => $commodity,
-            'presentaciones' => ($presentaciones[$commodity] ?? collect())->pluck('nombre')->values()->all(),
+        $grupos = $porCommodity->map(fn ($variedades, string $clave) => [
+            'commodity'      => $clave === self::clave(self::OTROS) ? self::OTROS : trim((string) $variedades->first()->commodity),
+            'presentaciones' => ($presentaciones[$clave] ?? collect())->pluck('nombre')->values()->all(),
             'variedades'     => $variedades->map(fn (CrmProducto $p) => [
                 'id'       => $p->id,
                 'nombre'   => $p->nombre,
@@ -61,6 +61,11 @@ class OpcionesCotizacionService
         })->values()->all();
 
         return ['productos' => $ordenados];
+    }
+
+    private static function clave(?string $commodity): string
+    {
+        return mb_strtolower(trim((string) $commodity)) ?: mb_strtolower(self::OTROS);
     }
 
     /** @return array<int, array<int, string>> variedad_id => nombres de calibres activos */

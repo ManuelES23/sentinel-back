@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\CRM;
 
+use App\Models\Calibre;
 use App\Models\CRM\CrmConfiguracionComercial;
 use App\Models\CRM\CrmPresentacion;
 use App\Models\CRM\CrmProducto;
@@ -150,6 +151,66 @@ class CotizacionPorCajaSbpTest extends TestCase
         $this->assertTrue($ajeno->fresh()->activo);
         $this->assertSame(0, CrmPresentacion::where('empresa_id', $otroId)->count());
         $this->assertFalse(CrmConfiguracionComercial::cotizacionPorCaja($otroId));
+    }
+
+    public function test_con_dos_variedades_del_mismo_nombre_liga_la_que_tiene_calibres_activos(): void
+    {
+        $id = $this->enterprise->id;
+        $menor = $this->variedad('Mango', 'Kent');
+        $mayor = $this->variedad('Mango', 'Kent');
+        $mayorInactiva = $this->variedad('Mango', 'Ataulfo');
+        $ataulfoConCalibres = $this->variedad('Mango', 'Ataulfo');
+        foreach ([[$mayor, 'Calibre 8', true], [$menor, 'Calibre 9', false], [$ataulfoConCalibres, 'Calibre 10', true]] as [$v, $nombre, $activo]) {
+            Calibre::create(['cultivo_id' => $v->cultivo_id, 'variedad_id' => $v->id, 'nombre' => $nombre, 'valor' => 1, 'is_active' => $activo, 'order' => 1]);
+        }
+        $kent = $this->producto($id, 'Kent Mango', 'Mango');
+        $ataulfo = $this->producto($id, 'Ataulfo Mango', 'Mango');
+
+        CotizacionPorCajaSbp::aplicar($id);
+
+        $this->assertSame($mayor->id, $kent->fresh()->variedad_id);
+        $this->assertSame($ataulfoConCalibres->id, $ataulfo->fresh()->variedad_id);
+        $this->assertNotSame($mayorInactiva->id, $ataulfo->fresh()->variedad_id);
+    }
+
+    public function test_con_dos_variedades_del_mismo_nombre_y_sin_calibres_liga_la_de_menor_id(): void
+    {
+        $id = $this->enterprise->id;
+        $menor = $this->variedad('Mango', 'Kent');
+        $this->variedad('Mango', 'Kent');
+        $kent = $this->producto($id, 'Kent Mango', 'Mango');
+
+        CotizacionPorCajaSbp::aplicar($id);
+
+        $this->assertSame($menor->id, $kent->fresh()->variedad_id);
+    }
+
+    public function test_renombra_solo_el_primero_y_desactiva_los_duplicados_del_nombre_viejo(): void
+    {
+        $id = $this->enterprise->id;
+        $primero = $this->producto($id, 'Yellow Corn Bulk', 'Corn');
+        $segundo = $this->producto($id, 'Yellow Corn Bulk', 'Corn');
+
+        CotizacionPorCajaSbp::aplicar($id);
+
+        $this->assertSame('Yellow Corn', $primero->fresh()->nombre);
+        $this->assertTrue($primero->fresh()->activo);
+        $this->assertSame('Yellow Corn Bulk', $segundo->fresh()->nombre);
+        $this->assertFalse($segundo->fresh()->activo);
+    }
+
+    public function test_si_el_destino_ya_existe_desactiva_todos_los_duplicados_del_nombre_viejo(): void
+    {
+        $id = $this->enterprise->id;
+        $this->producto($id, 'Yellow Corn', 'Corn');
+        $a = $this->producto($id, 'Yellow Corn Bulk', 'Corn');
+        $b = $this->producto($id, 'Yellow Corn Bulk', 'Corn');
+
+        CotizacionPorCajaSbp::aplicar($id);
+
+        $this->assertFalse($a->fresh()->activo);
+        $this->assertFalse($b->fresh()->activo);
+        $this->assertSame(1, CrmProducto::where('empresa_id', $id)->where('activo', true)->count());
     }
 
     public function test_la_migracion_prepara_sbp_y_no_hace_nada_si_no_existe(): void

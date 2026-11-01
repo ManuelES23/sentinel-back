@@ -6,6 +6,7 @@ use App\Models\CRM\CrmCliente;
 use App\Models\CRM\CrmCotizacion;
 use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmProducto;
+use App\Support\CRM\CotizacionPorCajaSbp;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Testing\TestResponse;
 use Laravel\Sanctum\Sanctum;
@@ -133,6 +134,28 @@ class CotizacionPorCajaControllerTest extends TestCase
         // Editar solo la cabecera (sin lineas) no toca los renglones.
         $this->withHeaders($this->crmHeaders())->putJson("/api/crm/cotizaciones/{$id}", ['notas' => 'solo notas'])->assertOk();
         $this->assertSame('Calibre 12', $cotizacion->fresh()->lineas()->first()->calibre);
+    }
+
+    public function test_un_borrador_con_productos_renombrados_o_desactivados_sigue_editable(): void
+    {
+        $id = $this->enterprise->id;
+        $bulk = CrmProducto::create(['empresa_id' => $id, 'nombre' => 'Yellow Corn Bulk', 'commodity' => 'Corn', 'precio' => 10]);
+        $tray = CrmProducto::create(['empresa_id' => $id, 'nombre' => 'Yellow Corn Tray', 'commodity' => 'Corn', 'precio' => 12]);
+        $lineas = [
+            ['producto_id' => $bulk->id, 'calibre' => null, 'presentacion' => 'Bulk RPC', 'cantidad' => 2, 'precio_unitario' => 10],
+            ['producto_id' => $tray->id, 'calibre' => null, 'presentacion' => 'Tray RPC', 'cantidad' => 1, 'precio_unitario' => 12],
+        ];
+        $cotizacionId = $this->crear($lineas)['data']['id'];
+
+        CotizacionPorCajaSbp::aplicar($id);
+        $this->assertFalse($tray->fresh()->activo);
+
+        $this->enviar($lineas, $cotizacionId)->assertOk();
+
+        $guardadas = CrmCotizacion::findOrFail($cotizacionId)->lineas;
+        $this->assertCount(2, $guardadas);
+        $this->assertSame('Yellow Corn', $guardadas->firstWhere('producto_id', $bulk->id)->descripcion);
+        $this->assertSame('Yellow Corn Tray', $guardadas->firstWhere('producto_id', $tray->id)->descripcion);
     }
 
     public function test_el_detalle_trae_commodity_cliente_y_empresa(): void
