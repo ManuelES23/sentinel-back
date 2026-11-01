@@ -12,11 +12,12 @@ class CrmConfiguracionComercial extends Model
 
     protected $table = 'crm_configuraciones_comerciales';
 
-    protected $fillable = ['empresa_id', 'descuento_global_habilitado', 'moneda', 'productos_en_oportunidad'];
+    protected $fillable = ['empresa_id', 'descuento_global_habilitado', 'moneda', 'productos_en_oportunidad', 'cotizacion_por_caja'];
 
     protected $casts = [
         'descuento_global_habilitado' => 'boolean',
         'productos_en_oportunidad' => 'boolean',
+        'cotizacion_por_caja' => 'boolean',
     ];
 
     public function empresa(): BelongsTo
@@ -29,7 +30,7 @@ class CrmConfiguracionComercial extends Model
     {
         return self::firstOrCreate(
             ['empresa_id' => $empresaId],
-            ['descuento_global_habilitado' => true, 'moneda' => 'MXN', 'productos_en_oportunidad' => false]
+            ['descuento_global_habilitado' => true, 'moneda' => 'MXN', 'productos_en_oportunidad' => false, 'cotizacion_por_caja' => false]
         );
     }
 
@@ -43,5 +44,11 @@ class CrmConfiguracionComercial extends Model
     public static function productosEnOportunidad(int $empresaId): bool
     {
         return (bool) self::paraEmpresa($empresaId)->productos_en_oportunidad;
+    }
+
+    /** ¿La empresa cotiza por caja (producto → variedad → renglones)? Solo lo enciende una migración. */
+    public static function cotizacionPorCaja(int $empresaId): bool
+    {
+        return (bool) self::paraEmpresa($empresaId)->cotizacion_por_caja;
     }
 }

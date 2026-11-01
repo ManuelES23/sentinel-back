@@ -35,6 +35,9 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('productos/commodities', [
         App\Http\Controllers\Api\CRM\ProductoController::class, 'commodities'
     ]);
+    Route::get('productos/opciones-cotizacion', [
+        App\Http\Controllers\Api\CRM\ProductoController::class, 'opcionesCotizacion'
+    ]);
     Route::get('productos/buscar', [
         App\Http\Controllers\Api\CRM\ProductoController::class, 'buscar'
     ]);
@@ -43,6 +46,16 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     ]);
     Route::apiResource('productos', App\Http\Controllers\Api\CRM\ProductoController::class)
         ->parameters(['productos' => 'producto']);
+
+    // Calibres propios por producto (los agrícolas solo se leen) y presentaciones por commodity
+    Route::get('productos/{producto}/calibres', [App\Http\Controllers\Api\CRM\CalibreProductoController::class, 'index']);
+    Route::post('productos/{producto}/calibres', [App\Http\Controllers\Api\CRM\CalibreProductoController::class, 'store']);
+    Route::put('productos/{producto}/calibres/{calibre}', [App\Http\Controllers\Api\CRM\CalibreProductoController::class, 'update']);
+    Route::delete('productos/{producto}/calibres/{calibre}', [App\Http\Controllers\Api\CRM\CalibreProductoController::class, 'destroy']);
+    Route::get('presentaciones', [App\Http\Controllers\Api\CRM\PresentacionController::class, 'index']);
+    Route::post('presentaciones', [App\Http\Controllers\Api\CRM\PresentacionController::class, 'store']);
+    Route::put('presentaciones/{presentacion}', [App\Http\Controllers\Api\CRM\PresentacionController::class, 'update']);
+    Route::delete('presentaciones/{presentacion}', [App\Http\Controllers\Api\CRM\PresentacionController::class, 'destroy']);
 
     // Configuración comercial (descuento global + impuestos), un registro por empresa
     Route::get('configuracion-comercial', [

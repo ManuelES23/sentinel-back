@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\CRM;
 
 use App\Events\CRM\ProductoUpdated;
 use App\Models\CRM\CrmProducto;
+use App\Services\CRM\OpcionesCotizacionService;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
@@ -93,6 +94,19 @@ class ProductoController extends CrmBaseController
         $commodities = CrmProducto::commoditiesDe($empresaId);
 
         return $this->jsonSuccess($commodities);
+    }
+
+    /**
+     * GET /crm/productos/opciones-cotizacion
+     * Variedades, calibres y presentaciones que ofrece el formulario de cotización por caja.
+     * Lectura abierta a cualquier usuario de la empresa.
+     */
+    public function opcionesCotizacion(Request $request, OpcionesCotizacionService $opciones): JsonResponse
+    {
+        $empresaId = $this->getEmpresaId($request);
+        abort_unless($empresaId, 403, 'No se pudo determinar el contexto de empresa.');
+
+        return $this->jsonSuccess($opciones->paraEmpresa($empresaId));
     }
 
     /**

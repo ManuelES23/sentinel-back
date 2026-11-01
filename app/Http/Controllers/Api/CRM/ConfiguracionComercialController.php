@@ -28,6 +28,7 @@ class ConfiguracionComercialController extends CrmBaseController
             'descuento_global_habilitado' => $config->descuento_global_habilitado,
             'moneda' => $config->moneda,
             'productos_en_oportunidad' => $config->productos_en_oportunidad,
+            'cotizacion_por_caja' => $config->cotizacion_por_caja,
             'impuestos' => $impuestos,
             'oportunidad_eje' => true,
         ]);
