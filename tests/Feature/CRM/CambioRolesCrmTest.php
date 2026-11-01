@@ -887,4 +887,225 @@ class CambioRolesCrmTest extends TestCase
         $nada = $this->cambio->permisos($this->enterprise, $this->usuario());
         $this->assertSame([false], array_values(array_unique(array_slice($nada, 1))));
     }
+
+    // ── Ola final: pertenencia, bloqueo de filas y administradores ───────
+
+    private function mensajeAjeno(int $userId): string
+    {
+        return "El usuario {$userId} no pertenece a esta empresa.";
+    }
+
+    public function test_sin_ser_admin_un_usuario_ajeno_responde_422_sin_decir_su_nombre(): void
+    {
+        $actor = $this->gestor(['ver', 'crear', 'editar']);
+        $otra = $this->crearOtraEmpresa();
+        (new CrmPermisosSeeder())->run();
+        $ajeno = $this->usuario($otra, true);
+        $ajeno->forceFill(['name' => 'Nombre Secreto Ajeno'])->save();
+
+        // Con un «antes» equivocado: no debe salir 409 con el nombre real.
+        $e = $this->esperaRechazo(422, $this->mensajeAjeno($ajeno->id), fn () => $this->cambio->guardar($this->enterprise, $actor, [
+            $this->pedir($ajeno, $this->roles(true), $this->roles(true)),
+        ]));
+        $this->assertStringNotContainsString('Secreto', $e->getMessage());
+
+        // Pidiendo un cambio: no debe salir 403 con el nombre real.
+        $e = $this->esperaRechazo(422, $this->mensajeAjeno($ajeno->id), fn () => $this->cambio->guardar($this->enterprise, $actor, [
+            $this->pedir($ajeno, $this->roles(), $this->roles(false, true)),
+        ]));
+        $this->assertStringNotContainsString('Secreto', $e->getMessage());
+
+        // Sin pedir nada tampoco se confirma nada de esa persona.
+        $this->esperaRechazo(422, $this->mensajeAjeno($ajeno->id), fn () => $this->cambio->guardar($this->enterprise, $actor, [
+            $this->pedir($ajeno, $this->roles(), $this->roles()),
+        ]));
+
+        // Un id que no existe responde exactamente igual.
+        $this->esperaRechazo(422, $this->mensajeAjeno(999999), fn () => $this->cambio->guardar($this->enterprise, $actor, [
+            ['user_id' => 999999, 'antes' => $this->roles()] + $this->roles(),
+        ]));
+
+        $this->assertSame([], $this->concedidos($ajeno));
+        $this->assertSame(0, CrmVendedor::where('user_id', $ajeno->id)->count());
+    }
+
+    public function test_sin_ser_admin_un_ajeno_en_el_lote_no_deja_escribir_ninguna_fila(): void
+    {
+        $actor = $this->gestor(['ver', 'crear', 'editar']);
+        $valido = $this->usuario();
+        $ajeno = $this->usuario($this->crearOtraEmpresa(), true);
+
+        $this->esperaRechazo(422, $this->mensajeAjeno($ajeno->id), fn () => $this->cambio->guardar($this->enterprise, $actor, [
+            $this->pedir($valido, $this->roles(), $this->roles(true)),
+            $this->pedir($ajeno, $this->roles(), $this->roles()),
+        ]));
+
+        $this->assertSame(0, $this->fichasDe($valido));
+        $this->assertSame([], $this->concedidos($valido));
+        $this->assertCount(0, $this->bitacora());
+    }
+
+    public function test_sin_ser_admin_cualquier_vinculo_con_la_empresa_basta(): void
+    {
+        $actor = $this->gestor(['ver', 'crear', 'editar']);
+
+        // Solo una fila de acceso a la empresa, apagada.
+        $conAccesoApagado = $this->usuario();
+        UserEnterpriseAccess::where('user_id', $conAccesoApagado->id)->update(['is_active' => false]);
+
+        // Solo una ficha (sin fila de acceso).
+        $soloFicha = $this->usuario(null, false);
+        CrmVendedor::create([
+            'empresa_id' => $this->enterprise->id, 'user_id' => $soloFicha->id,
+            'nombre' => 'Solo ficha', 'email' => 'sf@example.com', 'activo' => true,
+        ]);
+
+        // Solo permisos reales del CRM (sin fila de acceso ni ficha).
+        $soloPermisos = $this->usuario(null, false);
+        $this->perfiles->aplicarRoles($soloPermisos, $this->enterprise, ['gerencia']);
+
+        $r = $this->cambio->guardar($this->enterprise, $actor, [
+            $this->pedir($conAccesoApagado, $this->roles(), $this->roles()),
+            $this->pedir($soloFicha, $this->actual($soloFicha), $this->actual($soloFicha)),
+            $this->pedir($soloPermisos, $this->actual($soloPermisos), $this->actual($soloPermisos)),
+        ]);
+
+        $this->assertSame([], $r);
+    }
+
+    public function test_el_administrador_conserva_el_flujo_de_siempre_con_un_usuario_ajeno(): void
+    {
+        $ajeno = $this->usuario($this->crearOtraEmpresa(), true);
+
+        // Su «antes» equivocado sigue dando 409 y marcar algo sigue dando el 422 de acceso.
+        $this->esperaRechazo(409, "Los roles de {$ajeno->name} cambiaron; recarga la pantalla.", fn () => $this->cambio->guardar($this->enterprise, $this->admin, [
+            $this->pedir($ajeno, $this->roles(true), $this->roles(true)),
+        ]));
+        $this->esperaRechazo(422, self::SIN_ACCESO, fn () => $this->cambio->guardar($this->enterprise, $this->admin, [
+            $this->pedir($ajeno, $this->roles(), $this->roles(false, true)),
+        ]));
+    }
+
+    public function test_sin_ser_admin_no_cambia_a_un_administrador_del_sistema(): void
+    {
+        $actor = $this->gestor(['ver', 'crear', 'editar']);
+
+        foreach (['admin', 'superadmin'] as $rol) {
+            $jefe = $this->usuario(null, true, ['role' => $rol]);
+
+            $this->esperaRechazo(403, "Solo un administrador puede cambiar los roles de {$jefe->name}.", fn () => $this->cambio->guardar($this->enterprise, $actor, [
+                $this->pedir($jefe, $this->roles(), $this->roles(true)),
+            ]));
+            $this->assertSame(0, $this->fichasDe($jefe));
+            $this->assertSame([], $this->concedidos($jefe));
+        }
+    }
+
+    public function test_ligar_sin_ser_admin_no_toca_a_un_administrador_del_sistema(): void
+    {
+        $editor = $this->gestor(['ver', 'editar']);
+        $jefe = $this->usuario(null, true, ['role' => 'admin']);
+        $ficha = $this->fichaSinUsuario();
+
+        $this->esperaRechazo(403, "Solo un administrador puede cambiar los roles de {$jefe->name}.", fn () => $this->cambio->ligar($this->enterprise, $editor, $ficha, $jefe));
+
+        $this->assertNull($ficha->fresh()->user_id);
+        $this->assertSame([], $this->concedidos($jefe));
+
+        // Un administrador sí puede ligar a otro administrador.
+        $r = $this->cambio->ligar($this->enterprise, $this->admin, $ficha, $jefe);
+        $this->assertSame($jefe->id, $r[0]['vendedor']->user_id);
+    }
+
+    public function test_choque_al_crear_la_ficha_responde_409_y_no_escribe(): void
+    {
+        $usuario = $this->usuario(null, true, ['name' => 'Persona Concurrente']);
+        $otro = $this->usuario();
+        $empresaId = $this->enterprise->id;
+        $hecho = false;
+
+        // Otra sesión crea la ficha justo antes de que lo haga el servicio.
+        CrmVendedor::creating(function (CrmVendedor $nueva) use (&$hecho, $usuario, $empresaId) {
+            if ($hecho || $nueva->user_id !== $usuario->id) {
+                return;
+            }
+            $hecho = true;
+            DB::table('crm_vendedores')->insert([
+                'empresa_id' => $empresaId, 'user_id' => $usuario->id, 'nombre' => 'Otra sesión',
+                'email' => 'otra@example.com', 'activo' => 1, 'created_at' => now(), 'updated_at' => now(),
+            ]);
+        });
+
+        $this->esperaRechazo(409, 'Los roles de Persona Concurrente cambiaron; recarga la pantalla.', fn () => $this->cambio->guardar($this->enterprise, $this->admin, [
+            $this->pedir($otro, $this->roles(), $this->roles(false, true)),
+            $this->pedir($usuario, $this->roles(), $this->roles(true)),
+        ]));
+
+        $this->assertTrue($hecho);
+        $this->assertSame(0, $this->fichasDe($usuario));
+        $this->assertSame([], $this->concedidos($usuario));
+        $this->assertSame([], $this->concedidos($otro));
+        $this->assertCount(0, $this->bitacora());
+    }
+
+    public function test_choque_al_ligar_responde_409_y_no_escribe(): void
+    {
+        $usuario = $this->usuario(null, true, ['name' => 'Persona Concurrente']);
+        $ficha = $this->fichaSinUsuario();
+        $empresaId = $this->enterprise->id;
+        $hecho = false;
+
+        // Otra sesión le crea una ficha al usuario justo antes de ligar.
+        CrmVendedor::updating(function (CrmVendedor $f) use (&$hecho, $ficha, $usuario, $empresaId) {
+            if ($hecho || $f->id !== $ficha->id) {
+                return;
+            }
+            $hecho = true;
+            DB::table('crm_vendedores')->insert([
+                'empresa_id' => $empresaId, 'user_id' => $usuario->id, 'nombre' => 'Otra sesión',
+                'email' => 'otra@example.com', 'activo' => 1, 'created_at' => now(), 'updated_at' => now(),
+            ]);
+        });
+
+        $this->esperaRechazo(409, 'Los roles de Persona Concurrente cambiaron; recarga la pantalla.', fn () => $this->cambio->ligar($this->enterprise, $this->admin, $ficha, $usuario));
+
+        $this->assertTrue($hecho);
+        $this->assertNull($ficha->fresh()->user_id);
+        $this->assertSame(0, $this->fichasDe($usuario));
+        $this->assertSame([], $this->concedidos($usuario));
+        $this->assertCount(0, $this->bitacora());
+    }
+
+    public function test_perfil_viejo_y_luego_roles_y_luego_perfil_viejo(): void
+    {
+        $usuario = $this->usuario();
+        $otraApp = Application::create(['enterprise_id' => $this->enterprise->id, 'slug' => 'bodega', 'name' => 'Bodega', 'description' => 'Otra aplicación', 'path' => '/bodega', 'is_active' => true]);
+        UserApplicationAccess::create(['user_id' => $usuario->id, 'application_id' => $otraApp->id, 'is_active' => true, 'granted_at' => now()]);
+
+        // 1. Perfil viejo: Vendedor (sin ficha) se lee como «Falta su ficha».
+        $this->perfiles->aplicar($usuario, $this->enterprise, 'vendedor');
+        $hoy = $this->deduccion->dePersona($usuario, $this->enterprise);
+        $this->assertSame('falta_ficha', $hoy['aviso']);
+        $this->assertFalse($hoy['ajustado']);
+        $this->assertSame(0, $this->fichasDe($usuario));
+
+        // 2. Roles: marcar Vende y Gerencia crea la ficha y deja la unión.
+        $r = $this->cambio->guardar($this->enterprise, $this->admin, [
+            $this->pedir($usuario, $hoy['roles'], $this->roles(true, true)),
+        ]);
+        $this->assertSame('created', $r[0]['accion']);
+        $this->assertSame($this->roles(true, true), $this->actual($usuario));
+        $esperados = DeduccionRolesCrm::claves(CrmPerfilPermisosService::definicionRoles(['vende', 'gerencia']));
+        sort($esperados);
+        $this->assertSame($esperados, $this->concedidos($usuario));
+        $this->assertTrue((bool) UserApplicationAccess::where('user_id', $usuario->id)->where('application_id', $otraApp->id)->value('is_active'));
+
+        // 3. Perfil viejo otra vez: reemplaza los permisos y no toca la ficha.
+        $this->perfiles->aplicar($usuario, $this->enterprise, 'administracion');
+        $this->assertNotContains('oportunidades.oportunidades.ver', $this->concedidos($usuario));
+        $this->assertContains('catalogos.regiones.crear', $this->concedidos($usuario));
+        $this->assertSame(1, $this->fichasDe($usuario));
+        $this->assertTrue((bool) CrmVendedor::where('user_id', $usuario->id)->value('activo'));
+        $this->assertTrue((bool) UserApplicationAccess::where('user_id', $usuario->id)->where('application_id', $otraApp->id)->value('is_active'));
+    }
 }

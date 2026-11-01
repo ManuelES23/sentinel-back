@@ -17,9 +17,12 @@ use Illuminate\Validation\Rule;
 use InvalidArgumentException;
 
 /**
- * Perfiles de permisos del CRM (vendedor / gerencia / administración).
- * Solo administradores: aplicar un perfil reescribe los permisos de otra
- * persona, así que no basta con estar autenticado.
+ * Perfiles de permisos del CRM (vendedor / gerencia / administración) y, para
+ * el panel admin, los roles del Equipo comercial (vende, gerencia, catálogos):
+ * lectura y guardado de los roles de un usuario por empresa y el resumen de
+ * roles por usuario para la columna CRM.
+ * Solo administradores: aplicar un perfil o cambiar roles reescribe los
+ * permisos de otra persona, así que no basta con estar autenticado.
  */
 class PerfilPermisosController extends CrmBaseController
 {

@@ -11,6 +11,7 @@ use App\Models\UserEnterpriseAccess;
 use App\Support\PermisoSubmodulo;
 use Closure;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 
@@ -57,11 +58,28 @@ class CambioRolesCrm
         $this->exigirCrm($empresa);
         $pedidos = $this->normalizar($cambios);
 
-        $usuarios = User::whereIn('id', array_column($pedidos, 'user_id'))->get()->keyBy('id');
+        $ids = array_column($pedidos, 'user_id');
         $esAdmin = $this->esAdministrador($actor);
         $puede = $this->permisosDeVendedores($empresa, $actor);
 
-        $salida = DB::transaction(function () use ($empresa, $actor, $pedidos, $usuarios, $esAdmin, $puede) {
+        // Quien no es Administrador solo puede tocar a gente de su empresa: un
+        // id ajeno (o inexistente) responde igual y sin nombre, antes de
+        // comparar nada, para no poder listar los nombres de todos los usuarios.
+        if (! $esAdmin) {
+            $miembros = $this->deduccion->conVinculo($empresa, $ids);
+            foreach ($ids as $id) {
+                if (! isset($miembros[$id])) {
+                    throw new RolesEquipoException("El usuario {$id} no pertenece a esta empresa.", 422);
+                }
+            }
+        }
+
+        $salida = DB::transaction(function () use ($empresa, $actor, $pedidos, $ids, $esAdmin, $puede) {
+            // Primera sentencia: bloquea las filas de las personas (en orden de
+            // id, para no cruzarse con otro guardado) y fija la lectura, así
+            // dos guardados de la misma persona se turnan y el segundo ve lo
+            // que confirmó el primero (y responde 409 si ya no coincide).
+            $usuarios = User::whereIn('id', $ids)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
             $salida = [];
 
             foreach ($pedidos as $pedido) {
@@ -126,7 +144,10 @@ class CambioRolesCrm
         $puede = $this->permisosDeVendedores($empresa, $actor);
 
         $salida = DB::transaction(function () use ($empresa, $actor, $ficha, $usuario, $esAdmin, $puede) {
-            // La fila fresca y bloqueada: dos personas ligando a la vez no se pisan.
+            // Primero la fila del usuario y luego la de la ficha (mismo orden
+            // que guardar): dos personas ligando o guardando a la vez se turnan.
+            $usuario = User::lockForUpdate()->find($usuario->id)
+                ?? throw new RolesEquipoException("No existe el usuario {$usuario->id}.", 422);
             $ficha = CrmVendedor::where('empresa_id', $empresa->id)->lockForUpdate()->find($ficha->id)
                 ?? throw new RolesEquipoException('La ficha no pertenece a esta empresa.', 404);
 
@@ -154,8 +175,19 @@ class CambioRolesCrm
                 throw new RolesEquipoException(self::SIN_ACCESO, 422);
             }
 
+            // Ruling: un no administrador no toca a un administrador del sistema.
+            // Va después de los 422 para no confirmar el nombre de quien no es de la empresa.
+            if (! $esAdmin && $this->esAdministrador($usuario)) {
+                throw new RolesEquipoException("Solo un administrador puede cambiar los roles de {$usuario->name}.", 403);
+            }
+
             $despues = ['vende' => true] + $hoy['roles'];
-            $ficha->update(['user_id' => $usuario->id, 'activo' => true]);
+            try {
+                $ficha->update(['user_id' => $usuario->id, 'activo' => true]);
+            } catch (UniqueConstraintViolationException) {
+                // Otra sesión le dio una ficha a este usuario mientras tanto.
+                throw new RolesEquipoException("Los roles de {$usuario->name} cambiaron; recarga la pantalla.", 409);
+            }
             $this->perfiles->aplicarRoles($usuario, $empresa, $this->claves($despues));
             $this->registrar($usuario, $empresa, $hoy['roles'], $despues);
 
@@ -228,6 +260,9 @@ class CambioRolesCrm
         if ($actor->id === $usuario->id) {
             throw new RolesEquipoException("No puedes cambiar tus propios roles ({$nombre}); pídele a un administrador que lo haga.", 403);
         }
+        if ($this->esAdministrador($usuario)) {
+            throw new RolesEquipoException("Solo un administrador puede cambiar los roles de {$nombre}.", 403);
+        }
         if ($hoy['ajustado']) {
             throw new RolesEquipoException("{$nombre} tiene permisos ajustados a mano; solo un administrador puede cambiarlos.", 403);
         }
@@ -266,14 +301,21 @@ class CambioRolesCrm
                 return ['accion' => 'updated', 'vendedor' => $ficha];
             }
 
-            return ['accion' => 'created', 'vendedor' => CrmVendedor::create([
-                'empresa_id' => $empresa->id,
-                'user_id' => $usuario->id,
-                'nombre' => $usuario->name,
-                'email' => $usuario->email,
-                'telefono' => $usuario->phone,
-                'activo' => true,
-            ])];
+            try {
+                $nueva = CrmVendedor::create([
+                    'empresa_id' => $empresa->id,
+                    'user_id' => $usuario->id,
+                    'nombre' => $usuario->name,
+                    'email' => $usuario->email,
+                    'telefono' => $usuario->phone,
+                    'activo' => true,
+                ]);
+            } catch (UniqueConstraintViolationException) {
+                // Otra sesión creó la ficha de esta persona mientras tanto.
+                throw new RolesEquipoException("Los roles de {$usuario->name} cambiaron; recarga la pantalla.", 409);
+            }
+
+            return ['accion' => 'created', 'vendedor' => $nueva];
         }
 
         if ($ficha && $ficha->activo) {

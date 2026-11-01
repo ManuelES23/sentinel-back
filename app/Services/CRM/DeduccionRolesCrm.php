@@ -229,6 +229,34 @@ class DeduccionRolesCrm
             ->map(fn (User $u) => ['id' => $u->id, 'name' => $u->name, 'email' => $u->email]);
     }
 
+    /**
+     * Ids (de los pedidos) que tienen algún vínculo con la empresa: una fila de
+     * acceso a ella (activa o no), una ficha de vendedor o permisos reales del
+     * CRM. Una sola consulta (unión), sin consultas por persona.
+     *
+     * @param  int[]  $userIds
+     * @return array<int, true> ids que pertenecen a la empresa, como llaves
+     *
+     * @throws InvalidArgumentException si la empresa no tiene el CRM.
+     */
+    public function conVinculo(Enterprise $empresa, array $userIds): array
+    {
+        if ($userIds === []) {
+            return [];
+        }
+
+        $app = $this->appCrm($empresa);
+
+        $acceso = DB::table('user_enterprise_access')
+            ->where('enterprise_id', $empresa->id)->whereIn('user_id', $userIds)->select('user_id');
+        $ficha = DB::table('crm_vendedores')
+            ->where('empresa_id', $empresa->id)->whereIn('user_id', $userIds)->select('user_id');
+        $permisos = $this->consultaReales($app)->whereIn('usp.user_id', $userIds)->select('usp.user_id');
+
+        return $acceso->union($ficha)->union($permisos)->pluck('user_id')
+            ->mapWithKeys(fn ($id) => [(int) $id => true])->all();
+    }
+
     // ── Internos ──────────────────────────────────────────────────────────
 
     /**
