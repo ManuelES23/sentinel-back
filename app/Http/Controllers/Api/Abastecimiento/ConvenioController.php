@@ -5,12 +5,16 @@ namespace App\Http\Controllers\Api\Abastecimiento;
 use App\Models\Abastecimiento\Convenio;
 use App\Models\Abastecimiento\ConvenioMeta;
 use App\Models\Abastecimiento\ConvenioPrecio;
+use App\Models\Abastecimiento\Recepcion;
 use App\Models\Abastecimiento\Temporada;
 use App\Models\Abastecimiento\Variedad;
 use App\Models\Enterprise;
 use App\Services\Abastecimiento\GeneradorFolio;
+use App\Services\Abastecimiento\IndicadoresConvenio;
 use App\Services\Abastecimiento\MetasConvenio;
+use App\Services\Abastecimiento\PrecioVigente;
 use App\Services\Abastecimiento\ReglasConvenio;
+use App\Services\Abastecimiento\Semanas;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -34,6 +38,92 @@ class ConvenioController extends AbastecimientoController
         'cancelado' => [],
     ];
 
+    /**
+     * Convenios de una temporada con sus indicadores (sin el detalle por semana).
+     * Número de consultas constante: relaciones en carga ansiosa y las
+     * recepciones de todos los convenios en una sola consulta agrupada.
+     */
+    public function index(Request $request): JsonResponse
+    {
+        $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'view');
+        $filtros = $request->validate([
+            'temporada_id' => ['required', 'integer', Rule::exists('abs_temporadas', 'id')->where('enterprise_id', $empresa->id)->whereNull('deleted_at')],
+            'status' => ['nullable', Rule::in(Convenio::STATUSES)],
+            'estado' => ['nullable', Rule::in(IndicadoresConvenio::ESTADOS)],
+            'search' => ['nullable', 'string', 'max:100'],
+        ]);
+
+        $convenios = Convenio::deEmpresa($empresa->id)
+            ->where('temporada_id', $filtros['temporada_id'])
+            ->when(! empty($filtros['status']), fn ($q) => $q->where('status', $filtros['status']))
+            ->when(! empty($filtros['search']), function ($q) use ($filtros) {
+                $like = '%'.str_replace(['!', '%', '_'], ['!!', '!%', '!_'], trim($filtros['search'])).'%';
+                $q->where(function ($q) use ($like) {
+                    $q->whereRaw("abs_convenios.folio LIKE ? ESCAPE '!'", [$like])
+                        ->orWhereHas('productor', fn ($p) => $p->whereRaw("nombre LIKE ? ESCAPE '!'", [$like]))
+                        ->orWhereHas('variedad', fn ($v) => $v->whereRaw("nombre LIKE ? ESCAPE '!'", [$like]));
+                });
+            })
+            ->with(['productor:id,nombre,tipo', 'variedad:id,nombre', 'precios.tipoCarga:id,nombre', 'metas'])
+            ->orderBy('fecha_inicio')->orderBy('id')
+            ->get();
+
+        $hoy = Semanas::hoy();
+        $lineas = IndicadoresConvenio::lineas($convenios);
+
+        $data = $convenios->map(function (Convenio $c) use ($hoy, $lineas) {
+            $indicadores = IndicadoresConvenio::de($c, $hoy, $lineas->get($c->id, collect()));
+            unset($indicadores['semanas']);
+
+            return $this->datosBase($c) + [
+                'productor' => $c->productor,
+                'variedad' => $c->variedad,
+                'precio_principal' => $this->precioPrincipal($c),
+                'indicadores' => $indicadores,
+            ];
+        })->when(
+            ! empty($filtros['estado']),
+            fn ($datos) => $datos->filter(fn (array $d) => $d['indicadores']['estado'] === $filtros['estado']),
+        )->values();
+
+        return response()->json(['success' => true, 'data' => $data]);
+    }
+
+    /** Ficha del convenio: precios, metas, indicadores con el detalle por semana y las 10 recepciones más recientes. */
+    public function show(Request $request, int $id): JsonResponse
+    {
+        $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'view');
+        $convenio = Convenio::deEmpresa($empresa->id)
+            ->with(['productor:id,nombre,tipo', 'variedad:id,nombre', 'precios.tipoCarga:id,nombre', 'metas'])
+            ->findOrFail($id);
+
+        $recientes = Recepcion::where('convenio_id', $convenio->id)
+            ->with('tipoCarga:id,nombre')
+            ->orderByDesc('fecha')->orderByDesc('id')
+            ->limit(10)
+            ->get();
+
+        $data = $this->armar($convenio) + [
+            'productor' => $convenio->productor,
+            'variedad' => $convenio->variedad,
+            'precio_principal' => $this->precioPrincipal($convenio),
+            'indicadores' => IndicadoresConvenio::de($convenio),
+            'recepciones' => $recientes->map(fn (Recepcion $r) => [
+                'id' => $r->id,
+                'folio' => $r->folio,
+                'fecha' => $r->fecha->format('Y-m-d'),
+                'tipo_carga_id' => $r->tipo_carga_id,
+                'tipo_carga' => $r->tipoCarga ? ['id' => $r->tipoCarga->id, 'nombre' => $r->tipoCarga->nombre] : null,
+                'cantidad' => $r->cantidad,
+                'kilos' => $r->kilos,
+                'rezaga_kg' => $r->rezaga_kg,
+                'ticket_proveedor' => $r->ticket_proveedor,
+                'liquidada' => $r->estaLiquidada(),
+            ])->values()->all(),
+        ];
+
+        return response()->json(['success' => true, 'data' => $data]);
+    }
     public function store(Request $request): JsonResponse
     {
         $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'create');
@@ -279,6 +369,12 @@ class ConvenioController extends AbastecimientoController
     {
         $c->load(['precios.tipoCarga:id,nombre', 'metas']);
 
+        return $this->armar($c);
+    }
+
+    /** Columnas del convenio, sin relaciones (las de las respuestas de alta, edición y estatus). */
+    private function datosBase(Convenio $c): array
+    {
         return [
             'id' => $c->id,
             'folio' => $c->folio,
@@ -296,6 +392,13 @@ class ConvenioController extends AbastecimientoController
             'volumen_total' => $c->volumen_total,
             'status' => $c->status,
             'notas' => $c->notas,
+        ];
+    }
+
+    /** Convenio con sus precios y metas, que deben estar cargados. */
+    private function armar(Convenio $c): array
+    {
+        return $this->datosBase($c) + [
             'precios' => $c->precios
                 ->sortBy([['es_principal', 'desc'], ['tipo_carga_id', 'asc'], ['vigencia_inicio', 'asc']])
                 ->map(fn (ConvenioPrecio $p) => [
@@ -314,6 +417,21 @@ class ConvenioController extends AbastecimientoController
                     'semana' => $m->semana->format('Y-m-d'),
                     'cantidad' => $m->cantidad,
                 ])->values()->all(),
+        ];
+    }
+
+    /** Precio principal vigente al inicio del convenio, resuelto sobre los precios ya cargados. */
+    private function precioPrincipal(Convenio $c): ?array
+    {
+        $p = PrecioVigente::principalEnColeccion($c->precios, $c->fecha_inicio->format('Y-m-d'));
+
+        return $p === null ? null : [
+            'id' => $p->id,
+            'tipo_carga_id' => $p->tipo_carga_id,
+            'tipo_carga' => $p->tipoCarga ? ['id' => $p->tipoCarga->id, 'nombre' => $p->tipoCarga->nombre] : null,
+            'precio' => $p->precio,
+            'porcentaje_productor' => $p->porcentaje_productor,
+            'vigencia_inicio' => $p->vigencia_inicio->format('Y-m-d'),
         ];
     }
 }

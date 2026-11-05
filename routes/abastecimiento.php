@@ -48,6 +48,8 @@ Route::prefix('abastecimiento')->name('abastecimiento.')->group(function () {
 
     // Convenios y precios (submódulo convenios). `encimados` va antes de cualquier ruta con {id}.
     Route::get('convenios/encimados', [ConvenioController::class, 'encimados'])->name('convenios.encimados');
+    Route::get('convenios', [ConvenioController::class, 'index'])->name('convenios.index');
+    Route::get('convenios/{id}', [ConvenioController::class, 'show'])->whereNumber('id')->name('convenios.show');
     Route::post('convenios', [ConvenioController::class, 'store'])->name('convenios.store');
     Route::put('convenios/{id}', [ConvenioController::class, 'update'])->whereNumber('id')->name('convenios.update');
     Route::patch('convenios/{id}/estado', [ConvenioController::class, 'estado'])->whereNumber('id')->name('convenios.estado');
