@@ -108,7 +108,7 @@ class AvisosVacaciones
         $elegibles = $this->aprobador->elegiblesDelPaso($solicitud, $paso);
         foreach ($elegibles as $usuario) {
             $aviso = NotificationService::toUser($usuario)->icon('ClipboardCheck', 'amber')->high();
-            if (! $paso->is_rh_final) {
+            if (! $paso->is_rh_final && ! $paso->is_rh_review) {
                 $aviso->withAction('/profile?tab=approvals', 'Ver solicitud');
             }
             $aviso->vacation('Solicitud de vacaciones por aprobar', $texto);
@@ -145,7 +145,7 @@ class AvisosVacaciones
             if ($correo === null || in_array((int) $usuario->id, $usuariosDeJefes, true)) {
                 continue;
             }
-            $destinos[mb_strtolower($correo)] ??= [$usuario->name, $paso->is_rh_final ? VacationReviewMail::VIA_RH : VacationReviewMail::VIA_SENTINEL];
+            $destinos[mb_strtolower($correo)] ??= [$usuario->name, ($paso->is_rh_final || $paso->is_rh_review) ? VacationReviewMail::VIA_RH : VacationReviewMail::VIA_SENTINEL];
         }
 
         return $destinos;

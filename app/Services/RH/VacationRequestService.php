@@ -263,6 +263,42 @@ class VacationRequestService
         return $solicitud;
     }
 
+    /**
+     * RH da su visto bueno en el paso `is_rh_review`, con un comentario opcional para quien autoriza.
+     * Nunca cierra la solicitud: si después no queda nadie que decida, espera en el respaldo de RH.
+     */
+    public function darVistoBueno(VacationRequest $solicitud, User $usuario, ?string $comentario = null): VacationRequest
+    {
+        $comentario = trim((string) $comentario);
+        $comentario = $comentario === '' ? null : mb_substr($comentario, 0, 500);
+
+        $solicitud = DB::transaction(function () use ($solicitud, $usuario, $comentario) {
+            $solicitud = $this->bloquearPendiente($solicitud);
+            $paso = $this->cadena->pasoActual($solicitud);
+
+            if (! $paso || ! $paso->is_rh_review || ! $this->aprobador->puedeDecidir($usuario, $solicitud, $paso)) {
+                throw new VacacionesException('No puede dar el visto bueno de RH en el paso actual de esta solicitud.', 403);
+            }
+
+            $paso->update([
+                'decision' => VacationRequestApproval::APPROVED, 'decided_by' => $usuario->id,
+                'decided_at' => now(), 'comment' => $comentario,
+            ]);
+
+            // El respaldo de RH espera tras un visto bueno, así que la cadena nunca termina aquí.
+            if ($this->cadena->avanzar($solicitud) === null) {
+                throw new VacacionesException('El visto bueno de RH no puede cerrar la solicitud.', 409);
+            }
+
+            return $solicitud;
+        });
+
+        $solicitud = $solicitud->fresh(['employee.user', 'employee.enterprise', 'approvals']);
+        $this->avisos->pasoAprobado($solicitud);
+
+        return $solicitud;
+    }
+
     public function rechazar(VacationRequest $solicitud, User|Employee $quien, string $motivo): VacationRequest
     {
         $motivo = $this->exigirMotivo($motivo);
@@ -323,6 +359,10 @@ class VacationRequestService
     private function pasoDecidible(VacationRequest $solicitud, User|Employee $quien, string $accion): VacationRequestApproval
     {
         $paso = $this->cadena->pasoActual($solicitud);
+        if ($paso?->is_rh_review) {
+            throw new VacacionesException('Este paso es el visto bueno de RH.', 403);
+        }
+
         $puede = $paso && ($quien instanceof Employee
             ? $this->aprobador->puedeDecidirComoEmpleado($quien, $solicitud, $paso, $accion)
             : $this->aprobador->puedeDecidir($quien, $solicitud, $paso, $accion));

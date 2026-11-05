@@ -26,7 +26,8 @@ use Illuminate\Support\Collection;
  *   'enterprise').
  * - Corporativo (Grupo Espléndido) en otra empresa: solo por una regla de
  *   PUESTO para todas las empresas o para esa; el alcance es toda la empresa.
- * - Paso final de RH: quien tiene `aprobar` en RH → Gestión → Vacaciones.
+ * - Paso final de RH y visto bueno de RH: quien tiene `aprobar` en RH → Gestión → Vacaciones.
+ *   El visto bueno solo se da (nunca se rechaza ni se decide desde el portal).
  * Siempre: tener usuario y empleado activo (salvo el usuario específico sin
  * empleado), no ser el solicitante y no haber decidido otro paso de la misma solicitud.
  */
@@ -69,6 +70,11 @@ class AprobadorVacaciones
             return $this->esRh($usuario);
         }
 
+        // Visto bueno de RH: solo se da (no se rechaza), por RH, que no sea el solicitante ni haya decidido otro paso.
+        if ($paso->is_rh_review) {
+            return $accion !== 'rechazar' && $this->esRh($usuario) && ! $this->decidioOtroPaso($usuario, $solicitud, $paso);
+        }
+
         if ($this->decidioOtroPaso($usuario, $solicitud, $paso)) {
             return false;
         }
@@ -88,7 +94,7 @@ class AprobadorVacaciones
     /** @return Collection<int, User> usuarios que hoy podrían aprobar el paso */
     public function elegiblesDelPaso(VacationRequest $solicitud, VacationRequestApproval $paso): Collection
     {
-        if ($paso->is_rh_final) {
+        if ($paso->is_rh_final || $paso->is_rh_review) {
             return User::whereIn('id', $this->usuariosRhIds())->get()
                 ->filter(fn (User $usuario) => $this->puedeDecidir($usuario, $solicitud, $paso))
                 ->values();
@@ -117,7 +123,7 @@ class AprobadorVacaciones
     {
         $solicitante = $solicitud->employee;
         $jefeId = $solicitante ? $this->jefeDelDepartamento($solicitante) : null;
-        if ($jefeId === null || $paso->is_rh_final || $paso->decision !== VacationRequestApproval::WAITING) {
+        if ($jefeId === null || $paso->is_rh_final || $paso->is_rh_review || $paso->decision !== VacationRequestApproval::WAITING) {
             return collect();
         }
 
@@ -135,7 +141,7 @@ class AprobadorVacaciones
     /** Decisión de un jefe de departamento desde el portal: el empleado de la sesión, no un usuario. */
     public function puedeDecidirComoEmpleado(Employee $jefe, VacationRequest $solicitud, VacationRequestApproval $paso, string $accion = 'aprobar'): bool
     {
-        if ($paso->decision !== VacationRequestApproval::WAITING || $paso->is_rh_final || $jefe->status !== Employee::STATUS_ACTIVE) {
+        if ($paso->decision !== VacationRequestApproval::WAITING || $paso->is_rh_final || $paso->is_rh_review || $jefe->status !== Employee::STATUS_ACTIVE) {
             return false;
         }
 
