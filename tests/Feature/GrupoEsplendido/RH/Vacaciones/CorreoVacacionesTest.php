@@ -94,8 +94,8 @@ class CorreoVacacionesTest extends TestCase
         $aprobada = $this->nueva($this->empleado($this->empresa, ['email' => 'a@ejemplo.com']));
         $rechazada = $this->nueva($this->empleado($this->empresa, ['email' => 'b@ejemplo.com']));
 
-        $this->servicio()->resolverComoRh($aprobada, $rh, 'approved');
-        $this->servicio()->resolverComoRh($rechazada, $rh, 'rejected', 'Cobertura insuficiente');
+        $this->servicio()->aprobarPaso($aprobada, $rh);
+        $this->servicio()->rechazar($rechazada, $rh, 'Cobertura insuficiente');
 
         Mail::assertSent(VacationStatusMail::class, fn ($m) => $m->hasTo('a@ejemplo.com') && $m->evento === 'aprobada');
         Mail::assertSent(VacationStatusMail::class, fn ($m) => $m->hasTo('b@ejemplo.com')

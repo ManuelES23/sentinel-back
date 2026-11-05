@@ -319,43 +319,6 @@ class VacationRequestService
         return $solicitud;
     }
 
-    /** RH (permiso `aprobar`) decide en cualquier paso; los pasos restantes se cierran. */
-    public function resolverComoRh(VacationRequest $solicitud, User $usuario, string $decision, ?string $motivo = null): VacationRequest
-    {
-        if (! in_array($decision, [VacationRequestApproval::APPROVED, VacationRequestApproval::REJECTED], true)) {
-            throw new VacacionesException('Decisión no válida.');
-        }
-        $motivo = $decision === VacationRequestApproval::REJECTED ? $this->exigirMotivo($motivo) : $motivo;
-
-        $solicitud = DB::transaction(function () use ($solicitud, $usuario, $decision, $motivo) {
-            $solicitud = $this->bloquearPendiente($solicitud);
-
-            if (! $this->aprobador->esRh($usuario) || $this->aprobador->esSolicitante($usuario, $solicitud)) {
-                throw new VacacionesException('No tiene permiso para resolver esta solicitud como RH.', 403);
-            }
-
-            $this->cadena->pasoActual($solicitud)?->update([
-                'decision' => $decision,
-                'decided_by' => $usuario->id,
-                'decided_at' => now(),
-                'comment' => 'Resuelto por RH'.($motivo ? ': '.$motivo : ''),
-            ]);
-            $this->cadena->cerrarPendientes($solicitud, 'Resuelto por RH');
-            $solicitud->update(['resolved_by_rh' => true]);
-
-            $decision === VacationRequestApproval::APPROVED
-                ? $this->marcarAprobada($solicitud, $usuario)
-                : $this->marcarRechazada($solicitud, $usuario, $motivo);
-
-            return $solicitud;
-        });
-
-        $solicitud = $solicitud->fresh(['employee.user', 'employee.enterprise', 'approvals']);
-        $this->avisos->resuelta($solicitud);
-
-        return $solicitud;
-    }
-
     private function pasoDecidible(VacationRequest $solicitud, User|Employee $quien, string $accion): VacationRequestApproval
     {
         $paso = $this->cadena->pasoActual($solicitud);

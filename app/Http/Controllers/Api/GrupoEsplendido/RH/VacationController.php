@@ -8,8 +8,8 @@ use App\Models\Enterprise;
 use App\Models\Holiday;
 use App\Models\VacationBalance;
 use App\Models\VacationRequest;
-use App\Models\VacationRequestApproval;
 use App\Services\RH\AprobadorVacaciones;
+use App\Services\RH\CadenaAprobacionVacaciones;
 use App\Services\RH\EmpresaDeFestivos;
 use App\Services\RH\SaldosVacaciones;
 use App\Services\RH\VacationRequestService;
@@ -181,12 +181,31 @@ class VacationController extends Controller
         return response()->json(['success' => true, 'message' => 'Solicitud eliminada exitosamente']);
     }
 
-    /** Aprobar desde RH = resolver como RH en el paso que vaya. */
+    /** RH da su visto bueno en el paso `is_rh_review`, con un comentario opcional para quien autoriza. */
+    public function vistoBueno(Request $request, VacationRequest $vacation): JsonResponse
+    {
+        $this->exigir('aprobar');
+
+        $validated = $request->validate(['comentario' => 'nullable|string|max:500']);
+        $vacation = $this->vacaciones->darVistoBueno($vacation, Auth::user(), $validated['comentario'] ?? null);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Visto bueno enviado',
+            'data' => $this->presentar($vacation),
+        ]);
+    }
+
+    /** RH aprueba solo en su paso final (respaldo): en cualquier otro paso decide quien le toca. */
     public function approve(VacationRequest $vacation): JsonResponse
     {
         $this->exigir('aprobar');
 
-        $vacation = $this->vacaciones->resolverComoRh($vacation, Auth::user(), VacationRequestApproval::APPROVED);
+        if ($respuesta = $this->soloEnRespaldo($vacation)) {
+            return $respuesta;
+        }
+
+        $vacation = $this->vacaciones->aprobarPaso($vacation, Auth::user());
 
         return response()->json([
             'success' => true,
@@ -200,13 +219,34 @@ class VacationController extends Controller
         $this->exigir('aprobar');
 
         $validated = $request->validate(['rejection_reason' => 'required|string|max:500']);
-        $vacation = $this->vacaciones->resolverComoRh($vacation, Auth::user(), VacationRequestApproval::REJECTED, $validated['rejection_reason']);
+
+        if ($respuesta = $this->soloEnRespaldo($vacation)) {
+            return $respuesta;
+        }
+
+        $vacation = $this->vacaciones->rechazar($vacation, Auth::user(), $validated['rejection_reason']);
 
         return response()->json([
             'success' => true,
             'message' => 'Solicitud rechazada',
             'data' => $this->presentar($vacation),
         ]);
+    }
+
+    /**
+     * RH ya no resuelve la solicitud completa desde cualquier paso: solo cierra en el respaldo `is_rh_final`.
+     * Una solicitud que ya no está pendiente la responde el servicio (422).
+     */
+    private function soloEnRespaldo(VacationRequest $vacation): ?JsonResponse
+    {
+        if ($vacation->status === 'pending' && ! app(CadenaAprobacionVacaciones::class)->pasoActual($vacation)?->is_rh_final) {
+            return response()->json([
+                'success' => false,
+                'message' => 'RH solo puede aprobar o rechazar cuando la solicitud llega a su paso final; en el paso de visto bueno usa «Dar visto bueno».',
+            ], 403);
+        }
+
+        return null;
     }
 
     public function cancel(VacationRequest $vacation): JsonResponse

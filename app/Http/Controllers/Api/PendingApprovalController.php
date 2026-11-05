@@ -433,7 +433,8 @@ class PendingApprovalController extends Controller
             ->filter(function (VacationRequest $solicitud) use ($user) {
                 $paso = $this->cadenaVac()->pasoActual($solicitud);
 
-                return $paso !== null && $this->aprobadorVac()->puedeDecidir($user, $solicitud, $paso);
+                // El visto bueno de RH se da desde Vacaciones de RH, no desde la bandeja (spec §5.6).
+                return $paso !== null && ! $paso->is_rh_review && $this->aprobadorVac()->puedeDecidir($user, $solicitud, $paso);
             })
             ->collect()
             ->sortByDesc('created_at')
@@ -1221,6 +1222,7 @@ class PendingApprovalController extends Controller
                 'decision' => $paso->decision,
                 'decided_by' => $paso->nombreDeQuienDecidio(),
                 'comment' => $paso->comment,
+                'is_rh_review' => (bool) $paso->is_rh_review,
                 'decided_at' => $paso->decided_at?->toISOString(),
             ])->values()->all(),
             'rejection_reason' => $item->rejection_reason,

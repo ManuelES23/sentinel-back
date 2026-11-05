@@ -101,7 +101,7 @@ class VacacionesRhApiTest extends TestCase
             ->assertJsonPath('message', fn ($m) => str_contains($m, 'Puede adelantar hasta 14 días'));
     }
 
-    public function test_aprobar_como_rh_requiere_el_permiso_aprobar(): void
+    public function test_aprobar_en_el_respaldo_de_rh_requiere_el_permiso_aprobar(): void
     {
         $solicitud = app(\App\Services\RH\VacationRequestService::class)->crear(
             $this->empleado($this->empresa), $this->lunes(), $this->lunes()->copy()->addDays(4), null, VacationRequest::SOURCE_PORTAL
@@ -111,8 +111,7 @@ class VacacionesRhApiTest extends TestCase
 
         $this->concederVacaciones($this->rh, 'aprobar');
         $this->postJson(self::BASE."/{$solicitud->id}/aprobar")->assertOk()
-            ->assertJsonPath('data.status', 'approved')
-            ->assertJsonPath('data.resolved_by_rh', true);
+            ->assertJsonPath('data.status', 'approved');
     }
 
     public function test_rechazar_exige_motivo(): void
