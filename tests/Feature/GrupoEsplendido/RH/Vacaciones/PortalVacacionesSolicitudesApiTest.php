@@ -44,7 +44,7 @@ class PortalVacacionesSolicitudesApiTest extends TestCase
     {
         $inicio = $this->lunes()->addWeeks($semanasDespues);
 
-        return ['start_date' => $inicio->toDateString(), 'end_date' => $inicio->copy()->addDays(6)->toDateString()];
+        return ['start_date' => $inicio->toDateString(), 'end_date' => $inicio->copy()->addDays(6)->toDateString(), 'reason' => 'Descanso familiar'];
     }
 
     public function test_calcular_descuenta_solo_dias_laborables(): void
@@ -90,7 +90,7 @@ class PortalVacacionesSolicitudesApiTest extends TestCase
         $ajeno = $this->empleado($this->empresa);
         $encabezados = $this->entrar($empleado);
 
-        $this->postJson(self::BASE.'/solicitudes', $this->semana() + ['reason' => 'Viaje familiar', 'employee_id' => $ajeno->id], $encabezados)
+        $this->postJson(self::BASE.'/solicitudes', array_merge($this->semana(), ['reason' => 'Viaje familiar', 'employee_id' => $ajeno->id]), $encabezados)
             ->assertCreated()
             ->assertJsonPath('data.estado', 'pending')
             ->assertJsonPath('data.dias', 6)
@@ -117,7 +117,7 @@ class PortalVacacionesSolicitudesApiTest extends TestCase
             ->assertJsonPath('message', 'Ya existe una solicitud pendiente o aprobada que se empalma con esas fechas.');
 
         $ayer = today()->subDay()->toDateString();
-        $this->postJson(self::BASE.'/solicitudes', ['start_date' => $ayer, 'end_date' => $ayer], $encabezados)
+        $this->postJson(self::BASE.'/solicitudes', ['start_date' => $ayer, 'end_date' => $ayer, 'reason' => 'Descanso familiar'], $encabezados)
             ->assertStatus(422)
             ->assertJsonPath('message', 'La fecha de inicio no puede ser anterior a hoy.');
     }

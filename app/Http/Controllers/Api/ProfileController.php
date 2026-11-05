@@ -9,6 +9,7 @@ use App\Models\VacationRequest;
 use App\Services\RH\VacationRequestService;
 use App\Services\VacationCalculatorService;
 use App\Support\PasswordPolicy;
+use App\Support\RH\MotivoVacaciones;
 use App\Support\RH\PresentadorPortalVacaciones;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -268,18 +269,18 @@ class ProfileController extends Controller
             ], 400);
         }
 
+        MotivoVacaciones::recortar($request);
         $validated = $request->validate([
             'start_date' => 'required|date',
             'end_date' => 'required|date',
-            'reason' => 'nullable|string|max:500',
-        ]);
+        ] + MotivoVacaciones::REGLAS, MotivoVacaciones::MENSAJES);
 
         try {
             $vacationRequest = $vacaciones->crear(
                 $employee,
                 Carbon::parse($validated['start_date']),
                 Carbon::parse($validated['end_date']),
-                $validated['reason'] ?? null,
+                $validated['reason'],
                 VacationRequest::SOURCE_PERFIL,
                 $user,
             );

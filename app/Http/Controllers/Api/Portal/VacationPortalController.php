@@ -12,6 +12,7 @@ use App\Services\RH\AprobadorVacaciones;
 use App\Services\RH\SesionPortalVacaciones;
 use App\Services\RH\VacationRequestService;
 use App\Services\RH\VerificadorPinEmpleado;
+use App\Support\RH\MotivoVacaciones;
 use App\Support\RH\PresentadorPortalVacaciones;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -112,7 +113,8 @@ class VacationPortalController extends Controller
     public function crear(Request $request, VacationRequestService $vacaciones): JsonResponse
     {
         [$inicio, $fin] = $this->fechas($request);
-        $motivo = $request->validate(['reason' => 'nullable|string|max:500'])['reason'] ?? null;
+        MotivoVacaciones::recortar($request);
+        $motivo = $request->validate(MotivoVacaciones::REGLAS, MotivoVacaciones::MENSAJES)['reason'];
 
         $solicitud = $vacaciones->crear($this->empleado($request), $inicio, $fin, $motivo, VacationRequest::SOURCE_PORTAL);
 
