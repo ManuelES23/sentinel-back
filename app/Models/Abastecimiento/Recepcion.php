@@ -2,6 +2,7 @@
 
 namespace App\Models\Abastecimiento;
 
+use App\Models\User;
 use App\Traits\Loggable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -56,6 +57,11 @@ class Recepcion extends Model
     public function tipoCarga(): BelongsTo
     {
         return $this->belongsTo(TipoCarga::class, 'tipo_carga_id');
+    }
+
+    public function creador(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'created_by');
     }
 
     /** Una recepción ligada a una liquidación ya no se puede editar ni borrar. */

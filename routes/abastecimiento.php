@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\Abastecimiento\ConvenioController;
 use App\Http\Controllers\Api\Abastecimiento\CultivoController;
 use App\Http\Controllers\Api\Abastecimiento\PermisosController;
 use App\Http\Controllers\Api\Abastecimiento\ProductorController;
+use App\Http\Controllers\Api\Abastecimiento\RecepcionController;
 use App\Http\Controllers\Api\Abastecimiento\TemporadaController;
 use App\Http\Controllers\Api\Abastecimiento\TipoCargaController;
 use Illuminate\Support\Facades\Route;
@@ -53,4 +54,11 @@ Route::prefix('abastecimiento')->name('abastecimiento.')->group(function () {
     Route::post('convenios', [ConvenioController::class, 'store'])->name('convenios.store');
     Route::put('convenios/{id}', [ConvenioController::class, 'update'])->whereNumber('id')->name('convenios.update');
     Route::patch('convenios/{id}/estado', [ConvenioController::class, 'estado'])->whereNumber('id')->name('convenios.estado');
+
+    // Recepciones (submódulo recepciones). `semana` va antes de cualquier ruta con {id}.
+    Route::get('recepciones/semana', [RecepcionController::class, 'semana'])->name('recepciones.semana');
+    Route::get('recepciones', [RecepcionController::class, 'index'])->name('recepciones.index');
+    Route::post('recepciones', [RecepcionController::class, 'store'])->name('recepciones.store');
+    Route::put('recepciones/{id}', [RecepcionController::class, 'update'])->whereNumber('id')->name('recepciones.update');
+    Route::delete('recepciones/{id}', [RecepcionController::class, 'destroy'])->whereNumber('id')->name('recepciones.destroy');
 });
