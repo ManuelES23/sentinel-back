@@ -109,7 +109,7 @@ class ConvenioController extends AbastecimientoController
             'precio_principal' => $this->precioPrincipal($convenio),
             'indicadores' => IndicadoresConvenio::de($convenio),
             'recepciones_total' => Recepcion::where('convenio_id', $convenio->id)->count(),
-            'recepciones' =>$recientes->map(fn (Recepcion $r) => [
+            'recepciones' => $recientes->map(fn (Recepcion $r) => [
                 'id' => $r->id,
                 'folio' => $r->folio,
                 'fecha' => $r->fecha->format('Y-m-d'),
