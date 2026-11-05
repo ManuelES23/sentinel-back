@@ -729,6 +729,76 @@ class RecepcionesTest extends TestCase
         $this->assertSame('2026-07-14', $r->json('data.recepciones.0.fecha'));
     }
 
+    public function test_semana_trae_fechas_estatus_y_precios_de_cada_convenio(): void
+    {
+        $c = $this->cv001(['modalidad' => 'consignacion']);
+        $principal = $this->tipoPrincipal($c);
+        ConvenioPrecio::where('convenio_id', $c->id)->update(['porcentaje_productor' => 60]);
+        ConvenioPrecio::create([
+            'convenio_id' => $c->id, 'tipo_carga_id' => $principal, 'precio' => 200, 'porcentaje_productor' => 55,
+            'vigencia_inicio' => '2026-07-08', 'es_principal' => true,
+        ]);
+        $bin = $this->tipoExtra('Bin');
+        ConvenioPrecio::create([
+            'convenio_id' => $c->id, 'tipo_carga_id' => $bin->id, 'precio' => 900, 'porcentaje_productor' => 60,
+            'vigencia_inicio' => '2026-06-22', 'es_principal' => false,
+        ]);
+
+        $r = $this->getJson($this->url('recepciones/semana?temporada_id='.$c->temporada_id.'&lunes=2026-07-13'));
+
+        $r->assertOk();
+        $fila = $r->json('data.convenios.0');
+        $this->assertSame('2026-06-22', $fila['fecha_inicio']);
+        $this->assertSame('2026-08-23', $fila['fecha_fin']);
+        $this->assertSame('activo', $fila['status']);
+        $this->assertSame('MXN', $fila['moneda']);
+        $this->assertSame('consignacion', $fila['modalidad']);
+
+        // Dos vigencias del tipo principal primero (más antigua antes), luego el otro tipo: el orden de show.
+        $this->assertCount(3, $fila['precios']);
+        $this->assertSame([$principal, $principal, $bin->id], array_column($fila['precios'], 'tipo_carga_id'));
+        $this->assertSame(['2026-06-22', '2026-07-08', '2026-06-22'], array_column($fila['precios'], 'vigencia_inicio'));
+        $this->assertSame([true, true, false], array_column($fila['precios'], 'es_principal'));
+        $this->assertEqualsWithDelta(185, $fila['precios'][0]['precio'], 0.0001);
+        $this->assertEqualsWithDelta(200, $fila['precios'][1]['precio'], 0.0001);
+        $this->assertEqualsWithDelta(55, $fila['precios'][1]['porcentaje_productor'], 0.001);
+        $this->assertSame(['id' => $bin->id, 'nombre' => 'Bin'], $fila['precios'][2]['tipo_carga']);
+
+        // Mismo mapeo que la ficha del convenio.
+        $show = $this->getJson($this->url("convenios/{$c->id}"))->assertOk()->json('data.precios');
+        $this->assertSame($show, $fila['precios']);
+
+        // Lo anterior sigue igual.
+        foreach (['id', 'folio', 'productor', 'variedad', 'unidad', 'meta_semana', 'recibido_semana', 'por_dia'] as $clave) {
+            $this->assertArrayHasKey($clave, $fila);
+        }
+    }
+
+    public function test_semana_tiene_consultas_constantes_por_convenio(): void
+    {
+        $c = $this->cv001();
+        $url = $this->url('recepciones/semana?temporada_id='.$c->temporada_id.'&lunes=2026-07-13');
+        // Con una recepción, para que las relaciones de las recepciones también cuenten en la base de comparación.
+        $this->crearRecepcion($c, ['fecha' => '2026-07-13']);
+
+        DB::enableQueryLog();
+        $this->getJson($url)->assertOk();
+        $uno = count(DB::getQueryLog());
+        DB::flushQueryLog();
+
+        for ($i = 0; $i < 4; $i++) {
+            $extra = $this->cv001(['temporada_id' => $c->temporada_id]);
+            $this->crearRecepcion($extra, ['fecha' => '2026-07-14']);
+        }
+        DB::flushQueryLog();
+        $r = $this->getJson($url)->assertOk();
+        $cinco = count(DB::getQueryLog());
+        DB::disableQueryLog();
+
+        $this->assertCount(5, $r->json('data.convenios'));
+        $this->assertSame($uno, $cinco, 'La semana no debe consultar por convenio.');
+    }
+
     public function test_semana_omite_convenios_sin_esa_semana_o_no_activos(): void
     {
         $c = $this->cv001();

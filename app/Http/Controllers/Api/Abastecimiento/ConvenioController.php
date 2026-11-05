@@ -408,22 +408,33 @@ class ConvenioController extends AbastecimientoController
         ];
     }
 
+    /**
+     * Precios del convenio como los ven las pantallas: el tipo principal primero, luego por
+     * tipo de carga y vigencia. Compartido con recepciones/semana. Requiere `tipoCarga` cargado.
+     *
+     * @param  \Illuminate\Support\Collection<int, ConvenioPrecio>  $precios
+     */
+    public static function presentarPrecios(\Illuminate\Support\Collection $precios): array
+    {
+        return $precios
+            ->sortBy([['es_principal', 'desc'], ['tipo_carga_id', 'asc'], ['vigencia_inicio', 'asc']])
+            ->map(fn (ConvenioPrecio $p) => [
+                'id' => $p->id,
+                'tipo_carga_id' => $p->tipo_carga_id,
+                'tipo_carga' => $p->tipoCarga ? ['id' => $p->tipoCarga->id, 'nombre' => $p->tipoCarga->nombre] : null,
+                'precio' => $p->precio,
+                'porcentaje_productor' => $p->porcentaje_productor,
+                'vigencia_inicio' => $p->vigencia_inicio->format('Y-m-d'),
+                'es_principal' => $p->es_principal,
+                'notas' => $p->notas,
+            ])->values()->all();
+    }
+
     /** Convenio con sus precios y metas, que deben estar cargados. */
     private function armar(Convenio $c): array
     {
         return $this->datosBase($c) + [
-            'precios' => $c->precios
-                ->sortBy([['es_principal', 'desc'], ['tipo_carga_id', 'asc'], ['vigencia_inicio', 'asc']])
-                ->map(fn (ConvenioPrecio $p) => [
-                    'id' => $p->id,
-                    'tipo_carga_id' => $p->tipo_carga_id,
-                    'tipo_carga' => $p->tipoCarga ? ['id' => $p->tipoCarga->id, 'nombre' => $p->tipoCarga->nombre] : null,
-                    'precio' => $p->precio,
-                    'porcentaje_productor' => $p->porcentaje_productor,
-                    'vigencia_inicio' => $p->vigencia_inicio->format('Y-m-d'),
-                    'es_principal' => $p->es_principal,
-                    'notas' => $p->notas,
-                ])->values()->all(),
+            'precios' => self::presentarPrecios($c->precios),
             'metas' => $c->metas
                 ->sortBy(fn (ConvenioMeta $m) => $m->semana->format('Y-m-d'))
                 ->map(fn (ConvenioMeta $m) => [

@@ -110,7 +110,7 @@ class RecepcionController extends AbastecimientoController
             ->where('status', 'activo')
             ->whereDate('fecha_inicio', '<=', $rango['domingo'])
             ->whereDate('fecha_fin', '>=', $rango['lunes'])
-            ->with(['productor:id,nombre,tipo', 'variedad:id,nombre', 'precios', 'metas'])
+            ->with(['productor:id,nombre,tipo', 'variedad:id,nombre', 'precios.tipoCarga:id,nombre', 'metas'])
             ->orderBy('fecha_inicio')->orderBy('id')
             ->get();
 
@@ -135,6 +135,11 @@ class RecepcionController extends AbastecimientoController
                 'variedad' => $c->variedad,
                 'unidad' => $c->unidad,
                 'moneda' => $c->moneda,
+                'modalidad' => $c->modalidad,
+                'status' => $c->status,
+                'fecha_inicio' => $c->fecha_inicio->format('Y-m-d'),
+                'fecha_fin' => $c->fecha_fin->format('Y-m-d'),
+                'precios' => ConvenioController::presentarPrecios($c->precios),
                 'meta_semana' => $semana['meta'],
                 'recibido_semana' => $semana['recibido'],
                 'por_dia' => array_map(fn (float $v) => round($v, 2), $porDia),
