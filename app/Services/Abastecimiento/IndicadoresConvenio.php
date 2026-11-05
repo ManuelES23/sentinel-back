@@ -98,10 +98,12 @@ class IndicadoresConvenio
      * día y tipo de carga. La cantidad ya viene en la unidad del convenio
      * (kilos si se paga por kilo; si no, la cantidad capturada).
      *
+     * Con `$soloSinLiquidar` solo cuenta las recepciones sin liquidación (`liquidacion_id` nulo).
+     *
      * @param  Collection<int, Convenio>  $convenios
      * @return Collection<int, Collection<int, array{fecha: string, tipo_carga_id: int, cantidad: float}>> convenio_id => líneas
      */
-    public static function lineas(Collection $convenios): Collection
+    public static function lineas(Collection $convenios, bool $soloSinLiquidar = false): Collection
     {
         $unidades = $convenios->pluck('unidad', 'id');
         if ($unidades->isEmpty()) {
@@ -111,6 +113,7 @@ class IndicadoresConvenio
         return DB::table('abs_recepciones')
             ->whereIn('convenio_id', $unidades->keys()->all())
             ->whereNull('deleted_at')
+            ->when($soloSinLiquidar, fn ($q) => $q->whereNull('liquidacion_id'))
             ->groupBy('convenio_id', 'fecha', 'tipo_carga_id')
             ->selectRaw('convenio_id, fecha, tipo_carga_id, SUM(cantidad) as cantidad, SUM(kilos) as kilos')
             ->get()
@@ -120,6 +123,29 @@ class IndicadoresConvenio
                 'tipo_carga_id' => (int) $f->tipo_carga_id,
                 'cantidad' => (float) ($unidades->get((int) $convenioId) === 'kg' ? $f->kilos : $f->cantidad),
             ])->values());
+    }
+
+    /**
+     * Valor de unas líneas de recepciones del convenio: cantidad × precio vigente
+     * de su tipo y fecha × % del productor. Usa los precios ya cargados (sin consultas).
+     *
+     * @param  Collection  $lineas  líneas de ESTE convenio (ver `lineas`)
+     */
+    public static function valorDe(Convenio $convenio, Collection $lineas): float
+    {
+        $precios = $convenio->relationLoaded('precios') ? $convenio->precios : $convenio->precios()->get();
+
+        return round($lineas->sum(fn (array $linea) => self::valorLinea($precios, $linea)), 2);
+    }
+
+    /** Valor de una línea; sin precio vigente para su tipo y fecha no vale nada. */
+    private static function valorLinea(Collection $precios, array $linea): float
+    {
+        $precio = PrecioVigente::enColeccion($precios, $linea['tipo_carga_id'], $linea['fecha']);
+
+        return $precio === null
+            ? 0.0
+            : $linea['cantidad'] * (float) $precio->precio * self::porcentaje($precio->porcentaje_productor) / 100;
     }
 
     /** @return array{indicadores: array, peso: float} peso = precio principal × % del productor / 100 */
@@ -142,10 +168,7 @@ class IndicadoresConvenio
             $porSemana[$lunes] = ($porSemana[$lunes] ?? 0.0) + $linea['cantidad'];
             $recibido += $linea['cantidad'];
 
-            $precio = PrecioVigente::enColeccion($precios, $linea['tipo_carga_id'], $linea['fecha']);
-            if ($precio !== null) {
-                $valorRecibido += $linea['cantidad'] * (float) $precio->precio * self::porcentaje($precio->porcentaje_productor) / 100;
-            }
+            $valorRecibido += self::valorLinea($precios, $linea);
         }
 
         // Semanas del convenio: las de su rango, las de sus metas y las que tengan recepciones.

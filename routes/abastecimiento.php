@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\Abastecimiento\CultivoController;
 use App\Http\Controllers\Api\Abastecimiento\PermisosController;
 use App\Http\Controllers\Api\Abastecimiento\ProductorController;
 use App\Http\Controllers\Api\Abastecimiento\RecepcionController;
+use App\Http\Controllers\Api\Abastecimiento\TableroController;
 use App\Http\Controllers\Api\Abastecimiento\TemporadaController;
 use App\Http\Controllers\Api\Abastecimiento\TipoCargaController;
 use Illuminate\Support\Facades\Route;
@@ -17,6 +18,9 @@ use Illuminate\Support\Facades\Route;
  */
 Route::prefix('abastecimiento')->name('abastecimiento.')->group(function () {
     Route::get('mis-permisos', [PermisosController::class, 'index'])->name('mis-permisos');
+
+    // Tablero (submódulo tablero).
+    Route::get('tablero', [TableroController::class, 'index'])->name('tablero');
 
     // Cultivos y variedades (submódulo variedades).
     Route::get('cultivos', [CultivoController::class, 'index'])->name('cultivos.index');
