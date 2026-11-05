@@ -231,13 +231,16 @@ class IndicadoresConvenio
         ];
     }
 
-    /** Estado del avance (distinto del estatus del convenio, salvo cancelado y finalizado). */
+    /**
+     * Estado del avance (distinto del estatus del convenio, salvo cancelado y finalizado).
+     * Un borrador aún no opera: es «por iniciar» aunque su fecha de inicio ya haya pasado.
+     */
     private static function estado(string $status, string $inicio, string $fin, string $hoy, ?float $razon): string
     {
         if ($status === 'cancelado' || $status === 'finalizado') {
             return $status;
         }
-        if ($inicio > $hoy) {
+        if ($status === 'borrador' || $inicio > $hoy) {
             return 'por_iniciar';
         }
         if ($fin < $hoy) {

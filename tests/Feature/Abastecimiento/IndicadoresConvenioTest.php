@@ -162,6 +162,25 @@ class IndicadoresConvenioTest extends TestCase
         $this->assertEqualsWithDelta(0, $i['recibido'], 0.001);
     }
 
+    public function test_borrador_con_inicio_pasado_sigue_por_iniciar_y_suspendido_se_calcula(): void
+    {
+        // Mismo avance que CV-003 (70 %, atrasado) pero aún en borrador: no opera todavía.
+        $borrador = $this->cv003();
+        $borrador->update(['status' => 'borrador']);
+        $i = IndicadoresConvenio::de($borrador->fresh(), $this->hoy());
+        $this->assertSame('por_iniciar', $i['estado']);
+        $this->assertEqualsWithDelta(0.70, $i['cumplimiento'], 0.001);
+
+        // Un borrador ya vencido también es «por iniciar».
+        $vencido = $this->crearConvenio($this->sbp, ['status' => 'borrador', 'fecha_inicio' => '2026-06-01', 'fecha_fin' => '2026-06-28']);
+        $this->assertSame('por_iniciar', IndicadoresConvenio::de($vencido, $this->hoy())['estado']);
+
+        // Suspendido sigue calculándose con los umbrales.
+        $suspendido = $this->cv003();
+        $suspendido->update(['status' => 'suspendido']);
+        $this->assertSame('atrasado', IndicadoresConvenio::de($suspendido->fresh(), $this->hoy())['estado']);
+    }
+
     public function test_sin_semanas_cerradas_cumplimiento_null(): void
     {
         $c = $this->crearConvenio($this->sbp, [

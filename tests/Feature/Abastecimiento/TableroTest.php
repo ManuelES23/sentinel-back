@@ -266,7 +266,8 @@ class TableroTest extends TestCase
 
     public function test_orden_con_riesgo_y_dentro_del_estado_por_folio(): void
     {
-        // Dos en riesgo creados en orden inverso a su folio no existe: el folio manda el desempate.
+        // Dos convenios en riesgo (A y C) con el atrasado B en medio: el atrasado va primero y,
+        // entre los dos en riesgo, manda el folio.
         $a = $this->crearConvenio($this->sbp, [
             'fecha_inicio' => $this->lunes(27), 'fecha_fin' => '2026-07-26',
             'metas' => $this->metas(27, [1000, 1000, 1000, 1000]),
@@ -356,6 +357,49 @@ class TableroTest extends TestCase
 
         $this->assertCount(1, $avisos);
         $this->assertSame('CV-0001 · Huerta Uno recibió 25 % de su meta en las semanas cerradas. Faltan 1,500 kg.', $avisos[0]['texto']);
+    }
+
+    public function test_aviso_en_singular_con_una_caja_y_un_kilo(): void
+    {
+        // Atrasados sin recibir nada de una meta de 1 en la semana cerrada: «Faltan 1 caja» / «Faltan 1 kg».
+        $caja = $this->crearConvenio($this->sbp, [
+            'productor_id' => $this->productor('Huerta Caja'),
+            'fecha_inicio' => $this->lunes(28), 'fecha_fin' => '2026-07-26',
+            'metas' => $this->metas(28, [1, 1, 1]),
+        ]);
+        $kg = $this->crearConvenio($this->sbp, [
+            'temporada_id' => $caja->temporada_id, 'unidad' => 'kg',
+            'productor_id' => $this->productor('Huerta Kilo'),
+            'fecha_inicio' => $this->lunes(28), 'fecha_fin' => '2026-07-26',
+            'metas' => $this->metas(28, [1, 1, 1]),
+        ]);
+        // Empieza la semana siguiente con 1 caja.
+        $inicia = $this->crearConvenio($this->sbp, [
+            'temporada_id' => $caja->temporada_id,
+            'productor_id' => $this->productor('Huerta Inicia'),
+            'fecha_inicio' => $this->lunes(30), 'fecha_fin' => '2026-08-02',
+            'metas' => $this->metas(30, [1]),
+        ]);
+
+        $textos = array_column($this->tablero($caja->temporada_id)['avisos'], 'texto', 'convenio_id');
+
+        $this->assertSame('CV-0001 · Huerta Caja recibió 0 % de su meta en las semanas cerradas. Faltan 1 caja.', $textos[$caja->id]);
+        $this->assertSame('CV-0002 · Huerta Kilo recibió 0 % de su meta en las semanas cerradas. Faltan 1 kg.', $textos[$kg->id]);
+        $this->assertSame('CV-0003 · Huerta Inicia empieza la semana 30 con 1 caja.', $textos[$inicia->id]);
+    }
+
+    public function test_un_borrador_con_inicio_pasado_no_cuenta_como_atrasado(): void
+    {
+        $c = $this->prototipo();
+        $c[3]->update(['status' => 'borrador']); // el CV-0003 estaba atrasado
+
+        $data = $this->tablero($c[1]->temporada_id);
+
+        $this->assertSame(0, $data['kpis']['abajo_de_meta']);
+        $this->assertSame(3, $data['kpis']['con_avance']); // CV-0001, 0002 y 0005
+        $this->assertSame([], array_filter($data['avisos'], fn ($a) => $a['tipo'] === 'atrasado'));
+        $fila = collect($data['convenios'])->firstWhere('id', $c[3]->id);
+        $this->assertSame('por_iniciar', $fila['indicadores']['estado']);
     }
 
     public function test_sin_avisos_si_nadie_esta_atrasado_ni_empieza_la_semana_siguiente(): void
