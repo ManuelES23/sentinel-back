@@ -276,7 +276,7 @@ class JefeDelPortalTest extends TestCase
         $this->assertSame([$suya->id], collect($respuesta->json('data'))->pluck('id')->all());
     }
 
-    public function test_el_listado_es_una_lista_blanca_sin_saldo_ni_datos_personales(): void
+    public function test_el_listado_es_una_lista_blanca_con_solo_saldo_despues_y_adelanto(): void
     {
         [, $jefe, $solicitante] = $this->escenario();
         $this->regla(1, ApprovalFlowStep::TYPE_DEPARTMENT_MANAGER);
@@ -285,9 +285,10 @@ class JefeDelPortalTest extends TestCase
         $item = $this->getJson(self::BASE.'/por-revisar', $this->entrar($jefe))->assertOk()->json('data.0');
 
         $this->assertEqualsCanonicalizing(
-            ['id', 'folio', 'solicitante', 'numero', 'puesto', 'departamento', 'fecha_inicio', 'fecha_fin', 'dias', 'adelanto', 'motivo', 'solicitada_el', 'pasos'],
+            ['id', 'folio', 'solicitante', 'numero', 'puesto', 'departamento', 'fecha_inicio', 'fecha_fin', 'dias', 'adelanto', 'motivo', 'solicitada_el', 'pasos', 'saldo'],
             array_keys($item),
         );
+        $this->assertEqualsCanonicalizing(['despues', 'adelanto'], array_keys($item['saldo']));
         $this->assertSame($solicitante->full_name, $item['solicitante']);
         $this->assertSame('Descanso', $item['motivo']);
         $this->assertSame(5, $item['dias']);

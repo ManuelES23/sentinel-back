@@ -10,6 +10,7 @@ use App\Models\VacationRequest;
 use App\Models\VacationRequestApproval;
 use App\Services\RH\AprobadorVacaciones;
 use App\Services\RH\VacationRequestService;
+use App\Support\RH\ContextoRevisionVacaciones;
 use App\Support\RH\PresentadorPortalVacaciones;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -29,9 +30,12 @@ class VacationPortalRevisionController extends Controller
     {
         $jefe = $this->jefe($request);
 
+        $solicitudes = $this->revisables($jefe);
+        $saldos = ContextoRevisionVacaciones::saldosDeLista($solicitudes);
+
         return response()->json([
             'success' => true,
-            'data' => $this->revisables($jefe)->map(fn (VacationRequest $solicitud) => PresentadorPortalVacaciones::paraRevisar($solicitud))->values(),
+            'data' => $solicitudes->map(fn (VacationRequest $solicitud) => PresentadorPortalVacaciones::paraRevisar($solicitud, false, $saldos[$solicitud->id]))->values(),
         ]);
     }
 
@@ -39,7 +43,7 @@ class VacationPortalRevisionController extends Controller
     {
         return response()->json([
             'success' => true,
-            'data' => PresentadorPortalVacaciones::paraRevisar($this->revisable($this->jefe($request), $id)),
+            'data' => PresentadorPortalVacaciones::paraRevisar($this->revisable($this->jefe($request), $id), completo: true),
         ]);
     }
 

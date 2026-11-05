@@ -143,15 +143,18 @@ class PresentadorPortalVacaciones
     }
 
     /**
-     * Solicitud ajena que le toca revisar al jefe del portal (lista blanca): el solicitante, su
-     * puesto y departamento, el periodo y el motivo. Nada de saldo, ingreso ni datos personales.
+     * Solicitud ajena que le toca revisar a quien decide desde el portal (jefe o director), lista blanca. La lista
+     * (`$completo = false`) agrega solo `saldo: {despues, adelanto}`; el detalle (`$completo = true`) trae todo lo de
+     * ContextoRevisionVacaciones (saldo completo, desglose, historial por periodo, coincidencias...). `$saldoLista`
+     * es el `saldo` ya calculado en lote por ContextoRevisionVacaciones::saldosDeLista (evita una consulta por tarjeta).
+     * El comentario de los pasos de visto bueno de RH es para quien revisa: aquí sale, en detalle() no.
      */
-    public static function paraRevisar(VacationRequest $solicitud): array
+    public static function paraRevisar(VacationRequest $solicitud, bool $completo = false, ?array $saldoLista = null): array
     {
         $solicitante = $solicitud->employee;
         $solicitante->loadMissing(['position:id,name', 'department:id,name']);
 
-        return [
+        $datos = [
             'id' => $solicitud->id,
             'folio' => self::folio($solicitud),
             'solicitante' => $solicitante->full_name,
@@ -161,7 +164,6 @@ class PresentadorPortalVacaciones
             'fecha_inicio' => $solicitud->start_date->format('Y-m-d'),
             'fecha_fin' => $solicitud->end_date->format('Y-m-d'),
             'dias' => (int) $solicitud->days_requested,
-            // El jefe ve que es adelanto (no el saldo).
             'adelanto' => (int) $solicitud->advance_days,
             'motivo' => $solicitud->reason,
             'solicitada_el' => $solicitud->created_at?->toIso8601String(),
@@ -171,9 +173,17 @@ class PresentadorPortalVacaciones
                 'decision' => $paso->decision,
                 'decidido_por' => $paso->nombreDeQuienDecidio(),
                 'decidido_el' => $paso->decided_at?->toIso8601String(),
+                'comentario' => $paso->is_rh_review ? $paso->comment : null,
                 'es_rh' => $paso->is_rh_final,
+                'es_visto_bueno' => (bool) $paso->is_rh_review,
             ])->all(),
         ];
+
+        if ($completo) {
+            return $datos + ContextoRevisionVacaciones::para($solicitud);
+        }
+
+        return $datos + ['saldo' => $saldoLista ?? ContextoRevisionVacaciones::saldosDeLista(collect([$solicitud]))[$solicitud->id]];
     }
 
     public static function formato(VacationRequest $solicitud): array
