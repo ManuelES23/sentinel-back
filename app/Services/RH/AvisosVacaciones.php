@@ -120,7 +120,7 @@ class AvisosVacaciones
     }
 
     /**
-     * A quién se le manda correo en el paso, una vez por dirección: el jefe del portal (su correo de
+     * A quién se le manda correo en el paso, una vez por dirección: cada revisor del portal (jefe o director; su correo de
      * empleado o, si no tiene, el de su usuario) y cada usuario elegible que no sea ese mismo jefe.
      *
      * @return array<string, array{0: ?string, 1: string}> correo => [nombre, vía]
@@ -128,21 +128,21 @@ class AvisosVacaciones
     private function destinatariosDeCorreo(VacationRequest $solicitud, VacationRequestApproval $paso, Collection $elegibles): array
     {
         $destinos = [];
-        $usuariosDeJefes = [];
+        $usuariosDeRevisores = [];
 
-        foreach ($this->aprobador->jefesDelPortal($solicitud, $paso) as $jefe) {
-            $correo = CorreoVacaciones::correoValido($jefe->email) ?? CorreoVacaciones::correoValido($jefe->user?->email);
-            if ($jefe->user_id !== null) {
-                $usuariosDeJefes[] = (int) $jefe->user_id;
+        foreach ($this->aprobador->revisoresDelPortal($solicitud, $paso) as $revisor) {
+            $correo = CorreoVacaciones::correoValido($revisor->email) ?? CorreoVacaciones::correoValido($revisor->user?->email);
+            if ($revisor->user_id !== null) {
+                $usuariosDeRevisores[] = (int) $revisor->user_id;
             }
             if ($correo !== null) {
-                $destinos[mb_strtolower($correo)] ??= [$jefe->first_name, $jefe->user_id !== null ? VacationReviewMail::VIA_PORTAL_O_SENTINEL : VacationReviewMail::VIA_PORTAL];
+                $destinos[mb_strtolower($correo)] ??= [$revisor->first_name, $revisor->user_id !== null ? VacationReviewMail::VIA_PORTAL_O_SENTINEL : VacationReviewMail::VIA_PORTAL];
             }
         }
 
         foreach ($elegibles as $usuario) {
             $correo = CorreoVacaciones::correoValido($usuario->email);
-            if ($correo === null || in_array((int) $usuario->id, $usuariosDeJefes, true)) {
+            if ($correo === null || in_array((int) $usuario->id, $usuariosDeRevisores, true)) {
                 continue;
             }
             $destinos[mb_strtolower($correo)] ??= [$usuario->name, ($paso->is_rh_final || $paso->is_rh_review) ? VacationReviewMail::VIA_RH : VacationReviewMail::VIA_SENTINEL];

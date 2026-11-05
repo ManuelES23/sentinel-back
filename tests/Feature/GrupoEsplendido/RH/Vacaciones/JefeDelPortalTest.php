@@ -88,7 +88,7 @@ class JefeDelPortalTest extends TestCase
         $this->assertSame(1, $solicitud->fresh()->current_step);
         $this->assertSame(VacationRequestApproval::WAITING, $paso->decision);
         $this->assertTrue($this->aprobador()->elegiblesDelPaso($solicitud, $paso)->isEmpty());
-        $this->assertSame([$jefe->id], $this->aprobador()->jefesDelPortal($solicitud, $paso)->pluck('id')->all());
+        $this->assertSame([$jefe->id], $this->aprobador()->revisoresDelPortal($solicitud, $paso)->pluck('id')->all());
         $this->assertTrue($this->aprobador()->puedeDecidirComoEmpleado($jefe, $solicitud, $paso));
         $this->assertTrue($this->aprobador()->puedeDecidirComoEmpleado($jefe, $solicitud, $paso, 'rechazar'));
     }
@@ -106,7 +106,7 @@ class JefeDelPortalTest extends TestCase
 
         $jefe->update(['status' => Employee::STATUS_TERMINATED]);
         $this->assertFalse($this->aprobador()->puedeDecidirComoEmpleado($jefe->fresh(), $solicitud, $paso));
-        $this->assertTrue($this->aprobador()->jefesDelPortal($solicitud, $paso)->isEmpty());
+        $this->assertTrue($this->aprobador()->revisoresDelPortal($solicitud, $paso)->isEmpty());
     }
 
     public function test_el_jefe_no_aprueba_su_propia_solicitud_y_su_paso_se_salta(): void
@@ -134,6 +134,21 @@ class JefeDelPortalTest extends TestCase
         // Sin usuario, el jefe directo no es elegible: el paso se salta y espera en RH.
         $this->assertSame(VacationRequestApproval::SKIPPED, $solicitud->approvals()->where('step_order', 1)->first()->decision);
         $this->assertTrue($solicitud->approvals()->where('is_rh_final', true)->first()->decision === VacationRequestApproval::WAITING);
+    }
+
+    public function test_un_usuario_especifico_sin_empleado_ligado_no_abre_el_portal(): void
+    {
+        [, , $solicitante] = $this->escenario();
+        $director = User::factory()->create();
+        $this->regla(1, ApprovalFlowStep::TYPE_USER, ['user_id' => $director->id]);
+
+        $solicitud = $this->crearSolicitud($solicitante);
+        $paso = $this->pasoActual($solicitud);
+
+        // Sin empleado ligado no hay quién entre por el portal: solo decide desde Sentinel.
+        $this->assertTrue($this->aprobador()->revisoresDelPortal($solicitud, $paso)->isEmpty());
+        $this->assertSame([$director->id], $this->aprobador()->elegiblesDelPaso($solicitud, $paso)->pluck('id')->all());
+        $this->assertTrue($this->aprobador()->hayQuienDecida($solicitud, $paso));
     }
 
     public function test_respeta_can_approve_y_can_reject_de_la_regla(): void
