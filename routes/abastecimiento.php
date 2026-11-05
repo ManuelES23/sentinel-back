@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\Abastecimiento\ConvenioController;
 use App\Http\Controllers\Api\Abastecimiento\CultivoController;
 use App\Http\Controllers\Api\Abastecimiento\PermisosController;
 use App\Http\Controllers\Api\Abastecimiento\ProductorController;
@@ -44,4 +45,9 @@ Route::prefix('abastecimiento')->name('abastecimiento.')->group(function () {
     Route::post('temporadas', [TemporadaController::class, 'store'])->name('temporadas.store');
     Route::put('temporadas/{id}', [TemporadaController::class, 'update'])->whereNumber('id')->name('temporadas.update');
     Route::delete('temporadas/{id}', [TemporadaController::class, 'destroy'])->whereNumber('id')->name('temporadas.destroy');
+
+    // Convenios y precios (submódulo convenios). `encimados` va antes de cualquier ruta con {id}.
+    Route::get('convenios/encimados', [ConvenioController::class, 'encimados'])->name('convenios.encimados');
+    Route::post('convenios', [ConvenioController::class, 'store'])->name('convenios.store');
+    Route::put('convenios/{id}', [ConvenioController::class, 'update'])->whereNumber('id')->name('convenios.update');
 });
