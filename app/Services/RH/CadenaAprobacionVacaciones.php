@@ -38,6 +38,8 @@ class CadenaAprobacionVacaciones
                 'description' => mb_substr($reglas->map(fn (ApprovalFlowStep $regla) => $regla->approver_description)->unique()->implode(' o '), 0, 255),
                 'rules' => $reglas->pluck('id')->map(fn ($id) => (int) $id)->values()->all(),
                 'is_rh_final' => false,
+                // Paso de visto bueno de RH: todas sus reglas son rh_review (la configuración impide mezclarlas).
+                'is_rh_review' => $reglas->every(fn (ApprovalFlowStep $regla) => $regla->approver_type === ApprovalFlowStep::TYPE_RH_REVIEW),
                 'decision' => VacationRequestApproval::WAITING,
             ]);
         }

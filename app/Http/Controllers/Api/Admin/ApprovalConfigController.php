@@ -18,6 +18,7 @@ class ApprovalConfigController extends Controller
         ApprovalFlowStep::TYPE_DIRECT_SUPERVISOR => 'Jefe directo',
         ApprovalFlowStep::TYPE_DEPARTMENT_MANAGER => 'Jefe del departamento',
         ApprovalFlowStep::TYPE_USER => 'Usuario específico',
+        ApprovalFlowStep::TYPE_RH_REVIEW => 'RH (visto bueno)',
     ];
 
     /**
@@ -176,7 +177,7 @@ class ApprovalConfigController extends Controller
         $validated = $request->validate([
             'enterprise_id' => 'nullable|exists:enterprises,id',
             'step_order' => 'sometimes|integer|min:1',
-            'approver_type' => 'required|in:hierarchy_level,position,direct_supervisor,department_manager,user',
+            'approver_type' => 'required|in:hierarchy_level,position,direct_supervisor,department_manager,user,rh_review',
             'min_hierarchy_level' => 'required_if:approver_type,hierarchy_level|nullable|integer|min:1|max:7',
             'position_id' => 'required_if:approver_type,position|nullable|exists:positions,id',
             'user_id' => 'required_if:approver_type,user|nullable|exists:users,id',
@@ -192,6 +193,14 @@ class ApprovalConfigController extends Controller
         if (!isset($validated['step_order'])) {
             $validated['step_order'] = ($process->steps()->max('step_order') ?? 0) + 1;
         }
+
+        $this->validarChoqueConVistoBuenoRh(
+            $process,
+            $validated['approver_type'],
+            (int) $validated['step_order'],
+            isset($validated['enterprise_id']) ? (int) $validated['enterprise_id'] : null,
+            (bool) ($validated['is_active'] ?? true),
+        );
 
         $step = ApprovalFlowStep::create($validated);
         $step->load(['enterprise', 'position', 'user:id,name,email']);
@@ -227,7 +236,7 @@ class ApprovalConfigController extends Controller
         $validated = $request->validate([
             'enterprise_id' => 'nullable|exists:enterprises,id',
             'step_order' => 'sometimes|integer|min:1',
-            'approver_type' => 'sometimes|in:hierarchy_level,position,direct_supervisor,department_manager,user',
+            'approver_type' => 'sometimes|in:hierarchy_level,position,direct_supervisor,department_manager,user,rh_review',
             'min_hierarchy_level' => 'nullable|integer|min:1|max:7',
             'position_id' => 'nullable|exists:positions,id',
             'user_id' => 'nullable|exists:users,id',
@@ -241,6 +250,16 @@ class ApprovalConfigController extends Controller
         if ($tipo === ApprovalFlowStep::TYPE_USER && $usuarioFinal === null) {
             throw ValidationException::withMessages(['user_id' => 'Elige el usuario que aprueba este paso.']);
         }
+
+        $empresaFinal = array_key_exists('enterprise_id', $validated) ? $validated['enterprise_id'] : $step->enterprise_id;
+        $this->validarChoqueConVistoBuenoRh(
+            $process,
+            $tipo,
+            (int) ($validated['step_order'] ?? $step->step_order),
+            $empresaFinal !== null ? (int) $empresaFinal : null,
+            (bool) ($validated['is_active'] ?? $step->is_active),
+            $step->id,
+        );
 
         $step->update($validated);
         $step->load(['enterprise', 'position', 'user:id,name,email']);
@@ -280,11 +299,38 @@ class ApprovalConfigController extends Controller
         ], 422);
     }
 
+    /**
+     * Un paso de visto bueno de RH no comparte número con otro tipo de aprobador (spec §5.1):
+     * choca con las reglas activas del mismo proceso y paso, de la misma empresa o de alcance global.
+     */
+    private function validarChoqueConVistoBuenoRh(ApprovalProcess $process, ?string $tipo, int $paso, ?int $empresaId, bool $activa, ?int $ignorarId = null): void
+    {
+        if (! $activa) {
+            return;
+        }
+
+        $esVistoBueno = $tipo === ApprovalFlowStep::TYPE_RH_REVIEW;
+
+        $choca = $process->steps()
+            ->active()
+            ->where('step_order', $paso)
+            ->when($ignorarId, fn ($q) => $q->where('id', '!=', $ignorarId))
+            ->where('approver_type', $esVistoBueno ? '!=' : '=', ApprovalFlowStep::TYPE_RH_REVIEW)
+            ->when($empresaId !== null, fn ($q) => $q->where(fn ($q) => $q->whereNull('enterprise_id')->orWhere('enterprise_id', $empresaId)))
+            ->exists();
+
+        if ($choca) {
+            throw ValidationException::withMessages([
+                'step_order' => 'Un paso de visto bueno de RH no puede compartir número con otro tipo de aprobador.',
+            ]);
+        }
+    }
+
     /** Un cambio de tipo deja en nulo lo que el nuevo tipo no usa (puesto, nivel o usuario). */
     private function limpiarCamposAjenos(Request $request, ?string $tipo): void
     {
         $limpiar = match ($tipo) {
-            ApprovalFlowStep::TYPE_DIRECT_SUPERVISOR, ApprovalFlowStep::TYPE_DEPARTMENT_MANAGER => ['position_id', 'min_hierarchy_level', 'user_id'],
+            ApprovalFlowStep::TYPE_DIRECT_SUPERVISOR, ApprovalFlowStep::TYPE_DEPARTMENT_MANAGER, ApprovalFlowStep::TYPE_RH_REVIEW => ['position_id', 'min_hierarchy_level', 'user_id'],
             ApprovalFlowStep::TYPE_USER => ['position_id', 'min_hierarchy_level'],
             'position', 'hierarchy_level' => ['user_id'],
             default => [],

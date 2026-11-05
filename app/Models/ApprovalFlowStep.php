@@ -39,6 +39,9 @@ class ApprovalFlowStep extends Model
     /** Un usuario de Sentinel elegido a mano (approval_flow_steps.user_id). */
     public const TYPE_USER = 'user';
 
+    /** Paso de visto bueno de RH: RH lo da sin cerrar la solicitud (solo vacaciones). */
+    public const TYPE_RH_REVIEW = 'rh_review';
+
     // ===== Relaciones =====
 
     public function process()
@@ -111,6 +114,10 @@ class ApprovalFlowStep extends Model
 
         if ($this->approver_type === self::TYPE_DEPARTMENT_MANAGER) {
             return 'Jefe del departamento';
+        }
+
+        if ($this->approver_type === self::TYPE_RH_REVIEW) {
+            return 'RH (visto bueno)';
         }
 
         if ($this->approver_type === self::TYPE_USER) {
