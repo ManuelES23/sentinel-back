@@ -244,6 +244,83 @@ class VolumenYEstadosTest extends TestCase
         }
     }
 
+    // ---- Unidad y moneda con recepciones ----
+
+    public function test_unidad_y_moneda_no_cambian_con_recepciones(): void
+    {
+        $c = $this->crearConvenio($this->sbp, ['status' => 'activo']);
+        $this->crearRecepcion($c);
+
+        $this->putJson($this->url("convenios/{$c->id}"), $this->cuerpoDe($c, ['unidad' => 'kg']))
+            ->assertStatus(422)->assertJsonValidationErrors(['unidad'])
+            ->assertJsonMissingValidationErrors(['moneda'])
+            ->assertJsonPath('errors.unidad.0', 'No se puede cambiar: el convenio ya tiene recepciones.');
+        $this->putJson($this->url("convenios/{$c->id}"), $this->cuerpoDe($c, ['moneda' => 'USD']))
+            ->assertStatus(422)->assertJsonValidationErrors(['moneda'])
+            ->assertJsonPath('errors.moneda.0', 'No se puede cambiar: el convenio ya tiene recepciones.');
+        $this->putJson($this->url("convenios/{$c->id}"), $this->cuerpoDe($c, ['unidad' => 'kg', 'moneda' => 'USD']))
+            ->assertStatus(422)->assertJsonValidationErrors(['unidad', 'moneda']);
+
+        $c->refresh();
+        $this->assertSame('caja', $c->unidad);
+        $this->assertSame('MXN', $c->moneda);
+    }
+
+    public function test_mismos_valores_de_unidad_y_moneda_con_recepciones_se_aceptan(): void
+    {
+        $c = $this->crearConvenio($this->sbp, ['status' => 'activo']);
+        $this->crearRecepcion($c);
+
+        $this->putJson($this->url("convenios/{$c->id}"), $this->cuerpoDe($c, ['unidad' => 'caja', 'moneda' => 'MXN', 'notas' => 'ajuste']))
+            ->assertOk()->assertJsonPath('data.unidad', 'caja')->assertJsonPath('data.moneda', 'MXN');
+    }
+
+    public function test_sin_recepciones_o_con_recepcion_borrada_unidad_y_moneda_si_cambian(): void
+    {
+        $libre = $this->crearConvenio($this->sbp, ['status' => 'borrador']);
+        $this->putJson($this->url("convenios/{$libre->id}"), $this->cuerpoDe($libre, ['unidad' => 'kg', 'moneda' => 'USD']))
+            ->assertOk()->assertJsonPath('data.unidad', 'kg')->assertJsonPath('data.moneda', 'USD');
+
+        $borrada = $this->crearConvenio($this->sbp, ['status' => 'activo']);
+        $this->crearRecepcion($borrada)->delete();
+        $this->putJson($this->url("convenios/{$borrada->id}"), $this->cuerpoDe($borrada, ['unidad' => 'kg', 'moneda' => 'USD']))
+            ->assertOk()->assertJsonPath('data.unidad', 'kg')->assertJsonPath('data.moneda', 'USD');
+    }
+
+    public function test_cambio_de_unidad_con_recepciones_no_escribe_nada(): void
+    {
+        $c = $this->crearConvenio($this->sbp, ['status' => 'activo']);
+        $this->crearRecepcion($c);
+
+        $this->putJson($this->url("convenios/{$c->id}"), $this->cuerpoDe($c, ['unidad' => 'kg', 'notas' => 'cambio', 'fecha_fin' => '2026-07-12']))
+            ->assertStatus(422);
+        $c->refresh();
+        $this->assertNull($c->notas);
+        $this->assertSame('2026-06-28', $c->fecha_fin->format('Y-m-d'));
+    }
+
+    public function test_cerrado_sigue_diciendo_que_no_se_edita_aunque_cambie_la_unidad(): void
+    {
+        $c = $this->crearConvenio($this->sbp, ['status' => 'finalizado']);
+        $this->crearRecepcion($c);
+
+        $this->putJson($this->url("convenios/{$c->id}"), $this->cuerpoDe($c, ['unidad' => 'kg']))
+            ->assertStatus(422)->assertJsonValidationErrors(['status'])->assertJsonMissingValidationErrors(['unidad']);
+    }
+
+    public function test_show_trae_el_total_de_recepciones_vivas(): void
+    {
+        $c = $this->crearConvenio($this->sbp, ['status' => 'activo']);
+        for ($i = 0; $i < 12; $i++) {
+            $this->crearRecepcion($c);
+        }
+        $this->crearRecepcion($c)->delete();
+
+        $res = $this->getJson($this->url("convenios/{$c->id}"))->assertOk();
+        $res->assertJsonPath('data.recepciones_total', 12);
+        $this->assertCount(10, $res->json('data.recepciones'));
+    }
+
     // ---- Estados ----
 
     private function estado(Convenio $c, string $status)

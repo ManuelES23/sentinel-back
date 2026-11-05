@@ -108,7 +108,8 @@ class ConvenioController extends AbastecimientoController
             'variedad' => $convenio->variedad,
             'precio_principal' => $this->precioPrincipal($convenio),
             'indicadores' => IndicadoresConvenio::de($convenio),
-            'recepciones' => $recientes->map(fn (Recepcion $r) => [
+            'recepciones_total' => Recepcion::where('convenio_id', $convenio->id)->count(),
+            'recepciones' =>$recientes->map(fn (Recepcion $r) => [
                 'id' => $r->id,
                 'folio' => $r->folio,
                 'fecha' => $r->fecha->format('Y-m-d'),
@@ -160,6 +161,18 @@ class ConvenioController extends AbastecimientoController
         }
 
         $datos = $this->validar($request, $empresa);
+
+        // La unidad y la moneda reinterpretan las cantidades y montos ya capturados: con recepciones no cambian.
+        $cambios = array_filter([
+            'unidad' => $datos['unidad'] !== $convenio->unidad,
+            'moneda' => $datos['moneda'] !== $convenio->moneda,
+        ]);
+        if ($cambios !== [] && $convenio->recepciones()->exists()) {
+            throw ValidationException::withMessages(array_map(
+                fn () => 'No se puede cambiar: el convenio ya tiene recepciones.',
+                $cambios,
+            ));
+        }
 
         // El volumen se revisa sobre el estado final: lo enviado sobre lo guardado.
         // Sin `metas` en la petición se conservan las guardadas y se revisan contra las fechas nuevas.
