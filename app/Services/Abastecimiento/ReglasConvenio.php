@@ -5,8 +5,8 @@ namespace App\Services\Abastecimiento;
 use Illuminate\Validation\ValidationException;
 
 /**
- * Reglas de los precios de un convenio (modalidad, vigencias repetidas y tipo
- * de carga principal). Trabaja sobre las filas ya validadas en tipo por el
+ * Reglas de un convenio: precios (modalidad, vigencias repetidas y tipo
+ * de carga principal) y volumen pactado. Trabaja sobre las filas ya validadas en tipo por el
  * controlador; aquí solo viven las reglas de negocio.
  */
 class ReglasConvenio
@@ -84,6 +84,91 @@ class ReglasConvenio
             'es_principal' => (int) $p['tipo_carga_id'] === $principal,
             'notas' => $p['notas'] ?? null,
         ], $precios);
+    }
+
+    /**
+     * Reglas del volumen pactado sobre el estado FINAL del convenio (lo enviado
+     * sobre lo guardado). Lanza ValidationException sin tocar nada.
+     *
+     * `$datos`: modo_volumen, volumen_total, unidad, fecha_inicio, fecha_fin (Y-m-d)
+     * y metas (lista de ['semana', 'cantidad'], o null). `$metasGuardadas` indica que
+     * las metas no vienen en la petición sino de la base: entonces no hay un renglón
+     * que señalar y un choque con las fechas se reporta en `fecha_inicio`/`fecha_fin`.
+     * Las semanas repetidas ya las rechaza la validación `distinct` del controlador.
+     *
+     * @param  array<string, mixed>  $datos
+     */
+    public static function validarVolumen(array $datos, bool $metasGuardadas = false): void
+    {
+        $unidad = $datos['unidad'];
+        $metas = is_array($datos['metas'] ?? null) ? array_values($datos['metas']) : [];
+        $errores = [];
+
+        if ($datos['modo_volumen'] === 'total') {
+            $total = $datos['volumen_total'] ?? null;
+            if (! is_numeric($total) || (float) $total <= 0) {
+                $errores['volumen_total'] = 'Indica el volumen total pactado (mayor a cero).';
+            } elseif (! self::cantidadValida($total, $unidad)) {
+                $errores['volumen_total'] = self::mensajeCantidad($unidad);
+            }
+            if (! $metasGuardadas && $metas !== []) {
+                $errores['metas'] = 'En volumen total no se capturan metas semanales.';
+            }
+        } elseif ($metas === []) {
+            $errores['metas'] = 'Captura al menos una meta semanal.';
+        } else {
+            $semanas = Semanas::entre($datos['fecha_inicio'], $datos['fecha_fin']);
+            $primera = $semanas[0] ?? null;
+            $ultima = $semanas[count($semanas) - 1] ?? null;
+
+            foreach ($metas as $i => $meta) {
+                $semana = (string) $meta['semana'];
+
+                if (! $metasGuardadas) {
+                    if (Semanas::lunesDe($semana) !== $semana) {
+                        $errores["metas.{$i}.semana"] = 'La semana debe indicarse con la fecha de su lunes.';
+                    } elseif (! in_array($semana, $semanas, true)) {
+                        $errores["metas.{$i}.semana"] = 'La semana queda fuera de las fechas del convenio.';
+                    }
+                    if (! self::cantidadValida($meta['cantidad'], $unidad)) {
+                        $errores["metas.{$i}.cantidad"] = self::mensajeCantidad($unidad);
+                    }
+
+                    continue;
+                }
+
+                if ($primera !== null && $semana < $primera) {
+                    $errores['fecha_inicio'] = 'Hay metas fuera de las nuevas fechas: ajústalas primero.';
+                }
+                if ($ultima !== null && $semana > $ultima) {
+                    $errores['fecha_fin'] = 'Hay metas fuera de las nuevas fechas: ajústalas primero.';
+                }
+                if (! self::cantidadValida($meta['cantidad'], $unidad)) {
+                    $errores['unidad'] = 'Hay metas con cantidades que no caben en esta unidad: ajústalas primero.';
+                }
+            }
+        }
+
+        if ($errores !== []) {
+            throw ValidationException::withMessages($errores);
+        }
+    }
+
+    /** Cajas: enteras. Kilos: hasta dos decimales. */
+    private static function cantidadValida(mixed $cantidad, string $unidad): bool
+    {
+        $f = (float) $cantidad;
+
+        return $unidad === 'caja'
+            ? abs($f - round($f)) < 1e-9
+            : abs($f * 100 - round($f * 100)) < 1e-6;
+    }
+
+    private static function mensajeCantidad(string $unidad): string
+    {
+        return $unidad === 'caja'
+            ? 'En cajas la cantidad debe ser un número entero.'
+            : 'En kilos la cantidad admite hasta dos decimales.';
     }
 
     private static function marcado(array $precio): bool

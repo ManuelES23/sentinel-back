@@ -50,4 +50,5 @@ Route::prefix('abastecimiento')->name('abastecimiento.')->group(function () {
     Route::get('convenios/encimados', [ConvenioController::class, 'encimados'])->name('convenios.encimados');
     Route::post('convenios', [ConvenioController::class, 'store'])->name('convenios.store');
     Route::put('convenios/{id}', [ConvenioController::class, 'update'])->whereNumber('id')->name('convenios.update');
+    Route::patch('convenios/{id}/estado', [ConvenioController::class, 'estado'])->whereNumber('id')->name('convenios.estado');
 });

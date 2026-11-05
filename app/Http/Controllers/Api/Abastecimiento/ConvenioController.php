@@ -9,6 +9,7 @@ use App\Models\Abastecimiento\Temporada;
 use App\Models\Abastecimiento\Variedad;
 use App\Models\Enterprise;
 use App\Services\Abastecimiento\GeneradorFolio;
+use App\Services\Abastecimiento\MetasConvenio;
 use App\Services\Abastecimiento\ReglasConvenio;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -17,18 +18,27 @@ use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
 /**
- * Convenios de abastecimiento con sus precios por tipo de carga y vigencia
- * (submódulo `convenios`). Las reglas de volumen y de estados llegan después;
- * aquí el volumen pactado y las metas se guardan tal como vienen.
+ * Convenios de abastecimiento con sus precios por tipo de carga y vigencia,
+ * su volumen pactado (total o por semana) y su estatus (submódulo `convenios`).
  */
 class ConvenioController extends AbastecimientoController
 {
     private const SUBMODULO = 'convenios';
 
+    /** Transiciones permitidas del estatus; lo que no está aquí se rechaza. */
+    private const TRANSICIONES = [
+        'borrador' => ['activo', 'cancelado'],
+        'activo' => ['suspendido', 'finalizado', 'cancelado'],
+        'suspendido' => ['activo', 'finalizado', 'cancelado'],
+        'finalizado' => [],
+        'cancelado' => [],
+    ];
+
     public function store(Request $request): JsonResponse
     {
         $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'create');
         $datos = $this->validar($request, $empresa);
+        ReglasConvenio::validarVolumen($datos);
 
         $convenio = DB::transaction(function () use ($request, $empresa, $datos) {
             $convenio = Convenio::create($this->columnas($datos) + [
@@ -54,15 +64,35 @@ class ConvenioController extends AbastecimientoController
     {
         $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'edit');
         $convenio = Convenio::deEmpresa($empresa->id)->findOrFail($id);
+
+        if (in_array($convenio->status, ['finalizado', 'cancelado'], true)) {
+            throw ValidationException::withMessages(['status' => 'Un convenio finalizado o cancelado no se edita.']);
+        }
+
         $datos = $this->validar($request, $empresa);
 
-        DB::transaction(function () use ($convenio, $datos) {
+        // El volumen se revisa sobre el estado final: lo enviado sobre lo guardado.
+        // Sin `metas` en la petición se conservan las guardadas y se revisan contra las fechas nuevas.
+        $metasEnviadas = array_key_exists('metas', $datos);
+        $final = $datos + ['volumen_total' => $convenio->volumen_total];
+        if (! $metasEnviadas) {
+            $final['metas'] = $convenio->metas->map(fn (ConvenioMeta $m) => [
+                'semana' => $m->semana->format('Y-m-d'),
+                'cantidad' => $m->cantidad,
+            ])->all();
+        }
+        ReglasConvenio::validarVolumen($final, ! $metasEnviadas);
+
+        DB::transaction(function () use ($convenio, $datos, $metasEnviadas) {
             $convenio->update($this->columnas($datos));
 
-            // Los precios se reemplazan por la lista enviada; las metas solo si vienen.
+            // Los precios se reemplazan por la lista enviada. Las metas se reemplazan solo si
+            // vienen; en volumen total no existen renglones, así que pasar a total las borra.
             $this->guardarPrecios($convenio, $datos['precios']);
-            if (array_key_exists('metas', $datos)) {
-                $this->guardarMetas($convenio, $datos['metas'] ?? []);
+            if ($datos['modo_volumen'] === 'total') {
+                $this->guardarMetas($convenio, []);
+            } elseif ($metasEnviadas) {
+                $this->guardarMetas($convenio, $datos['metas']);
             }
         });
 
@@ -70,6 +100,45 @@ class ConvenioController extends AbastecimientoController
         $this->difundir('convenio', 'updated', $data, $empresa);
 
         return response()->json(['success' => true, 'message' => 'Convenio actualizado.', 'data' => $data]);
+    }
+
+    /** Cambia el estatus del convenio con la máquina de estados de TRANSICIONES. */
+    public function estado(Request $request, int $id): JsonResponse
+    {
+        $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'edit');
+        $destino = $request->validate(['status' => ['required', Rule::in(Convenio::STATUSES)]])['status'];
+
+        $convenio = DB::transaction(function () use ($empresa, $id, $destino) {
+            $convenio = Convenio::deEmpresa($empresa->id)->lockForUpdate()->findOrFail($id);
+
+            if (! in_array($destino, self::TRANSICIONES[$convenio->status] ?? [], true)) {
+                throw ValidationException::withMessages([
+                    'status' => "No se puede pasar un convenio de {$convenio->status} a {$destino}.",
+                ]);
+            }
+
+            if ($destino === 'activo' && $convenio->status === 'borrador') {
+                if (! $convenio->precios()->exists()) {
+                    throw ValidationException::withMessages(['status' => 'Agrega al menos un precio antes de activar el convenio.']);
+                }
+                if (MetasConvenio::pactado($convenio) <= 0) {
+                    throw ValidationException::withMessages(['status' => 'Define el volumen pactado antes de activar el convenio.']);
+                }
+            }
+
+            if ($destino === 'cancelado' && $convenio->recepciones()->exists()) {
+                throw ValidationException::withMessages(['status' => 'Tiene recepciones: finalízalo en lugar de cancelarlo.']);
+            }
+
+            $convenio->update(['status' => $destino]);
+
+            return $convenio;
+        });
+
+        $data = $this->presentar($convenio);
+        $this->difundir('convenio', 'updated', $data, $empresa);
+
+        return response()->json(['success' => true, 'message' => 'Estatus del convenio actualizado.', 'data' => $data]);
     }
 
     /** Convenios no cancelados del mismo productor y variedad cuyas fechas se tocan con el rango. */
