@@ -429,14 +429,31 @@ class RecepcionesTest extends TestCase
             ->assertStatus(422)->assertJsonValidationErrors(['fecha']);
     }
 
-    public function test_editar_una_recepcion_de_un_convenio_que_ya_no_esta_activo_422(): void
+    public function test_editar_una_recepcion_en_un_convenio_cerrado_sin_cambiar_de_convenio_200(): void
+    {
+        foreach (['suspendido', 'finalizado'] as $status) {
+            $c = $this->cv001();
+            $rec = $this->crearRecepcion($c, ['fecha' => '2026-07-14', 'cantidad' => 10]);
+            Convenio::whereKey($c->id)->update(['status' => $status]);
+
+            $this->putJson($this->url("recepciones/{$rec->id}"), $this->cuerpo($c, ['cantidad' => 20]))
+                ->assertOk()->assertJsonPath('data.cantidad', 20);
+            // Las demás reglas siguen aplicando.
+            $this->putJson($this->url("recepciones/{$rec->id}"), $this->cuerpo($c, ['cantidad' => 2.5]))
+                ->assertStatus(422)->assertJsonValidationErrors(['cantidad']);
+            $this->putJson($this->url("recepciones/{$rec->id}"), $this->cuerpo($c, ['fecha' => '2026-07-20']))
+                ->assertStatus(422)->assertJsonValidationErrors(['fecha']);
+        }
+    }
+
+    public function test_borrar_una_recepcion_de_un_convenio_no_activo_200(): void
     {
         $c = $this->cv001();
         $rec = $this->crearRecepcion($c, ['fecha' => '2026-07-14', 'cantidad' => 10]);
         Convenio::whereKey($c->id)->update(['status' => 'finalizado']);
 
-        $this->putJson($this->url("recepciones/{$rec->id}"), $this->cuerpo($c, ['cantidad' => 20]))
-            ->assertStatus(422)->assertJsonPath('errors.convenio_id.0', 'El convenio no está activo.');
+        $this->deleteJson($this->url("recepciones/{$rec->id}"))->assertOk();
+        $this->assertSoftDeleted('abs_recepciones', ['id' => $rec->id]);
     }
 
     public function test_editar_o_borrar_una_recepcion_liquidada_422(): void
@@ -462,7 +479,8 @@ class RecepcionesTest extends TestCase
         $rec = $this->crearRecepcion($c, ['fecha' => '2026-07-14', 'cantidad' => 1300]);
         $otra = $this->crearRecepcion($c, ['fecha' => '2026-07-13', 'cantidad' => 200]);
 
-        $this->deleteJson($this->url("recepciones/{$rec->id}"))->assertOk()->assertJsonPath('success', true);
+        $this->deleteJson($this->url("recepciones/{$rec->id}"))
+            ->assertOk()->assertJsonPath('success', true)->assertJsonPath('data.id', $rec->id);
 
         $this->assertSoftDeleted('abs_recepciones', ['id' => $rec->id]);
         $this->assertNull(Recepcion::find($rec->id));

@@ -87,6 +87,11 @@ class RecepcionController extends AbastecimientoController
      * Rejilla de una semana: un renglón por convenio activo que tiene esa semana
      * entre sus fechas (meta y recibido de la semana, cantidad por día de lunes a
      * sábado) y las recepciones de la semana. La cantidad va en la unidad del convenio.
+     *
+     * Alcance: `por_dia` cubre solo lunes a sábado, en la unidad del convenio (kilos si se paga
+     * por kilo); `recibido_semana` sí incluye el domingo, así que puede superar la suma de
+     * `por_dia` (las del domingo solo aparecen en `recepciones`). Un PUT que cambia fecha o
+     * convenio devuelve únicamente la semana destino, no la de origen.
      */
     public function semana(Request $request): JsonResponse
     {
@@ -188,7 +193,7 @@ class RecepcionController extends AbastecimientoController
             // Se relee con bloqueo: una liquidación concurrente no debe colarse entre la revisión y el cambio.
             $recepcion = Recepcion::deEmpresa($empresa->id)->lockForUpdate()->findOrFail($id);
             $convenio = Convenio::deEmpresa($empresa->id)->sharedLock()->findOrFail($datos['convenio_id']);
-            // Se valida el estado final: el convenio nuevo (o el del registro) debe estar activo.
+            // Se valida el estado final; el convenio debe estar activo solo si la recepción cambia de convenio.
             ReglasRecepcion::validar($convenio, $datos, $recepcion);
 
             $recepcion->update($datos);
@@ -205,8 +210,6 @@ class RecepcionController extends AbastecimientoController
     public function destroy(Request $request, int $id): JsonResponse
     {
         $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'delete');
-        Recepcion::deEmpresa($empresa->id)->findOrFail($id);
-
         $data = DB::transaction(function () use ($empresa, $id) {
             $recepcion = Recepcion::deEmpresa($empresa->id)->lockForUpdate()->findOrFail($id);
             ReglasRecepcion::exigirEditable($recepcion);
@@ -219,7 +222,7 @@ class RecepcionController extends AbastecimientoController
 
         $this->difundir('recepcion', 'deleted', $data, $empresa);
 
-        return response()->json(['success' => true, 'message' => 'Recepción eliminada.']);
+        return response()->json(['success' => true, 'message' => 'Recepción eliminada.', 'data' => ['id' => $id]]);
     }
 
     /** Cuerpo de alta y edición con los tipos y las llaves de la empresa ya validados. */

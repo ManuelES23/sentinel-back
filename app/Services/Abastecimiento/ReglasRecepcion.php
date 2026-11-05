@@ -21,7 +21,8 @@ class ReglasRecepcion
 
     /**
      * Valida el estado FINAL de la recepción contra el convenio al que quedará ligada
-     * (en una edición, el del registro o el nuevo si cambió `convenio_id`).
+     * (en una edición, el del registro o el nuevo si cambió `convenio_id`). El convenio
+     * debe estar activo en el alta y al pasar la recepción a otro convenio.
      *
      * @param  array{fecha: string, tipo_carga_id: int|string, cantidad: int|float|string, kilos?: mixed, rezaga_kg?: mixed}  $datos
      */
@@ -33,7 +34,10 @@ class ReglasRecepcion
 
         $errores = [];
 
-        if ($convenio->status !== 'activo') {
+        // Solo el alta y el cambio de convenio exigen un convenio activo: corregir una recepción
+        // que se queda en su convenio (aunque ya esté suspendido o finalizado) sigue permitido.
+        $cambiaDeConvenio = $actual === null || (int) $actual->convenio_id !== (int) $convenio->id;
+        if ($cambiaDeConvenio && $convenio->status !== 'activo') {
             $errores['convenio_id'] = 'El convenio no está activo.';
         }
 
@@ -128,6 +132,6 @@ class ReglasRecepcion
 
     private static function dosDecimales(float $valor): bool
     {
-        return abs($valor * 100 - round($valor * 100)) < 1e-6;
+        return round($valor, 2) == $valor;
     }
 }
