@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\Abastecimiento\ConvenioController;
 use App\Http\Controllers\Api\Abastecimiento\CultivoController;
+use App\Http\Controllers\Api\Abastecimiento\LiquidacionController;
 use App\Http\Controllers\Api\Abastecimiento\PermisosController;
 use App\Http\Controllers\Api\Abastecimiento\ProductorController;
 use App\Http\Controllers\Api\Abastecimiento\RecepcionController;
@@ -65,4 +66,13 @@ Route::prefix('abastecimiento')->name('abastecimiento.')->group(function () {
     Route::post('recepciones', [RecepcionController::class, 'store'])->name('recepciones.store');
     Route::put('recepciones/{id}', [RecepcionController::class, 'update'])->whereNumber('id')->name('recepciones.update');
     Route::delete('recepciones/{id}', [RecepcionController::class, 'destroy'])->whereNumber('id')->name('recepciones.destroy');
+
+    // Liquidaciones (submódulo liquidaciones). `recepciones-disponibles` y `previa` van antes de las rutas con {id}.
+    Route::get('liquidaciones/recepciones-disponibles', [LiquidacionController::class, 'recepcionesDisponibles'])->name('liquidaciones.recepciones-disponibles');
+    Route::post('liquidaciones/previa', [LiquidacionController::class, 'previa'])->name('liquidaciones.previa');
+    Route::get('liquidaciones', [LiquidacionController::class, 'index'])->name('liquidaciones.index');
+    Route::get('liquidaciones/{id}', [LiquidacionController::class, 'show'])->whereNumber('id')->name('liquidaciones.show');
+    Route::post('liquidaciones', [LiquidacionController::class, 'store'])->name('liquidaciones.store');
+    Route::put('liquidaciones/{id}', [LiquidacionController::class, 'update'])->whereNumber('id')->name('liquidaciones.update');
+    Route::delete('liquidaciones/{id}', [LiquidacionController::class, 'destroy'])->whereNumber('id')->name('liquidaciones.destroy');
 });
