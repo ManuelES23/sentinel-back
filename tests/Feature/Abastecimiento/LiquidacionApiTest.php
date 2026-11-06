@@ -374,7 +374,8 @@ class LiquidacionApiTest extends TestCase
 
         $aviso = $this->avisosDe($a1)->first();
         $this->assertStringContainsString($liq->folio, $aviso->title.' '.$aviso->message);
-        $this->assertStringContainsString('/splendidbyporvenir/administration/abastecimiento/liquidaciones', $aviso->action_url);
+        $this->assertSame('/profile?tab=approvals', $aviso->action_url);
+        $this->assertSame('Ver pendientes', $aviso->action_label);
 
         // Al avanzar de paso, el aviso llega al siguiente y a nadie más.
         $this->aprobar($liq, $a1, 1)->assertOk();
@@ -387,6 +388,71 @@ class LiquidacionApiTest extends TestCase
         $this->assertCount(1, $this->avisosDe($b));
     }
 
+    public function test_el_aviso_a_un_aprobador_sin_view_lleva_a_la_bandeja_del_perfil_y_la_pantalla_le_da_403(): void
+    {
+        $sinVer = $this->usuarioCon([]);
+        $this->reglaUsuario(1, $sinVer);
+        [$liq] = $this->borrador();
+
+        $this->enviar($liq)->assertOk();
+
+        $avisos = $this->avisosDe($sinVer);
+        $this->assertCount(1, $avisos);
+        $this->assertSame('/profile?tab=approvals', $avisos->first()->action_url);
+        $this->assertSame('Ver pendientes', $avisos->first()->action_label);
+
+        // La pantalla de Liquidaciones sigue cerrada para él.
+        $this->como($sinVer);
+        $this->getJson($this->url("liquidaciones/{$liq->id}"))->assertStatus(403);
+        $this->aprobar($liq, $sinVer, 1)->assertStatus(403);
+    }
+
+    public function test_el_aviso_de_rechazo_lleva_al_creador_a_la_pantalla_de_liquidaciones(): void
+    {
+        $a = $this->aprobadorEnPaso(1);
+        [$liq] = $this->borrador();
+        $this->enviar($liq)->assertOk();
+
+        $this->rechazar($liq, $a, 1, ['motivo' => 'Faltan tickets'])->assertOk();
+
+        $this->assertSame('/splendidbyporvenir/administration/abastecimiento/liquidaciones', $this->avisosDe($this->creador)->first()->action_url);
+    }
+
+    public function test_quien_solo_tiene_aprobar_y_no_esta_en_la_cadena_recibe_403(): void
+    {
+        $enCadena = $this->aprobadorEnPaso(1);
+        $soloPermiso = $this->usuarioCon(['view', 'aprobar']);
+        [$liq] = $this->borrador();
+        $this->enviar($liq)->assertOk();
+
+        $this->aprobar($liq, $soloPermiso, 1)->assertStatus(403)->assertJsonPath('message', 'No te toca decidir esta liquidación.');
+        $this->rechazar($liq, $soloPermiso, 1, ['motivo' => 'x'])->assertStatus(403);
+        $this->assertSame('en_revision', $liq->fresh()->status);
+        $this->assertCount(0, $this->avisosDe($soloPermiso));
+
+        $this->aprobar($liq, $enCadena, 1)->assertOk()->assertJsonPath('data.status', 'aprobada');
+    }
+
+    public function test_el_fallo_del_aviso_de_un_destinatario_no_detiene_a_los_demas(): void
+    {
+        $a1 = $this->aprobadorEnPaso(1);
+        $a2 = $this->aprobadorEnPaso(1);
+        $a3 = $this->aprobadorEnPaso(1);
+        [$liq] = $this->borrador();
+
+        // Falla solo el aviso de a2.
+        \App\Models\SystemNotification::creating(function ($n) use ($a2) {
+            if ((int) $n->user_id === $a2->id) {
+                throw new \RuntimeException('Aviso caído para un destinatario');
+            }
+        });
+
+        $this->enviar($liq)->assertOk()->assertJsonPath('data.status', 'en_revision');
+
+        $this->assertCount(1, $this->avisosDe($a1));
+        $this->assertCount(0, $this->avisosDe($a2));
+        $this->assertCount(1, $this->avisosDe($a3));
+    }
     public function test_el_rechazo_avisa_a_quien_creo_la_liquidacion_y_a_nadie_mas(): void
     {
         $a = $this->aprobadorEnPaso(1);

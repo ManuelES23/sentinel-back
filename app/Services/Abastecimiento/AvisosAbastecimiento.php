@@ -15,7 +15,14 @@ use Illuminate\Support\Facades\Log;
  */
 class AvisosAbastecimiento
 {
+    /** Pantalla de Liquidaciones: la ve quien creó la liquidación (tiene `view`). */
     public const ENLACE = '/splendidbyporvenir/administration/abastecimiento/liquidaciones';
+
+    /**
+     * Bandeja de pendientes del perfil: quien decide en una cadena configurada no necesita `liquidaciones.view`
+     * (puede decidir desde ahí), así que el aviso del paso no puede mandarlo a la pantalla de Liquidaciones.
+     */
+    public const ENLACE_PENDIENTES = '/profile?tab=approvals';
 
     /** Aviso a cada persona que puede decidir el paso actual (vacío si no está en revisión). */
     public static function pasoEnEspera(Liquidacion $liquidacion): void
@@ -34,7 +41,7 @@ class AvisosAbastecimiento
             self::aislar($liquidacion, $usuario, fn () => NotificationService::toUser($usuario)
                 ->high()
                 ->icon('ClipboardCheck', 'amber')
-                ->withAction(self::ENLACE, 'Ver liquidaciones')
+                ->withAction(self::ENLACE_PENDIENTES, 'Ver pendientes')
                 ->info('Liquidación por revisar', $mensaje));
         }
     }
