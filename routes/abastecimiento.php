@@ -75,6 +75,8 @@ Route::prefix('abastecimiento')->name('abastecimiento.')->group(function () {
     // Liquidaciones (submódulo liquidaciones). `recepciones-disponibles` y `previa` van antes de las rutas con {id}.
     Route::get('liquidaciones/recepciones-disponibles', [LiquidacionController::class, 'recepcionesDisponibles'])->name('liquidaciones.recepciones-disponibles');
     Route::post('liquidaciones/previa', [LiquidacionController::class, 'previa'])->name('liquidaciones.previa');
+    // Carga inicial (permiso `liquidaciones.carga-inicial`): nace aprobada, sin cadena. Fija, antes de las rutas con {id}.
+    Route::post('liquidaciones/carga-inicial', [LiquidacionController::class, 'cargaInicial'])->name('liquidaciones.carga-inicial');
     Route::get('liquidaciones', [LiquidacionController::class, 'index'])->name('liquidaciones.index');
     Route::get('liquidaciones/{id}', [LiquidacionController::class, 'show'])->whereNumber('id')->name('liquidaciones.show');
     Route::post('liquidaciones', [LiquidacionController::class, 'store'])->name('liquidaciones.store');
