@@ -15,10 +15,10 @@ use App\Services\Abastecimiento\Semanas;
 use App\Services\Abastecimiento\ValidadorImportacionRecepciones;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 /**
  * Recepciones de producto contra un convenio (submódulo `recepciones`): alta,
@@ -182,6 +182,7 @@ class RecepcionController extends AbastecimientoController
     {
         $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'importar');
         $this->validarArchivo($request);
+        set_time_limit(120); // hasta 2 000 renglones
 
         $resultado = $validador->validar($empresa, $lector->leer($request->file('archivo')));
 
@@ -196,6 +197,7 @@ class RecepcionController extends AbastecimientoController
     {
         $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'importar');
         $this->validarArchivo($request);
+        set_time_limit(120); // hasta 2 000 renglones: validar, crear y registrar la bitácora de cada uno
 
         $validado = $validador->validar($empresa, $lector->leer($request->file('archivo')));
         if ($validado['resumen']['con_error'] > 0) {

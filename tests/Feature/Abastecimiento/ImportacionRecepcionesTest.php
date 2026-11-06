@@ -247,7 +247,8 @@ class ImportacionRecepcionesTest extends TestCase
         foreach (['1,234', '100,5', '1.234,50', '1 234'] as $valor) {
             $cantidad = $this->unica(['cantidad' => $valor]);
             $this->assertSame('error', $cantidad['estado'], $valor);
-            $this->assertStringContainsString('punto decimal', $cantidad['errores'][0], $valor);
+            $this->assertSame("La cantidad «{$valor}» no es válida: use un número entero, sin comas ni puntos.", $cantidad['errores'][0], $valor);
+            $this->assertStringNotContainsString('1234.5', $cantidad['errores'][0]);
             $this->assertStringContainsString("«{$valor}»", $cantidad['errores'][0]);
 
             $kilos = $this->unica(['kilos' => $valor, 'rezaga_kg' => null]);
@@ -432,7 +433,7 @@ class ImportacionRecepcionesTest extends TestCase
         $this->assertSame([2, 3], array_column($r['filas'], 'fila'));
         $this->assertSame('lista', $r['filas'][0]['estado']);
         $this->assertSame('error', $r['filas'][1]['estado']);
-        $this->assertStringContainsString('punto decimal', $r['filas'][1]['errores'][0]);
+        $this->assertStringContainsString('número entero', $r['filas'][1]['errores'][0]);
         $this->assertCount(1, $r['advertencias']);
     }
 
@@ -732,5 +733,100 @@ class ImportacionRecepcionesTest extends TestCase
             $this->assertStringContainsString('ya no está activo', $e->errors()['archivo'][0]);
         }
         $this->assertSame(0, Recepcion::count());
+    }
+
+    // ---- Ronda 1: re-chequeo de tickets con bloqueo, folios en bloque ----
+
+    /** Consultas SQL que ejecuta $accion, en orden. */
+    private function consultas(callable $accion): array
+    {
+        $sql = [];
+        DB::listen(function ($q) use (&$sql) {
+            $sql[] = strtolower($q->sql);
+        });
+        $accion();
+
+        return $sql;
+    }
+
+    public function test_el_rechequeo_de_tickets_ocurre_despues_de_tomar_el_folio_y_detecta_el_ticket_confirmado_entre_medias(): void
+    {
+        $usuario = User::factory()->create(['role' => 'admin']);
+        $validado = $this->validar(app(LectorRecepciones::class)->leer($this->crearXlsx([$this->renglon(1), $this->renglon(2)])));
+        // Alguien confirma el ticket del renglón 2 después de la vista previa.
+        $this->crearRecepcion($this->convenio, ['fecha' => '2026-07-02', 'ticket_proveedor' => 'TK-2']);
+
+        $sql = $this->consultas(function () use ($usuario, $validado) {
+            try {
+                app(ImportadorRecepciones::class)->importar($this->sbp, $usuario, $validado['filas']);
+                $this->fail('Debía rechazar el ticket confirmado entre la vista previa y el guardado.');
+            } catch (ValidationException $e) {
+                $this->assertStringContainsString('renglón 3', $e->errors()['archivo'][0]);
+            }
+        });
+
+        $contador = null;
+        $tickets = null;
+        foreach ($sql as $i => $q) {
+            if ($contador === null && str_starts_with($q, 'update') && str_contains($q, 'abs_folios')) {
+                $contador = $i;
+            }
+            if ($tickets === null && str_starts_with($q, 'select') && str_contains($q, 'abs_recepciones') && str_contains($q, 'ticket_proveedor')) {
+                $tickets = $i;
+            }
+        }
+        $this->assertNotNull($contador, 'Debe reservar los folios.');
+        $this->assertNotNull($tickets, 'Debe releer los tickets.');
+        $this->assertGreaterThan($contador, $tickets, 'Los tickets se releen después de tomar el contador de folios.');
+        $this->assertSame(1, Recepcion::count());
+    }
+
+    public function test_los_folios_se_reservan_con_un_solo_update_sin_importar_cuantos_renglones(): void
+    {
+        $usuario = User::factory()->create(['role' => 'admin']);
+        $importar = function (int $desde, int $hasta) use ($usuario) {
+            $filas = $this->validar(app(LectorRecepciones::class)->leer(
+                $this->crearXlsx(array_map(fn (int $i) => $this->renglon($i), range($desde, $hasta))),
+            ))['filas'];
+
+            return $this->consultas(fn () => app(ImportadorRecepciones::class)->importar($this->sbp, $usuario, $filas));
+        };
+
+        $importar(1, 3); // crea la fila del contador
+        $pocas = $importar(11, 13);
+        $muchas = $importar(101, 600); // 500 renglones
+
+        $deFolios = fn (array $sql) => count(array_filter($sql, fn ($q) => str_contains($q, 'abs_folios')));
+        $this->assertSame($deFolios($pocas), $deFolios($muchas), 'Las consultas del contador no crecen con los renglones.');
+        $this->assertLessThanOrEqual(4, $deFolios($muchas));
+        $updates = array_filter($muchas, fn ($q) => str_starts_with($q, 'update') && str_contains($q, 'abs_folios'));
+        $this->assertCount(1, $updates);
+        // Folios consecutivos y sin huecos entre las dos importaciones.
+        $this->assertSame(506, Recepcion::count());
+        $this->assertSame('RC-0506', Recepcion::orderByDesc('id')->value('folio'));
+        $this->assertSame(range(1, 506), Recepcion::orderBy('id')->pluck('folio')->map(fn ($f) => (int) substr($f, 3))->all());
+    }
+
+    public function test_una_importacion_que_se_revierte_no_deja_huecos_de_folio(): void
+    {
+        $usuario = $this->comoAdmin();
+        $existente = $this->crearRecepcion($this->convenio, ['fecha' => '2026-07-02', 'ticket_proveedor' => 'TK-2']); // RC-0001
+        $validado = $this->validar(app(LectorRecepciones::class)->leer($this->crearXlsx([$this->renglon(5), $this->renglon(6)])));
+        // El ticket llega entre la vista previa y el guardado: la transacción se revierte con los folios ya reservados.
+        $this->crearRecepcion($this->convenio, ['fecha' => '2026-07-03', 'ticket_proveedor' => 'TK-6']); // RC-0002
+
+        try {
+            app(ImportadorRecepciones::class)->importar($this->sbp, $usuario, $validado['filas']);
+            $this->fail('Debía revertirse.');
+        } catch (ValidationException) {
+        }
+
+        $this->assertSame(2, Recepcion::count());
+        $this->assertSame(2, (int) DB::table('abs_folios')->where(['enterprise_id' => $this->sbp->id, 'prefijo' => 'RC'])->value('ultimo'));
+        $this->postJson($this->url(), [
+            'convenio_id' => $this->convenio->id, 'fecha' => '2026-07-10',
+            'tipo_carga_id' => TipoCarga::where('nombre', 'Caja empacada')->value('id'), 'cantidad' => 3,
+        ])->assertCreated()->assertJsonPath('data.folio', 'RC-0003');
+        $this->assertNotNull($existente);
     }
 }

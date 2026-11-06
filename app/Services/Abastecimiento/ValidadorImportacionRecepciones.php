@@ -324,10 +324,10 @@ class ValidadorImportacionRecepciones
         $no = "{$sujeto} «".self::corto($texto)."» no {$verbo} {$adjetivo}";
 
         if (preg_match('/[,\s]/u', $texto)) {
-            return [null, "{$no}: escribe el número con punto decimal, sin coma ni separador de miles ni espacios (por ejemplo 1234.5)."];
+            return [null, $decimales === 0 ? "{$no}: use un número entero, sin comas ni puntos." : "{$no}: escribe el número con punto decimal, sin coma ni separador de miles ni espacios (por ejemplo 1234.5)."];
         }
         if (! preg_match('/^-?\d+(\.\d+)?$/', $texto)) {
-            return [null, "{$no}: escribe solo un número (por ejemplo 1234.5)."];
+            return [null, $decimales === 0 ? "{$no}: use un número entero, sin comas ni puntos." : "{$no}: escribe solo un número (por ejemplo 1234.5)."];
         }
         [$entera, $fraccion] = array_pad(explode('.', ltrim($texto, '-'), 2), 2, '');
         if (strlen(ltrim($entera, '0')) > strlen((string) self::MAX_ENTERO)) {

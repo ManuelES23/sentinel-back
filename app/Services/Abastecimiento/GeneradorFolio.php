@@ -17,7 +17,29 @@ class GeneradorFolio
 {
     private const DIGITOS = 4;
 
+    /** Folios candidatos que se revisan contra los ocupados en una sola consulta. */
+    private const TRAMO = 500;
+
     public function siguiente(Enterprise $empresa, string $prefijo): string
+    {
+        return $this->tomar($empresa, $prefijo, 1)[0];
+    }
+
+    /**
+     * Reserva `$cantidad` folios consecutivos con UN solo bloqueo del contador y UN solo UPDATE
+     * (la importación de cientos de recepciones). Mismo formato y misma lógica que `siguiente`:
+     * salta los folios ocupados, también por registros borrados. Debe llamarse dentro de la
+     * transacción del alta.
+     *
+     * @return list<string>
+     */
+    public function reservar(Enterprise $empresa, string $prefijo, int $cantidad): array
+    {
+        return $cantidad < 1 ? [] : $this->tomar($empresa, $prefijo, $cantidad);
+    }
+
+    /** @return list<string> */
+    private function tomar(Enterprise $empresa, string $prefijo, int $cantidad): array
     {
         // El INSERT IGNORE que choca deja un bloqueo compartido en InnoDB y dos altas simultáneas se
         // interbloquean (1213): solo se inserta si la fila del contador todavía no existe.
@@ -31,18 +53,35 @@ class GeneradorFolio
 
         $numero = (int) $contador()->lockForUpdate()->value('ultimo');
 
-        do {
-            $numero++;
-            $folio = $prefijo.'-'.str_pad((string) $numero, self::DIGITOS, '0', STR_PAD_LEFT);
-        } while ($this->ocupado($empresa, $prefijo, $folio));
+        $folios = [];
+        while (count($folios) < $cantidad) {
+            // Candidatos de un tramo; una sola consulta dice cuáles están ocupados.
+            $faltan = min($cantidad - count($folios), self::TRAMO);
+            $candidatos = [];
+            for ($i = 1; $i <= $faltan; $i++) {
+                $candidatos[] = $prefijo.'-'.str_pad((string) ($numero + $i), self::DIGITOS, '0', STR_PAD_LEFT);
+            }
+            $ocupados = array_flip($this->ocupados($empresa, $prefijo, $candidatos));
+            foreach ($candidatos as $folio) {
+                $numero++;
+                if (! isset($ocupados[$folio])) {
+                    $folios[] = $folio;
+                }
+            }
+        }
 
-        DB::table('abs_folios')->where('enterprise_id', $empresa->id)->where('prefijo', $prefijo)
-            ->update(['ultimo' => $numero, 'updated_at' => now()]);
+        $contador()->update(['ultimo' => $numero, 'updated_at' => now()]);
 
-        return $folio;
+        return $folios;
     }
 
-    private function ocupado(Enterprise $empresa, string $prefijo, string $folio): bool
+    /**
+     * Folios del tramo que ya existen (con borrados lógicos incluidos).
+     *
+     * @param  list<string>  $folios
+     * @return list<string>
+     */
+    private function ocupados(Enterprise $empresa, string $prefijo, array $folios): array
     {
         $modelo = match ($prefijo) {
             'CV' => Convenio::class,
@@ -50,7 +89,7 @@ class GeneradorFolio
             default => null,
         };
 
-        return $modelo !== null
-            && $modelo::withTrashed()->where('enterprise_id', $empresa->id)->where('folio', $folio)->exists();
+        return $modelo === null ? [] : $modelo::withTrashed()
+            ->where('enterprise_id', $empresa->id)->whereIn('folio', $folios)->pluck('folio')->all();
     }
 }
