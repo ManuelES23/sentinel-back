@@ -18,6 +18,7 @@ use App\Services\Abastecimiento\GeneradorFolio;
 use App\Services\Abastecimiento\PrecioVigente;
 use App\Services\Abastecimiento\PresentadorLiquidacion;
 use App\Services\Abastecimiento\ReglasLiquidacion;
+use App\Services\Abastecimiento\TransaccionDinero;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -157,8 +158,9 @@ class LiquidacionController extends AbastecimientoController
         $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'create');
         $datos = $this->validar($request, $empresa);
 
-        $liquidacion = DB::transaction(function () use ($request, $empresa, $datos) {
+        $liquidacion = TransaccionDinero::ejecutar(function () use ($request, $empresa, $datos) {
             $convenio = Convenio::deEmpresa($empresa->id)->with('precios')->findOrFail($datos['convenio_id']);
+            TransaccionDinero::bloquearProductor($empresa->id, (int) $convenio->productor_id, true);
             $recepciones = ReglasLiquidacion::validarSeleccion($convenio, $datos['recepcion_ids'], $datos['periodo_inicio'], $datos['periodo_fin']);
             $calculo = $this->calcular($convenio, $recepciones, $datos);
 
@@ -166,13 +168,14 @@ class LiquidacionController extends AbastecimientoController
                 'enterprise_id' => $empresa->id,
                 'folio' => app(GeneradorFolio::class)->siguiente($empresa, 'LQ'),
                 'created_by' => $request->user()?->id,
+                'intervinieron' => $request->user() ? [(int) $request->user()->id] : [],
             ]);
             $this->guardarDetalles($liquidacion, $calculo, $recepciones);
 
             return $liquidacion;
         }, 3);
 
-        $this->difundir('liquidacion', 'created', $this->presentarResumen($liquidacion->load($this->presentador()->cargaResumen())), $empresa);
+        $this->difundir('liquidacion', 'created', PresentadorLiquidacion::evento($liquidacion), $empresa);
 
         return response()->json([
             'success' => true,
@@ -187,25 +190,29 @@ class LiquidacionController extends AbastecimientoController
         Liquidacion::deEmpresa($empresa->id)->findOrFail($id);
         $datos = $this->validar($request, $empresa);
 
-        $liquidacion = DB::transaction(function () use ($empresa, $id, $datos) {
-            // Se relee con bloqueo: un envío o una cancelación concurrente no debe colarse entre la revisión y el cambio.
-            $liquidacion = Liquidacion::deEmpresa($empresa->id)->lockForUpdate()->findOrFail($id);
-            ReglasLiquidacion::exigirBorrador($liquidacion);
+        $usuarioId = $request->user()?->id;
 
+        $liquidacion = TransaccionDinero::ejecutar(function () use ($empresa, $id, $datos, $usuarioId) {
+            // Productor(es) y luego la liquidación con bloqueo: un envío o una cancelación concurrente no debe
+            // colarse entre la revisión y el cambio (si cambia de convenio, también el productor del convenio nuevo).
             $convenio = Convenio::deEmpresa($empresa->id)->with('precios')->findOrFail($datos['convenio_id']);
+            $liquidacion = TransaccionDinero::bloquearLiquidacion($empresa->id, $id, [(int) $convenio->productor_id]);
+            ReglasLiquidacion::exigirBorrador($liquidacion);
             $recepciones = ReglasLiquidacion::validarSeleccion($convenio, $datos['recepcion_ids'], $datos['periodo_inicio'], $datos['periodo_fin'], $liquidacion->id);
             $calculo = $this->calcular($convenio, $recepciones, $datos);
 
             // Se rehace todo el detalle: primero se sueltan las recepciones y luego se ligan las elegidas.
             ReglasLiquidacion::liberarRecepciones($liquidacion);
             LiquidacionDetalle::where('liquidacion_id', $liquidacion->id)->delete();
+            // Quien edita (aunque el borrador sea de otro) queda excluido de decidirla.
+            $liquidacion->registrarIntervencion($usuarioId === null ? null : (int) $usuarioId);
             $liquidacion->update($this->columnas($convenio, $datos, $calculo));
             $this->guardarDetalles($liquidacion, $calculo, $recepciones);
 
             return $liquidacion;
         }, 3);
 
-        $this->difundir('liquidacion', 'updated', $this->presentarResumen($liquidacion->load($this->presentador()->cargaResumen())), $empresa);
+        $this->difundir('liquidacion', 'updated', PresentadorLiquidacion::evento($liquidacion), $empresa);
 
         return response()->json([
             'success' => true,
@@ -219,11 +226,11 @@ class LiquidacionController extends AbastecimientoController
         $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'delete');
         Liquidacion::deEmpresa($empresa->id)->findOrFail($id);
 
-        $data = DB::transaction(function () use ($empresa, $id) {
-            $liquidacion = Liquidacion::deEmpresa($empresa->id)->lockForUpdate()->findOrFail($id);
+        $data = TransaccionDinero::ejecutar(function () use ($empresa, $id) {
+            $liquidacion = TransaccionDinero::bloquearLiquidacion($empresa->id, $id);
             ReglasLiquidacion::exigirBorrador($liquidacion);
 
-            $data = $this->presentarResumen($liquidacion->load($this->presentador()->cargaResumen()));
+            $data = PresentadorLiquidacion::evento($liquidacion);
             ReglasLiquidacion::liberarRecepciones($liquidacion);
             LiquidacionDetalle::where('liquidacion_id', $liquidacion->id)->delete();
             $liquidacion->delete();
@@ -242,13 +249,11 @@ class LiquidacionController extends AbastecimientoController
     public function enviar(Request $request, int $id): JsonResponse
     {
         $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'edit');
-        Liquidacion::deEmpresa($empresa->id)->findOrFail($id);
+        $base = Liquidacion::deEmpresa($empresa->id)->findOrFail($id);
         $usuario = $request->user();
 
-        $liquidacion = DB::transaction(
-            fn () => FlujoLiquidacion::enviar(Liquidacion::deEmpresa($empresa->id)->findOrFail($id), $usuario),
-            3,
-        );
+        // El servicio bloquea productor y liquidación antes de leer nada.
+        $liquidacion = TransaccionDinero::ejecutar(fn () => FlujoLiquidacion::enviar($base, $usuario), 3);
 
         return $this->responderFlujo($request, $empresa, $liquidacion, 'Liquidación enviada a revisión.', AvisosAbastecimiento::pasoEnEspera(...));
     }
@@ -264,7 +269,8 @@ class LiquidacionController extends AbastecimientoController
         ], 'aprobar');
         $usuario = $request->user();
 
-        $liquidacion = DB::transaction(
+        // El servicio bloquea productor y liquidación y recién entonces lee el paso actual y quién decidió.
+        $liquidacion = TransaccionDinero::ejecutar(
             fn () => FlujoLiquidacion::aprobar($liquidacion, $usuario, $datos['comentario'] ?? null, (int) $datos['paso']),
             3,
         );
@@ -285,7 +291,7 @@ class LiquidacionController extends AbastecimientoController
         ], 'rechazar', ['motivo.required' => 'Escribe el motivo del rechazo.']);
         $usuario = $request->user();
 
-        $liquidacion = DB::transaction(
+        $liquidacion = TransaccionDinero::ejecutar(
             fn () => FlujoLiquidacion::rechazar($liquidacion, $usuario, (string) $datos['motivo'], (int) $datos['paso']),
             3,
         );
@@ -297,15 +303,16 @@ class LiquidacionController extends AbastecimientoController
     public function cancelar(Request $request, int $id): JsonResponse
     {
         $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'delete');
-        Liquidacion::deEmpresa($empresa->id)->findOrFail($id);
+        $base = Liquidacion::deEmpresa($empresa->id)->findOrFail($id);
         $datos = $request->validate(
             ['motivo' => ['required', 'string']],
             ['motivo.required' => 'Escribe el motivo de la cancelación.'],
         );
         $usuario = $request->user();
 
-        $liquidacion = DB::transaction(
-            fn () => FlujoLiquidacion::cancelar(Liquidacion::deEmpresa($empresa->id)->findOrFail($id), $usuario, (string) $datos['motivo']),
+        // El servicio bloquea productor y liquidación antes de revisar si tiene abonos aplicados.
+        $liquidacion = TransaccionDinero::ejecutar(
+            fn () => FlujoLiquidacion::cancelar($base, $usuario, (string) $datos['motivo']),
             3,
         );
 

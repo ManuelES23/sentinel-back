@@ -14,6 +14,7 @@ use App\Services\Abastecimiento\GeneradorFolio;
 use App\Services\Abastecimiento\PresentadorLiquidacion;
 use App\Services\Abastecimiento\SaldoProductor;
 use App\Services\Abastecimiento\Semanas;
+use App\Services\Abastecimiento\TransaccionDinero;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
@@ -176,9 +177,10 @@ class AbonoController extends AbastecimientoController
             $datos['aplicaciones'] ?? [],
         );
 
-        $resultado = DB::transaction(function () use ($request, $empresa, $datos, $aplicaciones) {
-            $productor = Productor::deEmpresa($empresa->id)->findOrFail($datos['productor_id']);
-            $this->exigirConvenioDelProductor($empresa, $productor, $datos['convenio_id'] ?? null);
+        $resultado = TransaccionDinero::ejecutar(function () use ($request, $empresa, $datos, $aplicaciones) {
+            // El productor se bloquea ANTES de leer el saldo: otro abono o aprobación del mismo productor espera.
+            $productor = TransaccionDinero::bloquearProductor($empresa->id, (int) $datos['productor_id']);
+            $this->exigirConvenioDelProductor($empresa, $productor, $datos['convenio_id'] ?? null, $datos['moneda']);
 
             $antes = $this->saldo($empresa, $productor->id, $datos['moneda']);
 
@@ -208,7 +210,7 @@ class AbonoController extends AbastecimientoController
 
         [$abono, $antes, $despues, $pagadas] = $resultado;
 
-        $this->difundir('abono', 'created', $this->presentarVarios(new EloquentCollection([$abono]))->first(), $empresa);
+        $this->difundir('abono', 'created', $this->evento($abono), $empresa);
         $this->difundirLiquidaciones($pagadas, $empresa);
 
         return response()->json([
@@ -236,9 +238,9 @@ class AbonoController extends AbastecimientoController
         );
         $usuario = $request->user();
 
-        [$abono, $reabiertas] = DB::transaction(function () use ($empresa, $id, $datos, $usuario) {
-            // El abono se bloquea primero (mismo orden que el aplicador) y se lee qué liquidaciones tenía pagadas.
-            $abono = Abono::deEmpresa($empresa->id)->lockForUpdate()->findOrFail($id);
+        [$abono, $reabiertas] = TransaccionDinero::ejecutar(function () use ($empresa, $id, $datos, $usuario) {
+            // Productor y luego abono (mismo orden que el aplicador); después se lee qué liquidaciones tenía pagadas.
+            $abono = TransaccionDinero::bloquearAbono($empresa->id, $id);
             $ids = AbonoAplicacion::where('abono_id', $abono->id)->pluck('liquidacion_id')->unique()->all();
             $pagadasAntes = $ids === [] ? [] : Liquidacion::whereIn('id', $ids)->where('status', 'pagada')->pluck('id')->all();
 
@@ -251,7 +253,7 @@ class AbonoController extends AbastecimientoController
         }, 3);
 
         $presentado = $this->presentarVarios(new EloquentCollection([$abono]))->first();
-        $this->difundir('abono', 'updated', $presentado, $empresa);
+        $this->difundir('abono', 'updated', $this->evento($abono), $empresa);
         $this->difundirLiquidaciones($reabiertas, $empresa);
 
         return response()->json([
@@ -305,8 +307,11 @@ class AbonoController extends AbastecimientoController
         ]);
     }
 
-    /** Un anticipo ligado a un convenio debe ser de un convenio del mismo productor. */
-    private function exigirConvenioDelProductor(Enterprise $empresa, Productor $productor, ?int $convenioId): void
+    /**
+     * Un anticipo ligado a un convenio debe ser de un convenio del mismo productor y de la misma moneda: uno de otra
+     * moneda nunca se podría aplicar (solo aplica a liquidaciones de ese convenio, y las monedas no se mezclan).
+     */
+    private function exigirConvenioDelProductor(Enterprise $empresa, Productor $productor, ?int $convenioId, string $moneda): void
     {
         if ($convenioId === null) {
             return;
@@ -314,6 +319,11 @@ class AbonoController extends AbastecimientoController
         $convenio = Convenio::deEmpresa($empresa->id)->findOrFail($convenioId);
         if ($convenio->productor_id !== $productor->id) {
             throw ValidationException::withMessages(['convenio_id' => ['El convenio elegido es de otro productor.']]);
+        }
+        if ($convenio->moneda !== $moneda) {
+            throw ValidationException::withMessages(['moneda' => [
+                "El convenio {$convenio->folio} es en {$convenio->moneda}: un abono en {$moneda} ligado a él nunca se podría aplicar.",
+            ]]);
         }
     }
 
@@ -330,15 +340,31 @@ class AbonoController extends AbastecimientoController
         ];
     }
 
+    /**
+     * Carga del evento en tiempo real del abono: sin monto, referencia, notas ni aplicaciones (el canal del módulo
+     * lo recibe cualquiera con acceso al módulo; el front solo filtra por `entidad` y vuelve a pedir).
+     *
+     * @return array{id: int, folio: string, status: string, productor_id: int, moneda: string}
+     */
+    private function evento(Abono $abono): array
+    {
+        return [
+            'id' => (int) $abono->id,
+            'folio' => $abono->folio,
+            'status' => $abono->status,
+            'productor_id' => (int) $abono->productor_id,
+            'moneda' => $abono->moneda,
+        ];
+    }
+
     /** Difunde el cambio de estado de las liquidaciones que pasaron a pagada o volvieron a aprobada. */
     private function difundirLiquidaciones(Collection $liquidaciones, Enterprise $empresa): void
     {
         if ($liquidaciones->isEmpty()) {
             return;
         }
-        $presentador = app(PresentadorLiquidacion::class);
         foreach ($liquidaciones as $l) {
-            $this->difundir('liquidacion', 'updated', $presentador->resumen($l), $empresa);
+            $this->difundir('liquidacion', 'updated', PresentadorLiquidacion::evento($l), $empresa);
         }
     }
 

@@ -21,8 +21,8 @@ class DespuesDeDecidirLiquidacion
     public static function ejecutar(Liquidacion $liquidacion, Enterprise $empresa, ?callable $aviso = null): void
     {
         try {
-            $resumen = app(PresentadorLiquidacion::class);
-            $data = $resumen->resumen($liquidacion->load($resumen->cargaResumen()));
+            // Sin montos ni notas: el canal del módulo lo recibe cualquiera con acceso al módulo.
+            $data = PresentadorLiquidacion::evento($liquidacion);
             $pendiente = broadcast(new AbastecimientoUpdated('updated', $data, $empresa->slug, 'liquidacion'));
             // PendingBroadcast emite al destruirse; forzarlo aquí mantiene la excepción dentro del try.
             unset($pendiente);

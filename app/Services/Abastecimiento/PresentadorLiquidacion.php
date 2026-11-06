@@ -31,7 +31,26 @@ class PresentadorLiquidacion
         ];
     }
 
-    /** Para listados y eventos: la liquidación con su convenio y productor. */
+    /**
+     * Carga del evento en tiempo real de una liquidación. El canal del módulo lo recibe cualquiera con acceso al
+     * módulo (también quien solo captura recepciones), así que NO lleva montos, ajustes ni notas: el front solo
+     * filtra por `entidad` y vuelve a pedir lo que sí puede ver.
+     *
+     * @return array{id: int, folio: string, status: string, convenio_id: int, productor_id: int, moneda: string}
+     */
+    public static function evento(Liquidacion $l): array
+    {
+        return [
+            'id' => (int) $l->id,
+            'folio' => $l->folio,
+            'status' => $l->status,
+            'convenio_id' => (int) $l->convenio_id,
+            'productor_id' => (int) $l->productor_id,
+            'moneda' => $l->moneda,
+        ];
+    }
+
+    /** Para listados: la liquidación con su convenio y productor. */
     public function resumen(Liquidacion $l): array
     {
         $l->loadMissing($this->cargaResumen());

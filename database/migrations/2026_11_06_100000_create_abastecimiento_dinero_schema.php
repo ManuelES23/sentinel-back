@@ -50,12 +50,21 @@ return new class extends Migration
                 $table->text('cancelada_motivo')->nullable();
                 $table->text('notas')->nullable();
                 $table->foreignId('created_by')->nullable()->constrained('users')->nullOnDelete();
+                // Ids de todos los usuarios que crearon, editaron o enviaron la liquidación: ninguno la decide.
+                $table->json('intervinieron')->nullable();
                 $table->timestamps();
                 $table->softDeletes();
                 $table->unique(['enterprise_id', 'folio'], 'abs_liquidaciones_empresa_folio_unique');
                 $table->index('status', 'abs_liquidaciones_status_index');
                 $table->index('convenio_id', 'abs_liquidaciones_convenio_index');
                 $table->index('productor_id', 'abs_liquidaciones_productor_index');
+            });
+        }
+
+        // Una tabla ya creada antes de agregar la columna (solo en una BD local) la recibe aquí.
+        if (! Schema::hasColumn('abs_liquidaciones', 'intervinieron')) {
+            Schema::table('abs_liquidaciones', function (Blueprint $table) {
+                $table->json('intervinieron')->nullable()->after('created_by');
             });
         }
 

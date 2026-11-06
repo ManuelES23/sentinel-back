@@ -16,9 +16,11 @@ use Illuminate\Validation\ValidationException;
  * Las filas de `abs_abono_aplicaciones` son la única fuente de lo aplicado: cancelar un abono las
  * copia a `abs_abonos.aplicaciones_canceladas` y las borra.
  *
- * Todos los métodos corren DENTRO de la transacción de quien llama (no abren la suya) y bloquean con
- * `lockForUpdate`. Orden de bloqueo único para evitar interbloqueos: primero los abonos (por id) y
- * luego las liquidaciones (por id). `aplicar` valida todo ANTES de escribir; si algo falla lanza
+ * Todos los métodos corren DENTRO de la transacción de quien llama (`TransaccionDinero::ejecutar`, READ
+ * COMMITTED en MySQL; no abren la suya) y bloquean con `lockForUpdate`. Orden de bloqueo único para evitar
+ * interbloqueos: primero el productor, luego los abonos (por id) y luego las liquidaciones (por id). Con el
+ * productor bloqueado, las sumas sin bloqueo de `abs_abono_aplicaciones` leen lo último confirmado: ningún
+ * otro escritor de dinero de ese productor puede estar a medias. `aplicar` valida todo ANTES de escribir; si algo falla lanza
  * ValidationException (422) sin haber escrito nada. Los montos se comparan en centavos enteros.
  */
 class AplicadorAbonos
@@ -121,7 +123,8 @@ class AplicadorAbonos
             return;
         }
 
-        // Primero los abonos (por id), luego la liquidación: el mismo orden que `aplicar` y `cancelar`.
+        // Productor, abonos (por id) y luego la liquidación: el mismo orden que `aplicar` y `cancelar`.
+        TransaccionDinero::bloquearProductor((int) $base->enterprise_id, (int) $base->productor_id, true);
         $abonos = Abono::where('enterprise_id', $base->enterprise_id)
             ->where('productor_id', $base->productor_id)
             ->where('moneda', $base->moneda)
@@ -221,9 +224,12 @@ class AplicadorAbonos
         self::sincronizar($liquidacion, $liq);
     }
 
+    /** Productor del abono primero y luego el abono (orden único de bloqueo). */
     private static function bloquearAbono(int $id): Abono
     {
-        return Abono::whereKey($id)->lockForUpdate()->firstOrFail();
+        $base = Abono::whereKey($id)->firstOrFail(['id', 'enterprise_id']);
+
+        return TransaccionDinero::bloquearAbono((int) $base->enterprise_id, $id);
     }
 
     /** Pasa al modelo que recibió quien llama el estado ya guardado. */

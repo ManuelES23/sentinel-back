@@ -331,8 +331,8 @@ class LiquidacionFlujoTest extends TestCase
 
         $liq = $this->enviar($this->borrador(), $quienEnvia);
 
-        $this->assertInvalida('liquidacion', fn () => $this->aprobar($liq, $this->creador), 'creó o envió');
-        $this->assertInvalida('liquidacion', fn () => $this->aprobar($liq, $quienEnvia), 'creó o envió');
+        $this->assertInvalida('liquidacion', fn () => $this->aprobar($liq, $this->creador), 'creó, editó o envió');
+        $this->assertInvalida('liquidacion', fn () => $this->aprobar($liq, $quienEnvia), 'creó, editó o envió');
         $this->assertInvalida('liquidacion', fn () => $this->rechazar($liq, $quienEnvia));
         $this->assertSame('en_revision', $liq->fresh()->status);
         $this->assertSame([1 => 'waiting'], $this->decisiones($liq, 1));

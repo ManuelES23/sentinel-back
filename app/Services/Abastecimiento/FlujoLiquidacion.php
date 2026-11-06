@@ -14,13 +14,15 @@ use Illuminate\Validation\ValidationException;
 /**
  * Flujo de una liquidación (spec 6.5 y 6.6, plan 2): enviar a revisión, aprobar, rechazar y cancelar.
  *
- * Todos los métodos corren DENTRO de la transacción de quien llama (no abren la suya, igual que
- * `AplicadorAbonos`) y empiezan releyendo la liquidación con `lockForUpdate`: el estado y el paso se
+ * Todos los métodos corren DENTRO de la transacción de quien llama (`TransaccionDinero::ejecutar`; no abren la
+ * suya, igual que `AplicadorAbonos`) y empiezan bloqueando al productor y luego la liquidación con `lockForUpdate`: el estado y el paso se
  * revalidan contra la fila bloqueada, así que un doble clic o dos aprobadores del mismo paso no avanzan
  * la cadena dos veces (el segundo recibe 422 en `liquidacion`). `$pasoEsperado` (obligatorio) es el
  * `step_order` que quien decide tenía a la vista: si ya no es el paso actual, 422 y no se decide nada.
- * Orden de bloqueo: la liquidación y luego, al aprobar, los abonos (`AplicadorAbonos::aplicarAnticiposA`);
- * un interbloqueo raro de InnoDB se reintenta en el controlador (`DB::transaction(fn, 3)`), no aquí.
+ * Orden de bloqueo: el productor, la liquidación y, al aprobar, los abonos (`AplicadorAbonos::aplicarAnticiposA`).
+ * Como todo escritor de dinero bloquea primero al productor, dos escritores del mismo productor se turnan y el
+ * orden de lo que sigue no puede cruzarse; las lecturas de precondición (paso actual, quién decidió, abonos
+ * aplicados) se hacen DESPUÉS de esos bloqueos.
  *
  * Todo se valida ANTES de escribir, así un 422 no deja cambios a medias aunque la transacción no
  * se revierta.
@@ -63,6 +65,8 @@ class FlujoLiquidacion
         // Cadena de la ronda nueva: se comprueba en memoria, antes de escribir nada.
         $l->ronda = (int) $l->ronda + 1;
         $l->enviada_by = $usuario->id;
+        // Quien envía (en cualquier ronda) queda excluido de decidir, aunque otro reenvíe después.
+        $l->registrarIntervencion((int) $usuario->id);
         $pasos = CadenaLiquidacion::definir($l);
         self::exigirQuienDecida($l, $pasos);
 
@@ -216,9 +220,10 @@ class FlujoLiquidacion
 
     // ---------------------------------------------------------------- internos
 
+    /** Productor primero y luego la liquidación (orden único de bloqueo de `TransaccionDinero`). */
     private static function bloquear(Liquidacion $liquidacion): Liquidacion
     {
-        return Liquidacion::whereKey($liquidacion->id)->lockForUpdate()->firstOrFail();
+        return TransaccionDinero::bloquearLiquidacion((int) $liquidacion->enterprise_id, (int) $liquidacion->id);
     }
 
     /** El paso actual en espera, ya comprobado que este usuario puede decidirlo. */
@@ -237,7 +242,7 @@ class FlujoLiquidacion
         }
 
         if (AprobadorLiquidaciones::esCreadorOEnviador($usuario, $l)) {
-            self::fallar('liquidacion', 'Quien creó o envió una liquidación no puede aprobarla ni rechazarla.');
+            self::fallar('liquidacion', 'Quien creó, editó o envió una liquidación no puede aprobarla ni rechazarla.');
         }
         if (AprobadorLiquidaciones::decidioOtroPaso($usuario, $paso)) {
             self::fallar('liquidacion', 'Ya decidiste otro paso de esta liquidación: nadie decide dos pasos.');

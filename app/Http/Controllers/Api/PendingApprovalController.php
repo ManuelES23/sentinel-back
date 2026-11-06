@@ -24,6 +24,7 @@ use App\Services\Abastecimiento\CadenaLiquidacion;
 use App\Services\Abastecimiento\DespuesDeDecidirLiquidacion;
 use App\Services\Abastecimiento\FlujoLiquidacion;
 use App\Services\Abastecimiento\PresentadorLiquidacion;
+use App\Services\Abastecimiento\TransaccionDinero;
 use App\Services\ActivosFijos\AlcanceActivos;
 use App\Services\Compras\AprobadorOrdenCompra;
 use App\Services\NotificationService;
@@ -625,6 +626,8 @@ class PendingApprovalController extends Controller
             ->whereNotNull('paso_actual')
             ->where(fn ($q) => $q->whereNull('created_by')->orWhere('created_by', '!=', $user->id))
             ->where(fn ($q) => $q->whereNull('enviada_by')->orWhere('enviada_by', '!=', $user->id))
+            // Mismo criterio que AprobadorLiquidaciones::esCreadorOEnviador: quien editó o envió en cualquier ronda tampoco.
+            ->where(fn ($q) => $q->whereNull('intervinieron')->orWhereJsonDoesntContain('intervinieron', (int) $user->id))
             ->with(['convenio:id,folio,variedad_id,moneda', 'convenio.variedad:id,nombre', 'productor:id,nombre', 'aprobaciones'])
             ->orderByDesc('enviada_at')
             ->orderByDesc('id')
@@ -752,8 +755,9 @@ class PendingApprovalController extends Controller
 
     /**
      * Cuerpo común de aprobar y rechazar: la liquidación debe existir y ser visible para el usuario (si no, 404 como
-     * en el detalle); `step` opcional es el paso que el cliente tenía a la vista y, si ya cambió, el servicio da 422.
-     * Sin `step` se toma el paso vigente al recibir la petición. Los demás fallos de regla los da el servicio (422).
+     * en el detalle); `step` (OBLIGATORIO, 422 si falta) es el paso que el cliente tenía a la vista y, si ya cambió,
+     * el servicio da 422: sin él un doble clic tardío decidiría el paso siguiente. Los demás fallos de regla los da
+     * el servicio (422).
      */
     private function decidirLiquidacion(Request $request, int $id, $user, callable $decidir, callable $mensaje, callable $avisoPara): JsonResponse
     {
@@ -762,12 +766,15 @@ class PendingApprovalController extends Controller
             return response()->json(['success' => false, 'message' => 'Registro no encontrado'], 404);
         }
 
-        $datos = $request->validate(['step' => ['nullable', 'integer', 'min:1']]);
-        $esperado = isset($datos['step'])
-            ? (int) $datos['step']
-            : (int) (CadenaLiquidacion::pasoActual($liquidacion)?->step_order ?? 0);
+        $datos = $request->validate(['step' => ['required', 'integer', 'min:1']], [
+            'step.required' => 'Falta el paso que estás decidiendo; recarga la pantalla.',
+            'step.integer' => 'El paso no es válido; recarga la pantalla.',
+            'step.min' => 'El paso no es válido; recarga la pantalla.',
+        ]);
+        $esperado = (int) $datos['step'];
 
-        $liquidacion = DB::transaction(fn () => $decidir($liquidacion, $esperado), 3);
+        // Transacción de dinero (READ COMMITTED en MySQL); el servicio bloquea productor y liquidación primero.
+        $liquidacion = TransaccionDinero::ejecutar(fn () => $decidir($liquidacion, $esperado), 3);
 
         // La empresa ya se consultó al comprobar la visibilidad; si faltara, solo se omiten el evento y el aviso.
         $empresa = $this->empresaDeLiquidacion($liquidacion);

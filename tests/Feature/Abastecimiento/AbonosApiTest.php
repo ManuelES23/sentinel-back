@@ -209,6 +209,16 @@ class AbonosApiTest extends TestCase
         $this->assertRechazoLimpio($this->cuerpo($otro, 100, [], ['convenio_id' => $convenio->id]), 'convenio_id', $otro);
     }
 
+    /** Arreglo final M4: un anticipo ligado a un convenio en otra moneda nunca se podría aplicar. */
+    public function test_un_anticipo_ligado_a_un_convenio_de_otra_moneda_es_422(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp, ['moneda' => 'USD']);
+        $productor = $this->productorDe($convenio);
+
+        $this->assertRechazoLimpio($this->cuerpo($productor, 100, [], ['convenio_id' => $convenio->id, 'moneda' => 'MXN']), 'moneda', $productor);
+        $this->alta($this->cuerpo($productor, 100, [], ['convenio_id' => $convenio->id, 'moneda' => 'USD']))->assertStatus(201);
+    }
+
     // ---------------------------------------------------------------- Review Focus 1: 422 sin escribir
 
     public function test_aplicaciones_que_suman_mas_que_el_monto_del_abono_son_422(): void
@@ -663,7 +673,8 @@ class AbonosApiTest extends TestCase
         $m = $d['movimientos'];
         $this->assertSame([$l1->folio, 'AB-0001', 'AB-0002', 'AB-0003', $l2->folio], array_column($m, 'folio'));
         $this->assertSame(['2026-06-10', '2026-06-12', '2026-06-15', '2026-06-18', '2026-06-20'], array_column($m, 'fecha'));
-        $this->assertSame(['liquidacion', 'abono', 'anticipo', 'anticipo', 'liquidacion'], array_column($m, 'tipo'));
+        // Arreglo final M6: el abono cancelado (sin aplicaciones) no es «anticipo»: es un abono cancelado sin efecto.
+        $this->assertSame(['liquidacion', 'abono', 'anticipo', 'abono', 'liquidacion'], array_column($m, 'tipo'));
         $this->assertSame([false, false, false, true, false], array_map(fn ($x) => (bool) $x['cancelado'], $m));
         $this->assertEquals([1000, 400, -300, -300, 200], array_column($m, 'saldo'));   // el cancelado no mueve el saldo
         $this->assertEquals([1000, 600, 700, 200, 500], array_column($m, 'monto'));
@@ -680,6 +691,8 @@ class AbonosApiTest extends TestCase
         $this->assertSame($convenio->folio, $m[0]['convenio']['folio']);
         $this->assertEquals(1000, $m[0]['aplicado']);
         $this->assertSame('Cheque devuelto', $m[3]['cancelado_motivo']);
+        $this->assertEquals(0, $m[3]['sin_aplicar']);
+        $this->assertTrue($m[3]['cancelado']);
         $this->assertSame($a3, $m[3]['id']);
         $this->assertNotNull($a1);
         $this->assertNotNull($a2);
@@ -763,6 +776,31 @@ class AbonosApiTest extends TestCase
             AbastecimientoUpdated::class,
             fn ($e) => $e->data['entidad'] === 'liquidacion' && $e->data['id'] === $liq->id && $e->data['status'] === 'aprobada',
         );
+    }
+
+    /** Arreglo final I1: el evento del abono no lleva monto, referencia, notas ni aplicaciones (tampoco el de la liquidación pagada). */
+    public function test_los_eventos_del_abono_no_llevan_dinero_ni_notas(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        $liq = $this->aprobada($convenio, 1000);
+        Event::fake([AbastecimientoUpdated::class]);
+
+        $id = $this->alta($this->cuerpo($this->productorDe($convenio), 1000, [$this->aplicacion($liq, 1000)], [
+            'referencia' => 'SPEI 123', 'notas' => 'Pago parcial acordado',
+        ]))->assertStatus(201)->json('data.id');
+        $this->postJson($this->url("abonos/{$id}/cancelar"), ['motivo' => 'Error'])->assertOk();
+
+        $eventos = Event::dispatched(AbastecimientoUpdated::class)->map(fn ($x) => $x[0]);
+        $abonos = $eventos->filter(fn ($e) => $e->data['entidad'] === 'abono');
+        $this->assertCount(2, $abonos);
+        foreach ($abonos as $e) {
+            $this->assertSame(['entidad', 'folio', 'id', 'moneda', 'productor_id', 'status'], collect($e->data)->keys()->sort()->values()->all());
+        }
+        foreach ($eventos as $e) {
+            foreach (['monto', 'monto_final', 'referencia', 'notas', 'aplicaciones', 'aplicado', 'sin_aplicar'] as $clave) {
+                $this->assertArrayNotHasKey($clave, $e->data);
+            }
+        }
     }
 
     public function test_un_422_no_difunde_nada(): void

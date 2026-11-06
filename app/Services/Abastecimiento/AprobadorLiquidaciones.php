@@ -21,7 +21,7 @@ use Illuminate\Support\Collection;
  *   regla y puede aprobar (alcance toda la empresa).
  * - Paso sin reglas (`rules = []`, sin cadena configurada): quien tenga `liquidaciones.aprobar` en la
  *   empresa; el administrador del sistema entra por el bypass de `ContextoAbastecimiento::puede`.
- * Siempre: acceso activo a la empresa (o ser admin), como exigen sus rutas; quien creó o envió la liquidación no decide, y nadie decide dos pasos de la misma ronda.
+ * Siempre: acceso activo a la empresa (o ser admin), como exigen sus rutas; quien creó, editó o envió la liquidación (en cualquier ronda) no decide, y nadie decide dos pasos de la misma ronda.
  */
 class AprobadorLiquidaciones
 {
@@ -108,10 +108,14 @@ class AprobadorLiquidaciones
             ->values();
     }
 
+    /**
+     * Separación de funciones: quien creó, editó (aunque el borrador fuera de otro) o envió la liquidación en
+     * cualquier ronda (`intervinieron`, más `created_by` y `enviada_by`) no la aprueba ni la rechaza. La bandeja
+     * del perfil aplica el mismo filtro en SQL (`PendingApprovalController::calcularLiquidacionesPara`).
+     */
     public static function esCreadorOEnviador(User $usuario, Liquidacion $liquidacion): bool
     {
-        return ($liquidacion->created_by !== null && (int) $liquidacion->created_by === (int) $usuario->id)
-            || ($liquidacion->enviada_by !== null && (int) $liquidacion->enviada_by === (int) $usuario->id);
+        return in_array((int) $usuario->id, $liquidacion->idsQueIntervinieron(), true);
     }
 
     /** ¿Ya decidió (aprobó o rechazó) otro paso de la misma ronda? */

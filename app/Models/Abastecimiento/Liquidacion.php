@@ -55,6 +55,7 @@ class Liquidacion extends Model
         'cancelada_motivo',
         'notas',
         'created_by',
+        'intervinieron',
     ];
 
     protected $attributes = [
@@ -89,7 +90,37 @@ class Liquidacion extends Model
         'cancelada_at' => 'datetime',
         'cancelada_by' => 'integer',
         'created_by' => 'integer',
+        'intervinieron' => 'array',
     ];
+
+    /**
+     * Agrega al usuario (sin repetir) a quienes crearon, editaron o enviaron la liquidación (separación de
+     * funciones: ninguno de ellos la aprueba ni la rechaza). No guarda; un rechazo no la vacía.
+     */
+    public function registrarIntervencion(?int $usuarioId): void
+    {
+        if ($usuarioId === null) {
+            return;
+        }
+        $ids = array_map('intval', $this->intervinieron ?? []);
+        if (! in_array($usuarioId, $ids, true)) {
+            $ids[] = $usuarioId;
+        }
+        $this->intervinieron = $ids;
+    }
+
+    /** @return array<int, int> ids de quienes crearon, editaron o enviaron (incluye `created_by` y `enviada_by`) */
+    public function idsQueIntervinieron(): array
+    {
+        $ids = array_map('intval', $this->intervinieron ?? []);
+        foreach ([$this->created_by, $this->enviada_by] as $id) {
+            if ($id !== null) {
+                $ids[] = (int) $id;
+            }
+        }
+
+        return array_values(array_unique($ids));
+    }
 
     public function scopeDeEmpresa(Builder $q, int $empresaId): Builder
     {

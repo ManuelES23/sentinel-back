@@ -142,6 +142,12 @@ class BandejaLiquidacionesTest extends TestCase
         return "/api/pending-approvals/supply_settlement/{$liq->id}".($accion === '' ? '' : "/{$accion}");
     }
 
+    /** Aprobar o rechazar desde la bandeja con el paso vigente (`step` es obligatorio) salvo que el cuerpo traiga otro. */
+    private function decidir(Liquidacion $liq, string $accion, array $cuerpo = [])
+    {
+        return $this->postJson($this->url($liq, $accion), $cuerpo + ['step' => $liq->fresh()->paso_actual ?? 1]);
+    }
+
     private function avisosDe(User $usuario)
     {
         return SystemNotification::where('user_id', $usuario->id)->get();
@@ -360,7 +366,7 @@ class BandejaLiquidacionesTest extends TestCase
         $liq = $this->enRevision();
 
         Sanctum::actingAs($a);
-        $this->postJson($this->url($liq, 'approve'))->assertOk();
+        $this->decidir($liq, 'approve')->assertOk();
 
         $this->getJson($this->url($liq))->assertOk()->assertJsonPath('data.approvals.0.decision', 'approved');
         Sanctum::actingAs($b);
@@ -375,7 +381,7 @@ class BandejaLiquidacionesTest extends TestCase
         $liq = $this->enRevision();
         Sanctum::actingAs($director);
 
-        $this->postJson($this->url($liq, 'approve'), ['comment' => 'Todo en orden'])
+        $this->decidir($liq, 'approve', ['comment' => 'Todo en orden'])
             ->assertOk()
             ->assertJsonPath('success', true)
             ->assertJsonPath('data.status', 'aprobada');
@@ -393,7 +399,7 @@ class BandejaLiquidacionesTest extends TestCase
         $liq = $this->enRevision();
         Sanctum::actingAs($aprobador);
 
-        $this->postJson($this->url($liq, 'approve'))->assertOk();
+        $this->decidir($liq, 'approve')->assertOk();
 
         $this->assertSame('aprobada', $liq->fresh()->status);
     }
@@ -405,7 +411,7 @@ class BandejaLiquidacionesTest extends TestCase
         $liq = $this->enRevision();
 
         Sanctum::actingAs($a);
-        $this->postJson($this->url($liq, 'approve'))
+        $this->decidir($liq, 'approve')
             ->assertOk()
             ->assertJsonPath('data.status', 'en_revision')
             ->assertJsonPath('data.paso_actual', 2);
@@ -416,7 +422,7 @@ class BandejaLiquidacionesTest extends TestCase
         $this->assertSame(2, $this->listaDe($b)['items'][0]['steps_total']);
 
         Sanctum::actingAs($b);
-        $this->postJson($this->url($liq, 'approve'))->assertOk()->assertJsonPath('data.status', 'aprobada');
+        $this->decidir($liq, 'approve')->assertOk()->assertJsonPath('data.status', 'aprobada');
     }
 
     public function test_quien_no_es_elegible_no_aprueba_ni_cambia_nada(): void
@@ -426,8 +432,8 @@ class BandejaLiquidacionesTest extends TestCase
         $liq = $this->enRevision();
         Sanctum::actingAs($ajeno);
 
-        $this->postJson($this->url($liq, 'approve'))->assertStatus(404);
-        $this->postJson($this->url($liq, 'reject'), ['rejection_reason' => 'No'])->assertStatus(404);
+        $this->decidir($liq, 'approve')->assertStatus(404);
+        $this->decidir($liq, 'reject', ['rejection_reason' => 'No'])->assertStatus(404);
 
         $this->assertSame('en_revision', $liq->fresh()->status);
         $this->assertSame(0, LiquidacionAprobacion::where('liquidacion_id', $liq->id)->where('decision', '!=', 'waiting')->count());
@@ -440,7 +446,7 @@ class BandejaLiquidacionesTest extends TestCase
         $liq = $this->enRevision();
         Sanctum::actingAs($this->creador);
 
-        $this->postJson($this->url($liq, 'approve'))->assertStatus(404);
+        $this->decidir($liq, 'approve')->assertStatus(404);
         $this->assertSame('en_revision', $liq->fresh()->status);
     }
 
@@ -451,7 +457,7 @@ class BandejaLiquidacionesTest extends TestCase
         $liq = $this->enRevision();
         Sanctum::actingAs($director);
 
-        $this->postJson($this->url($liq, 'approve'), ['step' => 2])
+        $this->decidir($liq, 'approve', ['step' => 2])
             ->assertStatus(422)
             ->assertJsonValidationErrors('liquidacion');
 
@@ -465,7 +471,7 @@ class BandejaLiquidacionesTest extends TestCase
         $liq = $this->enRevision();
         Sanctum::actingAs($director);
 
-        $this->postJson($this->url($liq, 'approve'), ['step' => 1])->assertOk();
+        $this->decidir($liq, 'approve', ['step' => 1])->assertOk();
     }
 
     public function test_aprobar_dos_veces_no_avanza_la_cadena_dos_veces(): void
@@ -475,8 +481,8 @@ class BandejaLiquidacionesTest extends TestCase
         $liq = $this->enRevision();
         Sanctum::actingAs($director);
 
-        $this->postJson($this->url($liq, 'approve'))->assertOk();
-        $this->postJson($this->url($liq, 'approve'))->assertStatus(422)->assertJsonValidationErrors('liquidacion');
+        $this->decidir($liq, 'approve')->assertOk();
+        $this->decidir($liq, 'approve')->assertStatus(422)->assertJsonValidationErrors('liquidacion');
 
         $this->assertSame(2, $liq->fresh()->paso_actual);
         $this->assertSame(1, LiquidacionAprobacion::where('liquidacion_id', $liq->id)->where('decision', 'approved')->count());
@@ -490,7 +496,7 @@ class BandejaLiquidacionesTest extends TestCase
         $liq = $this->enRevision();
         Sanctum::actingAs($director);
 
-        $this->postJson($this->url($liq, 'reject'))->assertStatus(422)->assertJsonValidationErrors('rejection_reason');
+        $this->decidir($liq, 'reject')->assertStatus(422)->assertJsonValidationErrors('rejection_reason');
         $this->assertSame('en_revision', $liq->fresh()->status);
     }
 
@@ -500,7 +506,7 @@ class BandejaLiquidacionesTest extends TestCase
         $liq = $this->enRevision();
         Sanctum::actingAs($director);
 
-        $this->postJson($this->url($liq, 'reject'), ['rejection_reason' => 'Los kilos no cuadran'])
+        $this->decidir($liq, 'reject', ['rejection_reason' => 'Los kilos no cuadran'])
             ->assertOk()
             ->assertJsonPath('success', true)
             ->assertJsonPath('data.status', 'borrador');
@@ -518,7 +524,7 @@ class BandejaLiquidacionesTest extends TestCase
         $liq = $this->enRevision();
         Sanctum::actingAs($aprobador);
 
-        $this->postJson($this->url($liq, 'reject'), ['rejection_reason' => 'Falta una recepción'])->assertOk();
+        $this->decidir($liq, 'reject', ['rejection_reason' => 'Falta una recepción'])->assertOk();
 
         $this->assertSame('borrador', $liq->fresh()->status);
     }
@@ -530,7 +536,7 @@ class BandejaLiquidacionesTest extends TestCase
         $liq = $this->enRevision();
         Sanctum::actingAs($usuario);
 
-        $this->postJson($this->url($liq, 'reject'), ['rejection_reason' => 'No'])
+        $this->decidir($liq, 'reject', ['rejection_reason' => 'No'])
             ->assertStatus(422)->assertJsonValidationErrors('liquidacion');
         $this->assertSame('en_revision', $liq->fresh()->status);
     }
@@ -541,7 +547,7 @@ class BandejaLiquidacionesTest extends TestCase
         $liq = $this->enRevision();
         Sanctum::actingAs($director);
 
-        $this->postJson($this->url($liq, 'reject'), ['rejection_reason' => 'No', 'step' => 3])->assertStatus(422);
+        $this->decidir($liq, 'reject', ['rejection_reason' => 'No', 'step' => 3])->assertStatus(422);
         $this->assertSame('en_revision', $liq->fresh()->status);
     }
 
@@ -558,7 +564,7 @@ class BandejaLiquidacionesTest extends TestCase
         $this->assertCount(0, $this->avisosDe($b));
 
         Sanctum::actingAs($a);
-        $this->postJson($this->url($liq, 'approve'))->assertOk();
+        $this->decidir($liq, 'approve')->assertOk();
 
         $this->assertCount(1, $this->avisosDe($b));
         $this->assertStringContainsString($liq->folio, $this->avisosDe($b)->first()->message);
@@ -573,7 +579,7 @@ class BandejaLiquidacionesTest extends TestCase
         $liq = $this->enRevision();
         Sanctum::actingAs($director);
 
-        $this->postJson($this->url($liq, 'reject'), ['rejection_reason' => 'Falta firma'])->assertOk();
+        $this->decidir($liq, 'reject', ['rejection_reason' => 'Falta firma'])->assertOk();
 
         $avisos = $this->avisosDe($this->creador);
         $this->assertCount(1, $avisos);
@@ -588,7 +594,7 @@ class BandejaLiquidacionesTest extends TestCase
         Event::fake([AbastecimientoUpdated::class]);
         Sanctum::actingAs($director);
 
-        $this->postJson($this->url($liq, 'approve'))->assertOk();
+        $this->decidir($liq, 'approve')->assertOk();
 
         Event::assertDispatched(AbastecimientoUpdated::class, fn (AbastecimientoUpdated $e) => $e->data['entidad'] === 'liquidacion'
             && $e->data['id'] === $liq->id
@@ -602,7 +608,7 @@ class BandejaLiquidacionesTest extends TestCase
         Event::listen(AbastecimientoUpdated::class, fn () => throw new \RuntimeException('Reverb caído'));
         Sanctum::actingAs($director);
 
-        $this->postJson($this->url($liq, 'approve'))->assertOk();
+        $this->decidir($liq, 'approve')->assertOk();
 
         $this->assertSame('aprobada', $liq->fresh()->status);
     }
@@ -644,5 +650,43 @@ class BandejaLiquidacionesTest extends TestCase
         $this->assertSame(1, $this->getJson('/api/pending-approvals/summary')->json('data.total_pending'));
         $this->assertTrue($this->getJson('/api/pending-approvals/summary')->json('data.can_approve'));
         $this->assertSame(1, $this->getJson('/api/pending-approvals')->json('data.total_pending'));
+    }
+
+    // ---------------------------------------------------------------- arreglo final (M1, I2)
+
+    public function test_aprobar_o_rechazar_sin_step_da_422_y_no_decide_nada(): void
+    {
+        $director = $this->directorSinEmpleado(1);
+        $liq = $this->enRevision();
+        Sanctum::actingAs($director);
+
+        $this->postJson($this->url($liq, 'approve'))->assertStatus(422)->assertJsonValidationErrors('step');
+        $this->postJson($this->url($liq, 'reject'), ['rejection_reason' => 'No'])->assertStatus(422)->assertJsonValidationErrors('step');
+        $this->postJson($this->url($liq, 'approve'), ['step' => 'uno'])->assertStatus(422)->assertJsonValidationErrors('step');
+
+        $this->assertSame('en_revision', $liq->fresh()->status);
+        $this->assertSame(0, LiquidacionAprobacion::where('liquidacion_id', $liq->id)->where('decision', '!=', 'waiting')->count());
+    }
+
+    public function test_quien_intervino_en_la_liquidacion_no_la_ve_ni_la_decide_desde_la_bandeja(): void
+    {
+        $editor = $this->directorSinEmpleado(1);
+        $otro = $this->directorSinEmpleado(1);
+        $liq = $this->enRevision();
+        // Como la deja editar el borrador de otro (o enviarlo en una ronda anterior).
+        $liq->registrarIntervencion($editor->id);
+        $liq->save();
+
+        $this->assertNull($this->resumenDe($editor));
+        $this->assertNull($this->listaDe($editor));
+        Sanctum::actingAs($editor);
+        $this->decidir($liq, 'approve')->assertStatus(404);
+        $this->getJson($this->url($liq))->assertStatus(404);
+
+        // Quien no hizo nada con ella sí la ve y la decide: la lista y el servicio dicen lo mismo.
+        $this->assertSame($liq->id, $this->listaDe($otro)['items'][0]['id']);
+        $this->assertSame(1, $this->resumenDe($otro)['pending_count']);
+        Sanctum::actingAs($otro);
+        $this->decidir($liq, 'approve')->assertOk()->assertJsonPath('data.status', 'aprobada');
     }
 }

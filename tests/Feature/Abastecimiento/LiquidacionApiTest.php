@@ -12,7 +12,10 @@ use App\Models\ApprovalFlowStep;
 use App\Models\ApprovalProcess;
 use App\Models\SystemNotification;
 use App\Models\User;
+use App\Services\Abastecimiento\FlujoLiquidacion;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\Event;
 use Laravel\Sanctum\Sanctum;
 use Tests\Concerns\CreatesAbastecimientoFixtures;
@@ -588,20 +591,34 @@ class LiquidacionApiTest extends TestCase
 
     // ---------------------------------------------------------------- menores diferidos de la Task 4
 
-    public function test_el_listado_y_los_eventos_traen_el_porcentaje_de_rezaga_del_convenio(): void
+    public function test_el_listado_trae_el_porcentaje_de_rezaga_del_convenio(): void
     {
-        Event::fake([AbastecimientoUpdated::class]);
         [$liq] = $this->borrador(1, ['porcentaje_rezaga' => 5]);
 
         $this->como($this->creador);
         $fila = $this->getJson($this->url())->assertOk()->json('data.0');
         $this->assertSame($liq->id, $fila['id']);
         $this->assertEquals(5, $fila['convenio']['porcentaje_rezaga']);
+    }
 
-        Event::assertDispatched(
-            AbastecimientoUpdated::class,
-            fn ($e) => $e->action === 'created' && $e->data['entidad'] === 'liquidacion' && $e->data['convenio']['porcentaje_rezaga'] == 5,
-        );
+    /** Arreglo final I1: el canal del módulo lo recibe cualquiera con acceso al módulo; el evento no lleva dinero. */
+    public function test_los_eventos_de_liquidacion_no_llevan_montos_ni_notas(): void
+    {
+        $a = $this->aprobadorEnPaso(1);
+        Event::fake([AbastecimientoUpdated::class]);
+        [$liq] = $this->borrador(1, ['porcentaje_rezaga' => 5]);
+        $this->enviar($liq)->assertOk();
+        $this->aprobar($liq, $a, 1)->assertOk();
+
+        $eventos = Event::dispatched(AbastecimientoUpdated::class)->map(fn ($x) => $x[0])
+            ->filter(fn ($e) => $e->data['entidad'] === 'liquidacion');
+        $this->assertGreaterThanOrEqual(3, $eventos->count());
+        foreach ($eventos as $e) {
+            $this->assertSame(['convenio_id', 'entidad', 'folio', 'id', 'moneda', 'productor_id', 'status'], collect($e->data)->keys()->sort()->values()->all());
+            foreach (['monto_final', 'monto_calculado', 'monto_ajustado', 'motivo_ajuste', 'bruto', 'descuento', 'notas', 'convenio', 'productor'] as $clave) {
+                $this->assertArrayNotHasKey($clave, $e->data);
+            }
+        }
     }
 
     public function test_editar_el_borrador_con_otro_convenio_libera_las_recepciones_viejas_y_recalcula(): void
@@ -662,5 +679,71 @@ class LiquidacionApiTest extends TestCase
 
         $this->assertSame('cancelada', $liq->fresh()->status);
         $this->assertNull($rec->fresh()->liquidacion_id);
+    }
+
+    // ---------------------------------------------------------------- arreglo final I2: separación de funciones
+
+    public function test_quien_edito_un_borrador_ajeno_no_lo_aprueba_aunque_otro_lo_envie(): void
+    {
+        $editor = $this->usuarioCon(['view', 'edit']);
+        $this->reglaUsuario(1, $editor);
+        $otro = $this->aprobadorEnPaso(1);
+        [$liq, $convenio] = $this->borrador(2);
+        $ids = Recepcion::where('liquidacion_id', $liq->id)->orderBy('id')->pluck('id')->all();
+
+        $this->como($editor);
+        $this->putJson($this->url("liquidaciones/{$liq->id}"), [
+            'convenio_id' => $convenio->id, 'periodo_inicio' => '2026-06-01', 'periodo_fin' => '2026-06-15',
+            'recepcion_ids' => [$ids[0]], 'monto_ajustado' => 900, 'motivo_ajuste' => 'Descuento acordado',
+        ])->assertOk();
+        $this->assertEqualsCanonicalizing([$this->creador->id, $editor->id], $liq->fresh()->intervinieron);
+
+        $this->enviar($liq)->assertOk();
+        $this->aprobar($liq, $editor, 1)->assertStatus(403);
+        $this->assertSame('en_revision', $liq->fresh()->status);
+
+        // El servicio dice lo mismo (aunque alguien llegara sin pasar por el controlador).
+        try {
+            DB::transaction(fn () => FlujoLiquidacion::aprobar($liq->fresh(), $editor, null, 1));
+            $this->fail('Quien editó no debe poder aprobar.');
+        } catch (ValidationException $e) {
+            $this->assertArrayHasKey('liquidacion', $e->errors());
+        }
+
+        // Quien no hizo nada con ella sí la aprueba.
+        $this->aprobar($liq, $otro, 1)->assertOk()->assertJsonPath('data.status', 'aprobada');
+    }
+
+    public function test_quien_envio_la_ronda_1_no_aprueba_la_ronda_2_aunque_otro_la_reenvie(): void
+    {
+        $emisor = $this->usuarioCon(['view', 'edit']);
+        $this->reglaUsuario(1, $emisor);
+        $otro = $this->aprobadorEnPaso(1);
+        [$liq] = $this->borrador();
+
+        $this->enviar($liq, $emisor)->assertOk();
+        $this->rechazar($liq, $otro, 1, ['motivo' => 'Falta una recepción'])->assertOk();
+        // Rechazar conserva a quienes intervinieron.
+        $this->assertEqualsCanonicalizing([$this->creador->id, $emisor->id], $liq->fresh()->intervinieron);
+
+        $this->enviar($liq)->assertOk();
+        $this->assertSame($this->creador->id, $liq->fresh()->enviada_by);
+        $this->assertSame(2, $liq->fresh()->ronda);
+
+        $this->aprobar($liq, $emisor, 1)->assertStatus(403);
+        $this->assertSame('en_revision', $liq->fresh()->status);
+        $this->aprobar($liq, $otro, 1)->assertOk()->assertJsonPath('data.status', 'aprobada');
+    }
+
+    public function test_si_el_unico_elegible_ya_intervino_no_se_puede_enviar(): void
+    {
+        $editor = $this->usuarioCon(['view', 'edit']);
+        $this->reglaUsuario(1, $editor);
+        [$liq] = $this->borrador();
+
+        // Lo envía quien solo está en la cadena: se excluye a sí mismo y el paso queda sin nadie.
+        $this->enviar($liq, $editor)->assertStatus(422)->assertJsonValidationErrors('liquidacion');
+        $this->assertSame('borrador', $liq->fresh()->status);
+        $this->assertEqualsCanonicalizing([$this->creador->id], $liq->fresh()->intervinieron);
     }
 }
