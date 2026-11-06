@@ -180,7 +180,7 @@ class RecepcionController extends AbastecimientoController
                 'folio' => app(GeneradorFolio::class)->siguiente($empresa, 'RC'),
                 'created_by' => $request->user()?->id,
             ]);
-        });
+        }, 3);
 
         $data = $this->presentarConSemana($recepcion);
         $this->difundir('recepcion', 'created', $data, $empresa);

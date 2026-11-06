@@ -143,7 +143,7 @@ class ConvenioController extends AbastecimientoController
             $this->guardarMetas($convenio, $datos['metas'] ?? []);
 
             return $convenio;
-        });
+        }, 3);
 
         $data = $this->presentar($convenio);
         $this->difundir('convenio', 'created', $data, $empresa);

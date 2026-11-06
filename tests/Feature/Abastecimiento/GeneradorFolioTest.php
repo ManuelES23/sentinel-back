@@ -33,6 +33,29 @@ class GeneradorFolioTest extends TestCase
         $this->assertSame(2, (int) DB::table('abs_folios')->where(['enterprise_id' => $sbp->id, 'prefijo' => 'CV'])->value('ultimo'));
     }
 
+    public function test_con_el_contador_existente_no_se_vuelve_a_insertar(): void
+    {
+        $sbp = $this->empresa('splendidbyporvenir');
+        $gen = new GeneradorFolio;
+
+        DB::transaction(function () use ($gen, $sbp) {
+            $gen->siguiente($sbp, 'CV'); // crea la fila del contador
+
+            $consultas = [];
+            DB::listen(function ($q) use (&$consultas) {
+                $consultas[] = $q->sql;
+            });
+            $this->assertSame('CV-0002', $gen->siguiente($sbp, 'CV'));
+            $this->assertSame('CV-0003', $gen->siguiente($sbp, 'CV'));
+
+            $inserts = array_filter($consultas, fn ($sql) => str_contains(strtolower($sql), 'insert'));
+            $this->assertSame([], array_values($inserts), 'No debe insertar si la fila del contador ya existe.');
+        });
+
+        $this->assertSame(1, DB::table('abs_folios')->where(['enterprise_id' => $sbp->id, 'prefijo' => 'CV'])->count());
+        $this->assertSame(3, (int) DB::table('abs_folios')->where(['enterprise_id' => $sbp->id, 'prefijo' => 'CV'])->value('ultimo'));
+    }
+
     public function test_salta_folios_ocupados_incluidos_los_borrados(): void
     {
         $sbp = $this->empresa('splendidbyporvenir');

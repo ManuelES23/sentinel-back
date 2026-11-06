@@ -19,13 +19,17 @@ class GeneradorFolio
 
     public function siguiente(Enterprise $empresa, string $prefijo): string
     {
-        DB::table('abs_folios')->insertOrIgnore([
-            'enterprise_id' => $empresa->id, 'prefijo' => $prefijo, 'ultimo' => 0,
-            'created_at' => now(), 'updated_at' => now(),
-        ]);
+        // El INSERT IGNORE que choca deja un bloqueo compartido en InnoDB y dos altas simultáneas se
+        // interbloquean (1213): solo se inserta si la fila del contador todavía no existe.
+        $contador = fn () => DB::table('abs_folios')->where('enterprise_id', $empresa->id)->where('prefijo', $prefijo);
+        if (! $contador()->exists()) {
+            DB::table('abs_folios')->insertOrIgnore([
+                'enterprise_id' => $empresa->id, 'prefijo' => $prefijo, 'ultimo' => 0,
+                'created_at' => now(), 'updated_at' => now(),
+            ]);
+        }
 
-        $numero = (int) DB::table('abs_folios')->where('enterprise_id', $empresa->id)
-            ->where('prefijo', $prefijo)->lockForUpdate()->value('ultimo');
+        $numero = (int) $contador()->lockForUpdate()->value('ultimo');
 
         do {
             $numero++;
