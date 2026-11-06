@@ -65,7 +65,7 @@ class PrecioVigente
     }
 
     /** @return Collection<int, ConvenioPrecio> */
-    private function precios(Convenio $convenio): Collection
+    protected function precios(Convenio $convenio): Collection
     {
         // Siempre consulta: la relación cargada puede estar vieja si se agregaron precios después.
         return ConvenioPrecio::where('convenio_id', $convenio->id)->get();
