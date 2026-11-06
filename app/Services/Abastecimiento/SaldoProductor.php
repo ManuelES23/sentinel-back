@@ -27,6 +27,9 @@ use Illuminate\Support\Facades\DB;
  */
 class SaldoProductor
 {
+    /** Estados de liquidación que cuentan como deuda con el productor. */
+    private const ESTADOS_DEUDA = ['aprobada', 'pagada'];
+
     /**
      * @param  array<int, int>|null  $productorIds  null = todos los de la empresa con movimiento
      * @return Collection<int, array<string, array{moneda: string, liquidado: float, aplicado: float, por_pagar: float, anticipos_sin_aplicar: float, sin_liquidar: float}>>
@@ -122,13 +125,62 @@ class SaldoProductor
         return collect($saldos);
     }
 
+    /**
+     * Por pagar (liquidado − aplicado) de los convenios de UNA temporada, por moneda y sumando a todos los
+     * productores: la cifra del tablero (Ruling 10). Mismas definiciones y mismas dos consultas agrupadas
+     * que `porProductores` con `$temporadaId` (sin el costoso `sin_liquidar`); un test compara ambas.
+     *
+     * @return array<string, float> moneda => por pagar
+     */
+    public static function porPagarDeTemporada(Enterprise $empresa, int $temporadaId): array
+    {
+        $liquidado = self::liquidaciones($empresa, null, $temporadaId)
+            ->groupBy('l.moneda')->selectRaw('l.moneda, SUM(l.monto_final) as total')->pluck('total', 'moneda');
+        $aplicado = self::liquidaciones($empresa, null, $temporadaId)
+            ->join('abs_abono_aplicaciones as ap', 'ap.liquidacion_id', '=', 'l.id')
+            ->groupBy('l.moneda')->selectRaw('l.moneda, SUM(ap.monto) as total')->pluck('total', 'moneda');
+
+        $porPagar = [];
+        foreach ($liquidado as $moneda => $total) {
+            $porPagar[$moneda] = round(round((float) $total, 2) - round((float) ($aplicado[$moneda] ?? 0), 2), 2);
+        }
+        ksort($porPagar);
+
+        return $porPagar;
+    }
+
+    /**
+     * Liquidado, aplicado y por pagar de UN convenio (sus liquidaciones aprobadas y pagadas), en la moneda del
+     * convenio. Mismas definiciones que `porProductores`: con un solo convenio da el mismo `por_pagar`.
+     *
+     * @return array{moneda: string, liquidado: float, aplicado: float, por_pagar: float}
+     */
+    public static function deConvenio(Convenio $convenio): array
+    {
+        $base = fn () => DB::table('abs_liquidaciones as l')
+            ->where('l.enterprise_id', $convenio->enterprise_id)
+            ->where('l.convenio_id', $convenio->id)
+            ->whereNull('l.deleted_at')
+            ->whereIn('l.status', self::ESTADOS_DEUDA);
+
+        $liquidado = round((float) $base()->sum('l.monto_final'), 2);
+        $aplicado = round((float) $base()->join('abs_abono_aplicaciones as ap', 'ap.liquidacion_id', '=', 'l.id')->sum('ap.monto'), 2);
+
+        return [
+            'moneda' => $convenio->moneda,
+            'liquidado' => $liquidado,
+            'aplicado' => $aplicado,
+            'por_pagar' => round($liquidado - $aplicado, 2),
+        ];
+    }
+
     /** Liquidaciones que cuentan como deuda (aprobadas y pagadas), de la empresa y, si se pide, de la temporada. */
     private static function liquidaciones(Enterprise $empresa, ?array $productorIds, ?int $temporadaId)
     {
         return DB::table('abs_liquidaciones as l')
             ->where('l.enterprise_id', $empresa->id)
             ->whereNull('l.deleted_at')
-            ->whereIn('l.status', ['aprobada', 'pagada'])
+            ->whereIn('l.status', self::ESTADOS_DEUDA)
             ->when($productorIds !== null, fn ($q) => $q->whereIn('l.productor_id', $productorIds))
             ->when($temporadaId !== null, fn ($q) => $q
                 ->join('abs_convenios as c', 'c.id', '=', 'l.convenio_id')

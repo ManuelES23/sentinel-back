@@ -3,6 +3,7 @@
 namespace App\Services\Abastecimiento;
 
 use App\Models\Abastecimiento\Convenio;
+use App\Models\Abastecimiento\Liquidacion;
 use App\Models\Enterprise;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
@@ -67,6 +68,9 @@ class TableroAbastecimiento
             ), 2),
         ];
 
+        // Dinero (plan 2): la misma definición de SaldoProductor, limitada a la temporada (Ruling 10).
+        $saldoPorPagar = $moneda === null ? 0.0 : (SaldoProductor::porPagarDeTemporada($empresa, $temporadaId)[$moneda] ?? 0.0);
+
         return [
             'monedas' => $monedas,
             'moneda' => $moneda,
@@ -76,12 +80,16 @@ class TableroAbastecimiento
                 'comprometido' => $kpis['comprometido'],
                 'valor_recibido' => $kpis['valor_recibido'],
                 'sin_liquidar' => $kpis['sin_liquidar'],
+                'saldo_por_pagar' => $saldoPorPagar,
                 'abajo_de_meta' => $kpis['abajo_de_meta'],
                 'con_avance' => $kpis['con_avance'],
             ],
             'convenios' => $detalle->map(fn (array $d) => self::fila($d['convenio'], $d['indicadores']))->all(),
             'grafica' => self::grafica($detalle),
-            'avisos' => self::avisos($detalle, $lunesHoy),
+            'avisos' => array_merge(
+                self::avisos($detalle, $lunesHoy),
+                self::avisoLiquidacionesEnRevision($empresa, $temporadaId, $moneda),
+            ),
         ];
     }
 
@@ -213,6 +221,34 @@ class TableroAbastecimiento
         }
 
         return $avisos;
+    }
+
+    /**
+     * «N liquidaciones esperando revisión» de los convenios de la temporada en la moneda del tablero (una sola
+     * consulta; ninguno si no hay). No es de un convenio, así que `convenio_id` va nulo.
+     *
+     * @return array<int, array{tipo: string, convenio_id: null, texto: string}>
+     */
+    private static function avisoLiquidacionesEnRevision(Enterprise $empresa, int $temporadaId, ?string $moneda): array
+    {
+        if ($moneda === null) {
+            return [];
+        }
+
+        $n = Liquidacion::where('enterprise_id', $empresa->id)
+            ->where('status', 'en_revision')
+            ->where('moneda', $moneda)
+            ->whereIn('convenio_id', Convenio::deEmpresa($empresa->id)
+                ->where('temporada_id', $temporadaId)
+                ->where('status', '!=', 'cancelado')
+                ->select('id'))
+            ->count();
+
+        return $n === 0 ? [] : [[
+            'tipo' => 'liquidaciones_en_revision',
+            'convenio_id' => null,
+            'texto' => $n === 1 ? '1 liquidación esperando revisión' : self::numero($n).' liquidaciones esperando revisión',
+        ]];
     }
 
     /** «1,000 cajas», «1 caja» o «1,500 kg». */

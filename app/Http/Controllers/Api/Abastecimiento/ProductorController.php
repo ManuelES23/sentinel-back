@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\Abastecimiento;
 
 use App\Models\Abastecimiento\Productor;
+use App\Services\Abastecimiento\SaldoProductor;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -53,7 +54,9 @@ class ProductorController extends AbastecimientoController
 
         $porPagina = min(max((int) $request->input('per_page', self::POR_PAGINA), 1), self::POR_PAGINA_MAX);
         $pagina = $query->orderBy('nombre')->orderBy('id')->paginate($porPagina);
-        $pagina->getCollection()->transform(fn (Productor $p) => $this->presentar($p));
+        // Saldo de la página completa en una sola llamada (nunca uno por productor).
+        $saldos = SaldoProductor::porProductores($empresa, $pagina->getCollection()->pluck('id')->all());
+        $pagina->getCollection()->transform(fn (Productor $p) => $this->presentar($p) + ['saldo' => self::saldoDe($saldos, $p->id)]);
 
         return response()->json(['success' => true, 'data' => $pagina]);
     }
@@ -63,13 +66,35 @@ class ProductorController extends AbastecimientoController
     {
         $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'view');
 
+        $productores = Productor::deEmpresa($empresa->id)
+            ->where('is_active', true)
+            ->orderBy('nombre')
+            ->get(['id', 'nombre', 'tipo']);
+        $saldos = SaldoProductor::porProductores($empresa, $productores->pluck('id')->all());
+
         return response()->json([
             'success' => true,
-            'data' => Productor::deEmpresa($empresa->id)
-                ->where('is_active', true)
-                ->orderBy('nombre')
-                ->get(['id', 'nombre', 'tipo']),
+            'data' => $productores->map(fn (Productor $p) => [
+                'id' => $p->id,
+                'nombre' => $p->nombre,
+                'tipo' => $p->tipo,
+                'saldo' => self::saldoDe($saldos, $p->id),
+            ])->values()->all(),
         ]);
+    }
+
+    /**
+     * Saldo de un productor por moneda (`SaldoProductor`): `[{moneda, por_pagar, anticipos_sin_aplicar, sin_liquidar}]`,
+     * vacío si no tiene movimiento.
+     */
+    private static function saldoDe($saldos, int $productorId): array
+    {
+        return collect($saldos->get($productorId, []))->sortKeys()->map(fn (array $s) => [
+            'moneda' => $s['moneda'],
+            'por_pagar' => $s['por_pagar'],
+            'anticipos_sin_aplicar' => $s['anticipos_sin_aplicar'],
+            'sin_liquidar' => $s['sin_liquidar'],
+        ])->values()->all();
     }
 
     /** Mismo RFC o mismo nombre (sin acentos ni mayúsculas). Solo avisa. */

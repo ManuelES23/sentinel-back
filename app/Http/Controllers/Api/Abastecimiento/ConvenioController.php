@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\Abastecimiento;
 use App\Models\Abastecimiento\Convenio;
 use App\Models\Abastecimiento\ConvenioMeta;
 use App\Models\Abastecimiento\ConvenioPrecio;
+use App\Models\Abastecimiento\Liquidacion;
 use App\Models\Abastecimiento\Recepcion;
 use App\Models\Abastecimiento\Temporada;
 use App\Models\Abastecimiento\Variedad;
@@ -14,6 +15,7 @@ use App\Services\Abastecimiento\IndicadoresConvenio;
 use App\Services\Abastecimiento\MetasConvenio;
 use App\Services\Abastecimiento\PrecioVigente;
 use App\Services\Abastecimiento\ReglasConvenio;
+use App\Services\Abastecimiento\SaldoProductor;
 use App\Services\Abastecimiento\Semanas;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -108,7 +110,20 @@ class ConvenioController extends AbastecimientoController
             'productor' => $convenio->productor,
             'variedad' => $convenio->variedad,
             'precio_principal' => $this->precioPrincipal($convenio),
-            'indicadores' => IndicadoresConvenio::de($convenio),
+            // Plan 2: `por_pagar` sale de SaldoProductor (aprobadas y pagadas menos lo aplicado de ESTE convenio).
+            'indicadores' => IndicadoresConvenio::de($convenio) + ['por_pagar' => SaldoProductor::deConvenio($convenio)['por_pagar']],
+            'liquidaciones' => Liquidacion::where('convenio_id', $convenio->id)
+                ->orderByDesc('id')
+                ->get(['id', 'folio', 'status', 'periodo_inicio', 'periodo_fin', 'monto_final', 'moneda'])
+                ->map(fn (Liquidacion $l) => [
+                    'id' => $l->id,
+                    'folio' => $l->folio,
+                    'status' => $l->status,
+                    'periodo_inicio' => $l->periodo_inicio->format('Y-m-d'),
+                    'periodo_fin' => $l->periodo_fin->format('Y-m-d'),
+                    'monto_final' => $l->monto_final,
+                    'moneda' => $l->moneda,
+                ])->values()->all(),
             'recepciones_total' => Recepcion::where('convenio_id', $convenio->id)->count(),
             'recepciones' => $recientes->map(fn (Recepcion $r) => [
                 'id' => $r->id,
