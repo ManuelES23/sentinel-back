@@ -7,7 +7,7 @@ use Illuminate\Broadcasting\PrivateChannel;
 /**
  * Alta, cambio o baja de un registro de Abastecimiento. Viaja por el canal del
  * módulo de la empresa; `data.entidad` dice qué cambió
- * (convenio|recepcion|productor|temporada|cultivo|tipo_carga).
+ * (convenio|recepcion|productor|temporada|cultivo|tipo_carga|liquidacion|abono).
  */
 class AbastecimientoUpdated extends ModelBroadcastEvent
 {
