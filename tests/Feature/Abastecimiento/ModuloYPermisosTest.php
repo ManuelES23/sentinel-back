@@ -6,6 +6,7 @@ use App\Models\Abastecimiento\Cultivo;
 use App\Models\Abastecimiento\TipoCarga;
 use App\Models\Abastecimiento\Variedad;
 use App\Models\Application;
+use App\Models\ApprovalProcess;
 use App\Models\Enterprise;
 use App\Models\Module;
 use App\Models\Submodule;
@@ -50,15 +51,74 @@ class ModuloYPermisosTest extends TestCase
 
         $this->seed(AbastecimientoModuleSeeder::class);
 
-        $this->assertSame(7, $this->conteos($sbp)['submodulos']);
+        $this->assertSame(9, $this->conteos($sbp)['submodulos']);
         $this->assertSame(0, $this->conteos($sf)['submodulos']);
         $this->assertSame(
-            ['tablero', 'convenios', 'recepciones', 'productores', 'temporadas', 'variedades', 'tipos-carga'],
+            ['tablero', 'convenios', 'recepciones', 'productores', 'temporadas', 'variedades', 'tipos-carga', 'liquidaciones', 'abonos'],
             Submodule::whereHas('module', fn ($m) => $m->where('slug', 'abastecimiento'))->orderBy('order')->pluck('slug')->all(),
         );
         // El tablero solo tiene "ver".
         $tablero = Submodule::where('slug', 'tablero')->first();
         $this->assertSame(['view'], $tablero->permissionTypes()->pluck('slug')->all());
+    }
+
+    public function test_seeder_crea_liquidaciones_y_abonos_con_sus_permisos(): void
+    {
+        Enterprise::create(['name' => 'SBP', 'slug' => 'splendidbyporvenir', 'description' => 'SBP', 'is_active' => true]);
+
+        $this->seed(AbastecimientoModuleSeeder::class);
+
+        $liq = Submodule::where('slug', 'liquidaciones')->first();
+        $abo = Submodule::where('slug', 'abonos')->first();
+        $this->assertSame('Receipt', $liq->icon);
+        $this->assertSame('Wallet', $abo->icon);
+        $this->assertSame(
+            ['view', 'create', 'edit', 'delete', 'aprobar'],
+            $liq->permissionTypes()->orderBy('order')->orderBy('id')->pluck('slug')->all(),
+        );
+        $this->assertSame(
+            ['view', 'create', 'edit', 'delete', 'cancelar'],
+            $abo->permissionTypes()->orderBy('order')->orderBy('id')->pluck('slug')->all(),
+        );
+    }
+
+    public function test_seeder_crea_el_proceso_supply_settlements_una_sola_vez_y_no_lo_reactiva(): void
+    {
+        Enterprise::create(['name' => 'SBP', 'slug' => 'splendidbyporvenir', 'description' => 'SBP', 'is_active' => true]);
+
+        $this->seed(AbastecimientoModuleSeeder::class);
+
+        $proceso = ApprovalProcess::where('code', ApprovalProcess::SUPPLY_SETTLEMENTS)->get();
+        $this->assertCount(1, $proceso);
+        $this->assertSame('supply_settlements', $proceso[0]->code);
+        $this->assertSame('Liquidaciones de abastecimiento', $proceso[0]->name);
+        $this->assertTrue($proceso[0]->requires_approval);
+        $this->assertTrue($proceso[0]->is_active);
+
+        $proceso[0]->update(['is_active' => false]);
+        $this->seed(AbastecimientoModuleSeeder::class);
+
+        $this->assertSame(1, ApprovalProcess::where('code', 'supply_settlements')->count());
+        $this->assertFalse(ApprovalProcess::where('code', 'supply_settlements')->first()->is_active, 'No debe reactivar lo desactivado');
+        $this->assertSame(0, ApprovalProcess::where('code', 'supply_settlements')->first()->steps()->count());
+    }
+
+    public function test_mis_permisos_trae_aprobar_y_cancelar(): void
+    {
+        $this->setUpAbastecimiento();
+        $this->otorgarAbs($this->captor, $this->sbp, 'liquidaciones', ['view', 'aprobar']);
+        $this->otorgarAbs($this->captor, $this->sbp, 'abonos', ['cancelar']);
+        Sanctum::actingAs($this->captor);
+
+        $res = $this->getJson($this->url())->assertOk();
+
+        $this->assertTrue($res->json('data.liquidaciones.view'));
+        $this->assertTrue($res->json('data.liquidaciones.aprobar'));
+        $this->assertFalse($res->json('data.liquidaciones.create'));
+        $this->assertTrue($res->json('data.abonos.cancelar'));
+        $this->assertFalse($res->json('data.abonos.view'));
+        $this->assertSame(['view', 'create', 'edit', 'delete', 'aprobar'], array_keys($res->json('data.liquidaciones')));
+        $this->assertSame(['view', 'create', 'edit', 'delete', 'cancelar'], array_keys($res->json('data.abonos')));
     }
 
     public function test_seeder_sin_sbp_no_hace_nada(): void
@@ -78,7 +138,7 @@ class ModuloYPermisosTest extends TestCase
         $this->seed(AbastecimientoModuleSeeder::class);
 
         $this->assertSame($primero, $this->conteos($sbp));
-        $this->assertSame(7, $primero['submodulos']);
+        $this->assertSame(9, $primero['submodulos']);
         $this->assertSame(2, $primero['cultivos']);
         $this->assertSame(11, $primero['variedades']);
         $this->assertSame(1, $primero['tipos_carga']);
@@ -97,7 +157,7 @@ class ModuloYPermisosTest extends TestCase
         $this->assertFalse($res->json('data.convenios.create'));
         $this->assertFalse($res->json('data.recepciones.view'));
         $this->assertSame(['view'], array_keys($res->json('data.tablero')));
-        $this->assertCount(7, $res->json('data'));
+        $this->assertCount(9, $res->json('data'));
     }
 
     public function test_sin_acceso_a_la_empresa_responde_403(): void

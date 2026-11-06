@@ -6,6 +6,7 @@ use App\Models\Abastecimiento\Cultivo;
 use App\Models\Abastecimiento\TipoCarga;
 use App\Models\Abastecimiento\Variedad;
 use App\Models\Application;
+use App\Models\ApprovalProcess;
 use App\Models\Enterprise;
 use App\Models\Module;
 use App\Models\Submodule;
@@ -31,7 +32,7 @@ class AbastecimientoModuleSeeder extends Seeder
 {
     public const EMPRESA = 'splendidbyporvenir';
 
-    /** Submódulos en orden de menú. El plan 2 agrega `liquidaciones` y `abonos`. */
+    /** Submódulos en orden de menú. El plan 2 agregó `liquidaciones` y `abonos`. */
     public const SUBMODULOS = [
         'tablero' => ['nombre' => 'Tablero', 'icono' => 'LayoutDashboard', 'permisos' => ['view']],
         'convenios' => ['nombre' => 'Convenios', 'icono' => 'FileSignature', 'permisos' => ['view', 'create', 'edit', 'delete']],
@@ -40,6 +41,8 @@ class AbastecimientoModuleSeeder extends Seeder
         'temporadas' => ['nombre' => 'Temporadas', 'icono' => 'CalendarRange', 'permisos' => ['view', 'create', 'edit', 'delete']],
         'variedades' => ['nombre' => 'Cultivos y variedades', 'icono' => 'Sprout', 'permisos' => ['view', 'create', 'edit', 'delete']],
         'tipos-carga' => ['nombre' => 'Tipos de carga', 'icono' => 'Package', 'permisos' => ['view', 'create', 'edit', 'delete']],
+        'liquidaciones' => ['nombre' => 'Liquidaciones', 'icono' => 'Receipt', 'permisos' => ['view', 'create', 'edit', 'delete', 'aprobar']],
+        'abonos' => ['nombre' => 'Abonos', 'icono' => 'Wallet', 'permisos' => ['view', 'create', 'edit', 'delete', 'cancelar']],
     ];
 
     private const PERMISOS = [
@@ -47,6 +50,8 @@ class AbastecimientoModuleSeeder extends Seeder
         'create' => ['name' => 'Crear', 'description' => 'Crear nuevos registros', 'order' => 2],
         'edit' => ['name' => 'Editar', 'description' => 'Editar registros existentes', 'order' => 3],
         'delete' => ['name' => 'Eliminar', 'description' => 'Eliminar registros', 'order' => 4],
+        'aprobar' => ['name' => 'Aprobar', 'description' => 'Aprobar liquidaciones', 'order' => 5],
+        'cancelar' => ['name' => 'Cancelar', 'description' => 'Cancelar abonos', 'order' => 5],
     ];
 
     private const CATALOGO = [
@@ -74,6 +79,7 @@ class AbastecimientoModuleSeeder extends Seeder
         [$app, $modulo, $submodulos] = $this->estructura($empresa);
         $this->accesoUsuariosBase($app, $modulo, $submodulos);
         $this->catalogoInicial($empresa);
+        $this->procesoAprobacion();
 
         $this->command?->info("  ✓ {$slug}/administration/abastecimiento (".count($submodulos).' submódulos)');
     }
@@ -148,6 +154,22 @@ class AbastecimientoModuleSeeder extends Seeder
                 }
             }
         }
+    }
+
+    /** Proceso de aprobación de las liquidaciones (global, como los demás); lo ya existente no se toca ni se reactiva. */
+    private function procesoAprobacion(): void
+    {
+        ApprovalProcess::firstOrCreate(
+            ['code' => ApprovalProcess::SUPPLY_SETTLEMENTS],
+            [
+                'name' => 'Liquidaciones de abastecimiento',
+                'description' => 'Aprobación de liquidaciones de abastecimiento antes de pagarse',
+                'module' => self::EMPRESA.'/abastecimiento',
+                'entity_type' => 'App\Models\Abastecimiento\Liquidacion',
+                'requires_approval' => true,
+                'is_active' => true,
+            ]
+        );
     }
 
     /** Cultivos, variedades y tipo de carga iniciales; lo ya existente (incluso desactivado) no se toca. */
