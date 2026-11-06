@@ -213,6 +213,63 @@ class BandejaLiquidacionesTest extends TestCase
         $this->assertSame($liq->periodo_fin->format('Y-m-d'), $item['period_end']);
     }
 
+    public function test_el_item_dice_si_su_regla_permite_aprobar_y_rechazar(): void
+    {
+        $completo = $this->directorSinEmpleado(1);
+        $soloRechaza = $this->usuarioConAcceso();
+        $this->regla(1, 'user', ['user_id' => $soloRechaza->id, 'can_approve' => false]);
+        $soloAprueba = $this->usuarioConAcceso();
+        $this->regla(1, 'user', ['user_id' => $soloAprueba->id, 'can_reject' => false]);
+        $this->enRevision();
+
+        $item = $this->listaDe($completo)['items'][0];
+        $this->assertTrue($item['can_approve']);
+        $this->assertTrue($item['can_reject']);
+
+        $item = $this->listaDe($soloRechaza)['items'][0];
+        $this->assertFalse($item['can_approve']);
+        $this->assertTrue($item['can_reject']);
+
+        $item = $this->listaDe($soloAprueba)['items'][0];
+        $this->assertTrue($item['can_approve']);
+        $this->assertFalse($item['can_reject']);
+    }
+
+    public function test_quien_no_tiene_acceso_a_la_empresa_no_paga_consultas_por_liquidacion(): void
+    {
+        $this->directorSinEmpleado(1);
+        $sinAcceso = User::factory()->create(['role' => 'user']);
+        Sanctum::actingAs($sinAcceso);
+
+        $consultas = function (): int {
+            DB::flushQueryLog();
+            DB::enableQueryLog();
+            $this->getJson('/api/pending-approvals/summary')->assertOk();
+            $this->getJson('/api/pending-approvals')->assertOk();
+            $total = count(DB::getQueryLog());
+            DB::disableQueryLog();
+
+            return $total;
+        };
+
+        for ($i = 0; $i < 2; $i++) {
+            $this->enRevision();
+        }
+        Sanctum::actingAs($sinAcceso);
+        $consultas(); // calentamiento: la primera petición también arma cachés propias (autenticación, ajustes)
+        $con2 = $consultas();
+
+        for ($i = 0; $i < 8; $i++) {
+            $this->enRevision();
+        }
+        Sanctum::actingAs($sinAcceso);
+        $con10 = $consultas();
+
+        $this->assertSame(10, Liquidacion::where('status', 'en_revision')->count());
+        $this->assertSame($con2, $con10, 'Las consultas de la bandeja no deben crecer con las liquidaciones en revisión.');
+        $this->assertNull($this->entrada($this->getJson('/api/pending-approvals/summary')->json('data.processes')));
+    }
+
     public function test_quien_no_es_elegible_no_la_ve(): void
     {
         $this->directorSinEmpleado(1);

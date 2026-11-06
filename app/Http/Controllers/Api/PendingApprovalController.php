@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Http\Controllers\Api\SplendidFarms\Inventory\InventoryMovementController;
+use App\Http\Middleware\EnsureUserIsAdmin;
 use App\Models\Abastecimiento\Liquidacion;
 use App\Models\ApprovalFlowStep;
 use App\Models\ApprovalProcess;
@@ -15,6 +16,7 @@ use App\Models\PurchaseOrder;
 use App\Models\Recipe;
 use App\Models\SfFieldCheck;
 use App\Models\TimeClockCheck;
+use App\Models\UserEnterpriseAccess;
 use App\Models\VacationRequest;
 use App\Services\Abastecimiento\AprobadorLiquidaciones;
 use App\Services\Abastecimiento\AvisosAbastecimiento;
@@ -48,6 +50,12 @@ class PendingApprovalController extends Controller
 
     /** @var array<int, Collection> liquidaciones de abastecimiento decidibles, por id de usuario (el controlador vive una petición) */
     private array $liquidacionesPorUsuario = [];
+
+    /** @var array<int, array<int, array{aprobar: bool, rechazar: bool}>> acciones posibles sobre cada liquidación pendiente, por usuario y liquidación */
+    private array $accionesLiquidaciones = [];
+
+    /** @var array<int, ?Enterprise> empresas de las liquidaciones ya consultadas en esta petición */
+    private array $empresasLiquidacion = [];
 
     /**
      * Obtener resumen de pendientes por aprobar para el usuario autenticado
@@ -597,7 +605,23 @@ class PendingApprovalController extends Controller
      */
     private function liquidacionesPara($user): Collection
     {
-        return $this->liquidacionesPorUsuario[$user->id] ??= Liquidacion::where('status', 'en_revision')
+        return $this->liquidacionesPorUsuario[$user->id] ??= $this->calcularLiquidacionesPara($user);
+    }
+
+    private function calcularLiquidacionesPara($user): Collection
+    {
+        // Solo cuentan las empresas a las que el usuario tiene acceso (una consulta; el administrador entra a todas):
+        // quien no tiene que ver con Abastecimiento no paga ninguna comprobación por liquidación en revisión.
+        $empresaIds = null;
+        if (! EnsureUserIsAdmin::esAdmin($user)) {
+            $empresaIds = UserEnterpriseAccess::where('user_id', $user->id)->where('is_active', true)->pluck('enterprise_id');
+            if ($empresaIds->isEmpty()) {
+                return collect();
+            }
+        }
+
+        return Liquidacion::where('status', 'en_revision')
+            ->when($empresaIds !== null, fn ($q) => $q->whereIn('enterprise_id', $empresaIds))
             ->whereNotNull('paso_actual')
             ->where(fn ($q) => $q->whereNull('created_by')->orWhere('created_by', '!=', $user->id))
             ->where(fn ($q) => $q->whereNull('enviada_by')->orWhere('enviada_by', '!=', $user->id))
@@ -607,8 +631,18 @@ class PendingApprovalController extends Controller
             ->get()
             ->filter(function (Liquidacion $liquidacion) use ($user) {
                 $paso = $this->pasoEnEsperaDe($liquidacion);
+                if ($paso === null) {
+                    return false;
+                }
 
-                return $paso !== null && $this->puedeDecidirLiquidacion($user, $liquidacion, $paso);
+                // Una sola evaluación del servicio; pendiente = puede aprobar O rechazar el paso.
+                $acciones = AprobadorLiquidaciones::accionesPara($user, $liquidacion, $paso);
+                if (! $acciones['aprobar'] && ! $acciones['rechazar']) {
+                    return false;
+                }
+                $this->accionesLiquidaciones[$user->id][$liquidacion->id] = $acciones;
+
+                return true;
             })
             ->values();
     }
@@ -621,11 +655,9 @@ class PendingApprovalController extends Controller
             && $paso->decision === 'waiting');
     }
 
-    /** ¿Puede aprobar o rechazar el paso? (cada regla permite una, otra o las dos). */
-    private function puedeDecidirLiquidacion($user, Liquidacion $liquidacion, $paso): bool
+    private function empresaDeLiquidacion(Liquidacion $liquidacion): ?Enterprise
     {
-        return AprobadorLiquidaciones::puedeDecidir($user, $liquidacion, $paso)
-            || AprobadorLiquidaciones::puedeDecidir($user, $liquidacion, $paso, 'rechazar');
+        return $this->empresasLiquidacion[$liquidacion->enterprise_id] ??= Enterprise::find($liquidacion->enterprise_id);
     }
 
     /**
@@ -634,7 +666,7 @@ class PendingApprovalController extends Controller
      */
     private function puedeVerLiquidacion($user, Liquidacion $liquidacion): bool
     {
-        $empresa = Enterprise::find($liquidacion->enterprise_id);
+        $empresa = $this->empresaDeLiquidacion($liquidacion);
         if ($empresa === null || ! AlcanceActivos::tieneAcceso($user, $empresa)) {
             return false;
         }
@@ -646,7 +678,12 @@ class PendingApprovalController extends Controller
 
         $paso = $liquidacion->status === 'en_revision' ? CadenaLiquidacion::pasoActual($liquidacion) : null;
 
-        return $paso !== null && $this->puedeDecidirLiquidacion($user, $liquidacion, $paso);
+        if ($paso === null) {
+            return false;
+        }
+        $acciones = AprobadorLiquidaciones::accionesPara($user, $liquidacion, $paso);
+
+        return $acciones['aprobar'] || $acciones['rechazar'];
     }
 
     /** Entrada del proceso de liquidaciones para este usuario (con o sin empleado ligado); null si no tiene nada por decidir. */
@@ -679,7 +716,7 @@ class PendingApprovalController extends Controller
         $empresas = Enterprise::whereIn('id', $liquidaciones->pluck('enterprise_id')->unique())->pluck('name', 'id');
 
         return $liquidaciones
-            ->map(function (Liquidacion $l) use ($empresas) {
+            ->map(function (Liquidacion $l) use ($empresas, $user) {
                 $paso = $this->pasoEnEsperaDe($l);
                 $inicio = $l->periodo_inicio?->format('d/m/Y');
                 $fin = $l->periodo_fin?->format('d/m/Y');
@@ -699,6 +736,9 @@ class PendingApprovalController extends Controller
                     'currency' => $l->moneda,
                     'period_start' => $l->periodo_inicio?->format('Y-m-d'),
                     'period_end' => $l->periodo_fin?->format('Y-m-d'),
+                    // Lo que su regla le permite: el front esconde «Aprobar» o «Rechazar» según el caso.
+                    'can_approve' => $this->accionesLiquidaciones[$user->id][$l->id]['aprobar'] ?? false,
+                    'can_reject' => $this->accionesLiquidaciones[$user->id][$l->id]['rechazar'] ?? false,
                 ];
             })
             ->values()
@@ -729,11 +769,11 @@ class PendingApprovalController extends Controller
 
         $liquidacion = DB::transaction(fn () => $decidir($liquidacion, $esperado), 3);
 
-        DespuesDeDecidirLiquidacion::ejecutar(
-            $liquidacion,
-            Enterprise::findOrFail($liquidacion->enterprise_id),
-            $avisoPara($liquidacion),
-        );
+        // La empresa ya se consultó al comprobar la visibilidad; si faltara, solo se omiten el evento y el aviso.
+        $empresa = $this->empresaDeLiquidacion($liquidacion);
+        if ($empresa !== null) {
+            DespuesDeDecidirLiquidacion::ejecutar($liquidacion, $empresa, $avisoPara($liquidacion));
+        }
 
         return response()->json([
             'success' => true,

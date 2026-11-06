@@ -57,6 +57,43 @@ class AprobadorLiquidaciones
             ->contains(fn (ApprovalFlowStep $regla) => self::cumpleRegla($usuario, $liquidacion, $regla));
     }
 
+    /**
+     * Lo que el usuario puede hacer con el paso (`aprobar` y/o `rechazar`) evaluando las comprobaciones comunes y las
+     * reglas UNA sola vez (la bandeja del perfil lo corre por cada liquidación en revisión). Mismo resultado que
+     * llamar a `puedeDecidir` con cada acción: una acción es posible si alguna regla que el usuario cumple la permite.
+     *
+     * @return array{aprobar: bool, rechazar: bool}
+     */
+    public static function accionesPara(User $usuario, Liquidacion $liquidacion, LiquidacionAprobacion $paso): array
+    {
+        $nada = ['aprobar' => false, 'rechazar' => false];
+        if ($paso->decision !== 'waiting') {
+            return $nada;
+        }
+        if (self::esCreadorOEnviador($usuario, $liquidacion) || self::decidioOtroPaso($usuario, $paso)) {
+            return $nada;
+        }
+
+        $empresa = Enterprise::find($liquidacion->enterprise_id);
+        if ($empresa === null || ! AlcanceActivos::tieneAcceso($usuario, $empresa)) {
+            return $nada;
+        }
+
+        if (($paso->rules ?? []) === []) {
+            $puede = app(ContextoAbastecimiento::class)->puede($usuario, $empresa, 'liquidaciones', 'aprobar');
+
+            return ['aprobar' => $puede, 'rechazar' => $puede];
+        }
+
+        $cumplidas = self::reglasDelPaso($paso)
+            ->filter(fn (ApprovalFlowStep $regla) => self::cumpleRegla($usuario, $liquidacion, $regla));
+
+        return [
+            'aprobar' => $cumplidas->contains(fn (ApprovalFlowStep $regla) => (bool) $regla->can_approve),
+            'rechazar' => $cumplidas->contains(fn (ApprovalFlowStep $regla) => (bool) $regla->can_reject),
+        ];
+    }
+
     /** @return Collection<int, User> usuarios que hoy podrían aprobar el paso (sin repetir) */
     public static function elegibles(Liquidacion $liquidacion, LiquidacionAprobacion $paso): Collection
     {
