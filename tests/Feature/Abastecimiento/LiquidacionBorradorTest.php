@@ -457,7 +457,7 @@ class LiquidacionBorradorTest extends TestCase
             ->assertJsonPath('data.puede.enviar', true)
             ->assertJsonPath('data.puede.aprobar', false)
             ->assertJsonPath('data.puede.rechazar', false)
-            ->assertJsonPath('data.puede.cancelar', false);
+            ->assertJsonPath('data.puede.cancelar', true);
         $this->assertArrayHasKey('razon_social', $r->json('data.empresa'));
         $this->assertCount(2, $r->json('data.detalles'));
         $primero = $r->json('data.detalles.0');

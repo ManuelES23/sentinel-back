@@ -8,20 +8,27 @@ use App\Models\Abastecimiento\LiquidacionDetalle;
 use App\Models\Abastecimiento\Recepcion;
 use App\Models\Enterprise;
 use App\Models\User;
+use App\Services\Abastecimiento\AprobadorLiquidaciones;
+use App\Services\Abastecimiento\AvisosAbastecimiento;
+use App\Services\Abastecimiento\CadenaLiquidacion;
 use App\Services\Abastecimiento\CalculadoraLiquidacion;
+use App\Services\Abastecimiento\FlujoLiquidacion;
 use App\Services\Abastecimiento\GeneradorFolio;
 use App\Services\Abastecimiento\PrecioVigente;
+use App\Services\Abastecimiento\PresentadorLiquidacion;
 use App\Services\Abastecimiento\ReglasLiquidacion;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
 
 /**
- * Liquidaciones a productores (submódulo `liquidaciones`). Esta parte cubre el borrador:
- * recepciones disponibles, vista previa, alta, edición, baja, listado y ficha. El flujo
- * de revisión y aprobación vive en otros servicios y endpoints.
+ * Liquidaciones a productores (submódulo `liquidaciones`): borrador (recepciones disponibles, vista previa,
+ * alta, edición, baja, listado y ficha) y flujo (enviar a revisión, aprobar, rechazar y cancelar). Las reglas
+ * del flujo viven en `FlujoLiquidacion`; aquí solo se autoriza, se corre en transacción y, después de
+ * confirmar, se difunde el cambio y se manda el aviso. La forma del JSON es de `PresentadorLiquidacion`.
  */
 class LiquidacionController extends AbastecimientoController
 {
@@ -108,7 +115,7 @@ class LiquidacionController extends AbastecimientoController
         $verCanceladas = $request->boolean('con_canceladas') || ($filtros['status'] ?? null) === 'cancelada';
 
         $liquidaciones = Liquidacion::deEmpresa($empresa->id)
-            ->with(['convenio:id,folio,productor_id,variedad_id,modalidad,unidad,moneda,temporada_id', 'convenio.variedad:id,nombre', 'productor:id,nombre,tipo'])
+            ->with($this->presentador()->cargaResumen())
             ->when(! $verCanceladas, fn ($q) => $q->where('status', '!=', 'cancelada'))
             ->when(! empty($filtros['status']), fn ($q) => $q->where('status', $filtros['status']))
             ->when(! empty($filtros['productor_id']), fn ($q) => $q->where('productor_id', $filtros['productor_id']))
@@ -163,7 +170,7 @@ class LiquidacionController extends AbastecimientoController
             return $liquidacion;
         }, 3);
 
-        $this->difundir('liquidacion', 'created', $this->presentarResumen($liquidacion->load($this->cargaResumen())), $empresa);
+        $this->difundir('liquidacion', 'created', $this->presentarResumen($liquidacion->load($this->presentador()->cargaResumen())), $empresa);
 
         return response()->json([
             'success' => true,
@@ -196,7 +203,7 @@ class LiquidacionController extends AbastecimientoController
             return $liquidacion;
         }, 3);
 
-        $this->difundir('liquidacion', 'updated', $this->presentarResumen($liquidacion->load($this->cargaResumen())), $empresa);
+        $this->difundir('liquidacion', 'updated', $this->presentarResumen($liquidacion->load($this->presentador()->cargaResumen())), $empresa);
 
         return response()->json([
             'success' => true,
@@ -214,7 +221,7 @@ class LiquidacionController extends AbastecimientoController
             $liquidacion = Liquidacion::deEmpresa($empresa->id)->lockForUpdate()->findOrFail($id);
             ReglasLiquidacion::exigirBorrador($liquidacion);
 
-            $data = $this->presentarResumen($liquidacion->load($this->cargaResumen()));
+            $data = $this->presentarResumen($liquidacion->load($this->presentador()->cargaResumen()));
             ReglasLiquidacion::liberarRecepciones($liquidacion);
             LiquidacionDetalle::where('liquidacion_id', $liquidacion->id)->delete();
             $liquidacion->delete();
@@ -225,6 +232,137 @@ class LiquidacionController extends AbastecimientoController
         $this->difundir('liquidacion', 'deleted', $data, $empresa);
 
         return response()->json(['success' => true, 'message' => 'Liquidación eliminada.', 'data' => ['id' => $id]]);
+    }
+
+    // ---- Flujo de revisión ----
+
+    /** Borrador → en revisión (`edit`). Avisa a quienes pueden decidir el primer paso. */
+    public function enviar(Request $request, int $id): JsonResponse
+    {
+        $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'edit');
+        Liquidacion::deEmpresa($empresa->id)->findOrFail($id);
+        $usuario = $request->user();
+
+        $liquidacion = DB::transaction(
+            fn () => FlujoLiquidacion::enviar(Liquidacion::deEmpresa($empresa->id)->findOrFail($id), $usuario),
+            3,
+        );
+
+        return $this->responderFlujo($request, $empresa, $liquidacion, 'Liquidación enviada a revisión.', AvisosAbastecimiento::pasoEnEspera(...));
+    }
+
+    /**
+     * Aprueba el paso actual. Quien decide en una cadena configurada solo necesita ver la pantalla (`view`) y que
+     * le toque el paso; `paso` es el número que tenía a la vista (si ya cambió, 422).
+     */
+    public function aprobar(Request $request, int $id): JsonResponse
+    {
+        [$empresa, $liquidacion, $datos] = $this->prepararDecision($request, $id, [
+            'comentario' => ['nullable', 'string'],
+        ], 'aprobar');
+        $usuario = $request->user();
+
+        $liquidacion = DB::transaction(
+            fn () => FlujoLiquidacion::aprobar($liquidacion, $usuario, $datos['comentario'] ?? null, (int) $datos['paso']),
+            3,
+        );
+
+        // Si quedó aprobada no hay a quién avisar; si pasó al siguiente paso, a quienes lo deciden.
+        return $this->responderFlujo(
+            $request, $empresa, $liquidacion,
+            $liquidacion->status === 'aprobada' ? 'Liquidación aprobada.' : 'Paso aprobado.',
+            $liquidacion->status === 'en_revision' ? AvisosAbastecimiento::pasoEnEspera(...) : null,
+        );
+    }
+
+    /** Rechaza el paso actual: regresa a borrador con el motivo y avisa a quien la creó. */
+    public function rechazar(Request $request, int $id): JsonResponse
+    {
+        [$empresa, $liquidacion, $datos] = $this->prepararDecision($request, $id, [
+            'motivo' => ['required', 'string'],
+        ], 'rechazar', ['motivo.required' => 'Escribe el motivo del rechazo.']);
+        $usuario = $request->user();
+
+        $liquidacion = DB::transaction(
+            fn () => FlujoLiquidacion::rechazar($liquidacion, $usuario, (string) $datos['motivo'], (int) $datos['paso']),
+            3,
+        );
+
+        return $this->responderFlujo($request, $empresa, $liquidacion, 'Liquidación rechazada y regresada a borrador.', AvisosAbastecimiento::rechazada(...));
+    }
+
+    /** Cancela (`delete`): borrador, en revisión o aprobada sin abonos aplicados; libera las recepciones. */
+    public function cancelar(Request $request, int $id): JsonResponse
+    {
+        $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'delete');
+        Liquidacion::deEmpresa($empresa->id)->findOrFail($id);
+        $datos = $request->validate(
+            ['motivo' => ['required', 'string']],
+            ['motivo.required' => 'Escribe el motivo de la cancelación.'],
+        );
+        $usuario = $request->user();
+
+        $liquidacion = DB::transaction(
+            fn () => FlujoLiquidacion::cancelar(Liquidacion::deEmpresa($empresa->id)->findOrFail($id), $usuario, (string) $datos['motivo']),
+            3,
+        );
+
+        return $this->responderFlujo($request, $empresa, $liquidacion, 'Liquidación cancelada.');
+    }
+
+    /**
+     * Pasos comunes de aprobar y rechazar: pantalla (`view`), liquidación de la empresa, cuerpo (con `paso`) y
+     * que al usuario le toque el paso que tenía a la vista. Si el paso ya cambió o la liquidación ya no está en
+     * revisión no se responde 403: el servicio da el 422 que explica qué pasó (doble clic, otro aprobador).
+     *
+     * @return array{0: Enterprise, 1: Liquidacion, 2: array}
+     */
+    private function prepararDecision(Request $request, int $id, array $reglas, string $accion, array $mensajes = []): array
+    {
+        $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'view');
+        $liquidacion = Liquidacion::deEmpresa($empresa->id)->findOrFail($id);
+
+        $datos = $request->validate(['paso' => ['required', 'integer', 'min:1']] + $reglas, $mensajes + [
+            'paso.required' => 'Falta el paso que estás decidiendo; recarga la pantalla.',
+            'paso.integer' => 'El paso no es válido; recarga la pantalla.',
+            'paso.min' => 'El paso no es válido; recarga la pantalla.',
+        ]);
+
+        $paso = CadenaLiquidacion::pasoActual($liquidacion);
+        if ($liquidacion->status === 'en_revision'
+            && $paso !== null
+            && (int) $paso->step_order === (int) $datos['paso']
+            && ! AprobadorLiquidaciones::puedeDecidir($request->user(), $liquidacion, $paso, $accion)) {
+            abort(response()->json(['status' => 'error', 'message' => 'No te toca decidir esta liquidación.'], 403));
+        }
+
+        return [$empresa, $liquidacion, $datos];
+    }
+
+    /**
+     * Después del commit: difunde el cambio, manda el aviso que corresponde (nunca rompe la respuesta) y entrega
+     * la ficha completa.
+     */
+    private function responderFlujo(Request $request, Enterprise $empresa, Liquidacion $liquidacion, string $mensaje, ?callable $aviso = null): JsonResponse
+    {
+        $this->difundir('liquidacion', 'updated', $this->presentarResumen($liquidacion->load($this->presentador()->cargaResumen())), $empresa);
+
+        try {
+            if ($aviso !== null) {
+                $aviso($liquidacion);
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Abastecimiento: no se pudo avisar del cambio de la liquidación', [
+                'liquidacion_id' => $liquidacion->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => $mensaje,
+            'data' => $this->presentarCompleta($liquidacion, $empresa, $request->user()),
+        ]);
     }
 
     // ---- Cuerpo y cálculo ----
@@ -310,158 +448,19 @@ class LiquidacionController extends AbastecimientoController
 
     // ---- Presentación ----
 
-    private function cargaResumen(): array
+    private function presentador(): PresentadorLiquidacion
     {
-        return ['convenio:id,folio,productor_id,variedad_id,modalidad,unidad,moneda,temporada_id', 'convenio.variedad:id,nombre', 'productor:id,nombre,tipo'];
+        return app(PresentadorLiquidacion::class);
     }
 
-    private function f($valor): ?float
-    {
-        return $valor === null ? null : (float) $valor;
-    }
-
-    /** Campos propios de la liquidación, con los importes como números. */
-    private function presentarBase(Liquidacion $l): array
-    {
-        return [
-            'id' => $l->id,
-            'folio' => $l->folio,
-            'convenio_id' => $l->convenio_id,
-            'productor_id' => $l->productor_id,
-            'moneda' => $l->moneda,
-            'periodo_inicio' => $l->periodo_inicio->format('Y-m-d'),
-            'periodo_fin' => $l->periodo_fin->format('Y-m-d'),
-            'cantidad' => $this->f($l->cantidad),
-            'kilos' => $this->f($l->kilos),
-            'bruto' => $this->f($l->bruto),
-            'rezaga_real_pct' => $this->f($l->rezaga_real_pct),
-            'rezaga_aceptada_pct' => $this->f($l->rezaga_aceptada_pct),
-            'descuento' => $this->f($l->descuento),
-            'monto_calculado' => $this->f($l->monto_calculado),
-            'monto_ajustado' => $this->f($l->monto_ajustado),
-            'motivo_ajuste' => $l->motivo_ajuste,
-            'monto_final' => $this->f($l->monto_final),
-            'status' => $l->status,
-            'origen' => $l->origen,
-            'paso_actual' => $l->paso_actual,
-            'ronda' => $l->ronda,
-            'enviada_at' => $l->enviada_at?->toIso8601String(),
-            'aprobada_at' => $l->aprobada_at?->toIso8601String(),
-            'rechazo_motivo' => $l->rechazo_motivo,
-            'rechazada_at' => $l->rechazada_at?->toIso8601String(),
-            'cancelada_at' => $l->cancelada_at?->toIso8601String(),
-            'cancelada_motivo' => $l->cancelada_motivo,
-            'notas' => $l->notas,
-            'created_by' => $l->created_by,
-        ];
-    }
-
-    private function datosConvenio(Liquidacion $l): array
-    {
-        $c = $l->convenio;
-
-        return [
-            'id' => $c->id,
-            'folio' => $c->folio,
-            'modalidad' => $c->modalidad,
-            'unidad' => $c->unidad,
-            'moneda' => $c->moneda,
-            'porcentaje_rezaga' => $this->f($c->porcentaje_rezaga),
-            'variedad' => $c->variedad ? ['id' => $c->variedad->id, 'nombre' => $c->variedad->nombre] : null,
-        ];
-    }
-
-    private function datosProductor(Liquidacion $l): ?array
-    {
-        $p = $l->productor;
-
-        return $p ? ['id' => $p->id, 'nombre' => $p->nombre, 'tipo' => $p->tipo] : null;
-    }
-
-    /** Para listados y eventos: la liquidación con su convenio y productor (ya cargados). */
     private function presentarResumen(Liquidacion $l): array
     {
-        $l->loadMissing($this->cargaResumen());
-
-        return $this->presentarBase($l) + [
-            'convenio' => $this->datosConvenio($l),
-            'productor' => $this->datosProductor($l),
-        ];
+        return $this->presentador()->resumen($l);
     }
 
-    /** Ficha completa: detalle, convenio, productor, pasos de aprobación, acciones posibles y datos de la empresa. */
     private function presentarCompleta(Liquidacion $l, Enterprise $empresa, ?User $usuario): array
     {
-        $l->load([
-            'convenio:id,folio,productor_id,variedad_id,modalidad,unidad,moneda,porcentaje_rezaga,temporada_id',
-            'convenio.variedad:id,nombre',
-            'productor:id,nombre,tipo',
-            'detalles' => fn ($q) => $q->orderBy('id'),
-            'detalles.recepcion:id,folio,fecha,tipo_carga_id',
-            'detalles.recepcion.tipoCarga:id,nombre',
-            'aprobaciones' => fn ($q) => $q->orderBy('ronda')->orderBy('step_order')->orderBy('id'),
-        ]);
-
-        return $this->presentarBase($l) + [
-            'convenio' => $this->datosConvenio($l),
-            'productor' => $this->datosProductor($l),
-            'detalles' => $l->detalles->map(fn (LiquidacionDetalle $d) => [
-                'id' => $d->id,
-                'recepcion_id' => $d->recepcion_id,
-                'folio' => $d->recepcion?->folio,
-                'fecha' => $d->recepcion?->fecha->format('Y-m-d'),
-                'tipo_carga' => $d->recepcion?->tipoCarga ? ['id' => $d->recepcion->tipoCarga->id, 'nombre' => $d->recepcion->tipoCarga->nombre] : null,
-                'cantidad' => $this->f($d->cantidad),
-                'kilos' => $this->f($d->kilos),
-                'rezaga_kg' => $this->f($d->rezaga_kg),
-                'precio' => $this->f($d->precio),
-                'porcentaje_productor' => $this->f($d->porcentaje_productor),
-                'subtotal' => $this->f($d->subtotal),
-                'descuento' => $this->f($d->descuento),
-                'a_pagar' => $this->f($d->a_pagar),
-            ])->values()->all(),
-            'aprobaciones' => $l->aprobaciones->map(fn ($a) => [
-                'id' => $a->id,
-                'ronda' => $a->ronda,
-                'step_order' => $a->step_order,
-                'description' => $a->description,
-                'decision' => $a->decision,
-                'decided_by' => $a->decided_by,
-                'comment' => $a->comment,
-                'decided_at' => $a->decided_at?->toIso8601String(),
-            ])->values()->all(),
-            'puede' => $this->puede($l, $empresa, $usuario),
-            'empresa' => [
-                'id' => $empresa->id,
-                'nombre' => $empresa->name,
-                'razon_social' => $empresa->razon_social,
-                'rfc' => $empresa->rfc,
-                'direccion' => $empresa->direccion,
-                'ciudad' => $empresa->ciudad,
-                'pais' => $empresa->pais,
-                'telefono' => $empresa->telefono,
-            ],
-        ];
-    }
-
-    /**
-     * Acciones que el usuario tiene a la mano sobre la liquidación. Punto único de extensión:
-     * la cadena de aprobación (aprobar, rechazar) y la cancelación se suman aquí.
-     *
-     * @return array{editar: bool, enviar: bool, aprobar: bool, rechazar: bool, cancelar: bool}
-     */
-    private function puede(Liquidacion $l, Enterprise $empresa, ?User $usuario): array
-    {
-        $borrador = $l->status === 'borrador';
-        $edita = $usuario !== null && $this->ctx->puede($usuario, $empresa, self::SUBMODULO, 'edit');
-
-        return [
-            'editar' => $borrador && $edita,
-            'enviar' => $borrador && $edita,
-            'aprobar' => false,
-            'rechazar' => false,
-            'cancelar' => false,
-        ];
+        return $this->presentador()->completa($l, $empresa, $usuario);
     }
 
     /** Renglón de la vista previa: el cálculo más lo que la tabla muestra de la recepción. */

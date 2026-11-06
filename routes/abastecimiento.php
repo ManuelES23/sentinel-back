@@ -75,4 +75,8 @@ Route::prefix('abastecimiento')->name('abastecimiento.')->group(function () {
     Route::post('liquidaciones', [LiquidacionController::class, 'store'])->name('liquidaciones.store');
     Route::put('liquidaciones/{id}', [LiquidacionController::class, 'update'])->whereNumber('id')->name('liquidaciones.update');
     Route::delete('liquidaciones/{id}', [LiquidacionController::class, 'destroy'])->whereNumber('id')->name('liquidaciones.destroy');
+    Route::post('liquidaciones/{id}/enviar', [LiquidacionController::class, 'enviar'])->whereNumber('id')->name('liquidaciones.enviar');
+    Route::post('liquidaciones/{id}/aprobar', [LiquidacionController::class, 'aprobar'])->whereNumber('id')->name('liquidaciones.aprobar');
+    Route::post('liquidaciones/{id}/rechazar', [LiquidacionController::class, 'rechazar'])->whereNumber('id')->name('liquidaciones.rechazar');
+    Route::post('liquidaciones/{id}/cancelar', [LiquidacionController::class, 'cancelar'])->whereNumber('id')->name('liquidaciones.cancelar');
 });
