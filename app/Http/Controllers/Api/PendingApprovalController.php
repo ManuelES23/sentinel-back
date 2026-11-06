@@ -20,6 +20,7 @@ use App\Services\NotificationService;
 use App\Services\RH\AprobadorVacaciones;
 use App\Services\RH\CadenaAprobacionVacaciones;
 use App\Services\RH\VacationRequestService;
+use App\Support\RH\PresentadorPortalVacaciones;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -421,6 +422,37 @@ class PendingApprovalController extends Controller
     }
 
     // ===== Vacaciones =====
+
+    /**
+     * ¿Puede ver el detalle de esta solicitud? Quien decide su paso actual, quien ya decidió algún paso (su historial)
+     * o RH. El solicitante nunca (tampoco por un usuario compartido): el comentario del visto bueno no es para él.
+     */
+    private function puedeVerVacacion($user, VacationRequest $detalle): bool
+    {
+        // El detalle carga al solicitante con pocas columnas (sin reports_to ni user_id) y las reglas de
+        // esSolicitante/puedeDecidir necesitan el empleado completo: se revisa sobre una copia completa.
+        $solicitud = VacationRequest::with(['employee.department', 'approvals'])->find($detalle->id);
+
+        if ($this->aprobadorVac()->esSolicitante($user, $solicitud)) {
+            return false;
+        }
+
+        if ($this->aprobadorVac()->esRh($user)) {
+            return true;
+        }
+
+        $empleadoId = $user->employee()->value('id');
+        $decidioUnPaso = $solicitud->approvals->contains(fn ($paso) => (int) $paso->decided_by === (int) $user->id
+            || ($empleadoId !== null && (int) $paso->decided_by_employee_id === (int) $empleadoId));
+        if ($decidioUnPaso) {
+            return true;
+        }
+
+        $paso = $solicitud->status === 'pending' ? $this->cadenaVac()->pasoActual($solicitud) : null;
+
+        return $paso !== null && ($this->aprobadorVac()->puedeDecidir($user, $solicitud, $paso)
+            || $this->aprobadorVac()->puedeDecidir($user, $solicitud, $paso, 'rechazar'));
+    }
 
     /** Solicitudes cuyo paso ACTUAL puede decidir este usuario (spec §5.6). */
     private function vacacionesPara($user): Collection
@@ -873,7 +905,9 @@ class PendingApprovalController extends Controller
             default => null,
         };
 
-        if (! $item) {
+        // Vacaciones: el detalle trae la cadena con el comentario del visto bueno de RH, que es para quien revisa.
+        // Una solicitud que no le toca responde igual que una inexistente.
+        if (! $item || ($type === 'vacation_request' && ! $this->puedeVerVacacion($request->user(), $item))) {
             return response()->json(['success' => false, 'message' => 'Registro no encontrado'], 404);
         }
 
@@ -1216,7 +1250,8 @@ class PendingApprovalController extends Controller
                 ['label' => 'Motivo', 'value' => $item->reason ?: 'No especificado'],
                 ['label' => 'Fecha de solicitud', 'value' => $item->created_at?->format('d/m/Y H:i')],
             ],
-            'approvals' => $item->approvals->map(fn ($paso) => [
+            // Misma regla que el portal: el respaldo de RH solo sale si decidió o si es el que espera.
+            'approvals' => PresentadorPortalVacaciones::pasosVisibles($item)->map(fn ($paso) => [
                 'step_order' => $paso->step_order,
                 'description' => $paso->description,
                 'decision' => $paso->decision,

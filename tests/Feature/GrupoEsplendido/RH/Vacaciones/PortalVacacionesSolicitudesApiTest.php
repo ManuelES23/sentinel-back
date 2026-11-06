@@ -165,7 +165,7 @@ class PortalVacacionesSolicitudesApiTest extends TestCase
             ->assertJsonPath('data.pasos.1.decision', 'waiting')
             ->assertJsonCount(2, 'data.pasos');
 
-        $this->assertSame(['orden', 'descripcion', 'decision', 'decidido_por', 'decidido_el', 'comentario', 'es_rh'], array_keys($respuesta->json('data.pasos.0')));
+        $this->assertSame(['orden', 'descripcion', 'decision', 'decidido_por', 'decidido_el', 'comentario', 'es_rh', 'es_visto_bueno'], array_keys($respuesta->json('data.pasos.0')));
         $this->assertStringNotContainsString($usuarioJefe->email, $respuesta->getContent());
     }
 

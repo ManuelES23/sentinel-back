@@ -126,7 +126,10 @@ class PresentadorPortalVacaciones
         ];
     }
 
-    /** Resumen + línea de tiempo. De quien decidió solo sale el nombre (spec §6.1). */
+    /**
+     * Resumen + línea de tiempo. De quien decidió solo sale el nombre (spec §6.1). El empleado ve el paso de visto
+     * bueno de RH («RH dio el visto bueno», `es_visto_bueno`), pero nunca su comentario: es para quien revisa (§5.5).
+     */
     public static function detalle(VacationRequest $solicitud): array
     {
         return self::resumen($solicitud) + [
@@ -138,6 +141,7 @@ class PresentadorPortalVacaciones
                 'decidido_el' => $paso->decided_at?->toIso8601String(),
                 'comentario' => $paso->decision === VacationRequestApproval::REJECTED ? $paso->comment : null,
                 'es_rh' => $paso->is_rh_final,
+                'es_visto_bueno' => (bool) $paso->is_rh_review,
             ])->all(),
         ];
     }
@@ -215,9 +219,10 @@ class PresentadorPortalVacaciones
 
     /**
      * El paso final de RH solo se activa si todos los anteriores se saltan
-     * (spec §5.4): se muestra únicamente si decidió o si es el que espera.
+     * (spec §5.4): se muestra únicamente si decidió o si es el que espera. La comparten el portal, el perfil y el
+     * detalle de la bandeja (PendingApprovalController), para que nadie lea «RH en espera» detrás del director.
      */
-    private static function pasosVisibles(VacationRequest $solicitud): Collection
+    public static function pasosVisibles(VacationRequest $solicitud): Collection
     {
         return $solicitud->approvals
             ->reject(fn (VacationRequestApproval $paso) => $paso->is_rh_final

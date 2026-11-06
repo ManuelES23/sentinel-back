@@ -97,7 +97,8 @@ class BandejaVacacionesTest extends TestCase
 
         $detalle = $this->getJson("/api/pending-approvals/vacation_request/{$this->solicitud->id}")->assertOk()->json('data');
 
-        $this->assertSame(['Jefe directo', 'RH Grupo Espléndido'], array_column($detalle['approvals'], 'description'));
+        // El respaldo de RH no espera (el jefe puede decidir): se oculta, igual que en el portal.
+        $this->assertSame(['Jefe directo'], array_column($detalle['approvals'], 'description'));
     }
 
     public function test_la_solicitud_mas_antigua_no_se_pierde_entre_muchas_ajenas(): void

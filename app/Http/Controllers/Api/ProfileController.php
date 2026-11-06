@@ -337,9 +337,19 @@ class ProfileController extends Controller
         }
 
         $requests = VacationRequest::where('employee_id', $employee->id)
-            ->with(['approver:id,name', 'approvals'])
+            ->with(['approver:id,name', 'approvals.decider:id,name', 'approvals.decidedByEmployee:id,first_name,last_name,second_last_name'])
             ->orderBy('created_at', 'desc')
             ->paginate(20);
+
+        // Igual que en index(): la cadena cruda (reglas, comentario del visto bueno de RH, que es para quien revisa)
+        // no sale; solo la revisión presentada del portal (spec §5.5).
+        $requests->getCollection()->each(function (VacationRequest $solicitud) {
+            $solicitud->setAttribute('revision', Arr::only(
+                PresentadorPortalVacaciones::detalle($solicitud),
+                ['paso_actual', 'total_pasos', 'revisor_actual', 'pasos'],
+            ));
+            $solicitud->unsetRelation('approvals');
+        });
 
         $balances = VacationBalance::where('employee_id', $employee->id)
             ->orderBy('year', 'desc')
