@@ -12,6 +12,7 @@ use App\Services\Abastecimiento\AprobadorLiquidaciones;
 use App\Services\Abastecimiento\AvisosAbastecimiento;
 use App\Services\Abastecimiento\CadenaLiquidacion;
 use App\Services\Abastecimiento\CalculadoraLiquidacion;
+use App\Services\Abastecimiento\DespuesDeDecidirLiquidacion;
 use App\Services\Abastecimiento\FlujoLiquidacion;
 use App\Services\Abastecimiento\GeneradorFolio;
 use App\Services\Abastecimiento\PrecioVigente;
@@ -21,7 +22,6 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
 
 /**
@@ -345,18 +345,7 @@ class LiquidacionController extends AbastecimientoController
      */
     private function responderFlujo(Request $request, Enterprise $empresa, Liquidacion $liquidacion, string $mensaje, ?callable $aviso = null): JsonResponse
     {
-        $this->difundir('liquidacion', 'updated', $this->presentarResumen($liquidacion->load($this->presentador()->cargaResumen())), $empresa);
-
-        try {
-            if ($aviso !== null) {
-                $aviso($liquidacion);
-            }
-        } catch (\Throwable $e) {
-            Log::warning('Abastecimiento: no se pudo avisar del cambio de la liquidación', [
-                'liquidacion_id' => $liquidacion->id,
-                'error' => $e->getMessage(),
-            ]);
-        }
+        DespuesDeDecidirLiquidacion::ejecutar($liquidacion, $empresa, $aviso);
 
         return response()->json([
             'success' => true,
