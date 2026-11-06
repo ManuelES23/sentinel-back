@@ -23,6 +23,7 @@ Route::prefix('abastecimiento')->name('abastecimiento.')->group(function () {
 
     // Tablero (submódulo tablero).
     Route::get('tablero', [TableroController::class, 'index'])->name('tablero');
+    Route::get('tablero/exportar', [TableroController::class, 'exportar'])->name('tablero.exportar');
 
     // Cultivos y variedades (submódulo variedades).
     Route::get('cultivos', [CultivoController::class, 'index'])->name('cultivos.index');
