@@ -128,77 +128,53 @@ class DecisionesVacacionesTest extends TestCase
         $this->esperar(422, 'motivo', fn () => $this->servicio()->rechazar($this->nueva(), $this->jefe->user, '   '));
     }
 
-    public function test_rh_resuelve_en_cualquier_paso(): void
-    {
-        $rh = User::factory()->create();
-        $this->concederVacaciones($rh, 'aprobar');
-
-        $solicitud = $this->servicio()->resolverComoRh($this->nueva(), $rh, 'approved');
-
-        $this->assertSame('approved', $solicitud->status);
-        $this->assertTrue($solicitud->resolved_by_rh);
-        $this->assertSame('Resuelto por RH', $solicitud->approvals()->where('step_order', 1)->value('comment'));
-        $this->assertSame(VacationRequestApproval::APPROVED, $solicitud->approvals()->where('step_order', 1)->value('decision'));
-        $this->assertSame(0, $solicitud->approvals()->where('decision', VacationRequestApproval::WAITING)->count());
-        $this->assertSame(5, AttendanceRecord::where('employee_id', $this->solicitante->id)->count());
-    }
-
-    public function test_resolver_como_rh_exige_el_permiso_y_no_aplica_a_lo_propio(): void
-    {
-        $solicitud = $this->nueva();
-
-        $this->esperar(403, 'como RH', fn () => $this->servicio()->resolverComoRh($solicitud, User::factory()->create(), 'approved'));
-
-        $this->concederVacaciones($this->solicitante->user, 'aprobar');
-        $this->esperar(403, 'como RH', fn () => $this->servicio()->resolverComoRh($solicitud, $this->solicitante->user, 'approved'));
-    }
-
-    public function test_rh_rechaza_con_motivo(): void
-    {
-        $rh = User::factory()->create();
-        $this->concederVacaciones($rh, 'aprobar');
-        $solicitud = $this->nueva();
-
-        $this->esperar(422, 'motivo', fn () => $this->servicio()->resolverComoRh($solicitud, $rh, 'rejected'));
-
-        $rechazada = $this->servicio()->resolverComoRh($solicitud, $rh, 'rejected', 'Temporada alta');
-        $this->assertSame('rejected', $rechazada->status);
-        $this->assertSame('Resuelto por RH: Temporada alta', $rechazada->approvals()->where('step_order', 1)->value('comment'));
-    }
-
     public function test_la_asistencia_respeta_los_dias_con_entrada(): void
     {
         AttendanceRecord::create(['employee_id' => $this->solicitante->id, 'date' => $this->lunes->toDateString(), 'status' => 'present', 'check_in' => $this->lunes->copy()->setTime(8, 0)]);
         AttendanceRecord::create(['employee_id' => $this->solicitante->id, 'date' => $this->lunes->copy()->addDay()->toDateString(), 'status' => 'absent']);
-        $rh = User::factory()->create();
-        $this->concederVacaciones($rh, 'aprobar');
 
-        $this->servicio()->resolverComoRh($this->nueva(), $rh, 'approved');
+        $solicitud = $this->servicio()->aprobarPaso($this->nueva(), $this->jefe->user);
+        $this->servicio()->aprobarPaso($solicitud, $this->coordinador->user);
 
         $this->assertSame('present', AttendanceRecord::where('employee_id', $this->solicitante->id)->whereDate('date', $this->lunes->toDateString())->value('status'));
         $this->assertSame('vacation', AttendanceRecord::where('employee_id', $this->solicitante->id)->whereDate('date', $this->lunes->copy()->addDay()->toDateString())->value('status'));
     }
-    public function test_rh_ligado_a_dos_empleados_no_resuelve_la_solicitud_del_segundo(): void
+
+    /** Sin nadie que decida los pasos del jefe y del coordinador, la solicitud espera en el respaldo de RH. */
+    private function enRespaldoDeRh(): VacationRequest
+    {
+        $this->jefe->update(['status' => Employee::STATUS_INACTIVE]);
+        $this->coordinador->update(['status' => Employee::STATUS_INACTIVE]);
+        $solicitud = $this->nueva();
+        $this->assertTrue((bool) $solicitud->approvals()->where('step_order', $solicitud->current_step)->value('is_rh_final'));
+
+        return $solicitud;
+    }
+
+    public function test_rh_ligado_a_dos_empleados_no_cierra_en_el_respaldo_la_solicitud_del_segundo(): void
     {
         $rh = User::factory()->create();
         $this->concederVacaciones($rh, 'aprobar');
         // Dato viejo: dos empleados ligados al mismo usuario; hasOne devuelve el primero.
         $this->empleado($this->corporativo, ['user_id' => $rh->id]);
         $segundo = $this->empleado($this->empresa, ['user_id' => $rh->id]);
+        $this->coordinador->update(['status' => Employee::STATUS_INACTIVE]);
         $solicitud = $this->servicio()->crear($segundo, $this->lunes, $this->lunes->copy()->addDays(4), null, VacationRequest::SOURCE_PORTAL);
+        $this->assertTrue((bool) $solicitud->approvals()->where('step_order', $solicitud->current_step)->value('is_rh_final'));
 
         $this->assertNotSame($segundo->id, $rh->employee?->id);
-        $this->esperar(403, 'como RH', fn () => $this->servicio()->resolverComoRh($solicitud, $rh, 'approved'));
+        $this->esperar(403, 'No puede aprobar', fn () => $this->servicio()->aprobarPaso($solicitud, $rh));
+        $this->esperar(403, 'No puede rechazar', fn () => $this->servicio()->rechazar($solicitud, $rh, 'No procede'));
     }
 
-    public function test_rh_aprueba_aunque_el_empleado_se_haya_dado_de_baja_con_borrado_logico(): void
+    public function test_rh_cierra_en_el_respaldo_aunque_el_empleado_se_haya_dado_de_baja_con_borrado_logico(): void
     {
         $rh = User::factory()->create();
         $this->concederVacaciones($rh, 'aprobar');
-        $solicitud = $this->nueva();
+        $solicitud = $this->enRespaldoDeRh();
         $this->solicitante->delete();
 
-        $resuelta = $this->servicio()->resolverComoRh($solicitud->fresh(), $rh, 'approved');
+        $resuelta = $this->servicio()->aprobarPaso($solicitud->fresh(), $rh);
 
         $this->assertSame('approved', $resuelta->status);
         $this->assertSame(5, AttendanceRecord::where('employee_id', $this->solicitante->id)->where('status', 'vacation')->count());

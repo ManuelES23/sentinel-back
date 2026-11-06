@@ -17,7 +17,7 @@ class VacationRequestApproval extends Model
     public const SKIPPED = 'skipped';
 
     protected $fillable = [
-        'vacation_request_id', 'step_order', 'description', 'rules', 'is_rh_final',
+        'vacation_request_id', 'step_order', 'description', 'rules', 'is_rh_final', 'is_rh_review',
         'decision', 'decided_by', 'decided_by_employee_id', 'comment', 'decided_at',
     ];
 
@@ -25,6 +25,7 @@ class VacationRequestApproval extends Model
         'step_order' => 'integer',
         'rules' => 'array',
         'is_rh_final' => 'boolean',
+        'is_rh_review' => 'boolean',
         'decided_at' => 'datetime',
     ];
 

@@ -126,7 +126,10 @@ class PresentadorPortalVacaciones
         ];
     }
 
-    /** Resumen + línea de tiempo. De quien decidió solo sale el nombre (spec §6.1). */
+    /**
+     * Resumen + línea de tiempo. De quien decidió solo sale el nombre (spec §6.1). El empleado ve el paso de visto
+     * bueno de RH («RH dio el visto bueno», `es_visto_bueno`), pero nunca su comentario: es para quien revisa (§5.5).
+     */
     public static function detalle(VacationRequest $solicitud): array
     {
         return self::resumen($solicitud) + [
@@ -138,20 +141,24 @@ class PresentadorPortalVacaciones
                 'decidido_el' => $paso->decided_at?->toIso8601String(),
                 'comentario' => $paso->decision === VacationRequestApproval::REJECTED ? $paso->comment : null,
                 'es_rh' => $paso->is_rh_final,
+                'es_visto_bueno' => (bool) $paso->is_rh_review,
             ])->all(),
         ];
     }
 
     /**
-     * Solicitud ajena que le toca revisar al jefe del portal (lista blanca): el solicitante, su
-     * puesto y departamento, el periodo y el motivo. Nada de saldo, ingreso ni datos personales.
+     * Solicitud ajena que le toca revisar a quien decide desde el portal (jefe o director), lista blanca. La lista
+     * (`$completo = false`) agrega solo `saldo: {despues, adelanto}`; el detalle (`$completo = true`) trae todo lo de
+     * ContextoRevisionVacaciones (saldo completo, desglose, historial por periodo, coincidencias...). `$saldoLista`
+     * es el `saldo` ya calculado en lote por ContextoRevisionVacaciones::saldosDeLista (evita una consulta por tarjeta).
+     * El comentario de los pasos de visto bueno de RH es para quien revisa: aquí sale, en detalle() no.
      */
-    public static function paraRevisar(VacationRequest $solicitud): array
+    public static function paraRevisar(VacationRequest $solicitud, bool $completo = false, ?array $saldoLista = null): array
     {
         $solicitante = $solicitud->employee;
         $solicitante->loadMissing(['position:id,name', 'department:id,name']);
 
-        return [
+        $datos = [
             'id' => $solicitud->id,
             'folio' => self::folio($solicitud),
             'solicitante' => $solicitante->full_name,
@@ -161,7 +168,6 @@ class PresentadorPortalVacaciones
             'fecha_inicio' => $solicitud->start_date->format('Y-m-d'),
             'fecha_fin' => $solicitud->end_date->format('Y-m-d'),
             'dias' => (int) $solicitud->days_requested,
-            // El jefe ve que es adelanto (no el saldo).
             'adelanto' => (int) $solicitud->advance_days,
             'motivo' => $solicitud->reason,
             'solicitada_el' => $solicitud->created_at?->toIso8601String(),
@@ -171,9 +177,17 @@ class PresentadorPortalVacaciones
                 'decision' => $paso->decision,
                 'decidido_por' => $paso->nombreDeQuienDecidio(),
                 'decidido_el' => $paso->decided_at?->toIso8601String(),
+                'comentario' => $paso->is_rh_review ? $paso->comment : null,
                 'es_rh' => $paso->is_rh_final,
+                'es_visto_bueno' => (bool) $paso->is_rh_review,
             ])->all(),
         ];
+
+        if ($completo) {
+            return $datos + ContextoRevisionVacaciones::para($solicitud);
+        }
+
+        return $datos + ['saldo' => $saldoLista ?? ContextoRevisionVacaciones::saldosDeLista(collect([$solicitud]))[$solicitud->id]];
     }
 
     public static function formato(VacationRequest $solicitud): array
@@ -205,9 +219,10 @@ class PresentadorPortalVacaciones
 
     /**
      * El paso final de RH solo se activa si todos los anteriores se saltan
-     * (spec §5.4): se muestra únicamente si decidió o si es el que espera.
+     * (spec §5.4): se muestra únicamente si decidió o si es el que espera. La comparten el portal, el perfil y el
+     * detalle de la bandeja (PendingApprovalController), para que nadie lea «RH en espera» detrás del director.
      */
-    private static function pasosVisibles(VacationRequest $solicitud): Collection
+    public static function pasosVisibles(VacationRequest $solicitud): Collection
     {
         return $solicitud->approvals
             ->reject(fn (VacationRequestApproval $paso) => $paso->is_rh_final

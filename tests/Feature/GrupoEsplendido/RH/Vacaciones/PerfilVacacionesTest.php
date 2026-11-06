@@ -30,6 +30,7 @@ class PerfilVacacionesTest extends TestCase
         $respuesta = $this->postJson('/api/profile/vacation-request', [
             'start_date' => $this->lunes->toDateString(),
             'end_date' => $this->lunes->copy()->addDays(6)->toDateString(),
+            'reason' => 'Descanso familiar',
         ])->assertOk()->assertJsonPath('status', 'success');
 
         $solicitud = VacationRequest::findOrFail($respuesta->json('data.id'));
@@ -46,6 +47,7 @@ class PerfilVacacionesTest extends TestCase
         $this->postJson('/api/profile/vacation-request', [
             'start_date' => $this->lunes->toDateString(),
             'end_date' => $this->lunes->copy()->addDays(20)->toDateString(),
+            'reason' => 'Descanso familiar',
         ])->assertStatus(400)->assertJsonPath('status', 'error')
             ->assertJsonPath('message', fn ($m) => str_contains($m, 'Puede adelantar hasta 12 días'));
     }

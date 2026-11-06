@@ -179,7 +179,7 @@ class AdelantoYDomingosVacacionesTest extends TestCase
         $empleado = $this->nuevo();
         $token = $this->postJson('/api/portal-vacaciones/login', ['employee_number' => $empleado->employee_number, 'pin' => '123456'])->json('data.token');
         $encabezados = ['X-Portal-Token' => $token];
-        $fechas = ['start_date' => $this->dia(0)->toDateString(), 'end_date' => $this->dia(4)->toDateString()];
+        $fechas = ['start_date' => $this->dia(0)->toDateString(), 'end_date' => $this->dia(4)->toDateString(), 'reason' => 'Descanso familiar'];
 
         $this->postJson('/api/portal-vacaciones/calcular', $fechas, $encabezados)->assertOk()
             ->assertJsonPath('data.adelanto', 5)

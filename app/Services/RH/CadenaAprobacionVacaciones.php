@@ -5,12 +5,14 @@ namespace App\Services\RH;
 use App\Models\ApprovalFlowStep;
 use App\Models\VacationRequest;
 use App\Models\VacationRequestApproval;
+use Illuminate\Support\Collection;
 
 /**
  * La cadena de cada solicitud se congela al crearla (spec §5.2): un paso por
  * cada step_order configurado (reglas con el mismo número = alternativas),
  * numerados 1..n, más un paso final de RH. Avanzar salta los pasos sin nadie
- * elegible; el paso de RH solo espera si ningún paso anterior aprobó.
+ * elegible; el paso de RH solo espera si ningún paso anterior aprobó o si el último que aprobó
+ * fue un visto bueno de RH (que nunca cierra la solicitud).
  */
 class CadenaAprobacionVacaciones
 {
@@ -38,6 +40,8 @@ class CadenaAprobacionVacaciones
                 'description' => mb_substr($reglas->map(fn (ApprovalFlowStep $regla) => $regla->approver_description)->unique()->implode(' o '), 0, 255),
                 'rules' => $reglas->pluck('id')->map(fn ($id) => (int) $id)->values()->all(),
                 'is_rh_final' => false,
+                // Paso de visto bueno de RH: todas sus reglas son rh_review (la configuración impide mezclarlas).
+                'is_rh_review' => $reglas->every(fn (ApprovalFlowStep $regla) => $regla->approver_type === ApprovalFlowStep::TYPE_RH_REVIEW),
                 'decision' => VacationRequestApproval::WAITING,
             ]);
         }
@@ -64,7 +68,7 @@ class CadenaAprobacionVacaciones
             }
 
             if ($paso->is_rh_final) {
-                if ($pasos->contains('decision', VacationRequestApproval::APPROVED)) {
+                if ($this->respaldoNoRequerido($pasos)) {
                     $this->saltar($paso, self::NO_REQUERIDO);
                     break;
                 }
@@ -90,6 +94,41 @@ class CadenaAprobacionVacaciones
         return null;
     }
 
+    /**
+     * Simula, sin escribir, qué paso quedaría en espera si se aprobara el actual (mismos saltos y
+     * misma regla del respaldo que `avanzar`, tratando al actual como aprobado). null = la
+     * solicitud quedaría aprobada. No sabe quién aprobaría el actual, así que un paso posterior
+     * cuyo único aprobador sea esa persona se muestra como si hubiera quien lo decida.
+     */
+    public function siguienteSiAprueba(VacationRequest $solicitud): ?VacationRequestApproval
+    {
+        $actual = $this->pasoActual($solicitud);
+        if (! $actual) {
+            return null;
+        }
+
+        $pasos = $solicitud->approvals()->get();
+        // El actual cuenta como aprobado (copia en memoria: no se escribe nada).
+        $aprobados = $pasos->where('decision', VacationRequestApproval::APPROVED)
+            ->push((clone $actual)->setAttribute('decision', VacationRequestApproval::APPROVED));
+
+        foreach ($pasos as $paso) {
+            if ($paso->step_order <= $actual->step_order || $paso->decision !== VacationRequestApproval::WAITING) {
+                continue;
+            }
+
+            if ($paso->is_rh_final) {
+                return $this->respaldoNoRequerido($aprobados) ? null : $paso;
+            }
+
+            if ($this->aprobador->hayQuienDecida($solicitud, $paso)) {
+                return $paso;
+            }
+        }
+
+        return null;
+    }
+
     public function pasoActual(VacationRequest $solicitud): ?VacationRequestApproval
     {
         if ($solicitud->current_step === null) {
@@ -107,6 +146,17 @@ class CadenaAprobacionVacaciones
     {
         $solicitud->approvals()->where('decision', VacationRequestApproval::WAITING)->get()
             ->each(fn (VacationRequestApproval $paso) => $this->saltar($paso, $motivo));
+    }
+
+    /**
+     * El respaldo de RH se salta solo si hubo una aprobación y la última (la de mayor step_order)
+     * no fue un visto bueno: el visto bueno nunca cierra la solicitud, el director tiene la última palabra.
+     */
+    private function respaldoNoRequerido(Collection $pasos): bool
+    {
+        $ultimo = $pasos->where('decision', VacationRequestApproval::APPROVED)->sortByDesc('step_order')->first();
+
+        return $ultimo !== null && ! $ultimo->is_rh_review;
     }
 
     private function saltar(VacationRequestApproval $paso, string $motivo): void

@@ -8,9 +8,11 @@ use App\Models\Department;
 use App\Models\Employee;
 use App\Models\VacationPortalSession;
 use App\Models\VacationRequest;
+use App\Services\RH\AprobadorVacaciones;
 use App\Services\RH\SesionPortalVacaciones;
 use App\Services\RH\VacationRequestService;
 use App\Services\RH\VerificadorPinEmpleado;
+use App\Support\RH\MotivoVacaciones;
 use App\Support\RH\PresentadorPortalVacaciones;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -56,7 +58,7 @@ class VacationPortalController extends Controller
         return response()->json(['success' => true, 'message' => 'Sesión cerrada.']);
     }
 
-    public function yo(Request $request): JsonResponse
+    public function yo(Request $request, AprobadorVacaciones $aprobador): JsonResponse
     {
         $empleado = $this->empleado($request);
 
@@ -65,7 +67,9 @@ class VacationPortalController extends Controller
             'data' => [
                 'empleado' => PresentadorPortalVacaciones::empleado($empleado),
                 'saldo' => PresentadorPortalVacaciones::saldo($empleado),
-                // Muestra la pestaña «Por revisar»: el empleado es jefe de algún departamento.
+                // Muestra la pestaña «Por revisar»: jefe de algún departamento o usuario de una regla «Usuario específico».
+                'puede_revisar' => $aprobador->puedeRevisarEnPortal($empleado),
+                // Se conserva para el front anterior: solo jefe de departamento.
                 'es_jefe' => Department::where('manager_id', $empleado->id)->exists(),
             ],
         ]);
@@ -109,7 +113,8 @@ class VacationPortalController extends Controller
     public function crear(Request $request, VacationRequestService $vacaciones): JsonResponse
     {
         [$inicio, $fin] = $this->fechas($request);
-        $motivo = $request->validate(['reason' => 'nullable|string|max:500'])['reason'] ?? null;
+        MotivoVacaciones::recortar($request);
+        $motivo = $request->validate(MotivoVacaciones::REGLAS, MotivoVacaciones::MENSAJES)['reason'];
 
         $solicitud = $vacaciones->crear($this->empleado($request), $inicio, $fin, $motivo, VacationRequest::SOURCE_PORTAL);
 

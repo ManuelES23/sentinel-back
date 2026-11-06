@@ -1104,6 +1104,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
                 // Rutas existentes
                 Route::get('balance', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationController::class, 'getBalance']);
+                Route::post('{vacation}/visto-bueno', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationController::class, 'vistoBueno']);
                 Route::post('{vacation}/aprobar', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationController::class, 'approve']);
                 Route::post('{vacation}/rechazar', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationController::class, 'reject']);
                 Route::post('{vacation}/cancelar', [App\Http\Controllers\Api\GrupoEsplendido\RH\VacationController::class, 'cancel']);

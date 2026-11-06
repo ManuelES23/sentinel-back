@@ -9,6 +9,7 @@ use App\Models\VacationRequest;
 use App\Services\RH\VacationRequestService;
 use App\Services\VacationCalculatorService;
 use App\Support\PasswordPolicy;
+use App\Support\RH\MotivoVacaciones;
 use App\Support\RH\PresentadorPortalVacaciones;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -268,18 +269,18 @@ class ProfileController extends Controller
             ], 400);
         }
 
+        MotivoVacaciones::recortar($request);
         $validated = $request->validate([
             'start_date' => 'required|date',
             'end_date' => 'required|date',
-            'reason' => 'nullable|string|max:500',
-        ]);
+        ] + MotivoVacaciones::REGLAS, MotivoVacaciones::MENSAJES);
 
         try {
             $vacationRequest = $vacaciones->crear(
                 $employee,
                 Carbon::parse($validated['start_date']),
                 Carbon::parse($validated['end_date']),
-                $validated['reason'] ?? null,
+                $validated['reason'],
                 VacationRequest::SOURCE_PERFIL,
                 $user,
             );
@@ -336,9 +337,19 @@ class ProfileController extends Controller
         }
 
         $requests = VacationRequest::where('employee_id', $employee->id)
-            ->with(['approver:id,name', 'approvals'])
+            ->with(['approver:id,name', 'approvals.decider:id,name', 'approvals.decidedByEmployee:id,first_name,last_name,second_last_name'])
             ->orderBy('created_at', 'desc')
             ->paginate(20);
+
+        // Igual que en index(): la cadena cruda (reglas, comentario del visto bueno de RH, que es para quien revisa)
+        // no sale; solo la revisión presentada del portal (spec §5.5).
+        $requests->getCollection()->each(function (VacationRequest $solicitud) {
+            $solicitud->setAttribute('revision', Arr::only(
+                PresentadorPortalVacaciones::detalle($solicitud),
+                ['paso_actual', 'total_pasos', 'revisor_actual', 'pasos'],
+            ));
+            $solicitud->unsetRelation('approvals');
+        });
 
         $balances = VacationBalance::where('employee_id', $employee->id)
             ->orderBy('year', 'desc')

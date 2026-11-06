@@ -10,15 +10,16 @@ use App\Models\VacationRequest;
 use App\Models\VacationRequestApproval;
 use App\Services\RH\AprobadorVacaciones;
 use App\Services\RH\VacationRequestService;
+use App\Support\RH\ContextoRevisionVacaciones;
 use App\Support\RH\PresentadorPortalVacaciones;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 
 /**
- * Revisión de solicitudes por el jefe de departamento desde el portal (número + PIN), con o sin
- * usuario de Sentinel. El jefe sale siempre de la sesión; solo ve las solicitudes cuyo paso actual
- * le toca decidir (AprobadorVacaciones::puedeDecidirComoEmpleado). Una ajena o que ya no le toca
+ * Revisión de solicitudes por el jefe de departamento o por el director (regla «Usuario específico» con empleado
+ * ligado) desde el portal (número + PIN), con o sin usuario de Sentinel. El revisor sale siempre de la sesión;
+ * solo ve las solicitudes cuyo paso actual le toca decidir (AprobadorVacaciones::puedeDecidirComoEmpleado). Una ajena o que ya no le toca
  * da el mismo 404 que una inexistente. Lo que sale pasa por PresentadorPortalVacaciones::paraRevisar.
  */
 class VacationPortalRevisionController extends Controller
@@ -29,9 +30,12 @@ class VacationPortalRevisionController extends Controller
     {
         $jefe = $this->jefe($request);
 
+        $solicitudes = $this->revisables($jefe);
+        $saldos = ContextoRevisionVacaciones::saldosDeLista($solicitudes);
+
         return response()->json([
             'success' => true,
-            'data' => $this->revisables($jefe)->map(fn (VacationRequest $solicitud) => PresentadorPortalVacaciones::paraRevisar($solicitud))->values(),
+            'data' => $solicitudes->map(fn (VacationRequest $solicitud) => PresentadorPortalVacaciones::paraRevisar($solicitud, false, $saldos[$solicitud->id]))->values(),
         ]);
     }
 
@@ -39,7 +43,7 @@ class VacationPortalRevisionController extends Controller
     {
         return response()->json([
             'success' => true,
-            'data' => PresentadorPortalVacaciones::paraRevisar($this->revisable($this->jefe($request), $id)),
+            'data' => PresentadorPortalVacaciones::paraRevisar($this->revisable($this->jefe($request), $id), completo: true),
         ]);
     }
 
@@ -72,12 +76,15 @@ class VacationPortalRevisionController extends Controller
     private function revisables(Employee $jefe): Collection
     {
         $departamentos = Department::where('manager_id', $jefe->id)->pluck('id');
-        if ($departamentos->isEmpty()) {
+        $esUsuarioDeRegla = $this->aprobador->esUsuarioDeUnaRegla($jefe);
+        if ($departamentos->isEmpty() && ! $esUsuarioDeRegla) {
             return collect();
         }
 
+        // Quien decide como «Usuario específico» (el director) puede recibir solicitudes de cualquier departamento;
+        // el jefe solo las de los suyos. Lo que de verdad le toca ahora lo decide pasoRevisable.
         return $this->consulta()
-            ->whereHas('employee', fn ($q) => $q->whereIn('department_id', $departamentos))
+            ->when(! $esUsuarioDeRegla, fn ($q) => $q->whereHas('employee', fn ($e) => $e->whereIn('department_id', $departamentos)))
             ->orderBy('created_at')
             ->orderBy('id')
             ->get()
