@@ -68,6 +68,11 @@ class IndicadoresConvenio
         $conAvance = 0;
 
         foreach ($convenios as $convenio) {
+            // Un borrador aún no opera: no entra al cumplimiento ponderado ni a lo comprometido.
+            if ($convenio->status === 'borrador') {
+                continue;
+            }
+
             $r = self::calcular($convenio, $hoy, $lineas->get($convenio->id, collect()));
             $i = $r['indicadores'];
 
@@ -197,7 +202,7 @@ class IndicadoresConvenio
             ];
         }
 
-        $razon = $metaFecha > 0 ? $recibidoFecha / $metaFecha : null;
+        $razon = $metaFecha > 0 && $convenio->status !== 'borrador' ? $recibidoFecha / $metaFecha : null;
         $proyeccion = $cerradas === 0
             ? $recibido
             : $recibidoFecha + ($recibidoFecha / $cerradas) * (count($lunes) - $cerradas);

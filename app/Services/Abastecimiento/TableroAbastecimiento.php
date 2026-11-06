@@ -132,6 +132,10 @@ class TableroAbastecimiento
         foreach (Convenio::UNIDADES as $unidad) {
             $semanas = [];
             foreach ($detalle as $d) {
+                // El borrador aún no opera: no suma a la gráfica.
+                if ($d['convenio']->status === 'borrador') {
+                    continue;
+                }
                 if ($d['convenio']->unidad !== $unidad) {
                     continue;
                 }

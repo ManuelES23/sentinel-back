@@ -169,7 +169,7 @@ class IndicadoresConvenioTest extends TestCase
         $borrador->update(['status' => 'borrador']);
         $i = IndicadoresConvenio::de($borrador->fresh(), $this->hoy());
         $this->assertSame('por_iniciar', $i['estado']);
-        $this->assertEqualsWithDelta(0.70, $i['cumplimiento'], 0.001);
+        $this->assertNull($i['cumplimiento']); // un borrador no tiene cumplimiento
 
         // Un borrador ya vencido también es «por iniciar».
         $vencido = $this->crearConvenio($this->sbp, ['status' => 'borrador', 'fecha_inicio' => '2026-06-01', 'fecha_fin' => '2026-06-28']);

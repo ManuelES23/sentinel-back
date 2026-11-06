@@ -402,6 +402,48 @@ class TableroTest extends TestCase
         $this->assertSame('por_iniciar', $fila['indicadores']['estado']);
     }
 
+    public function test_un_borrador_sin_recepciones_no_entra_al_cumplimiento_ni_a_la_grafica_pero_si_al_aviso_de_inicio(): void
+    {
+        $activo = $this->crearConvenio($this->sbp, [
+            'fecha_inicio' => $this->lunes(27), 'fecha_fin' => '2026-08-23',
+            'metas' => $this->metas(27, [1000, 1000, 1000, 1000]),
+        ]);
+        $this->recibir($activo, [27 => 1000, 28 => 1000]);
+        $temporada = $activo->temporada_id;
+
+        $antes = $this->tablero($temporada);
+        $this->assertEqualsWithDelta(1.0, $antes['kpis']['cumplimiento'], 0.0001);
+
+        // Borrador sin recepciones con inicio pasado y semanas cerradas con meta (sería 0 % si contara).
+        $borrador = $this->crearConvenio($this->sbp, [
+            'temporada_id' => $temporada, 'status' => 'borrador',
+            'productor_id' => $this->productor('Huerta Borrador'),
+            'fecha_inicio' => $this->lunes(27), 'fecha_fin' => '2026-08-23',
+            'metas' => $this->metas(27, [5000, 5000, 5000, 5000]),
+        ]);
+        // Borrador que empieza la semana siguiente: su aviso de inicio se conserva como recordatorio.
+        $proximo = $this->crearConvenio($this->sbp, [
+            'temporada_id' => $temporada, 'status' => 'borrador',
+            'productor_id' => $this->productor('Huerta Proxima'),
+            'fecha_inicio' => $this->lunes(30), 'fecha_fin' => '2026-08-23',
+            'metas' => $this->metas(30, [700]),
+        ]);
+
+        $data = $this->tablero($temporada);
+
+        $this->assertEqualsWithDelta(1.0, $data['kpis']['cumplimiento'], 0.0001);
+        $this->assertEqualsWithDelta($antes['kpis']['comprometido'], $data['kpis']['comprometido'], 0.001);
+        $this->assertSame($antes['kpis']['abajo_de_meta'], $data['kpis']['abajo_de_meta']);
+        $fila = collect($data['convenios'])->firstWhere('id', $borrador->id);
+        $this->assertNull($fila['indicadores']['cumplimiento']);
+        $this->assertSame('por_iniciar', $fila['indicadores']['estado']);
+        $this->assertSame($antes['grafica'], $data['grafica']);
+
+        $avisos = array_column($data['avisos'], 'tipo', 'convenio_id');
+        $this->assertSame('inicia', $avisos[$proximo->id]);
+        $this->assertArrayNotHasKey($borrador->id, $avisos);
+    }
+
     public function test_sin_avisos_si_nadie_esta_atrasado_ni_empieza_la_semana_siguiente(): void
     {
         $c = $this->crearConvenio($this->sbp, [
