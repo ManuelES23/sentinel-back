@@ -17,8 +17,8 @@ use Illuminate\Validation\ValidationException;
  * Todos los métodos corren DENTRO de la transacción de quien llama (no abren la suya, igual que
  * `AplicadorAbonos`) y empiezan releyendo la liquidación con `lockForUpdate`: el estado y el paso se
  * revalidan contra la fila bloqueada, así que un doble clic o dos aprobadores del mismo paso no avanzan
- * la cadena dos veces (el segundo recibe 422 en `liquidacion`). Quien llama puede pasar `$pasoEsperado`
- * (el `step_order` que tenía a la vista) para que un paso que ya avanzó no se decida por error.
+ * la cadena dos veces (el segundo recibe 422 en `liquidacion`). `$pasoEsperado` (obligatorio) es el
+ * `step_order` que quien decide tenía a la vista: si ya no es el paso actual, 422 y no se decide nada.
  * Orden de bloqueo: la liquidación y luego, al aprobar, los abonos (`AplicadorAbonos::aplicarAnticiposA`);
  * un interbloqueo raro de InnoDB se reintenta en el controlador (`DB::transaction(fn, 3)`), no aquí.
  *
@@ -96,7 +96,7 @@ class FlujoLiquidacion
      *
      * @throws ValidationException `liquidacion`, `comentario`
      */
-    public static function aprobar(Liquidacion $liquidacion, User $usuario, ?string $comentario = null, ?int $pasoEsperado = null): Liquidacion
+    public static function aprobar(Liquidacion $liquidacion, User $usuario, ?string $comentario, int $pasoEsperado): Liquidacion
     {
         $l = self::bloquear($liquidacion);
         $comentario = self::textoOpcional($comentario, 'comentario', 'El comentario');
@@ -139,7 +139,7 @@ class FlujoLiquidacion
      *
      * @throws ValidationException `liquidacion`, `motivo`
      */
-    public static function rechazar(Liquidacion $liquidacion, User $usuario, string $motivo, ?int $pasoEsperado = null): Liquidacion
+    public static function rechazar(Liquidacion $liquidacion, User $usuario, string $motivo, int $pasoEsperado): Liquidacion
     {
         $l = self::bloquear($liquidacion);
         $motivo = self::textoOpcional($motivo, 'motivo', 'El motivo');
@@ -222,15 +222,18 @@ class FlujoLiquidacion
     }
 
     /** El paso actual en espera, ya comprobado que este usuario puede decidirlo. */
-    private static function pasoADecidir(Liquidacion $l, User $usuario, string $accion, ?int $pasoEsperado): LiquidacionAprobacion
+    private static function pasoADecidir(Liquidacion $l, User $usuario, string $accion, int $pasoEsperado): LiquidacionAprobacion
     {
         if ($l->status !== 'en_revision') {
             self::fallar('liquidacion', 'La liquidación no está en revisión.');
         }
 
         $paso = CadenaLiquidacion::pasoActual($l);
-        if ($paso === null || ($pasoEsperado !== null && (int) $pasoEsperado !== (int) $paso->step_order)) {
+        if ($paso === null) {
             self::fallar('liquidacion', 'Este paso de la liquidación ya fue decidido; recarga para ver su estado.');
+        }
+        if ($pasoEsperado !== (int) $paso->step_order) {
+            self::fallar('liquidacion', 'La liquidación ya cambió de paso; recarga la pantalla.');
         }
 
         if (AprobadorLiquidaciones::esCreadorOEnviador($usuario, $l)) {

@@ -76,6 +76,7 @@ class LiquidacionFlujoTest extends TestCase
     {
         $puesto = $this->puesto($this->sbp, $nombre, 3, true);
         $empleado = $this->empleadoConUsuario($this->sbp, ['position_id' => $puesto->id] + $atributosEmpleado);
+        $this->darAcceso($empleado->user);
 
         return [$this->regla($paso, 'position', ['position_id' => $puesto->id]), $empleado->user, $empleado];
     }
@@ -103,13 +104,34 @@ class LiquidacionFlujoTest extends TestCase
         return DB::transaction(fn () => FlujoLiquidacion::enviar($liq, $usuario ?? $this->creador));
     }
 
+    /** El paso que quien decide ve como actual (el de la base ahora mismo); pasa explícito el que se quiera simular. */
+    private function pasoVigente(Liquidacion $liq): int
+    {
+        return (int) $liq->fresh()->paso_actual;
+    }
+
+    /** Acceso activo de un usuario a SBP (como EmpresaDeLaRuta lo exige), sin permisos de liquidaciones. */
+    private function darAcceso(User $usuario, $empresa = null): User
+    {
+        \App\Models\UserEnterpriseAccess::firstOrCreate(
+            ['user_id' => $usuario->id, 'enterprise_id' => ($empresa ?? $this->sbp)->id],
+            ['is_active' => true, 'granted_at' => now()],
+        );
+
+        return $usuario;
+    }
+
     private function aprobar(Liquidacion $liq, User $usuario, ?string $comentario = null, ?int $pasoEsperado = null): Liquidacion
     {
+        $pasoEsperado ??= $this->pasoVigente($liq);
+
         return DB::transaction(fn () => FlujoLiquidacion::aprobar($liq, $usuario, $comentario, $pasoEsperado));
     }
 
     private function rechazar(Liquidacion $liq, User $usuario, string $motivo = 'Los kilos no cuadran', ?int $pasoEsperado = null): Liquidacion
     {
+        $pasoEsperado ??= $this->pasoVigente($liq);
+
         return DB::transaction(fn () => FlujoLiquidacion::rechazar($liq, $usuario, $motivo, $pasoEsperado));
     }
 
@@ -400,7 +422,7 @@ class LiquidacionFlujoTest extends TestCase
         $puesto = $this->puesto($this->sbp, 'Gerente', 3, true);
         $this->regla(1, 'position', ['position_id' => $puesto->id]);
 
-        $baja = $this->empleadoConUsuario($this->sbp, ['position_id' => $puesto->id, 'status' => 'terminated']);
+        $baja = $this->empleadoConUsuario($this->sbp, ['position_id' => $puesto->id, 'status' => 'terminated']); $this->darAcceso($baja->user);
         $this->empleadoConUsuario($this->otra, ['position_id' => $puesto->id]);
         $this->empleado($this->sbp, ['position_id' => $puesto->id]); // sin usuario
         $liq = $this->borrador();
@@ -408,7 +430,7 @@ class LiquidacionFlujoTest extends TestCase
         $this->assertInvalida('liquidacion', fn () => $this->enviar($liq));
 
         // El puesto deja de poder aprobar: tampoco cuenta.
-        $activo = $this->empleadoConUsuario($this->sbp, ['position_id' => $puesto->id]);
+        $activo = $this->empleadoConUsuario($this->sbp, ['position_id' => $puesto->id]); $this->darAcceso($activo->user);
         $puesto->update(['can_approve' => false]);
         $this->assertInvalida('liquidacion', fn () => $this->enviar($liq));
 
@@ -601,8 +623,8 @@ class LiquidacionFlujoTest extends TestCase
         $enviada = $this->enviar($this->borrador());
 
         // Los dos clics llegan con la misma copia vieja de la liquidación (paso 1).
-        $this->aprobar($enviada, $a);
-        $this->assertInvalida('liquidacion', fn () => $this->aprobar($enviada, $a));
+        $this->aprobar($enviada, $a, null, 1);
+        $this->assertInvalida('liquidacion', fn () => $this->aprobar($enviada, $a, null, 1));
 
         $liq = $enviada->fresh();
         $this->assertSame(2, $liq->paso_actual);
@@ -624,8 +646,8 @@ class LiquidacionFlujoTest extends TestCase
         $this->aprobar($enviada, $a, null, 1);
 
         // B también tenía abierto el paso 1: aunque podría decidir el paso 2, no es lo que pidió aprobar.
-        $this->assertInvalida('liquidacion', fn () => $this->aprobar($enviada, $b, null, 1));
-        $this->assertInvalida('liquidacion', fn () => $this->rechazar($enviada, $b, 'No', 1));
+        $this->assertInvalida('liquidacion', fn () => $this->aprobar($enviada, $b, null, 1), 'cambió de paso');
+        $this->assertInvalida('liquidacion', fn () => $this->rechazar($enviada, $b, 'No', 1), 'cambió de paso');
 
         $liq = $enviada->fresh();
         $this->assertSame(2, $liq->paso_actual);
@@ -796,5 +818,142 @@ class LiquidacionFlujoTest extends TestCase
 
         $liq = $this->aprobar($liq, $b);
         $this->assertCount(0, FlujoLiquidacion::decididoresDe($liq));
+    }
+
+    // ---------------------------------------------------------------- acceso a la empresa
+
+    public function test_una_regla_de_usuario_sin_acceso_a_la_empresa_deja_el_paso_sin_elegibles(): void
+    {
+        $sinAcceso = User::factory()->create(['role' => 'user']);
+        $this->reglaUsuario(1, $sinAcceso); // regla global, pero el usuario no entra a SBP
+        $liq = $this->borrador();
+
+        $this->assertInvalida('liquidacion', fn () => $this->enviar($liq), 'paso 1');
+        $this->assertSame('borrador', $liq->fresh()->status);
+
+        // Con acceso activo a SBP ya es elegible; con el acceso apagado vuelve a quedar fuera.
+        $this->darAcceso($sinAcceso);
+        $enviada = $this->enviar($liq);
+        $paso = CadenaLiquidacion::pasoActual($enviada);
+        $this->assertSame([$sinAcceso->id], AprobadorLiquidaciones::elegibles($enviada, $paso)->pluck('id')->all());
+        $this->assertTrue(AprobadorLiquidaciones::puedeDecidir($sinAcceso, $enviada, $paso));
+
+        \App\Models\UserEnterpriseAccess::where('user_id', $sinAcceso->id)->update(['is_active' => false]);
+        $this->assertCount(0, AprobadorLiquidaciones::elegibles($enviada, $paso));
+        $this->assertFalse(AprobadorLiquidaciones::puedeDecidir($sinAcceso, $enviada, $paso));
+        $this->assertInvalida('liquidacion', fn () => $this->aprobar($enviada, $sinAcceso, null, 1));
+    }
+
+    public function test_acceso_solo_a_otra_empresa_no_vuelve_elegible_al_usuario(): void
+    {
+        $deOtra = User::factory()->create(['role' => 'user']);
+        $this->darAcceso($deOtra, $this->otra);
+        $this->reglaUsuario(1, $deOtra);
+
+        $this->assertInvalida('liquidacion', fn () => $this->enviar($this->borrador()));
+    }
+
+    public function test_el_paso_sin_cadena_tambien_exige_acceso_a_la_empresa(): void
+    {
+        // Concesión de aprobar sin acceso activo a la empresa: no cuenta.
+        $conPermisoSinAcceso = $this->usuarioCon(['aprobar']);
+        \App\Models\UserEnterpriseAccess::where('user_id', $conPermisoSinAcceso->id)->update(['is_active' => false]);
+        $liq = $this->borrador();
+
+        $this->assertInvalida('liquidacion', fn () => $this->enviar($liq));
+
+        $conAcceso = $this->usuarioCon(['aprobar']);
+        $enviada = $this->enviar($liq);
+        $paso = CadenaLiquidacion::pasoActual($enviada);
+        $this->assertSame([$conAcceso->id], AprobadorLiquidaciones::elegibles($enviada, $paso)->pluck('id')->all());
+        $this->assertFalse(AprobadorLiquidaciones::puedeDecidir($conPermisoSinAcceso, $enviada, $paso));
+    }
+
+    public function test_los_administradores_no_necesitan_fila_de_acceso(): void
+    {
+        $admin = User::factory()->create(['role' => 'admin']);
+        $this->reglaUsuario(1, $admin);
+
+        $enviada = $this->enviar($this->borrador());
+
+        $this->assertSame('aprobada', $this->aprobar($enviada, $admin)->status);
+    }
+
+    // ---------------------------------------------------------------- ficha de empleado de otra empresa
+
+    public function test_la_regla_de_puesto_usa_la_ficha_del_usuario_en_la_empresa_de_la_liquidacion(): void
+    {
+        $puesto = $this->puesto($this->sbp, 'Gerente de compras', 3, true);
+        $this->regla(1, 'position', ['position_id' => $puesto->id]);
+
+        // Dos fichas con el mismo usuario: la de la otra empresa se crea primero (la «primera» de employee()).
+        $usuario = $this->darAcceso(User::factory()->create(['role' => 'user']));
+        $this->empleado($this->otra, ['user_id' => $usuario->id]);
+        $this->empleado($this->sbp, ['user_id' => $usuario->id, 'position_id' => $puesto->id]);
+
+        $liq = $this->borrador();
+        $this->assertSame($usuario->id, optional($usuario->employee()->first())->user_id);
+        $this->assertNotSame($this->sbp->id, (int) $usuario->employee()->first()->enterprise_id, 'La prueba necesita que la primera ficha sea la de otra empresa.');
+
+        $enviada = $this->enviar($liq);
+        $paso = CadenaLiquidacion::pasoActual($enviada);
+        $this->assertSame([$usuario->id], AprobadorLiquidaciones::elegibles($enviada, $paso)->pluck('id')->all());
+        $this->assertSame('aprobada', $this->aprobar($enviada, $usuario)->status);
+    }
+
+    public function test_la_ficha_de_otra_empresa_no_habilita_ni_bloquea_por_si_sola(): void
+    {
+        $puesto = $this->puesto($this->sbp, 'Gerente', 3, true);
+        $this->regla(1, 'position', ['position_id' => $puesto->id]);
+
+        // Solo tiene ficha activa con el puesto en OTRA empresa: no es elegible en SBP.
+        $soloOtra = $this->darAcceso(User::factory()->create(['role' => 'user']));
+        $this->empleado($this->otra, ['user_id' => $soloOtra->id, 'position_id' => $puesto->id]);
+        $this->assertInvalida('liquidacion', fn () => $this->enviar($this->borrador()));
+
+        // Regla de usuario: una ficha dada de baja en otra empresa no le quita el paso en SBP.
+        $this->proceso->steps()->delete();
+        $conBajaAjena = $this->darAcceso(User::factory()->create(['role' => 'user']));
+        $this->empleado($this->otra, ['user_id' => $conBajaAjena->id, 'status' => 'terminated']);
+        $this->reglaUsuario(1, $conBajaAjena);
+        $enviada = $this->enviar($this->borrador());
+        $this->assertSame('aprobada', $this->aprobar($enviada, $conBajaAjena)->status);
+    }
+
+    // ---------------------------------------------------------------- paso esperado obligatorio
+
+    public function test_aprobar_con_el_paso_que_ya_avanzo_da_422_aunque_el_usuario_sea_elegible_del_siguiente(): void
+    {
+        $a = $this->usuarioCon([]);
+        $b = $this->usuarioCon([]); // alternativa del paso 1 y elegible del paso 2
+        $c = $this->usuarioCon([]);
+        $this->reglaUsuario(1, $a);
+        $this->reglaUsuario(1, $b);
+        $this->reglaUsuario(2, $b);
+        $this->reglaUsuario(2, $c);
+        $enviada = $this->enviar($this->borrador());
+
+        $this->aprobar($enviada, $a, null, 1);
+
+        // B tenía en pantalla el paso 1 y hace clic cuando ya va en el 2: no debe aprobar el 2 sin verlo.
+        $this->assertInvalida('liquidacion', fn () => $this->aprobar($enviada, $b, null, 1), 'La liquidación ya cambió de paso; recarga la pantalla.');
+        $liq = $enviada->fresh();
+        $this->assertSame('en_revision', $liq->status);
+        $this->assertSame(2, $liq->paso_actual);
+        $this->assertSame([1 => 'approved', 2 => 'waiting'], $this->decisiones($liq, 1));
+
+        // Viendo el paso 2, B sí lo decide.
+        $this->assertSame('aprobada', $this->aprobar($enviada, $b, null, 2)->status);
+    }
+
+    public function test_el_paso_esperado_es_obligatorio_en_aprobar_y_rechazar(): void
+    {
+        foreach (['aprobar', 'rechazar'] as $metodo) {
+            $firma = (new \ReflectionMethod(FlujoLiquidacion::class, $metodo))->getParameters();
+            $ultimo = end($firma);
+            $this->assertSame('pasoEsperado', $ultimo->getName());
+            $this->assertFalse($ultimo->isOptional(), "{$metodo}: pasoEsperado debe ser obligatorio");
+            $this->assertFalse($ultimo->allowsNull());
+        }
     }
 }

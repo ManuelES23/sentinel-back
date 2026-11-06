@@ -9,6 +9,7 @@ use App\Models\ApprovalFlowStep;
 use App\Models\Employee;
 use App\Models\Enterprise;
 use App\Models\User;
+use App\Services\ActivosFijos\AlcanceActivos;
 use App\Support\PermisoSubmodulo;
 use Illuminate\Support\Collection;
 
@@ -20,7 +21,7 @@ use Illuminate\Support\Collection;
  *   regla y puede aprobar (alcance toda la empresa).
  * - Paso sin reglas (`rules = []`, sin cadena configurada): quien tenga `liquidaciones.aprobar` en la
  *   empresa; el administrador del sistema entra por el bypass de `ContextoAbastecimiento::puede`.
- * Siempre: quien creó o envió la liquidación no decide, y nadie decide dos pasos de la misma ronda.
+ * Siempre: acceso activo a la empresa (o ser admin), como exigen sus rutas; quien creó o envió la liquidación no decide, y nadie decide dos pasos de la misma ronda.
  */
 class AprobadorLiquidaciones
 {
@@ -39,11 +40,14 @@ class AprobadorLiquidaciones
             return false;
         }
 
-        if (($paso->rules ?? []) === []) {
-            $empresa = Enterprise::find($liquidacion->enterprise_id);
+        // Las rutas de la empresa exigen admin o acceso activo a ella: sin eso nadie podría decidir el paso.
+        $empresa = Enterprise::find($liquidacion->enterprise_id);
+        if ($empresa === null || ! AlcanceActivos::tieneAcceso($usuario, $empresa)) {
+            return false;
+        }
 
-            return $empresa !== null
-                && app(ContextoAbastecimiento::class)->puede($usuario, $empresa, 'liquidaciones', 'aprobar');
+        if (($paso->rules ?? []) === []) {
+            return app(ContextoAbastecimiento::class)->puede($usuario, $empresa, 'liquidaciones', 'aprobar');
         }
 
         $bandera = $accion === 'rechazar' ? 'can_reject' : 'can_approve';
@@ -95,19 +99,20 @@ class AprobadorLiquidaciones
 
     private static function cumpleRegla(User $usuario, Liquidacion $liquidacion, ApprovalFlowStep $regla): bool
     {
-        $empleado = $usuario->employee()->first();
+        // `employees.user_id` no es único: solo cuentan las fichas de la empresa de la liquidación.
+        $empleados = Employee::where('user_id', $usuario->id)
+            ->where('enterprise_id', $liquidacion->enterprise_id)
+            ->with('position')
+            ->get();
 
         if ($regla->approver_type === ApprovalFlowStep::TYPE_USER) {
             return $regla->user_id !== null
                 && (int) $regla->user_id === (int) $usuario->id
-                && ($empleado === null || $empleado->status === Employee::STATUS_ACTIVE);
+                && ($empleados->isEmpty() || $empleados->contains(fn (Employee $e) => $e->status === Employee::STATUS_ACTIVE));
         }
 
         if ($regla->approver_type === 'position') {
-            return $empleado !== null
-                && $empleado->status === Employee::STATUS_ACTIVE
-                && (int) $empleado->enterprise_id === (int) $liquidacion->enterprise_id
-                && $regla->matchesEmployee($empleado);
+            return $empleados->contains(fn (Employee $e) => $e->status === Employee::STATUS_ACTIVE && $regla->matchesEmployee($e));
         }
 
         // Cualquier otro tipo no se admite en este proceso: nadie cumple (falla cerrado).
