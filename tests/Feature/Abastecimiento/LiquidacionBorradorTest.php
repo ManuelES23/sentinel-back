@@ -418,6 +418,29 @@ class LiquidacionBorradorTest extends TestCase
         $this->deleteJson($this->url("liquidaciones/{$liq->id}"))->assertStatus(403);
     }
 
+    /** Arreglo final I3b: quien solo puede editar un borrador también necesita las dos lecturas de apoyo del formulario. */
+    public function test_quien_solo_edita_puede_pedir_recepciones_disponibles_y_vista_previa(): void
+    {
+        [$c, $a] = $this->convenioConTres();
+        $id = $this->liquidar($c, [$a->id]);
+        $cuerpo = $this->cuerpo($c, [$a->id], ['liquidacion_id' => $id]);
+        $disponibles = 'liquidaciones/recepciones-disponibles?convenio_id='.$c->id.'&periodo_inicio=2026-06-01&periodo_fin=2026-06-15&liquidacion_id='.$id;
+
+        $editor = \App\Models\User::factory()->create(['role' => 'user']);
+        $this->otorgarAbs($editor, $this->sbp, 'liquidaciones', ['view', 'edit']);
+        Sanctum::actingAs($editor);
+        $this->getJson($this->url($disponibles))->assertOk();
+        $this->postJson($this->url('liquidaciones/previa'), $cuerpo)->assertOk();
+        // Crear sigue pidiendo `create`.
+        $this->postJson($this->url(), $this->cuerpo($c, [$a->id]))->assertStatus(403);
+
+        $soloVer = \App\Models\User::factory()->create(['role' => 'user']);
+        $this->otorgarAbs($soloVer, $this->sbp, 'liquidaciones', ['view']);
+        Sanctum::actingAs($soloVer);
+        $this->getJson($this->url($disponibles))->assertStatus(403);
+        $this->postJson($this->url('liquidaciones/previa'), $cuerpo)->assertStatus(403);
+    }
+
     public function test_cada_accion_pide_su_permiso(): void
     {
         [$c, $a] = $this->convenioConTres();

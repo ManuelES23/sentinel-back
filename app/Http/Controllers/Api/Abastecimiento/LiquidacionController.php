@@ -39,7 +39,8 @@ class LiquidacionController extends AbastecimientoController
     /** Recepciones que el formulario puede ofrecer para un convenio y un periodo (más las del borrador que se edita). */
     public function recepcionesDisponibles(Request $request): JsonResponse
     {
-        $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'create');
+        // Lectura de apoyo del formulario: la usa quien crea y quien corrige un borrador (`create` o `edit`).
+        $empresa = $this->ctx->autorizarAlguno($request, self::SUBMODULO, ['create', 'edit']);
         $datos = $request->validate([
             'convenio_id' => ['required', 'integer', $this->viva($empresa, 'abs_convenios')],
             'periodo_inicio' => ['required', 'date_format:Y-m-d'],
@@ -76,7 +77,8 @@ class LiquidacionController extends AbastecimientoController
     /** Calcula la liquidación con la selección dada sin guardar nada. */
     public function previa(Request $request): JsonResponse
     {
-        $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'create');
+        // Vista previa sin guardar: la usa quien crea y quien corrige un borrador (`create` o `edit`).
+        $empresa = $this->ctx->autorizarAlguno($request, self::SUBMODULO, ['create', 'edit']);
         $datos = $this->validar($request, $empresa, true);
 
         $convenio = Convenio::deEmpresa($empresa->id)->with(['precios', 'variedad:id,nombre'])->findOrFail($datos['convenio_id']);
