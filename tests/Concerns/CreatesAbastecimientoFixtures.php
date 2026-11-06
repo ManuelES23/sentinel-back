@@ -13,24 +13,24 @@ use App\Models\Abastecimiento\Recepcion;
 use App\Models\Abastecimiento\Temporada;
 use App\Models\Abastecimiento\TipoCarga;
 use App\Models\Abastecimiento\Variedad;
+use App\Models\Application;
 use App\Models\Enterprise;
+use App\Models\Module;
+use App\Models\Submodule;
+use App\Models\SubmodulePermissionType;
 use App\Models\User;
 use App\Models\UserEnterpriseAccess;
+use App\Models\UserSubmodulePermission;
 use App\Services\Abastecimiento\GeneradorFolio;
 use App\Services\Abastecimiento\LectorRecepciones;
 use Database\Seeders\AbastecimientoModuleSeeder;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use PhpOffice\PhpSpreadsheet\Cell\DataType;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
-use Illuminate\Support\Str;
-use App\Models\Application;
-use App\Models\Module;
-use App\Models\Submodule;
-use App\Models\SubmodulePermissionType;
-use App\Models\UserSubmodulePermission;
 
 /**
  * Fixtures de Administración → Abastecimiento: Splendid by Porvenir
@@ -226,6 +226,7 @@ trait CreatesAbastecimientoFixtures
         unlink($ruta);
         $ruta .= '.xlsx';
         (new Xlsx($libro))->save($ruta);
+        $this->beforeApplicationDestroyed(fn () => @unlink($ruta));
 
         return new UploadedFile($ruta, $nombre, null, null, true);
     }

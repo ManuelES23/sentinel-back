@@ -108,6 +108,73 @@ class LectorRecepcionesTest extends TestCase
         $this->assertArrayNotHasKey('fecha_original', $filas[2]);
     }
 
+    public function test_la_fecha_acepta_dia_y_mes_sin_cero_y_fecha_hora_iso(): void
+    {
+        $archivo = $this->crearXlsx(array_map(
+            fn ($f) => ['CV-1', $f, 'Caja empacada', 1, 1],
+            ['1/7/2026', '2026-7-4', '2026-07-14 00:00:00', '2026-07-14T00:00:00', '5-3-2026'],
+        ));
+
+        $this->assertSame(
+            ['2026-07-01', '2026-07-04', '2026-07-14', '2026-07-14', '2026-03-05'],
+            array_column($this->lector()->leer($archivo), 'fecha'),
+        );
+    }
+
+    public function test_dia_mes_imposibles_o_mes_primero_siguen_ilegibles(): void
+    {
+        $archivo = $this->crearXlsx(array_map(
+            fn ($f) => ['CV-1', $f, 'Caja empacada', 1, 1],
+            ['31/02/2026', '07/14/2026', '2026-13-01', '2026-07-32T00:00:00', '14 de julio'],
+        ));
+
+        $filas = $this->lector()->leer($archivo);
+
+        $this->assertSame([null, null, null, null, null], array_column($filas, 'fecha'));
+        $this->assertSame(
+            ['31/02/2026', '07/14/2026', '2026-13-01', '2026-07-32T00:00:00', '14 de julio'],
+            array_column($filas, 'fecha_original'),
+        );
+    }
+
+    public function test_un_valor_suelto_muy_abajo_no_cuelga_la_lectura(): void
+    {
+        $filas = array_merge(
+            [
+                ['CV-1', '2026-07-14', 'Caja empacada', 1, 1],
+                ['CV-2', '2026-07-15', 'Caja empacada', 2, 2],
+                ['CV-3', '2026-07-16', 'Caja empacada', 3, 3],
+            ],
+            array_fill(0, 29996, []),
+            [array_merge(array_fill(0, 25, null), ['nota suelta'])],
+        );
+        $archivo = $this->crearXlsx($filas);
+
+        $inicio = microtime(true);
+        $leidas = $this->lector()->leer($archivo);
+
+        $this->assertSame([2, 3, 4], array_column($leidas, 'fila'));
+        $this->assertLessThan(10, microtime(true) - $inicio);
+    }
+
+    public function test_el_error_de_columnas_nombra_la_hoja_leida(): void
+    {
+        $archivo = $this->crearXlsx([['x']], ['Algo']);
+
+        $mensaje = $this->mensajeDe(fn () => $this->lector()->leer($archivo));
+
+        $this->assertStringContainsString('«Worksheet»', $mensaje);
+        $this->assertStringNotContainsString('primera hoja', $mensaje);
+    }
+
+    public function test_un_html_con_extension_xlsx_no_se_lee(): void
+    {
+        $ruta = tempnam(sys_get_temp_dir(), 'html').'.xlsx';
+        file_put_contents($ruta, '<html><body><table><tr><td>Folio del convenio</td><td>Fecha</td><td>Tipo de carga</td><td>Cantidad</td><td>Kilos</td></tr><tr><td>CV-1</td><td>2026-07-14</td><td>Caja</td><td>1</td><td>1</td></tr></table></body></html>');
+        $this->beforeApplicationDestroyed(fn () => @unlink($ruta));
+
+        $this->mensajeDe(fn () => $this->lector()->leer(new UploadedFile($ruta, 'recepciones.xlsx', null, null, true)));
+    }
     public function test_ignora_renglones_vacios_y_conserva_la_numeracion(): void
     {
         $archivo = $this->crearXlsx([
@@ -173,11 +240,12 @@ class LectorRecepcionesTest extends TestCase
     {
         $ruta = tempnam(sys_get_temp_dir(), 'txt').'.xlsx';
         file_put_contents($ruta, "esto no es un Excel\n\x00\x01\x02 basura");
+        $this->beforeApplicationDestroyed(fn () => @unlink($ruta));
         $archivo = new UploadedFile($ruta, 'recepciones.xlsx', null, null, true);
 
         $mensaje = $this->mensajeDe(fn () => $this->lector()->leer($archivo));
 
-        $this->assertNotSame('', $mensaje);
+        $this->assertMatchesRegularExpression('/No se pudo leer el archivo|Faltan columnas obligatorias/', $mensaje);
     }
 
     public function test_2001_renglones_pasan_del_maximo(): void

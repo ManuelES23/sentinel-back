@@ -6,6 +6,8 @@ use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use PhpOffice\PhpSpreadsheet\Cell\Cell;
+use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
+use PhpOffice\PhpSpreadsheet\Cell\DataType;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Reader\Csv;
 use PhpOffice\PhpSpreadsheet\Shared\Date as FechaExcel;
@@ -51,7 +53,10 @@ class LectorRecepciones
     public function leer(UploadedFile $archivo): array
     {
         $hoja = $this->hojaDeDatos($this->abrir($archivo));
-        [$columnas, $filaEncabezado] = $this->columnas($hoja);
+        // Solo las celdas que existen, agrupadas por renglón: la lectura es lineal en ellas
+        // y no depende de qué tan abajo esté el último renglón con formato o un valor suelto.
+        $celdas = $this->celdasPorFila($hoja);
+        [$columnas, $filaEncabezado] = $this->columnas($celdas);
 
         $faltan = [];
         foreach (self::COLUMNAS as $campo => [$titulo, , $obligatoria]) {
@@ -60,14 +65,18 @@ class LectorRecepciones
             }
         }
         if ($faltan !== []) {
-            throw $this->error('Faltan columnas obligatorias en la primera hoja: '.implode(', ', $faltan).'. Descarga la plantilla y respeta sus encabezados.');
+            throw $this->error('Faltan columnas obligatorias en la hoja «'.$hoja->getTitle().'»: '.implode(', ', $faltan).'. Descarga la plantilla y respeta sus encabezados.');
         }
 
         $filas = [];
-        for ($numero = $filaEncabezado + 1; $numero <= $hoja->getHighestDataRow(); $numero++) {
+        foreach ($celdas as $numero => $delRenglon) {
+            if ($numero <= $filaEncabezado) {
+                continue;
+            }
             $crudo = [];
             foreach (array_keys(self::COLUMNAS) as $campo) {
-                $crudo[$campo] = isset($columnas[$campo]) ? $this->valor($hoja->getCell($columnas[$campo].$numero)) : null;
+                $celda = isset($columnas[$campo]) ? ($delRenglon[$columnas[$campo]] ?? null) : null;
+                $crudo[$campo] = $celda ? $this->valor($celda) : null;
             }
             if (collect($crudo)->every(fn ($v) => $this->texto($v) === null)) {
                 continue;
@@ -116,7 +125,7 @@ class LectorRecepciones
         $hoja->setCellValue('D2', 120);
         $hoja->setCellValue('E2', 1450.5);
         $hoja->setCellValue('F2', 35);
-        $hoja->setCellValueExplicit('G2', 'T-0001', \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
+        $hoja->setCellValueExplicit('G2', 'T-0001', DataType::TYPE_STRING);
         $hoja->getStyle('D2:F2')->getNumberFormat()->setFormatCode(NumberFormat::FORMAT_GENERAL);
         $hoja->freezePane('A2');
 
@@ -153,7 +162,9 @@ class LectorRecepciones
     private function abrir(UploadedFile $archivo): Spreadsheet
     {
         try {
-            $lector = IOFactory::createReaderForFile($archivo->getRealPath());
+            // Solo Excel y CSV: nada de autodetectar HTML, XML u otros formatos.
+            $tipo = IOFactory::identify($archivo->getRealPath(), [IOFactory::READER_XLSX, IOFactory::READER_XLS, IOFactory::READER_CSV]);
+            $lector = IOFactory::createReader($tipo);
             if ($lector instanceof Csv) {
                 $lector->setInputEncoding(Csv::GUESS_ENCODING);
             }
@@ -176,18 +187,46 @@ class LectorRecepciones
         return $libro->getSheet(0);
     }
 
-    /** @return array{0: array<string, string>, 1: int} letra de columna por campo y número de la fila de encabezados */
-    private function columnas(Worksheet $hoja): array
+    /**
+     * Celdas que existen en la hoja, agrupadas por número de renglón (ascendente) y por letra
+     * de columna. No crea celdas ni recorre renglones vacíos.
+     *
+     * @return array<int, array<string, Cell>>
+     */
+    private function celdasPorFila(Worksheet $hoja): array
+    {
+        $coleccion = $hoja->getCellCollection();
+        $porFila = [];
+        foreach ($coleccion->getCoordinates() as $coordenada) {
+            if (($celda = $coleccion->get($coordenada)) === null) {
+                continue;
+            }
+            [$columna, $fila] = Coordinate::coordinateFromString($coordenada);
+            $porFila[(int) $fila][$columna] = $celda;
+        }
+        ksort($porFila);
+
+        return $porFila;
+    }
+
+    /**
+     * @param  array<int, array<string, Cell>>  $celdas
+     * @return array{0: array<string, string>, 1: int} letra de columna por campo y número de la fila de encabezados
+     */
+    private function columnas(array $celdas): array
     {
         // El encabezado está en una de las primeras 5 filas; gana la que reconoce más columnas.
         $mejor = [[], 1];
-        for ($fila = 1; $fila <= min(5, $hoja->getHighestDataRow()); $fila++) {
+        foreach ($celdas as $fila => $delRenglon) {
+            if ($fila > 5) {
+                break;
+            }
             $encontradas = [];
-            foreach ($hoja->getRowIterator($fila, $fila)->current()->getCellIterator() as $celda) {
+            foreach ($delRenglon as $columna => $celda) {
                 $titulo = self::normalizar((string) $this->valor($celda));
                 foreach (self::COLUMNAS as $campo => [, $alias]) {
                     if (! isset($encontradas[$campo]) && in_array($titulo, $alias, true)) {
-                        $encontradas[$campo] = $celda->getColumn();
+                        $encontradas[$campo] = $columna;
                     }
                 }
             }
@@ -253,14 +292,16 @@ class LectorRecepciones
         if ($texto === null) {
             return null;
         }
-        foreach (['Y-m-d', 'd/m/Y', 'd-m-Y'] as $formato) {
-            $fecha = \DateTime::createFromFormat('!'.$formato, $texto);
-            if ($fecha && $fecha->format($formato) === $texto) {
-                return $fecha->format('Y-m-d');
-            }
+        // d/m/Y o d-m-Y (día y mes con o sin cero) y ISO con hora opcional (se ignora la hora).
+        if (preg_match('#^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$#', $texto, $m)) {
+            [$dia, $mes, $anio] = [(int) $m[1], (int) $m[2], (int) $m[3]];
+        } elseif (preg_match('#^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T].*)?$#', $texto, $m)) {
+            [$anio, $mes, $dia] = [(int) $m[1], (int) $m[2], (int) $m[3]];
+        } else {
+            return null;
         }
 
-        return null;
+        return checkdate($mes, $dia, $anio) ? sprintf('%04d-%02d-%02d', $anio, $mes, $dia) : null;
     }
 
     private function error(string $mensaje): ValidationException
