@@ -63,6 +63,10 @@ Route::prefix('abastecimiento')->name('abastecimiento.')->group(function () {
 
     // Recepciones (submódulo recepciones). `semana` va antes de cualquier ruta con {id}.
     Route::get('recepciones/semana', [RecepcionController::class, 'semana'])->name('recepciones.semana');
+    // Importación desde Excel (permiso `recepciones.importar`). Los segmentos fijos van antes de las rutas con {id}.
+    Route::get('recepciones/plantilla', [RecepcionController::class, 'plantilla'])->name('recepciones.plantilla');
+    Route::post('recepciones/importar/vista-previa', [RecepcionController::class, 'vistaPreviaImportacion'])->name('recepciones.importar.vista-previa');
+    Route::post('recepciones/importar', [RecepcionController::class, 'importar'])->name('recepciones.importar');
     Route::get('recepciones', [RecepcionController::class, 'index'])->name('recepciones.index');
     Route::post('recepciones', [RecepcionController::class, 'store'])->name('recepciones.store');
     Route::put('recepciones/{id}', [RecepcionController::class, 'update'])->whereNumber('id')->name('recepciones.update');

@@ -4,13 +4,22 @@ namespace Tests\Feature\Abastecimiento;
 
 use App\Models\Abastecimiento\Convenio;
 use App\Models\Abastecimiento\ConvenioPrecio;
+use App\Events\AbastecimientoUpdated;
+use App\Models\Abastecimiento\Recepcion;
 use App\Models\Abastecimiento\TipoCarga;
+use App\Models\User;
+use App\Services\Abastecimiento\ImportadorRecepciones;
+use App\Services\Abastecimiento\IndicadoresConvenio;
 use App\Services\Abastecimiento\LectorRecepciones;
 use App\Services\Abastecimiento\ValidadorImportacionRecepciones;
 use Carbon\Carbon;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Validation\ValidationException;
+use Laravel\Sanctum\Sanctum;
 use Tests\Concerns\CreatesAbastecimientoFixtures;
 use Tests\TestCase;
 
@@ -89,7 +98,7 @@ class ImportacionRecepcionesTest extends TestCase
             'tipo_carga_id' => TipoCarga::where('enterprise_id', $this->sbp->id)->where('nombre', 'Caja empacada')->value('id'),
             'cantidad' => '120',
             'kilos' => '1450.50',
-            'rezaga_kg' => '35',
+            'rezaga_kg' => '35.00',
             'ticket_proveedor' => 'T-0001',
             'notas' => null,
         ], $f['datos']);
@@ -253,7 +262,7 @@ class ImportacionRecepcionesTest extends TestCase
         foreach (['abc', '12abc', '1e3', '.5', '5.', '$100', '--5'] as $valor) {
             $f = $this->unica(['cantidad' => $valor]);
             $this->assertSame('error', $f['estado'], $valor);
-            $this->assertStringContainsString('no es un número válido', $f['errores'][0], $valor);
+            $this->assertStringContainsString('La cantidad «'.$valor.'» no es válida', $f['errores'][0], $valor);
         }
 
         $this->assertStringContainsString('demasiado grande', $this->unica(['cantidad' => '1000000000000'])['errores'][0]);
@@ -425,5 +434,303 @@ class ImportacionRecepcionesTest extends TestCase
         $this->assertSame('error', $r['filas'][1]['estado']);
         $this->assertStringContainsString('punto decimal', $r['filas'][1]['errores'][0]);
         $this->assertCount(1, $r['advertencias']);
+    }
+
+    // ---- Ajustes del validador (decimales, ticket, mensajes) ----
+
+    public function test_los_datos_salen_normalizados_para_decimal_14_2(): void
+    {
+        $d = $this->unica(['cantidad' => '10.0', 'kilos' => '1450.5', 'rezaga_kg' => '0', 'ticket' => 'N-1'])['datos'];
+
+        $this->assertSame('10', $d['cantidad']);
+        $this->assertSame('1450.50', $d['kilos']);
+        $this->assertSame('0.00', $d['rezaga_kg']);
+
+        $max = $this->unica(['cantidad' => '999999999999', 'kilos' => '999999999999.99', 'rezaga_kg' => '100.500', 'ticket' => 'N-2']);
+        $this->assertSame('lista', $max['estado'], implode(' | ', $max['errores']));
+        $this->assertSame('999999999999.99', $max['datos']['kilos']);
+        $this->assertSame('100.50', $max['datos']['rezaga_kg']);
+        // Cabe en la columna: no hay 500 al insertar.
+        $this->assertSame('999999999999.99', Recepcion::create($max['datos'] + ['enterprise_id' => $this->sbp->id, 'folio' => 'RC-9998'])->fresh()->kilos);
+    }
+
+    public function test_valores_con_demasiados_decimales_se_rechazan_en_vez_de_desbordar_la_columna(): void
+    {
+        $desborde = '999999999999.9999999999';
+
+        $this->assertSame(['Los kilos aceptan hasta 2 decimales.'], $this->unica(['kilos' => $desborde, 'rezaga_kg' => null])['errores']);
+        $this->assertSame(['La rezaga acepta hasta 2 decimales.'], $this->unica(['rezaga_kg' => $desborde])['errores']);
+        $this->assertSame(['La cantidad va en números enteros.'], $this->unica(['cantidad' => $desborde])['errores']);
+        $this->assertSame(['La cantidad va en números enteros.'], $this->unica(['cantidad' => '10.001'])['errores']);
+        $this->assertSame(['Los kilos aceptan hasta 2 decimales.'], $this->unica(['kilos' => '100.005', 'rezaga_kg' => null])['errores']);
+    }
+
+    public function test_tickets_de_otros_alfabetos_no_se_confunden_y_los_espacios_y_mayusculas_si_se_igualan(): void
+    {
+        $r = $this->validar([
+            $this->fila(['fila' => 2, 'ticket' => '日本']),
+            $this->fila(['fila' => 3, 'ticket' => '中国', 'cantidad' => '5']),
+            $this->fila(['fila' => 4, 'ticket' => 'Ж-1', 'cantidad' => '6']),
+            $this->fila(['fila' => 5, 'ticket' => 'Я-1', 'cantidad' => '7']),
+            $this->fila(['fila' => 6, 'ticket' => 'Ab   12', 'cantidad' => '8']),
+            $this->fila(['fila' => 7, 'ticket' => ' aB 12 ', 'cantidad' => '9']),
+        ]);
+
+        $this->assertSame(['lista', 'lista', 'lista', 'lista', 'lista', 'error'], array_column($r['filas'], 'estado'));
+        $this->assertStringContainsString('ya aparece en el renglón 6', $r['filas'][5]['errores'][0]);
+    }
+
+    public function test_mensajes_numericos_con_buena_gramatica_y_texto_del_usuario_recortado(): void
+    {
+        $this->assertStringStartsWith('La cantidad «abc» no es válida', $this->unica(['cantidad' => 'abc'])['errores'][0]);
+        $this->assertStringStartsWith('Los kilos «abc» no son válidos', $this->unica(['kilos' => 'abc', 'rezaga_kg' => null])['errores'][0]);
+        $this->assertStringStartsWith('La rezaga «abc» no es válida', $this->unica(['rezaga_kg' => 'abc'])['errores'][0]);
+
+        $largo = str_repeat('x', 300);
+        foreach ([
+            $this->unica(['convenio_folio' => $largo]),
+            $this->unica(['tipo_carga' => $largo]),
+            $this->unica(['fecha' => null, 'fecha_original' => $largo]),
+            $this->unica(['cantidad' => $largo]),
+        ] as $f) {
+            $this->assertStringContainsString(str_repeat('x', 60).'…', $f['errores'][0]);
+            $this->assertStringNotContainsString(str_repeat('x', 61), $f['errores'][0]);
+        }
+    }
+
+    // ---- Endpoints de plantilla, vista previa e importación ----
+
+    private function url(string $ruta = ''): string
+    {
+        return '/api/splendidbyporvenir/administration/abastecimiento/recepciones'.($ruta === '' ? '' : "/{$ruta}");
+    }
+
+    private function comoAdmin(): User
+    {
+        $admin = User::factory()->create(['role' => 'admin']);
+        Sanctum::actingAs($admin);
+
+        return $admin;
+    }
+
+    /** Sube el Excel con los renglones [folio, fecha, tipo, cantidad, kilos, rezaga, ticket]. */
+    private function subir(string $ruta, array $filas): \Illuminate\Testing\TestResponse
+    {
+        return $this->withHeader('Accept', 'application/json')
+            ->post($this->url($ruta), ['archivo' => $this->crearXlsx($filas)]);
+    }
+
+    private function renglon(int $i, ?Convenio $convenio = null): array
+    {
+        return [($convenio ?? $this->convenio)->folio, sprintf('2026-07-%02d', 1 + ($i % 14)), 'Caja empacada', 10 + $i, 100 + $i, null, "TK-{$i}"];
+    }
+
+    public function test_la_plantilla_se_descarga_con_importar(): void
+    {
+        $this->comoAdmin();
+
+        $r = $this->get($this->url('plantilla'));
+
+        $r->assertOk();
+        $this->assertStringContainsString('Plantilla_Recepciones.xlsx', $r->headers->get('content-disposition'));
+        $this->assertStringContainsString('spreadsheetml', $r->headers->get('content-type'));
+    }
+
+    public function test_sin_el_permiso_importar_las_tres_rutas_responden_403(): void
+    {
+        $this->otorgarAbs($this->captor, $this->sbp, 'recepciones', ['view', 'create', 'edit', 'delete']);
+        Sanctum::actingAs($this->captor);
+
+        $this->get($this->url('plantilla'))->assertForbidden();
+        $this->subir('importar/vista-previa', [$this->renglon(1)])->assertForbidden();
+        $this->subir('importar', [$this->renglon(1)])->assertForbidden();
+        $this->assertSame(0, Recepcion::count());
+
+        $this->otorgarAbs($this->captor, $this->sbp, 'recepciones', ['importar']);
+        $this->get($this->url('plantilla'))->assertOk();
+        $this->subir('importar', [$this->renglon(1)])->assertCreated();
+    }
+
+    public function test_la_vista_previa_no_escribe_nada_ni_gasta_folios(): void
+    {
+        $this->comoAdmin();
+        $this->assertSame(0, DB::table('abs_folios')->where('prefijo', 'RC')->count());
+
+        $r = $this->subir('importar/vista-previa', [
+            $this->renglon(1), $this->renglon(2),
+            [$this->convenio->folio, '2026-07-02', 'Caja empacada', 'x', 1, null, null],
+        ]);
+
+        $r->assertOk()->assertJsonPath('success', true)
+            ->assertJsonPath('data.resumen.total', 3)
+            ->assertJsonPath('data.resumen.listas', 2)
+            ->assertJsonPath('data.resumen.con_error', 1)
+            ->assertJsonPath('data.filas.2.estado', 'error');
+        $this->assertSame(0, Recepcion::count());
+        $this->assertSame(0, DB::table('abs_folios')->where('prefijo', 'RC')->count());
+    }
+
+    public function test_importacion_valida_crea_las_recepciones_con_folios_consecutivos_y_autor(): void
+    {
+        $usuario = $this->comoAdmin();
+        $otro = $this->crearConvenio($this->sbp, ['fecha_inicio' => '2026-07-01', 'fecha_fin' => '2026-07-31']);
+
+        $r = $this->subir('importar', [$this->renglon(1), $this->renglon(2, $otro), $this->renglon(3)]);
+
+        $r->assertCreated()
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('data.importadas', 3)
+            ->assertJsonPath('data.folios.primero', 'RC-0001')
+            ->assertJsonPath('data.folios.ultimo', 'RC-0003')
+            ->assertJsonCount(2, 'data.por_convenio');
+        $this->assertSame(['RC-0001', 'RC-0002', 'RC-0003'], Recepcion::orderBy('id')->pluck('folio')->all());
+        $this->assertSame(['TK-1', 'TK-2', 'TK-3'], Recepcion::orderBy('id')->pluck('ticket_proveedor')->all());
+        $this->assertSame([$usuario->id], Recepcion::pluck('created_by')->unique()->values()->all());
+        $this->assertSame([$this->sbp->id], Recepcion::pluck('enterprise_id')->unique()->values()->all());
+        $this->assertNull(Recepcion::first()->notas);
+        $this->assertSame('11.00', Recepcion::first()->cantidad);
+    }
+
+    public function test_un_renglon_invalido_entre_quinientos_validos_no_guarda_nada_ni_gasta_folios(): void
+    {
+        $this->comoAdmin();
+        $filas = array_map(fn (int $i) => $this->renglon($i), range(1, 500));
+        array_splice($filas, 250, 0, [[$this->convenio->folio, '2026-07-05', 'Caja empacada', '7.5', 100, null, 'MALO']]);
+
+        $r = $this->subir('importar', $filas);
+
+        $r->assertStatus(422)
+            ->assertJsonPath('success', false)
+            ->assertJsonCount(1, 'errors.filas')
+            ->assertJsonPath('errors.filas.0.fila', 252)
+            ->assertJsonPath('errors.filas.0.errores.0', 'La cantidad va en números enteros.');
+        $this->assertSame(0, Recepcion::count());
+
+        // El siguiente alta manual recibe el primer folio.
+        $this->postJson($this->url(), [
+            'convenio_id' => $this->convenio->id, 'fecha' => '2026-07-10',
+            'tipo_carga_id' => TipoCarga::where('nombre', 'Caja empacada')->value('id'), 'cantidad' => 3,
+        ])->assertCreated()->assertJsonPath('data.folio', 'RC-0001');
+    }
+
+    public function test_quinientos_renglones_validos_se_importan_con_folios_del_1_al_500(): void
+    {
+        $this->comoAdmin();
+
+        $r = $this->subir('importar', array_map(fn (int $i) => $this->renglon($i), range(1, 500)));
+
+        $r->assertCreated()->assertJsonPath('data.importadas', 500)
+            ->assertJsonPath('data.folios.primero', 'RC-0001')->assertJsonPath('data.folios.ultimo', 'RC-0500');
+        $this->assertSame(500, Recepcion::count());
+        $this->assertSame('TK-500', Recepcion::where('folio', 'RC-0500')->value('ticket_proveedor'));
+    }
+
+    public function test_reimportar_el_mismo_archivo_con_tickets_se_rechaza_completo_sin_duplicar(): void
+    {
+        $this->comoAdmin();
+        $filas = [$this->renglon(1), $this->renglon(2), $this->renglon(3)];
+
+        $this->subir('importar', $filas)->assertCreated();
+        $r = $this->subir('importar', $filas);
+
+        $r->assertStatus(422)->assertJsonCount(3, 'errors.filas');
+        $this->assertStringContainsString('ya existe en el convenio', $r->json('errors.filas.0.errores.0'));
+        $this->assertSame(3, Recepcion::count());
+        $this->assertSame(['RC-0001', 'RC-0002', 'RC-0003'], Recepcion::orderBy('id')->pluck('folio')->all());
+    }
+
+    public function test_archivo_ausente_de_otro_tipo_corrupto_o_mayor_de_5_mb_responde_422(): void
+    {
+        $this->comoAdmin();
+        $cabeceras = ['Accept' => 'application/json'];
+
+        $this->withHeaders($cabeceras)->post($this->url('importar'), [])->assertStatus(422)->assertJsonValidationErrors('archivo');
+        $this->withHeaders($cabeceras)->post($this->url('importar/vista-previa'), [])->assertStatus(422)->assertJsonValidationErrors('archivo');
+        $this->withHeaders($cabeceras)->post($this->url('importar'), ['archivo' => UploadedFile::fake()->create('datos.pdf', 10, 'application/pdf')])
+            ->assertStatus(422)->assertJsonValidationErrors('archivo');
+        $this->withHeaders($cabeceras)->post($this->url('importar'), ['archivo' => UploadedFile::fake()->create('grande.xlsx', 6000)])
+            ->assertStatus(422)->assertJsonValidationErrors('archivo');
+
+        $falso = UploadedFile::fake()->createWithContent('falso.xlsx', 'esto no es un excel');
+        $this->withHeaders($cabeceras)->post($this->url('importar'), ['archivo' => $falso])->assertStatus(422)->assertJsonValidationErrors('archivo');
+        $this->assertSame(0, Recepcion::count());
+    }
+
+    public function test_el_convenio_de_otra_empresa_es_error_del_renglon(): void
+    {
+        $this->comoAdmin();
+        $this->crearConvenio($this->otra);
+        $ajeno = $this->crearConvenio($this->otra);
+
+        $r = $this->subir('importar', [$this->renglon(1), $this->renglon(2, $ajeno)]);
+
+        $r->assertStatus(422)->assertJsonCount(1, 'errors.filas')->assertJsonPath('errors.filas.0.fila', 3);
+        $this->assertStringContainsString('No existe el convenio', $r->json('errors.filas.0.errores.0'));
+        $this->assertSame(0, Recepcion::count());
+    }
+
+    public function test_el_evento_trae_solo_los_convenios_y_la_cantidad_importada(): void
+    {
+        $this->comoAdmin();
+        Event::fake([AbastecimientoUpdated::class]);
+        $otro = $this->crearConvenio($this->sbp, ['fecha_inicio' => '2026-07-01', 'fecha_fin' => '2026-07-31']);
+
+        $this->subir('importar', [$this->renglon(1), $this->renglon(2, $otro), $this->renglon(3)])->assertCreated();
+
+        Event::assertDispatchedTimes(AbastecimientoUpdated::class, 1);
+        Event::assertDispatched(AbastecimientoUpdated::class, function ($e) use ($otro) {
+            $this->assertSame('imported', $e->action);
+            $this->assertEquals(['cantidad' => 3, 'convenio_ids' => [$this->convenio->id, $otro->id], 'entidad' => 'recepcion'], $e->data);
+
+            return true;
+        });
+    }
+
+    public function test_las_recepciones_importadas_aparecen_en_semana_indicadores_y_tablero(): void
+    {
+        $this->comoAdmin();
+        // Semana 29: lunes 13 y martes 14 de julio.
+        $this->subir('importar', [
+            [$this->convenio->folio, '2026-07-13', 'Caja empacada', 40, 400, null, 'S-1'],
+            [$this->convenio->folio, '2026-07-14', 'Caja empacada', 60, 600, null, 'S-2'],
+        ])->assertCreated();
+
+        $semana = $this->getJson($this->url('semana?temporada_id='.$this->convenio->temporada_id.'&lunes=2026-07-13'))->assertOk();
+        $this->assertCount(2, $semana->json('data.recepciones'));
+        $this->assertEqualsWithDelta(100, $semana->json('data.convenios.0.recibido_semana'), 0.001);
+
+        $indicadores = IndicadoresConvenio::de(Convenio::with(['precios', 'metas'])->find($this->convenio->id));
+        $this->assertEqualsWithDelta(100, $indicadores['recibido'], 0.001);
+
+        $tablero = $this->getJson('/api/splendidbyporvenir/administration/abastecimiento/tablero?temporada_id='.$this->convenio->temporada_id)->assertOk();
+        $this->assertEqualsWithDelta(100 * 100, $tablero->json('data.kpis.valor_recibido'), 0.01);
+    }
+
+    public function test_un_ticket_nuevo_o_un_convenio_inactivo_cancelan_la_importacion_completa(): void
+    {
+        $usuario = User::factory()->create(['role' => 'admin']);
+        $validado = $this->validar(app(LectorRecepciones::class)->leer($this->crearXlsx([$this->renglon(1), $this->renglon(2)])));
+        $importador = app(ImportadorRecepciones::class);
+
+        // Un ticket del archivo se registra después de validar.
+        $this->crearRecepcion($this->convenio, ['fecha' => '2026-07-02', 'ticket_proveedor' => 'tk-2']);
+        try {
+            $importador->importar($this->sbp, $usuario, $validado['filas']);
+            $this->fail('Debía rechazar el ticket ya registrado.');
+        } catch (ValidationException $e) {
+            $this->assertStringContainsString('TK-2', $e->errors()['archivo'][0]);
+        }
+        $this->assertSame(1, Recepcion::count());
+
+        // El convenio se suspende después de validar.
+        Recepcion::query()->forceDelete();
+        $this->convenio->update(['status' => 'suspendido']);
+        try {
+            $importador->importar($this->sbp, $usuario, $validado['filas']);
+            $this->fail('Debía rechazar el convenio inactivo.');
+        } catch (ValidationException $e) {
+            $this->assertStringContainsString('ya no está activo', $e->errors()['archivo'][0]);
+        }
+        $this->assertSame(0, Recepcion::count());
     }
 }

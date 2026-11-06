@@ -24,6 +24,9 @@ class ValidadorImportacionRecepciones
 
     private const MAX_TICKET = 60;
 
+    /** Largo máximo del texto del usuario que se refleja en un mensaje de error. */
+    private const MAX_MENSAJE = 60;
+
     /**
      * @param  list<array<string, mixed>>  $filas  salida de LectorRecepciones::leer
      * @return array{
@@ -59,7 +62,7 @@ class ValidadorImportacionRecepciones
             if ($folio === null) {
                 $errores[] = 'Falta el folio del convenio.';
             } elseif ($convenio === null) {
-                $errores[] = "No existe el convenio «{$folio}» en esta empresa.";
+                $errores[] = 'No existe el convenio «'.self::corto($folio).'» en esta empresa.';
             }
 
             if ($nombreTipo === null) {
@@ -67,9 +70,9 @@ class ValidadorImportacionRecepciones
             } else {
                 $candidatos = $tipos->get(self::normalizar($nombreTipo), []);
                 if (count($candidatos) === 0) {
-                    $errores[] = "No existe el tipo de carga «{$nombreTipo}».";
+                    $errores[] = 'No existe el tipo de carga «'.self::corto($nombreTipo).'».';
                 } elseif (count($candidatos) > 1) {
-                    $errores[] = "Hay más de un tipo de carga llamado «{$nombreTipo}»; corrige el catálogo o el archivo.";
+                    $errores[] = 'Hay más de un tipo de carga llamado «'.self::corto($nombreTipo).'»; corrige el catálogo o el archivo.';
                 } else {
                     $tipo = $candidatos[0];
                     $tipoId = (int) $tipo->id;
@@ -80,20 +83,20 @@ class ValidadorImportacionRecepciones
                 $original = $this->texto($crudo['fecha_original'] ?? null);
                 $errores[] = $original === null
                     ? 'Falta la fecha.'
-                    : "La fecha «{$original}» no se entiende; usa AAAA-MM-DD o DD/MM/AAAA.";
+                    : 'La fecha «'.self::corto($original).'» no se entiende; usa AAAA-MM-DD o DD/MM/AAAA.';
             } elseif (! preg_match('/^\d{4}-\d{2}-\d{2}$/', $fecha) || ! checkdate((int) substr($fecha, 5, 2), (int) substr($fecha, 8, 2), (int) substr($fecha, 0, 4))) {
-                $errores[] = "La fecha «{$fecha}» no es válida; usa AAAA-MM-DD o DD/MM/AAAA.";
+                $errores[] = 'La fecha «'.self::corto($fecha).'» no es válida; usa AAAA-MM-DD o DD/MM/AAAA.';
                 $fecha = null;
             }
 
-            [$cantidad, $errorCantidad] = $this->numero($this->texto($crudo['cantidad'] ?? null), 'La cantidad');
+            [$cantidad, $errorCantidad] = $this->numero($this->texto($crudo['cantidad'] ?? null), ['La cantidad', 'es', 'válida'], 0);
             if ($errorCantidad !== null) {
                 $errores[] = $errorCantidad;
             } elseif ($cantidad === null) {
                 $errores[] = 'Falta la cantidad.';
             }
-            [$kilos, $errorKilos] = $this->numero($this->texto($crudo['kilos'] ?? null), 'Los kilos');
-            [$rezaga, $errorRezaga] = $this->numero($this->texto($crudo['rezaga_kg'] ?? null), 'La rezaga');
+            [$kilos, $errorKilos] = $this->numero($this->texto($crudo['kilos'] ?? null), ['Los kilos', 'son', 'válidos'], 2);
+            [$rezaga, $errorRezaga] = $this->numero($this->texto($crudo['rezaga_kg'] ?? null), ['La rezaga', 'es', 'válida'], 2);
             array_push($errores, ...array_values(array_filter([$errorKilos, $errorRezaga])));
 
             if ($ticket !== null && mb_strlen($ticket) > self::MAX_TICKET) {
@@ -119,6 +122,7 @@ class ValidadorImportacionRecepciones
                 $errores = array_merge($errores, $this->duplicados(
                     $convenio, $datos, $numero, $identicas, $ticketsDelArchivo, $existentes,
                 ));
+                $datos = $this->normalizarDatos($datos);
             }
 
             $resultado[] = [
@@ -179,7 +183,7 @@ class ValidadorImportacionRecepciones
         $huella = implode('|', [
             $datos['convenio_id'], $datos['fecha'], $datos['tipo_carga_id'],
             $this->canonico($datos['cantidad']), $this->canonico($datos['kilos']), $this->canonico($datos['rezaga_kg']),
-            $datos['ticket_proveedor'] === null ? '' : self::normalizar($datos['ticket_proveedor']),
+            $datos['ticket_proveedor'] === null ? '' : self::normalizarTicket($datos['ticket_proveedor']),
         ]);
         $esIdentico = false;
         if (isset($identicas[$huella])) {
@@ -191,13 +195,13 @@ class ValidadorImportacionRecepciones
 
         $ticket = $datos['ticket_proveedor'];
         if ($ticket !== null) {
-            $clave = $datos['convenio_id'].'|'.self::normalizar($ticket);
+            $clave = $datos['convenio_id'].'|'.self::normalizarTicket($ticket);
             if (isset($existentes[$clave])) {
-                $errores[] = "El ticket «{$ticket}» ya existe en el convenio {$convenio->folio} (recepción {$existentes[$clave]}).";
+                $errores[] = 'El ticket «'.self::corto($ticket)."» ya existe en el convenio {$convenio->folio} (recepción {$existentes[$clave]}).";
             }
             if (isset($ticketsDelArchivo[$clave])) {
                 if (! $esIdentico) {
-                    $errores[] = "El ticket «{$ticket}» ya aparece en el renglón {$ticketsDelArchivo[$clave]} del archivo para este convenio.";
+                    $errores[] = 'El ticket «'.self::corto($ticket)."» ya aparece en el renglón {$ticketsDelArchivo[$clave]} del archivo para este convenio.";
                 }
             } else {
                 $ticketsDelArchivo[$clave] = $numero;
@@ -254,7 +258,7 @@ class ValidadorImportacionRecepciones
             ->orderBy('id')
             ->get(['id', 'convenio_id', 'ticket_proveedor', 'folio'])
             ->each(function (Recepcion $r) use (&$mapa) {
-                $mapa[$r->convenio_id.'|'.self::normalizar($r->ticket_proveedor)] ??= $r->folio;
+                $mapa[$r->convenio_id.'|'.self::normalizarTicket($r->ticket_proveedor)] ??= $r->folio;
             });
 
         return $mapa;
@@ -305,27 +309,57 @@ class ValidadorImportacionRecepciones
     /**
      * Número estricto: dígitos con punto decimal opcional (y signo menos). La coma, los
      * espacios y los separadores de miles se rechazan: «1,234» podría ser 1234 o 1.234.
+     * También se rechaza lo que no cabe en la columna (decimal(14,2)): más de `$decimales`
+     * decimales significativos (con 0 decimales, cualquier fracción distinta de cero).
      *
-     * @return array{0: ?string, 1: ?string} [valor normalizado, mensaje de error]
+     * @param  array{0: string, 1: string, 2: string}  $campo  [sujeto, «es»|«son», adjetivo concordado]
+     * @return array{0: ?string, 1: ?string} [valor, mensaje de error]
      */
-    private function numero(?string $texto, string $campo): array
+    private function numero(?string $texto, array $campo, int $decimales): array
     {
         if ($texto === null) {
             return [null, null];
         }
+        [$sujeto, $verbo, $adjetivo] = $campo;
+        $no = "{$sujeto} «".self::corto($texto)."» no {$verbo} {$adjetivo}";
+
         if (preg_match('/[,\s]/u', $texto)) {
-            return [null, "{$campo} «{$texto}» no es válido: escribe el número con punto decimal, sin coma ni separador de miles ni espacios (por ejemplo 1234.5)."];
+            return [null, "{$no}: escribe el número con punto decimal, sin coma ni separador de miles ni espacios (por ejemplo 1234.5)."];
         }
         if (! preg_match('/^-?\d+(\.\d+)?$/', $texto)) {
-            return [null, "{$campo} «{$texto}» no es un número válido."];
+            return [null, "{$no}: escribe solo un número (por ejemplo 1234.5)."];
         }
-        if (strlen(ltrim(explode('.', ltrim($texto, '-'))[0], '0')) > strlen((string) self::MAX_ENTERO)) {
-            return [null, "{$campo} «{$texto}» es demasiado grande."];
+        [$entera, $fraccion] = array_pad(explode('.', ltrim($texto, '-'), 2), 2, '');
+        if (strlen(ltrim($entera, '0')) > strlen((string) self::MAX_ENTERO)) {
+            return [null, "{$no}: es demasiado grande."];
+        }
+        if (strlen(rtrim($fraccion, '0')) > $decimales) {
+            return [null, $decimales === 0
+                ? "{$sujeto} va en números enteros."
+                : "{$sujeto} ".($verbo === 'son' ? 'aceptan' : 'acepta')." hasta {$decimales} decimales."];
         }
 
         return [$texto, null];
     }
 
+    /** Valores listos para `Recepcion::create`: cantidad entera y kilos/rezaga con 2 decimales exactos. */
+    private function normalizarDatos(array $datos): array
+    {
+        $datos['cantidad'] = number_format((float) $datos['cantidad'], 0, '.', '');
+        foreach (['kilos', 'rezaga_kg'] as $campo) {
+            if ($datos[$campo] !== null) {
+                $datos[$campo] = number_format((float) $datos[$campo], 2, '.', '');
+            }
+        }
+
+        return $datos;
+    }
+
+    /** Texto del usuario recortado para reflejarlo en un mensaje sin inflarlo. */
+    private static function corto(string $texto): string
+    {
+        return mb_strlen($texto) > self::MAX_MENSAJE ? mb_substr($texto, 0, self::MAX_MENSAJE).'…' : $texto;
+    }
     /** Valor numérico comparable (huella de duplicados): 10, 10.0 y 10.00 son lo mismo. */
     private function canonico(?string $numero): string
     {
@@ -347,7 +381,16 @@ class ValidadorImportacionRecepciones
         return mb_strtoupper(trim($folio));
     }
 
-    /** Minúsculas, sin acentos y con los espacios colapsados. */
+    /**
+     * Ticket comparable: minúsculas, sin espacios en los bordes y con los espacios internos colapsados.
+     * No usa Str::ascii: transliterar colapsaría tickets distintos escritos en otros alfabetos.
+     */
+    public static function normalizarTicket(string $ticket): string
+    {
+        return trim(preg_replace('/\s+/u', ' ', mb_strtolower($ticket)));
+    }
+
+    /** Minúsculas, sin acentos y con los espacios colapsados (nombres de tipo de carga). */
     private static function normalizar(string $texto): string
     {
         return trim(preg_replace('/\s+/u', ' ', mb_strtolower(Str::ascii($texto))));
