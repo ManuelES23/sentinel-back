@@ -1,0 +1,178 @@
+<?php
+
+namespace App\Services\Abastecimiento;
+
+use Illuminate\Validation\ValidationException;
+
+/**
+ * Reglas de un convenio: precios (modalidad, vigencias repetidas y tipo
+ * de carga principal) y volumen pactado. Trabaja sobre las filas ya validadas en tipo por el
+ * controlador; aquí solo viven las reglas de negocio.
+ */
+class ReglasConvenio
+{
+    /**
+     * Lanza ValidationException con la clave `precios.N.campo` del primer renglón culpable.
+     *
+     * @param  array<int, array<string, mixed>>  $precios
+     */
+    public static function validarPrecios(array $precios, string $modalidad): void
+    {
+        $errores = [];
+        $vistos = [];
+        $principales = []; // tipo_carga_id => primer índice marcado
+
+        foreach (array_values($precios) as $i => $precio) {
+            if ($modalidad === 'consignacion') {
+                $pct = $precio['porcentaje_productor'] ?? null;
+                if ($pct === null || $pct === '') {
+                    $errores["precios.{$i}.porcentaje_productor"] = 'Indica el porcentaje que corresponde al productor.';
+                } elseif (! is_numeric($pct) || $pct < 0 || $pct > 100) {
+                    $errores["precios.{$i}.porcentaje_productor"] = 'El porcentaje del productor debe estar entre 0 y 100.';
+                }
+            }
+
+            $clave = ($precio['tipo_carga_id'] ?? '').'|'.($precio['vigencia_inicio'] ?? '');
+            if (isset($vistos[$clave])) {
+                $errores["precios.{$i}.vigencia_inicio"] = 'Ya hay un precio de este tipo de carga con esa fecha de vigencia.';
+            }
+            $vistos[$clave] = true;
+
+            if (self::marcado($precio)) {
+                $principales[$precio['tipo_carga_id']] ??= $i;
+            }
+        }
+
+        if (count($principales) > 1) {
+            $indices = array_values($principales);
+            sort($indices);
+            foreach (array_slice($indices, 1) as $i) {
+                $errores["precios.{$i}.es_principal"] = 'Solo un tipo de carga puede ser el principal.';
+            }
+        }
+
+        if ($errores !== []) {
+            throw ValidationException::withMessages($errores);
+        }
+    }
+
+    /**
+     * Filas listas para guardar: el porcentaje del productor solo existe en
+     * consignación y `es_principal` identifica un TIPO de carga (todas sus
+     * vigencias comparten el valor; el primer tipo de la lista si ninguno se marcó).
+     *
+     * @param  array<int, array<string, mixed>>  $precios
+     * @return array<int, array<string, mixed>>
+     */
+    public static function normalizarPrecios(array $precios, string $modalidad): array
+    {
+        $precios = array_values($precios);
+        $principal = null;
+        foreach ($precios as $precio) {
+            if (self::marcado($precio)) {
+                $principal = (int) $precio['tipo_carga_id'];
+                break;
+            }
+        }
+        $principal ??= isset($precios[0]) ? (int) $precios[0]['tipo_carga_id'] : null;
+
+        return array_map(fn (array $p) => [
+            'tipo_carga_id' => (int) $p['tipo_carga_id'],
+            'precio' => $p['precio'],
+            'porcentaje_productor' => $modalidad === 'consignacion' ? ($p['porcentaje_productor'] ?? null) : null,
+            'vigencia_inicio' => $p['vigencia_inicio'],
+            'es_principal' => (int) $p['tipo_carga_id'] === $principal,
+            'notas' => $p['notas'] ?? null,
+        ], $precios);
+    }
+
+    /**
+     * Reglas del volumen pactado sobre el estado FINAL del convenio (lo enviado
+     * sobre lo guardado). Lanza ValidationException sin tocar nada.
+     *
+     * `$datos`: modo_volumen, volumen_total, unidad, fecha_inicio, fecha_fin (Y-m-d)
+     * y metas (lista de ['semana', 'cantidad'], o null). `$metasGuardadas` indica que
+     * las metas no vienen en la petición sino de la base: entonces no hay un renglón
+     * que señalar y un choque con las fechas se reporta en `fecha_inicio`/`fecha_fin`.
+     * Las semanas repetidas ya las rechaza la validación `distinct` del controlador.
+     *
+     * @param  array<string, mixed>  $datos
+     */
+    public static function validarVolumen(array $datos, bool $metasGuardadas = false): void
+    {
+        $unidad = $datos['unidad'];
+        $metas = is_array($datos['metas'] ?? null) ? array_values($datos['metas']) : [];
+        $errores = [];
+
+        if ($datos['modo_volumen'] === 'total') {
+            $total = $datos['volumen_total'] ?? null;
+            if (! is_numeric($total) || (float) $total <= 0) {
+                $errores['volumen_total'] = 'Indica el volumen total pactado (mayor a cero).';
+            } elseif (! self::cantidadValida($total, $unidad)) {
+                $errores['volumen_total'] = self::mensajeCantidad($unidad);
+            }
+            if (! $metasGuardadas && $metas !== []) {
+                $errores['metas'] = 'En volumen total no se capturan metas semanales.';
+            }
+        } elseif ($metas === []) {
+            $errores['metas'] = 'Captura al menos una meta semanal.';
+        } else {
+            $semanas = Semanas::entre($datos['fecha_inicio'], $datos['fecha_fin']);
+            $primera = $semanas[0] ?? null;
+            $ultima = $semanas[count($semanas) - 1] ?? null;
+
+            foreach ($metas as $i => $meta) {
+                $semana = (string) $meta['semana'];
+
+                if (! $metasGuardadas) {
+                    if (Semanas::lunesDe($semana) !== $semana) {
+                        $errores["metas.{$i}.semana"] = 'La semana debe indicarse con la fecha de su lunes.';
+                    } elseif (! in_array($semana, $semanas, true)) {
+                        $errores["metas.{$i}.semana"] = 'La semana queda fuera de las fechas del convenio.';
+                    }
+                    if (! self::cantidadValida($meta['cantidad'], $unidad)) {
+                        $errores["metas.{$i}.cantidad"] = self::mensajeCantidad($unidad);
+                    }
+
+                    continue;
+                }
+
+                if ($primera !== null && $semana < $primera) {
+                    $errores['fecha_inicio'] = 'Hay metas fuera de las nuevas fechas: ajústalas primero.';
+                }
+                if ($ultima !== null && $semana > $ultima) {
+                    $errores['fecha_fin'] = 'Hay metas fuera de las nuevas fechas: ajústalas primero.';
+                }
+                if (! self::cantidadValida($meta['cantidad'], $unidad)) {
+                    $errores['unidad'] = 'Hay metas con cantidades que no caben en esta unidad: ajústalas primero.';
+                }
+            }
+        }
+
+        if ($errores !== []) {
+            throw ValidationException::withMessages($errores);
+        }
+    }
+
+    /** Cajas: enteras. Kilos: hasta dos decimales. */
+    private static function cantidadValida(mixed $cantidad, string $unidad): bool
+    {
+        $f = (float) $cantidad;
+
+        return $unidad === 'caja'
+            ? abs($f - round($f)) < 1e-9
+            : abs($f * 100 - round($f * 100)) < 1e-6;
+    }
+
+    private static function mensajeCantidad(string $unidad): string
+    {
+        return $unidad === 'caja'
+            ? 'En cajas la cantidad debe ser un número entero.'
+            : 'En kilos la cantidad admite hasta dos decimales.';
+    }
+
+    private static function marcado(array $precio): bool
+    {
+        return filter_var($precio['es_principal'] ?? false, FILTER_VALIDATE_BOOLEAN);
+    }
+}

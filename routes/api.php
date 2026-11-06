@@ -1156,6 +1156,7 @@ Route::middleware('auth:sanctum')->group(function () {
         ->middleware(App\Http\Middleware\EmpresaDeLaRuta::class)
         ->group(function () {
             Route::group([], base_path('routes/activos-fijos.php'));
+            Route::group([], base_path('routes/abastecimiento.php'));
             Route::group([], base_path('routes/organizacion.php'));
         });
 
