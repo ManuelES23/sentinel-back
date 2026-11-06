@@ -3,8 +3,11 @@
 namespace App\Http\Controllers\Api\Abastecimiento;
 
 use App\Models\Abastecimiento\Productor;
+use App\Models\Enterprise;
+use App\Services\Abastecimiento\SaldoProductor;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -53,7 +56,11 @@ class ProductorController extends AbastecimientoController
 
         $porPagina = min(max((int) $request->input('per_page', self::POR_PAGINA), 1), self::POR_PAGINA_MAX);
         $pagina = $query->orderBy('nombre')->orderBy('id')->paginate($porPagina);
-        $pagina->getCollection()->transform(fn (Productor $p) => $this->presentar($p));
+        // Saldo de la página completa en una sola llamada (nunca uno por productor) y solo para quien ve dinero.
+        $saldos = $this->verDinero($request, $empresa)
+            ? SaldoProductor::porProductores($empresa, $pagina->getCollection()->pluck('id')->all())
+            : null;
+        $pagina->getCollection()->transform(fn (Productor $p) => $this->presentar($p) + ['saldo' => $saldos === null ? null : self::saldoDe($saldos, $p->id)]);
 
         return response()->json(['success' => true, 'data' => $pagina]);
     }
@@ -63,13 +70,43 @@ class ProductorController extends AbastecimientoController
     {
         $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'view');
 
+        $productores = Productor::deEmpresa($empresa->id)
+            ->where('is_active', true)
+            ->orderBy('nombre')
+            ->get(['id', 'nombre', 'tipo']);
+        $saldos = $this->verDinero($request, $empresa) ? SaldoProductor::porProductores($empresa, $productores->pluck('id')->all()) : null;
+
         return response()->json([
             'success' => true,
-            'data' => Productor::deEmpresa($empresa->id)
-                ->where('is_active', true)
-                ->orderBy('nombre')
-                ->get(['id', 'nombre', 'tipo']),
+            'data' => $productores->map(fn (Productor $p) => [
+                'id' => $p->id,
+                'nombre' => $p->nombre,
+                'tipo' => $p->tipo,
+                'saldo' => $saldos === null ? null : self::saldoDe($saldos, $p->id),
+            ])->values()->all(),
         ]);
+    }
+
+    /** El saldo es dinero: solo con Abonos o Liquidaciones (`view`); el administrador siempre. */
+    private function verDinero(Request $request, Enterprise $empresa): bool
+    {
+        $usuario = $request->user();
+
+        return $this->ctx->puede($usuario, $empresa, 'abonos', 'view') || $this->ctx->puede($usuario, $empresa, 'liquidaciones', 'view');
+    }
+
+    /**
+     * Saldo de un productor por moneda (`SaldoProductor`): `[{moneda, por_pagar, anticipos_sin_aplicar, sin_liquidar}]`,
+     * vacío si no tiene movimiento.
+     */
+    private static function saldoDe(Collection $saldos, int $productorId): array
+    {
+        return collect($saldos->get($productorId, []))->sortKeys()->map(fn (array $s) => [
+            'moneda' => $s['moneda'],
+            'por_pagar' => $s['por_pagar'],
+            'anticipos_sin_aplicar' => $s['anticipos_sin_aplicar'],
+            'sin_liquidar' => $s['sin_liquidar'],
+        ])->values()->all();
     }
 
     /** Mismo RFC o mismo nombre (sin acentos ni mayúsculas). Solo avisa. */

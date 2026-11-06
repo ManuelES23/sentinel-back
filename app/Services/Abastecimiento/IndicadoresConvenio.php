@@ -103,7 +103,8 @@ class IndicadoresConvenio
      * día y tipo de carga. La cantidad ya viene en la unidad del convenio
      * (kilos si se paga por kilo; si no, la cantidad capturada).
      *
-     * Con `$soloSinLiquidar` solo cuenta las recepciones sin liquidación (`liquidacion_id` nulo).
+     * Con `$soloSinLiquidar` solo cuenta las recepciones sin liquidación (`liquidacion_id` nulo
+     * o ligado a una liquidación cancelada).
      *
      * @param  Collection<int, Convenio>  $convenios
      * @return Collection<int, Collection<int, array{fecha: string, tipo_carga_id: int, cantidad: float}>> convenio_id => líneas
@@ -118,7 +119,10 @@ class IndicadoresConvenio
         return DB::table('abs_recepciones')
             ->whereIn('convenio_id', $unidades->keys()->all())
             ->whereNull('deleted_at')
-            ->when($soloSinLiquidar, fn ($q) => $q->whereNull('liquidacion_id'))
+            // Libre = sin liquidación; por si acaso, una que apunta a una liquidación cancelada también (Ruling 12 ya la libera).
+            ->when($soloSinLiquidar, fn ($q) => $q->where(fn ($q) => $q
+                ->whereNull('liquidacion_id')
+                ->orWhereIn('liquidacion_id', DB::table('abs_liquidaciones')->select('id')->where('status', 'cancelada'))))
             ->groupBy('convenio_id', 'fecha', 'tipo_carga_id')
             ->selectRaw('convenio_id, fecha, tipo_carga_id, SUM(cantidad) as cantidad, SUM(kilos) as kilos')
             ->get()

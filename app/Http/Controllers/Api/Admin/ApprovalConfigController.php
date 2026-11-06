@@ -22,6 +22,17 @@ class ApprovalConfigController extends Controller
     ];
 
     /**
+     * Procesos con lista propia de tipos de aprobador (con su nombre en pantalla).
+     * Un proceso que está aquí solo acepta esos tipos y siempre con alcance de toda la empresa.
+     */
+    private const TIPOS_POR_PROCESO = [
+        ApprovalProcess::SUPPLY_SETTLEMENTS => [
+            ApprovalFlowStep::TYPE_USER => 'Usuario específico',
+            'position' => 'Puesto',
+        ],
+    ];
+
+    /**
      * Listar todos los procesos de aprobación
      */
     public function index(Request $request): JsonResponse
@@ -168,11 +179,12 @@ class ApprovalConfigController extends Controller
     public function addStep(Request $request, ApprovalProcess $process): JsonResponse
     {
         $tipo = $request->input('approver_type');
-        if (isset(self::TIPOS_SOLO_VACACIONES[$tipo]) && $process->code !== ApprovalProcess::VACATION_REQUESTS) {
-            return $this->soloVacaciones($tipo);
+        if ($rechazo = $this->tipoNoPermitido($process, $tipo)) {
+            return $rechazo;
         }
 
         $this->limpiarCamposAjenos($request, $tipo);
+        $this->forzarAlcanceDelProceso($request, $process);
 
         $validated = $request->validate([
             'enterprise_id' => 'nullable|exists:enterprises,id',
@@ -225,13 +237,14 @@ class ApprovalConfigController extends Controller
         }
 
         $tipo = $request->input('approver_type', $step->approver_type);
-        if (isset(self::TIPOS_SOLO_VACACIONES[$tipo]) && $process->code !== ApprovalProcess::VACATION_REQUESTS) {
-            return $this->soloVacaciones($tipo);
+        if ($rechazo = $this->tipoNoPermitido($process, $tipo)) {
+            return $rechazo;
         }
 
         if ($request->has('approver_type')) {
             $this->limpiarCamposAjenos($request, $tipo);
         }
+        $this->forzarAlcanceDelProceso($request, $process);
 
         $validated = $request->validate([
             'enterprise_id' => 'nullable|exists:enterprises,id',
@@ -249,6 +262,11 @@ class ApprovalConfigController extends Controller
         $usuarioFinal = array_key_exists('user_id', $validated) ? $validated['user_id'] : $step->user_id;
         if ($tipo === ApprovalFlowStep::TYPE_USER && $usuarioFinal === null) {
             throw ValidationException::withMessages(['user_id' => 'Elige el usuario que aprueba este paso.']);
+        }
+
+        $puestoFinal = array_key_exists('position_id', $validated) ? $validated['position_id'] : $step->position_id;
+        if (isset(self::TIPOS_POR_PROCESO[$process->code]) && $tipo === 'position' && $puestoFinal === null) {
+            throw ValidationException::withMessages(['position_id' => 'Elige el puesto que aprueba este paso.']);
         }
 
         $empresaFinal = array_key_exists('enterprise_id', $validated) ? $validated['enterprise_id'] : $step->enterprise_id;
@@ -289,6 +307,42 @@ class ApprovalConfigController extends Controller
             'success' => true,
             'message' => 'Regla eliminada exitosamente',
         ]);
+    }
+
+    /**
+     * Rechaza el tipo de aprobador que el proceso no admite: los procesos con lista propia solo aceptan la suya;
+     * en los demás, los tipos de vacaciones solo valen en vacaciones.
+     */
+    private function tipoNoPermitido(ApprovalProcess $process, mixed $tipo): ?JsonResponse
+    {
+        $permitidos = self::TIPOS_POR_PROCESO[$process->code] ?? null;
+
+        if ($permitidos !== null) {
+            if ($tipo === null || (is_string($tipo) && isset($permitidos[$tipo]))) {
+                return null;
+            }
+
+            $nombres = array_map(fn ($nombre) => '«'.$nombre.'»', array_values($permitidos));
+
+            return response()->json([
+                'success' => false,
+                'message' => 'En las liquidaciones de abastecimiento solo se pueden usar los tipos '.implode(' y ', $nombres).'.',
+            ], 422);
+        }
+
+        if (isset(self::TIPOS_SOLO_VACACIONES[$tipo]) && $process->code !== ApprovalProcess::VACATION_REQUESTS) {
+            return $this->soloVacaciones($tipo);
+        }
+
+        return null;
+    }
+
+    /** Los procesos con lista propia de tipos aprueban siempre con alcance de toda la empresa. */
+    private function forzarAlcanceDelProceso(Request $request, ApprovalProcess $process): void
+    {
+        if (isset(self::TIPOS_POR_PROCESO[$process->code])) {
+            $request->merge(['approval_scope' => 'enterprise']);
+        }
     }
 
     private function soloVacaciones(string $tipo): JsonResponse
