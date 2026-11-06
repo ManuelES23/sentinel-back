@@ -15,6 +15,7 @@ use App\Services\Abastecimiento\MetasConvenio;
 use App\Services\Abastecimiento\PrecioVigente;
 use App\Services\Abastecimiento\ReglasConvenio;
 use App\Services\Abastecimiento\Semanas;
+use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -162,16 +163,10 @@ class ConvenioController extends AbastecimientoController
 
         $datos = $this->validar($request, $empresa);
 
-        // La unidad y la moneda reinterpretan las cantidades y montos ya capturados: con recepciones no cambian.
-        $cambios = array_filter([
-            'unidad' => $datos['unidad'] !== $convenio->unidad,
-            'moneda' => $datos['moneda'] !== $convenio->moneda,
-        ]);
-        if ($cambios !== [] && $convenio->recepciones()->exists()) {
-            throw ValidationException::withMessages(array_map(
-                fn () => 'No se puede cambiar: el convenio ya tiene recepciones.',
-                $cambios,
-            ));
+        // Con recepciones vivas, lo ya capturado no se puede dejar huérfano.
+        $errores = $this->erroresConRecepciones($convenio, $datos);
+        if ($errores !== []) {
+            throw ValidationException::withMessages($errores);
         }
 
         // El volumen se revisa sobre el estado final: lo enviado sobre lo guardado.
@@ -301,7 +296,7 @@ class ConvenioController extends AbastecimientoController
             'notas' => ['nullable', 'string', 'max:5000'],
             'precios' => ['required', 'array', 'min:1'],
             'precios.*.tipo_carga_id' => ['required', 'integer', $viva('abs_tipos_carga')],
-            'precios.*.precio' => ['required', 'numeric', 'gt:0', 'max:9999999999.9999'],
+            'precios.*.precio' => ['required', 'numeric', 'gt:0', 'max:99999999.9999'],
             'precios.*.porcentaje_productor' => ['nullable', 'numeric', 'between:0,100'],
             'precios.*.vigencia_inicio' => ['required', 'date_format:Y-m-d'],
             'precios.*.es_principal' => ['nullable', 'boolean'],
@@ -322,6 +317,52 @@ class ConvenioController extends AbastecimientoController
         $datos['precios'] = ReglasConvenio::normalizarPrecios($datos['precios'], $datos['modalidad']);
 
         return $datos;
+    }
+
+    /**
+     * Con recepciones vivas: la unidad, la moneda, el productor, la variedad y la temporada no cambian
+     * (reinterpretarían lo capturado); las fechas deben seguir cubriendo todas las recepciones y la lista
+     * de precios debe dejar un precio vigente para cada tipo de carga y fecha ya recibidos.
+     *
+     * @return array<string, string>
+     */
+    private function erroresConRecepciones(Convenio $convenio, array $datos): array
+    {
+        if (! $convenio->recepciones()->exists()) {
+            return [];
+        }
+
+        $errores = [];
+        $sinCambio = 'No se puede cambiar: el convenio ya tiene recepciones.';
+        foreach (['unidad', 'moneda', 'productor_id', 'variedad_id', 'temporada_id'] as $campo) {
+            if ((string) $datos[$campo] !== (string) $convenio->{$campo}) {
+                $errores[$campo] = $sinCambio;
+            }
+        }
+
+        $fueraDeFechas = 'No se puede: hay recepciones fuera de las nuevas fechas del convenio.';
+        $primera = Carbon::parse($convenio->recepciones()->min('fecha'))->format('Y-m-d');
+        $ultima = Carbon::parse($convenio->recepciones()->max('fecha'))->format('Y-m-d');
+        if ($datos['fecha_inicio'] > $primera) {
+            $errores['fecha_inicio'] = $fueraDeFechas;
+        }
+        if ($datos['fecha_fin'] < $ultima) {
+            $errores['fecha_fin'] = $fueraDeFechas;
+        }
+
+        // Cada par (tipo de carga, fecha) ya recibido necesita precio vigente con la lista que se va a guardar.
+        $nuevos = collect($datos['precios'])->map(fn (array $p) => new ConvenioPrecio($p));
+        $sinPrecio = $convenio->recepciones()->select('tipo_carga_id', 'fecha')->distinct()->get()
+            ->contains(fn ($r) => PrecioVigente::enColeccion(
+                $nuevos,
+                (int) $r->tipo_carga_id,
+                Carbon::parse($r->fecha)->format('Y-m-d'),
+            ) === null);
+        if ($sinPrecio) {
+            $errores['precios'] = 'No se puede: el precio dejaría recepciones ya capturadas sin precio vigente.';
+        }
+
+        return $errores;
     }
 
     private function columnas(array $datos): array
