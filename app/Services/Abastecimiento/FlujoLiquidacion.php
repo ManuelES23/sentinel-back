@@ -273,7 +273,7 @@ class FlujoLiquidacion
         foreach ($pasos->values() as $i => $paso) {
             $ids = AprobadorLiquidaciones::elegibles($l, $paso)->pluck('id')->map(fn ($id) => (int) $id)->all();
             if ($ids === []) {
-                self::fallar('liquidacion', "El paso {$paso->step_order} ({$paso->description}) no tiene a nadie que pueda decidirlo; quien creó o envía la liquidación no cuenta. Revisa la cadena de aprobación.");
+                self::fallar('liquidacion', "El paso {$paso->step_order} ({$paso->description}) no tiene a nadie que pueda decidirlo; quien creó, editó o envió la liquidación no cuenta. Revisa la cadena de aprobación.");
             }
             $candidatos[$i] = $ids;
         }

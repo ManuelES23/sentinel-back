@@ -44,7 +44,7 @@ class TransaccionDinero
         $intentos = $anidada ? 1 : max(1, $intentos);
 
         for ($intento = 1; ; $intento++) {
-            if (! $anidada && DB::getDriverName() === 'mysql') {
+            if (! $anidada && self::usaAislamiento(DB::getDriverName())) {
                 DB::statement('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
             }
 
@@ -58,6 +58,12 @@ class TransaccionDinero
         }
     }
 
+    /** ¿El driver admite `SET TRANSACTION ISOLATION LEVEL`? MySQL y MariaDB (producción puede usar `DB_CONNECTION=mariadb`). */
+    public static function usaAislamiento(string $driver): bool
+    {
+        return in_array($driver, ['mysql', 'mariadb'], true);
+    }
+
     /** Bloquea la fila del productor de la empresa (el primer bloqueo de toda escritura de dinero); 404 si no es suyo. */
     public static function bloquearProductor(int $empresaId, int $productorId, bool $conBorrados = false): Productor
     {
@@ -69,8 +75,11 @@ class TransaccionDinero
     }
 
     /**
-     * Para las acciones sobre una liquidación: lee SOLO su `productor_id` (columna que no cambia) sin bloquear,
-     * bloquea al productor y después bloquea y recarga la liquidación. 404 si no es de la empresa.
+     * Para las acciones sobre una liquidación: lee SOLO su `productor_id` sin bloquear, bloquea al productor y
+     * después bloquea y recarga la liquidación. 404 si no es de la empresa. Fuera de borrador el `productor_id` ya
+     * no cambia (todas las rutas de dinero actúan sobre esos estados); un borrador sí puede pasar por `PUT` al
+     * convenio de otro productor, y por eso `update` pasa también ese productor en `$otrosProductores` (todos se
+     * bloquean en orden de id antes de releer la liquidación bloqueada).
      */
     public static function bloquearLiquidacion(int $empresaId, int $liquidacionId, array $otrosProductores = []): Liquidacion
     {
@@ -83,7 +92,10 @@ class TransaccionDinero
         return Liquidacion::deEmpresa($empresaId)->lockForUpdate()->findOrFail($liquidacionId);
     }
 
-    /** Igual que `bloquearLiquidacion`, para un abono: productor primero y luego el abono. 404 si no es de la empresa. */
+    /**
+     * Igual que `bloquearLiquidacion`, para un abono: productor primero y luego el abono. 404 si no es de la empresa.
+     * El `productor_id` de un abono no se edita (no hay ruta que lo cambie).
+     */
     public static function bloquearAbono(int $empresaId, int $abonoId): Abono
     {
         $productorId = Abono::deEmpresa($empresaId)->whereKey($abonoId)->value('productor_id');

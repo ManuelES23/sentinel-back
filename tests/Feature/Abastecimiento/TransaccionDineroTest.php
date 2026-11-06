@@ -44,6 +44,14 @@ class TransaccionDineroTest extends TestCase
         $this->assertEmpty(array_filter($sql, fn ($s) => stripos($s, 'isolation') !== false));
     }
 
+    public function test_el_aislamiento_se_fija_en_mysql_y_mariadb_y_no_en_sqlite(): void
+    {
+        $this->assertTrue(TransaccionDinero::usaAislamiento('mysql'));
+        $this->assertTrue(TransaccionDinero::usaAislamiento('mariadb'));
+        $this->assertFalse(TransaccionDinero::usaAislamiento('sqlite'));
+        $this->assertFalse(TransaccionDinero::usaAislamiento('pgsql'));
+    }
+
     public function test_reintenta_una_vez_ante_un_interbloqueo_y_devuelve_el_segundo_intento(): void
     {
         $llamadas = 0;
