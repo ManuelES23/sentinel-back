@@ -17,8 +17,14 @@ use App\Models\Enterprise;
 use App\Models\User;
 use App\Models\UserEnterpriseAccess;
 use App\Services\Abastecimiento\GeneradorFolio;
+use App\Services\Abastecimiento\LectorRecepciones;
 use Database\Seeders\AbastecimientoModuleSeeder;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
+use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
+use PhpOffice\PhpSpreadsheet\Cell\DataType;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use Illuminate\Support\Str;
 use App\Models\Application;
 use App\Models\Module;
@@ -188,6 +194,40 @@ trait CreatesAbastecimientoFixtures
             'periodo_inicio' => $convenio->fecha_inicio->format('Y-m-d'),
             'periodo_fin' => $convenio->fecha_fin->format('Y-m-d'),
         ], $over)));
+    }
+
+    /**
+     * Excel de recepciones en un archivo temporal, listo para subir. `$filas` son listas de
+     * valores en el orden de `$encabezados` (por omisión, los de la plantilla) y empiezan en
+     * la fila 2. Los números quedan como número (así llegan las fechas en serie de Excel) y
+     * el resto como texto; null no escribe celda.
+     */
+    protected function crearXlsx(array $filas, ?array $encabezados = null, string $nombre = 'recepciones.xlsx'): UploadedFile
+    {
+        $encabezados ??= LectorRecepciones::ENCABEZADOS;
+        $libro = new Spreadsheet();
+        $hoja = $libro->getActiveSheet();
+
+        foreach (array_merge([$encabezados], $filas) as $i => $fila) {
+            foreach (array_values($fila) as $j => $valor) {
+                if ($valor === null) {
+                    continue;
+                }
+                $celda = Coordinate::stringFromColumnIndex($j + 1).($i + 1);
+                $hoja->setCellValueExplicit(
+                    $celda,
+                    $valor,
+                    is_int($valor) || is_float($valor) ? DataType::TYPE_NUMERIC : DataType::TYPE_STRING,
+                );
+            }
+        }
+
+        $ruta = tempnam(sys_get_temp_dir(), 'xlsx');
+        unlink($ruta);
+        $ruta .= '.xlsx';
+        (new Xlsx($libro))->save($ruta);
+
+        return new UploadedFile($ruta, $nombre, null, null, true);
     }
 
     /**
