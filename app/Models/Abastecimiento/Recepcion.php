@@ -59,6 +59,12 @@ class Recepcion extends Model
         return $this->belongsTo(TipoCarga::class, 'tipo_carga_id');
     }
 
+    /** Liquidación a la que está ligada (sin llave foránea: ver plan 2, ruling 11). */
+    public function liquidacion(): BelongsTo
+    {
+        return $this->belongsTo(Liquidacion::class, 'liquidacion_id');
+    }
+
     public function creador(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');

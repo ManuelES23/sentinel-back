@@ -2,10 +2,12 @@
 
 namespace Tests\Concerns;
 
+use App\Models\Abastecimiento\Abono;
 use App\Models\Abastecimiento\Convenio;
 use App\Models\Abastecimiento\ConvenioMeta;
 use App\Models\Abastecimiento\ConvenioPrecio;
 use App\Models\Abastecimiento\Cultivo;
+use App\Models\Abastecimiento\Liquidacion;
 use App\Models\Abastecimiento\Productor;
 use App\Models\Abastecimiento\Recepcion;
 use App\Models\Abastecimiento\Temporada;
@@ -165,6 +167,45 @@ trait CreatesAbastecimientoFixtures
             'fecha' => $convenio->fecha_inicio->format('Y-m-d'),
             'tipo_carga_id' => $tipoCarga,
             'cantidad' => 10,
+        ], $over)));
+    }
+
+    /**
+     * Liquidación en borrador del convenio, creada directo (sin pasar por los servicios):
+     * mismo periodo, moneda y productor que el convenio, importes en cero. `$over` pisa
+     * cualquier columna; el folio sale de GeneradorFolio ('LQ') salvo que se indique.
+     */
+    protected function crearLiquidacion(Convenio $convenio, array $over = []): Liquidacion
+    {
+        $empresa = Enterprise::findOrFail($convenio->enterprise_id);
+
+        return DB::transaction(fn () => Liquidacion::create(array_merge([
+            'enterprise_id' => $empresa->id,
+            'folio' => $over['folio'] ?? app(GeneradorFolio::class)->siguiente($empresa, 'LQ'),
+            'convenio_id' => $convenio->id,
+            'productor_id' => $convenio->productor_id,
+            'moneda' => $convenio->moneda,
+            'periodo_inicio' => $convenio->fecha_inicio->format('Y-m-d'),
+            'periodo_fin' => $convenio->fecha_fin->format('Y-m-d'),
+        ], $over)));
+    }
+
+    /**
+     * Abono aplicado al productor, creado directo (sin aplicaciones). Por omisión: 100 MXN
+     * por transferencia el 2026-06-10; el folio sale de GeneradorFolio ('AB') salvo que se indique.
+     */
+    protected function crearAbono(Productor $productor, array $over = []): Abono
+    {
+        $empresa = Enterprise::findOrFail($productor->enterprise_id);
+
+        return DB::transaction(fn () => Abono::create(array_merge([
+            'enterprise_id' => $empresa->id,
+            'folio' => $over['folio'] ?? app(GeneradorFolio::class)->siguiente($empresa, 'AB'),
+            'productor_id' => $productor->id,
+            'fecha' => '2026-06-10',
+            'monto' => 100,
+            'moneda' => 'MXN',
+            'metodo_pago' => 'transferencia',
         ], $over)));
     }
 }
