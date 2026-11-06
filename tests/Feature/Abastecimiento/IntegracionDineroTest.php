@@ -248,6 +248,127 @@ class IntegracionDineroTest extends TestCase
         $this->assertSame($porProductor, SaldoProductor::porPagarDeTemporada($this->sbp, $uno->temporada_id));
     }
 
+    // ---------------------------------------------------------------- visibilidad del dinero
+
+    /** Usuario sin rol de administrador con `view` en los submódulos pedidos. */
+    private function usuarioCon(array $submodulos): User
+    {
+        $usuario = User::factory()->create(['role' => 'user']);
+        foreach ($submodulos as $submodulo) {
+            $this->otorgarAbs($usuario, $this->sbp, $submodulo, ['view']);
+        }
+        Sanctum::actingAs($usuario);
+
+        return $usuario;
+    }
+
+    /** Consultas SQL que tocan las tablas del dinero durante la petición. */
+    private function consultasDeDinero(string $ruta): int
+    {
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->getJson($this->url($ruta))->assertOk();
+        $n = collect(DB::getQueryLog())->filter(fn ($q) => preg_match('/abs_(liquidaciones|abonos|abono_aplicaciones)/', $q['query']))->count();
+        DB::disableQueryLog();
+
+        return $n;
+    }
+
+    private function conSaldo(): Convenio
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        $this->crearRecepcion($convenio);
+        $this->abonar($this->liquidacion($convenio, 1000), 400);
+
+        return $convenio;
+    }
+
+    public function test_productores_oculta_el_saldo_sin_abonos_ni_liquidaciones_view(): void
+    {
+        $this->conSaldo();
+        $this->usuarioCon(['productores']);
+
+        foreach (['productores' => 'data.data.0', 'productores/list' => 'data.0'] as $ruta => $fila) {
+            $res = $this->getJson($this->url($ruta))->assertOk();
+            $this->assertArrayHasKey('saldo', $res->json($fila), $ruta);
+            $this->assertNull($res->json("{$fila}.saldo"), $ruta);
+            $this->assertSame(0, $this->consultasDeDinero($ruta), "{$ruta}: no debe consultar el dinero.");
+        }
+    }
+
+    public function test_productores_muestra_el_saldo_con_abonos_view_o_con_liquidaciones_view(): void
+    {
+        $this->conSaldo();
+
+        foreach (['abonos', 'liquidaciones'] as $submodulo) {
+            $this->usuarioCon(['productores', $submodulo]);
+
+            foreach (['productores' => 'data.data.0', 'productores/list' => 'data.0'] as $ruta => $fila) {
+                $saldo = $this->getJson($this->url($ruta))->assertOk()->json("{$fila}.saldo");
+                $this->assertEqualsWithDelta(600, $this->porMoneda($saldo, 'MXN')['por_pagar'], 0.001, "{$submodulo} / {$ruta}");
+            }
+        }
+    }
+
+    public function test_productores_muestra_el_saldo_al_administrador(): void
+    {
+        $this->conSaldo();
+
+        $this->assertEqualsWithDelta(600, $this->porMoneda($this->getJson($this->url('productores'))->json('data.data.0.saldo'), 'MXN')['por_pagar'], 0.001);
+        $this->assertEqualsWithDelta(600, $this->porMoneda($this->getJson($this->url('productores/list'))->json('data.0.saldo'), 'MXN')['por_pagar'], 0.001);
+    }
+
+    public function test_la_ficha_oculta_el_dinero_sin_liquidaciones_view(): void
+    {
+        $convenio = $this->conSaldo();
+
+        // Ni siquiera abonos.view lo abre: solo liquidaciones.view.
+        $this->usuarioCon(['convenios', 'abonos']);
+        $res = $this->getJson($this->url("convenios/{$convenio->id}"))->assertOk();
+        $this->assertArrayHasKey('por_pagar', $res->json('data.indicadores'));
+        $this->assertNull($res->json('data.indicadores.por_pagar'));
+        $this->assertArrayHasKey('liquidaciones', $res->json('data'));
+        $this->assertNull($res->json('data.liquidaciones'));
+        $this->assertEqualsWithDelta(100 * 10, $res->json('data.indicadores.valor_recibido'), 0.001);
+        $this->assertSame(0, $this->consultasDeDinero("convenios/{$convenio->id}"));
+    }
+
+    public function test_la_ficha_muestra_el_dinero_con_liquidaciones_view_y_al_administrador(): void
+    {
+        $convenio = $this->conSaldo();
+
+        $this->usuarioCon(['convenios', 'liquidaciones']);
+        $res = $this->getJson($this->url("convenios/{$convenio->id}"))->assertOk();
+        $this->assertEqualsWithDelta(600, $res->json('data.indicadores.por_pagar'), 0.001);
+        $this->assertCount(1, $res->json('data.liquidaciones'));
+
+        Sanctum::actingAs(User::factory()->create(['role' => 'admin']));
+        $res = $this->getJson($this->url("convenios/{$convenio->id}"))->assertOk();
+        $this->assertEqualsWithDelta(600, $res->json('data.indicadores.por_pagar'), 0.001);
+        $this->assertCount(1, $res->json('data.liquidaciones'));
+    }
+
+    public function test_sin_liquidaciones_la_ficha_con_permiso_trae_lista_vacia_y_no_null(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        $this->usuarioCon(['convenios', 'liquidaciones']);
+
+        $res = $this->getJson($this->url("convenios/{$convenio->id}"))->assertOk();
+        $this->assertSame([], $res->json('data.liquidaciones'));
+        $this->assertSame(0.0, (float) $res->json('data.indicadores.por_pagar'));
+    }
+
+    public function test_el_tablero_muestra_saldo_y_aviso_a_quien_solo_ve_el_tablero(): void
+    {
+        $convenio = $this->conSaldo();
+        $this->liquidacion($convenio, 10, 'en_revision');
+        $this->usuarioCon(['tablero']);
+
+        $data = $this->tablero($convenio->temporada_id);
+        $this->assertEqualsWithDelta(600, $data['kpis']['saldo_por_pagar'], 0.001);
+        $this->assertSame(['1 liquidación esperando revisión'], collect($data['avisos'])->where('tipo', 'liquidaciones_en_revision')->pluck('texto')->values()->all());
+    }
+
     // ---------------------------------------------------------------- consultas
 
     public function test_la_lista_de_productores_no_hace_consultas_por_productor(): void

@@ -52,7 +52,7 @@ class SaldoProductor
         };
 
         // 1. Liquidado.
-        foreach (self::liquidaciones($empresa, $productorIds, $temporadaId)
+        foreach (self::liquidaciones($empresa->id, $productorIds, $temporadaId)
             ->groupBy('l.productor_id', 'l.moneda')
             ->selectRaw('l.productor_id, l.moneda, SUM(l.monto_final) as total')
             ->get() as $fila) {
@@ -62,7 +62,7 @@ class SaldoProductor
         }
 
         // 2. Aplicado a esas liquidaciones.
-        foreach (self::liquidaciones($empresa, $productorIds, $temporadaId)
+        foreach (self::liquidaciones($empresa->id, $productorIds, $temporadaId)
             ->join('abs_abono_aplicaciones as ap', 'ap.liquidacion_id', '=', 'l.id')
             ->groupBy('l.productor_id', 'l.moneda')
             ->selectRaw('l.productor_id, l.moneda, SUM(ap.monto) as total')
@@ -134,9 +134,9 @@ class SaldoProductor
      */
     public static function porPagarDeTemporada(Enterprise $empresa, int $temporadaId): array
     {
-        $liquidado = self::liquidaciones($empresa, null, $temporadaId)
+        $liquidado = self::liquidaciones($empresa->id, null, $temporadaId)
             ->groupBy('l.moneda')->selectRaw('l.moneda, SUM(l.monto_final) as total')->pluck('total', 'moneda');
-        $aplicado = self::liquidaciones($empresa, null, $temporadaId)
+        $aplicado = self::liquidaciones($empresa->id, null, $temporadaId)
             ->join('abs_abono_aplicaciones as ap', 'ap.liquidacion_id', '=', 'l.id')
             ->groupBy('l.moneda')->selectRaw('l.moneda, SUM(ap.monto) as total')->pluck('total', 'moneda');
 
@@ -157,11 +157,7 @@ class SaldoProductor
      */
     public static function deConvenio(Convenio $convenio): array
     {
-        $base = fn () => DB::table('abs_liquidaciones as l')
-            ->where('l.enterprise_id', $convenio->enterprise_id)
-            ->where('l.convenio_id', $convenio->id)
-            ->whereNull('l.deleted_at')
-            ->whereIn('l.status', self::ESTADOS_DEUDA);
+        $base = fn () => self::liquidaciones($convenio->enterprise_id, null, null, $convenio->id);
 
         $liquidado = round((float) $base()->sum('l.monto_final'), 2);
         $aplicado = round((float) $base()->join('abs_abono_aplicaciones as ap', 'ap.liquidacion_id', '=', 'l.id')->sum('ap.monto'), 2);
@@ -174,11 +170,12 @@ class SaldoProductor
         ];
     }
 
-    /** Liquidaciones que cuentan como deuda (aprobadas y pagadas), de la empresa y, si se pide, de la temporada. */
-    private static function liquidaciones(Enterprise $empresa, ?array $productorIds, ?int $temporadaId)
+    /** Liquidaciones que cuentan como deuda (aprobadas y pagadas), de la empresa y, si se pide, de la temporada o de un convenio. */
+    private static function liquidaciones(int $empresaId, ?array $productorIds, ?int $temporadaId, ?int $convenioId = null)
     {
         return DB::table('abs_liquidaciones as l')
-            ->where('l.enterprise_id', $empresa->id)
+            ->where('l.enterprise_id', $empresaId)
+            ->when($convenioId !== null, fn ($q) => $q->where('l.convenio_id', $convenioId))
             ->whereNull('l.deleted_at')
             ->whereIn('l.status', self::ESTADOS_DEUDA)
             ->when($productorIds !== null, fn ($q) => $q->whereIn('l.productor_id', $productorIds))

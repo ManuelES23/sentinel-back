@@ -235,6 +235,8 @@ class TableroAbastecimiento
             return [];
         }
 
+        // Excluye convenios cancelados como el resto del tablero; el KPI de saldo (SaldoProductor) no los excluye, pero hoy no
+        // hay diferencia: ConvenioController no deja cancelar un convenio con recepciones.
         $n = Liquidacion::where('enterprise_id', $empresa->id)
             ->where('status', 'en_revision')
             ->where('moneda', $moneda)

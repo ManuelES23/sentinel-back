@@ -100,6 +100,8 @@ class ConvenioController extends AbastecimientoController
             ->with(['productor:id,nombre,tipo', 'variedad:id,nombre', 'precios.tipoCarga:id,nombre', 'metas'])
             ->findOrFail($id);
 
+        $verDinero = $this->ctx->puede($request->user(), $empresa, 'liquidaciones', 'view');
+
         $recientes = Recepcion::where('convenio_id', $convenio->id)
             ->with('tipoCarga:id,nombre')
             ->orderByDesc('fecha')->orderByDesc('id')
@@ -110,9 +112,10 @@ class ConvenioController extends AbastecimientoController
             'productor' => $convenio->productor,
             'variedad' => $convenio->variedad,
             'precio_principal' => $this->precioPrincipal($convenio),
-            // Plan 2: `por_pagar` sale de SaldoProductor (aprobadas y pagadas menos lo aplicado de ESTE convenio).
-            'indicadores' => IndicadoresConvenio::de($convenio) + ['por_pagar' => SaldoProductor::deConvenio($convenio)['por_pagar']],
-            'liquidaciones' => Liquidacion::where('convenio_id', $convenio->id)
+            // Plan 2: dinero solo con `liquidaciones.view` (null = sin permiso; [] = sin liquidaciones). `por_pagar` sale de
+            // SaldoProductor (aprobadas y pagadas menos lo aplicado de ESTE convenio).
+            'indicadores' => IndicadoresConvenio::de($convenio) + ['por_pagar' => $verDinero ? SaldoProductor::deConvenio($convenio)['por_pagar'] : null],
+            'liquidaciones' => ! $verDinero ? null : Liquidacion::where('convenio_id', $convenio->id)
                 ->orderByDesc('id')
                 ->get(['id', 'folio', 'status', 'periodo_inicio', 'periodo_fin', 'monto_final', 'moneda'])
                 ->map(fn (Liquidacion $l) => [
