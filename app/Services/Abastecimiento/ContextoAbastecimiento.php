@@ -67,6 +67,28 @@ class ContextoAbastecimiento
         return $empresa;
     }
 
+    /**
+     * Exige AL MENOS UNO de los permisos del submódulo (p. ej. las lecturas de apoyo del formulario de liquidación,
+     * que usan tanto quien crea como quien edita un borrador) y devuelve la empresa de la URL.
+     *
+     * @param  array<int, string>  $permisos
+     */
+    public function autorizarAlguno(Request $request, string $submodulo, array $permisos): Enterprise
+    {
+        $empresa = $this->empresa($request);
+
+        foreach ($permisos as $permiso) {
+            if ($this->puede($request->user(), $empresa, $submodulo, $permiso)) {
+                return $empresa;
+            }
+        }
+
+        abort(response()->json([
+            'status' => 'error',
+            'message' => 'No tienes permiso para esta acción de Abastecimiento.',
+        ], 403));
+    }
+
     /** @return array<string, array<string, bool>> [submódulo => [permiso => bool]] para el front. */
     public function resumen(Request $request): array
     {

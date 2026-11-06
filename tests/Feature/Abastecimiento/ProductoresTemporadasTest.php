@@ -167,7 +167,7 @@ class ProductoresTemporadasTest extends TestCase
 
         $res = $this->getJson($this->url('productores/list'))->assertOk();
         $this->assertSame(['Activo A'], collect($res->json('data'))->pluck('nombre')->all());
-        $this->assertSame(['id', 'nombre', 'tipo'], array_keys($res->json('data.0')));
+        $this->assertSame(['id', 'nombre', 'tipo', 'saldo'], array_keys($res->json('data.0')));
     }
 
     public function test_posibles_duplicados_por_nombre_sin_acentos_ni_mayusculas_y_por_rfc(): void

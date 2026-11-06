@@ -100,4 +100,9 @@ class Convenio extends Model
     {
         return $this->hasMany(Recepcion::class, 'convenio_id');
     }
+
+    public function liquidaciones(): HasMany
+    {
+        return $this->hasMany(Liquidacion::class, 'convenio_id');
+    }
 }

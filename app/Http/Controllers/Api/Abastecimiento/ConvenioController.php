@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\Abastecimiento;
 use App\Models\Abastecimiento\Convenio;
 use App\Models\Abastecimiento\ConvenioMeta;
 use App\Models\Abastecimiento\ConvenioPrecio;
+use App\Models\Abastecimiento\Liquidacion;
 use App\Models\Abastecimiento\Recepcion;
 use App\Models\Abastecimiento\Temporada;
 use App\Models\Abastecimiento\Variedad;
@@ -14,6 +15,7 @@ use App\Services\Abastecimiento\IndicadoresConvenio;
 use App\Services\Abastecimiento\MetasConvenio;
 use App\Services\Abastecimiento\PrecioVigente;
 use App\Services\Abastecimiento\ReglasConvenio;
+use App\Services\Abastecimiento\SaldoProductor;
 use App\Services\Abastecimiento\Semanas;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -98,6 +100,8 @@ class ConvenioController extends AbastecimientoController
             ->with(['productor:id,nombre,tipo', 'variedad:id,nombre', 'precios.tipoCarga:id,nombre', 'metas'])
             ->findOrFail($id);
 
+        $verDinero = $this->ctx->puede($request->user(), $empresa, 'liquidaciones', 'view');
+
         $recientes = Recepcion::where('convenio_id', $convenio->id)
             ->with('tipoCarga:id,nombre')
             ->orderByDesc('fecha')->orderByDesc('id')
@@ -108,7 +112,21 @@ class ConvenioController extends AbastecimientoController
             'productor' => $convenio->productor,
             'variedad' => $convenio->variedad,
             'precio_principal' => $this->precioPrincipal($convenio),
-            'indicadores' => IndicadoresConvenio::de($convenio),
+            // Plan 2: dinero solo con `liquidaciones.view` (null = sin permiso; [] = sin liquidaciones). `por_pagar` sale de
+            // SaldoProductor (aprobadas y pagadas menos lo aplicado de ESTE convenio).
+            'indicadores' => IndicadoresConvenio::de($convenio) + ['por_pagar' => $verDinero ? SaldoProductor::deConvenio($convenio)['por_pagar'] : null],
+            'liquidaciones' => ! $verDinero ? null : Liquidacion::where('convenio_id', $convenio->id)
+                ->orderByDesc('id')
+                ->get(['id', 'folio', 'status', 'periodo_inicio', 'periodo_fin', 'monto_final', 'moneda'])
+                ->map(fn (Liquidacion $l) => [
+                    'id' => $l->id,
+                    'folio' => $l->folio,
+                    'status' => $l->status,
+                    'periodo_inicio' => $l->periodo_inicio->format('Y-m-d'),
+                    'periodo_fin' => $l->periodo_fin->format('Y-m-d'),
+                    'monto_final' => round((float) $l->monto_final, 2),
+                    'moneda' => $l->moneda,
+                ])->values()->all(),
             'recepciones_total' => Recepcion::where('convenio_id', $convenio->id)->count(),
             'recepciones' => $recientes->map(fn (Recepcion $r) => [
                 'id' => $r->id,
