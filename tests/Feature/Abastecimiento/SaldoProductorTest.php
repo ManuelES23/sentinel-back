@@ -389,21 +389,24 @@ class SaldoProductorTest extends TestCase
         $liq = $this->aprobada($convenio, 500);
         $abono = $this->crearAbono($this->productor($convenio), ['monto' => 500]);
 
+        // [aplicaciones, clave del 422]
         $casos = [
-            'repetida' => [['liquidacion_id' => $liq->id, 'monto' => 100], ['liquidacion_id' => $liq->id, 'monto' => 100]],
-            'inexistente' => [['liquidacion_id' => 999999, 'monto' => 100]],
-            'monto cero' => [['liquidacion_id' => $liq->id, 'monto' => 0]],
-            'monto negativo' => [['liquidacion_id' => $liq->id, 'monto' => -5]],
-            'sin monto' => [['liquidacion_id' => $liq->id]],
+            'repetida' => [[['liquidacion_id' => $liq->id, 'monto' => 100], ['liquidacion_id' => $liq->id, 'monto' => 100]], 'aplicaciones'],
+            'inexistente' => [[['liquidacion_id' => 999999, 'monto' => 100]], 'liquidacion_id'],
+            'monto cero' => [[['liquidacion_id' => $liq->id, 'monto' => 0]], 'aplicaciones'],
+            'monto negativo' => [[['liquidacion_id' => $liq->id, 'monto' => -5]], 'aplicaciones'],
+            'sin monto' => [[['liquidacion_id' => $liq->id]], 'aplicaciones'],
         ];
-        foreach ($casos as $nombre => $aplicaciones) {
+        foreach ($casos as $nombre => [$aplicaciones, $campo]) {
             try {
                 $this->aplicar($abono, $aplicaciones);
                 $this->fail("Caso {$nombre}: debió fallar.");
-            } catch (ValidationException) {
-                $this->assertTrue(true);
+            } catch (ValidationException $e) {
+                $this->assertArrayHasKey($campo, $e->errors(), "Caso {$nombre}");
             }
             $this->assertSinEscribir($abono);
+            $this->assertSame(0, AbonoAplicacion::count(), "Caso {$nombre}");
+            $this->assertSame('aprobada', $liq->fresh()->status, "Caso {$nombre}");
         }
     }
 
@@ -414,8 +417,15 @@ class SaldoProductorTest extends TestCase
         $liqAjena = $this->aprobada($ajena, 300);
         $abono = $this->crearAbono($this->productor($convenio), ['monto' => 500]);
 
-        $this->expectException(ValidationException::class);
-        $this->aplicar($abono, [['liquidacion_id' => $liqAjena->id, 'monto' => 100]]);
+        try {
+            $this->aplicar($abono, [['liquidacion_id' => $liqAjena->id, 'monto' => 100]]);
+            $this->fail('Debió fallar.');
+        } catch (ValidationException $e) {
+            $this->assertArrayHasKey('liquidacion_id', $e->errors());
+        }
+        $this->assertSinEscribir($abono);
+        $this->assertSame(0, AbonoAplicacion::where('liquidacion_id', $liqAjena->id)->count());
+        $this->assertSame('aprobada', $liqAjena->fresh()->status);
     }
 
     public function test_aplicaciones_vacias_dejan_el_anticipo_completo(): void

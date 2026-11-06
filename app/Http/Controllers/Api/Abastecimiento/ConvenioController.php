@@ -124,7 +124,7 @@ class ConvenioController extends AbastecimientoController
                     'status' => $l->status,
                     'periodo_inicio' => $l->periodo_inicio->format('Y-m-d'),
                     'periodo_fin' => $l->periodo_fin->format('Y-m-d'),
-                    'monto_final' => $l->monto_final,
+                    'monto_final' => round((float) $l->monto_final, 2),
                     'moneda' => $l->moneda,
                 ])->values()->all(),
             'recepciones_total' => Recepcion::where('convenio_id', $convenio->id)->count(),

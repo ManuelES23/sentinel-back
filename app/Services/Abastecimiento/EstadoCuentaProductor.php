@@ -138,7 +138,8 @@ class EstadoCuentaProductor
                     'monto' => round((float) $f->monto, 2),
                 ])->all();
             $aplicado = self::centavos(array_sum(array_column($aplicaciones, 'monto')));
-            $sinAplicar = max(self::centavos($a->monto) - $aplicado, 0);
+            // Un abono cancelado no tiene efecto: nunca es «anticipo» ni deja nada sin aplicar (la etiqueta llega al PDF).
+            $sinAplicar = $cancelado ? 0 : max(self::centavos($a->monto) - $aplicado, 0);
             $fecha = $a->fecha->format('Y-m-d');
 
             $filas[] = [

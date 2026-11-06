@@ -211,6 +211,12 @@ class IntegracionDineroTest extends TestCase
             array_keys($data['liquidaciones'][0]),
         );
         $this->assertSame('cancelada', $data['liquidaciones'][1]['status']);
+        // Arreglo final M5: el monto es número (como el resto del dinero del módulo), no la cadena del cast decimal.
+        foreach ($data['liquidaciones'] as $fila) {
+            $this->assertTrue(is_int($fila['monto_final']) || is_float($fila['monto_final']), 'monto_final debe ser numérico');
+        }
+        $this->assertEqualsWithDelta(1000, $data['liquidaciones'][0]['monto_final'], 0.001);
+        $this->assertEqualsWithDelta(300, $data['liquidaciones'][1]['monto_final'], 0.001);
         // La cancelada no entra al por pagar.
         $this->assertEqualsWithDelta(1000, $data['indicadores']['por_pagar'], 0.001);
     }
