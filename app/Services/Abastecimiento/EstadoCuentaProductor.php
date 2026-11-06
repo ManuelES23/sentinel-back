@@ -116,6 +116,7 @@ class EstadoCuentaProductor
                     'fecha' => $fecha,
                     'folio' => $l->folio,
                     'status' => $l->status,
+                    'origen' => $l->origen,
                     'convenio' => $l->convenio ? ['id' => $l->convenio->id, 'folio' => $l->convenio->folio] : null,
                     'monto' => (float) $l->monto_final,
                     'aplicado' => round((float) $aplicadoPorLiquidacion->get($l->id, 0), 2),

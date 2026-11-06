@@ -245,6 +245,11 @@ class ConvenioController extends AbastecimientoController
             if ($destino === 'cancelado' && $convenio->recepciones()->exists()) {
                 throw ValidationException::withMessages(['status' => 'Tiene recepciones: finalízalo en lugar de cancelarlo.']);
             }
+            // Una liquidación (también la de carga inicial, aunque no tenga recepciones) es deuda con el productor:
+            // cancelar el convenio la dejaría contando en el saldo sin convenio vivo. Finalizar y suspender siguen igual.
+            if ($destino === 'cancelado' && $this->tieneLiquidacionesVigentes($convenio)) {
+                throw ValidationException::withMessages(['status' => 'Tiene liquidaciones: cancélalas primero o finaliza el convenio en lugar de cancelarlo.']);
+            }
 
             $convenio->update(['status' => $destino]);
 
@@ -346,16 +351,27 @@ class ConvenioController extends AbastecimientoController
      */
     private function erroresConRecepciones(Convenio $convenio, array $datos): array
     {
-        if (! $convenio->recepciones()->exists()) {
+        $conRecepciones = $convenio->recepciones()->exists();
+        $conLiquidaciones = $this->tieneLiquidacionesVigentes($convenio);
+        if (! $conRecepciones && ! $conLiquidaciones) {
             return [];
         }
 
+        // Con recepciones o con liquidaciones no canceladas (aunque sean de carga inicial, sin recepciones) lo ya
+        // capturado o liquidado no se reinterpreta: cambiar moneda, productor o temporada movería deuda ya aprobada.
         $errores = [];
-        $sinCambio = 'No se puede cambiar: el convenio ya tiene recepciones.';
+        $sinCambio = $conRecepciones
+            ? 'No se puede cambiar: el convenio ya tiene recepciones.'
+            : 'No se puede cambiar: el convenio ya tiene liquidaciones.';
         foreach (['unidad', 'moneda', 'productor_id', 'variedad_id', 'temporada_id'] as $campo) {
             if ((string) $datos[$campo] !== (string) $convenio->{$campo}) {
                 $errores[$campo] = $sinCambio;
             }
+        }
+
+        // Fechas y precios solo se cuidan contra recepciones.
+        if (! $conRecepciones) {
+            return $errores;
         }
 
         $fueraDeFechas = 'No se puede: hay recepciones fuera de las nuevas fechas del convenio.';
@@ -381,6 +397,12 @@ class ConvenioController extends AbastecimientoController
         }
 
         return $errores;
+    }
+
+    /** ¿Tiene liquidaciones que no estén canceladas (borrador, en revisión, aprobada o pagada)? */
+    private function tieneLiquidacionesVigentes(Convenio $convenio): bool
+    {
+        return $convenio->liquidaciones()->where('status', '!=', 'cancelada')->exists();
     }
 
     private function columnas(array $datos): array

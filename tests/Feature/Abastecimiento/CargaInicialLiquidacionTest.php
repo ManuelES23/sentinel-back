@@ -522,4 +522,192 @@ class CargaInicialLiquidacionTest extends TestCase
         $this->postJson($this->url(), $this->cuerpoRecepciones($convenio, [$id]))->assertStatus(403);
         $this->assertSame(0, Liquidacion::count());
     }
+
+    // ---------------------------------------------------------------- ronda 1 de arreglos
+
+    /** Cuerpo de `PUT convenios/{id}` que repite el convenio tal cual. */
+    private function cuerpoConvenio(Convenio $c, array $over = []): array
+    {
+        $c->load('precios');
+
+        return array_merge([
+            'temporada_id' => $c->temporada_id, 'productor_id' => $c->productor_id, 'variedad_id' => $c->variedad_id,
+            'modalidad' => $c->modalidad, 'unidad' => $c->unidad, 'moneda' => $c->moneda, 'porcentaje_rezaga' => 0,
+            'fecha_inicio' => $c->fecha_inicio->format('Y-m-d'), 'fecha_fin' => $c->fecha_fin->format('Y-m-d'),
+            'modo_volumen' => $c->modo_volumen, 'volumen_total' => $c->volumen_total,
+            'precios' => $c->precios->map(fn ($p) => [
+                'tipo_carga_id' => $p->tipo_carga_id, 'precio' => $p->precio,
+                'vigencia_inicio' => $p->vigencia_inicio->format('Y-m-d'), 'es_principal' => $p->es_principal,
+            ])->all(),
+        ], $over);
+    }
+
+    public function test_un_convenio_con_liquidaciones_no_se_cancela_pero_si_se_suspende_y_finaliza(): void
+    {
+        // Carga inicial solo monto: sin recepciones, así que la regla de recepciones no lo frena.
+        $convenio = $this->crearConvenio($this->sbp);
+        $id = $this->cargar($this->cuerpoMonto($convenio))->assertStatus(201)->json('data.id');
+        $estado = fn (string $status) => $this->patchJson($this->url("convenios/{$convenio->id}/estado"), ['status' => $status]);
+
+        $this->como($this->admin);
+        $estado('cancelado')->assertStatus(422)->assertJsonValidationErrors('status')
+            ->assertJsonPath('errors.status.0', 'Tiene liquidaciones: cancélalas primero o finaliza el convenio en lugar de cancelarlo.');
+        $this->assertSame('activo', $convenio->fresh()->status);
+
+        $estado('suspendido')->assertOk();
+        $estado('activo')->assertOk();
+        $estado('cancelado')->assertStatus(422);
+
+        // Una vez cancelada la liquidación, el convenio sin recepciones ya se puede cancelar.
+        $this->postJson($this->url("liquidaciones/{$id}/cancelar"), ['motivo' => 'Capturada por error'])->assertOk();
+        $estado('cancelado')->assertOk()->assertJsonPath('data.status', 'cancelado');
+    }
+
+    public function test_un_borrador_de_liquidacion_tambien_impide_cancelar_el_convenio_y_finalizar_sigue_permitido(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        $this->crearLiquidacion($convenio, ['status' => 'borrador']);
+
+        $this->como($this->admin);
+        $this->patchJson($this->url("convenios/{$convenio->id}/estado"), ['status' => 'cancelado'])->assertStatus(422);
+        $this->patchJson($this->url("convenios/{$convenio->id}/estado"), ['status' => 'finalizado'])->assertOk();
+    }
+
+    public function test_con_una_carga_inicial_solo_monto_no_cambian_moneda_productor_ni_temporada(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        $id = $this->cargar($this->cuerpoMonto($convenio))->assertStatus(201)->json('data.id');
+        $otroProductor = Productor::create(['enterprise_id' => $this->sbp->id, 'nombre' => 'Otro', 'tipo' => 'productor', 'is_active' => true]);
+        $otraTemporada = \App\Models\Abastecimiento\Temporada::create([
+            'enterprise_id' => $this->sbp->id, 'cultivo_id' => $convenio->cultivo_id, 'nombre' => 'Otra',
+            'fecha_inicio' => '2026-05-01', 'fecha_fin' => '2026-09-30', 'estado' => 'activa',
+        ]);
+        $url = $this->url("convenios/{$convenio->id}");
+        $mensaje = 'No se puede cambiar: el convenio ya tiene liquidaciones.';
+
+        $this->como($this->admin);
+        $this->putJson($url, $this->cuerpoConvenio($convenio, ['moneda' => 'USD']))->assertStatus(422)->assertJsonPath('errors.moneda.0', $mensaje);
+        $this->putJson($url, $this->cuerpoConvenio($convenio, ['productor_id' => $otroProductor->id]))->assertStatus(422)->assertJsonPath('errors.productor_id.0', $mensaje);
+        $this->putJson($url, $this->cuerpoConvenio($convenio, ['temporada_id' => $otraTemporada->id]))->assertStatus(422)->assertJsonPath('errors.temporada_id.0', $mensaje);
+        $this->putJson($url, $this->cuerpoConvenio($convenio, ['unidad' => 'kg']))->assertStatus(422)->assertJsonValidationErrors('unidad');
+        $this->assertSame('MXN', $convenio->fresh()->moneda);
+        $this->assertSame($convenio->productor_id, $convenio->fresh()->productor_id);
+
+        // Otros campos siguen editables.
+        $this->putJson($url, $this->cuerpoConvenio($convenio, ['notas' => 'Se corrigió la nota']))->assertOk();
+        $this->assertSame('Se corrigió la nota', $convenio->fresh()->notas);
+
+        // Cancelada la liquidación, vuelve a ser posible.
+        $this->postJson($this->url("liquidaciones/{$id}/cancelar"), ['motivo' => 'Capturada por error'])->assertOk();
+        $this->putJson($url, $this->cuerpoConvenio($convenio, ['moneda' => 'USD']))->assertOk();
+        $this->assertSame('USD', $convenio->fresh()->moneda);
+    }
+
+    public function test_la_carga_inicial_con_recepciones_ya_no_deja_cambiar_la_moneda_con_el_mensaje_de_recepciones(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        $id = $this->crearRecepcion($convenio, ['fecha' => '2026-06-02'])->id;
+        $this->cargar($this->cuerpoRecepciones($convenio, [$id]))->assertStatus(201);
+
+        $this->como($this->admin);
+        $this->putJson($this->url("convenios/{$convenio->id}"), $this->cuerpoConvenio($convenio, ['moneda' => 'USD']))
+            ->assertStatus(422)->assertJsonPath('errors.moneda.0', 'No se puede cambiar: el convenio ya tiene recepciones.');
+    }
+
+    public function test_el_convenio_se_relee_con_bloqueo_despues_del_productor(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        $this->como($this->cargador);
+
+        $sql = [];
+        DB::listen(function ($q) use (&$sql) {
+            $sql[] = $q->sql;
+        });
+        $this->postJson($this->url('liquidaciones/carga-inicial'), $this->cuerpoMonto($convenio))->assertStatus(201);
+
+        $productor = array_search(true, array_map(fn ($s) => str_starts_with($s, 'select * from "abs_productores"'), $sql), true);
+        $convenios = array_keys(array_filter($sql, fn ($s) => str_starts_with($s, 'select * from "abs_convenios"')));
+        $this->assertNotFalse($productor);
+        $this->assertNotEmpty($convenios);
+        // Sin `for update` en SQLite: se comprueba que la relectura completa del convenio va DESPUÉS del productor.
+        $this->assertGreaterThan($productor, end($convenios));
+    }
+
+    public function test_con_recepciones_exige_monto_final_mayor_a_cero_sin_consumir_folio_ni_ligar(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        $id = $this->crearRecepcion($convenio, ['fecha' => '2026-06-02'])->id;
+
+        // Ajuste manual en cero (con motivo).
+        $this->cargar($this->cuerpoRecepciones($convenio, [$id], ['monto_ajustado' => 0, 'motivo_ajuste' => 'Se compensó fuera del sistema']))
+            ->assertStatus(422)->assertJsonValidationErrors('monto_ajustado');
+
+        // Un cálculo que da cero (precio 0).
+        $gratis = $this->crearConvenio($this->sbp, ['precio' => 0, 'productor_id' => Productor::create([
+            'enterprise_id' => $this->sbp->id, 'nombre' => 'Sin precio', 'tipo' => 'productor', 'is_active' => true,
+        ])->id]);
+        $idGratis = $this->crearRecepcion($gratis, ['fecha' => '2026-06-02'])->id;
+        $this->cargar($this->cuerpoRecepciones($gratis, [$idGratis]))->assertStatus(422)->assertJsonValidationErrors('recepcion_ids');
+
+        $this->assertSame(0, Liquidacion::count());
+        $this->assertNull(Recepcion::find($id)->liquidacion_id);
+        $this->assertNull(Recepcion::find($idGratis)->liquidacion_id);
+        // No se consumió ningún folio.
+        $this->cargar($this->cuerpoRecepciones($convenio, [$id]))->assertStatus(201)->assertJsonPath('data.folio', 'LQ-0001');
+    }
+
+    public function test_un_campo_del_otro_modo_se_rechaza_en_vez_de_ignorarse(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        $id = $this->crearRecepcion($convenio, ['fecha' => '2026-06-02'])->id;
+
+        $this->cargar($this->cuerpoRecepciones($convenio, [$id], ['motivo' => 'Un motivo largo de más']))
+            ->assertStatus(422)->assertJsonValidationErrors('motivo');
+        $this->cargar($this->cuerpoMonto($convenio, ['motivo_ajuste' => 'Un ajuste que no aplica']))
+            ->assertStatus(422)->assertJsonValidationErrors('motivo_ajuste');
+        $this->cargar($this->cuerpoMonto($convenio, ['monto_ajustado' => 10]))
+            ->assertStatus(422)->assertJsonValidationErrors('monto_ajustado');
+        $this->assertSame(0, Liquidacion::count());
+
+        // Con el campo vacío (null) el modo sigue valiendo.
+        $this->cargar($this->cuerpoMonto($convenio, ['motivo_ajuste' => null, 'monto_ajustado' => null]))->assertStatus(201);
+    }
+
+    public function test_el_monto_tiene_tope(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+
+        $this->cargar($this->cuerpoMonto($convenio, ['monto' => 1000000000000]))->assertStatus(422)->assertJsonValidationErrors('monto');
+        $this->assertSame(0, Liquidacion::count());
+        $this->cargar($this->cuerpoMonto($convenio, ['monto' => 999999999999.99]))->assertStatus(201);
+    }
+
+    public function test_en_modo_con_recepciones_sin_liquidar_baja_a_cero(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        $ids = [$this->crearRecepcion($convenio, ['fecha' => '2026-06-02'])->id, $this->crearRecepcion($convenio, ['fecha' => '2026-06-03'])->id];
+        $this->assertEqualsWithDelta(2000, $this->saldo($convenio)['sin_liquidar'], 0.001);
+
+        $this->cargar($this->cuerpoRecepciones($convenio, $ids))->assertStatus(201);
+
+        $saldo = $this->saldo($convenio);
+        $this->assertEqualsWithDelta(0, $saldo['sin_liquidar'], 0.001);
+        $this->assertEqualsWithDelta(2000, $saldo['liquidado'], 0.001);
+        $this->como($this->admin);
+        $tablero = $this->getJson($this->url("tablero?temporada_id={$convenio->temporada_id}"))->assertOk()->json('data');
+        $this->assertEqualsWithDelta(0, $tablero['kpis']['sin_liquidar'], 0.001);
+    }
+
+    public function test_el_estado_de_cuenta_expone_el_origen_de_la_liquidacion(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        $inicial = $this->cargar($this->cuerpoMonto($convenio, ['monto' => 700]))->assertStatus(201)->json('data.id');
+        $normal = $this->crearLiquidacion($convenio, ['status' => 'aprobada', 'monto_calculado' => 300, 'monto_final' => 300, 'aprobada_at' => now()]);
+
+        $this->como($this->admin);
+        $movs = collect($this->getJson($this->url("abonos/productores/{$convenio->productor_id}/estado-cuenta?moneda=MXN"))
+            ->assertOk()->json('data.movimientos'))->where('tipo', 'liquidacion');
+        $this->assertSame('carga_inicial', $movs->firstWhere('id', $inicial)['origen']);
+        $this->assertSame('normal', $movs->firstWhere('id', $normal->id)['origen']);
+    }
 }

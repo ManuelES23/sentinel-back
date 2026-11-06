@@ -47,7 +47,10 @@ class CargaInicialLiquidacion
             }
             TransaccionDinero::bloquearProductor($empresa->id, (int) $productorId, true);
 
-            $convenio = Convenio::deEmpresa($empresa->id)->with('precios')->findOrFail($datos['convenio_id']);
+            // Con bloqueo (orden productor → convenio): `ConvenioController::estado` bloquea el convenio y revisa sus
+            // liquidaciones; así no se cuela una carga inicial mientras se cancela el convenio. `estado` no bloquea
+            // productores, de modo que no hay ciclo.
+            $convenio = Convenio::deEmpresa($empresa->id)->with('precios')->lockForUpdate()->findOrFail($datos['convenio_id']);
             if (in_array($convenio->status, ['borrador', 'cancelado'], true)) {
                 self::fallar('convenio_id', 'El convenio está en borrador o cancelado: no se le puede registrar una carga inicial.');
             }
@@ -62,6 +65,13 @@ class CargaInicialLiquidacion
                     isset($datos['monto_ajustado']) ? (float) $datos['monto_ajustado'] : null,
                     $datos['motivo_ajuste'] ?? null,
                 );
+                // Misma regla que `FlujoLiquidacion::enviar`: una liquidación en cero no se puede aprobar.
+                if ($calculo['monto_final'] <= 0) {
+                    self::fallar(
+                        $calculo['monto_ajustado'] !== null ? 'monto_ajustado' : 'recepcion_ids',
+                        'El monto final de la liquidación debe ser mayor a cero.',
+                    );
+                }
             } else {
                 $calculo = self::calculoSoloMonto($datos);
             }
