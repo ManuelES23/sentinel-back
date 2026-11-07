@@ -105,7 +105,11 @@ class EstadoCuentaProductor
 
         $filas = [];
         foreach ($liquidaciones as $l) {
-            $fecha = ($l->aprobada_at ?? $l->created_at)?->copy()->setTimezone(Semanas::ZONA)->format('Y-m-d') ?? $l->periodo_fin->format('Y-m-d');
+            // Una carga inicial es deuda de antes del módulo: se ubica en el fin de su periodo (no en el día que se capturó,
+            // que la pondría después de abonos anteriores y dejaría saldos corrientes negativos). Las normales, al aprobarse.
+            $fecha = $l->origen === 'carga_inicial'
+                ? $l->periodo_fin->format('Y-m-d')
+                : (($l->aprobada_at ?? $l->created_at)?->copy()->setTimezone(Semanas::ZONA)->format('Y-m-d') ?? $l->periodo_fin->format('Y-m-d'));
             $filas[] = [
                 'orden' => [$fecha, 0, $l->id],
                 'centavos' => self::centavos($l->monto_final),
@@ -116,6 +120,7 @@ class EstadoCuentaProductor
                     'fecha' => $fecha,
                     'folio' => $l->folio,
                     'status' => $l->status,
+                    'origen' => $l->origen,
                     'convenio' => $l->convenio ? ['id' => $l->convenio->id, 'folio' => $l->convenio->folio] : null,
                     'monto' => (float) $l->monto_final,
                     'aplicado' => round((float) $aplicadoPorLiquidacion->get($l->id, 0), 2),

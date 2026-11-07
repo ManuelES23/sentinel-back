@@ -170,6 +170,34 @@ class SaldoProductor
         ];
     }
 
+    /**
+     * Por pagar (liquidado − aplicado) de VARIOS convenios en dos consultas agrupadas, sin importar cuántos sean
+     * (para el Excel del tablero). Mismas definiciones que `deConvenio`: un convenio sin liquidaciones da 0.
+     *
+     * @param  array<int, int>  $convenioIds
+     * @return array<int, float> convenio_id => por pagar
+     */
+    public static function porPagarDeConvenios(Enterprise $empresa, array $convenioIds): array
+    {
+        $ids = array_values(array_unique(array_map('intval', $convenioIds)));
+        if ($ids === []) {
+            return [];
+        }
+
+        $liquidado = self::liquidaciones($empresa->id, null, null)->whereIn('l.convenio_id', $ids)
+            ->groupBy('l.convenio_id')->selectRaw('l.convenio_id, SUM(l.monto_final) as total')->pluck('total', 'convenio_id');
+        $aplicado = self::liquidaciones($empresa->id, null, null)->whereIn('l.convenio_id', $ids)
+            ->join('abs_abono_aplicaciones as ap', 'ap.liquidacion_id', '=', 'l.id')
+            ->groupBy('l.convenio_id')->selectRaw('l.convenio_id, SUM(ap.monto) as total')->pluck('total', 'convenio_id');
+
+        $porPagar = [];
+        foreach ($ids as $id) {
+            $porPagar[$id] = round(round((float) ($liquidado[$id] ?? 0), 2) - round((float) ($aplicado[$id] ?? 0), 2), 2);
+        }
+
+        return $porPagar;
+    }
+
     /** Liquidaciones que cuentan como deuda (aprobadas y pagadas), de la empresa y, si se pide, de la temporada o de un convenio. */
     private static function liquidaciones(int $empresaId, ?array $productorIds, ?int $temporadaId, ?int $convenioId = null)
     {

@@ -6,15 +6,19 @@ use App\Models\Abastecimiento\Convenio;
 use App\Models\Abastecimiento\Recepcion;
 use App\Models\Enterprise;
 use App\Services\Abastecimiento\GeneradorFolio;
+use App\Services\Abastecimiento\ImportadorRecepciones;
 use App\Services\Abastecimiento\IndicadoresConvenio;
+use App\Services\Abastecimiento\LectorRecepciones;
 use App\Services\Abastecimiento\PrecioVigente;
 use App\Services\Abastecimiento\ReglasRecepcion;
 use App\Services\Abastecimiento\Semanas;
+use App\Services\Abastecimiento\ValidadorImportacionRecepciones;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 /**
  * Recepciones de producto contra un convenio (submódulo `recepciones`): alta,
@@ -163,6 +167,95 @@ class RecepcionController extends AbastecimientoController
             'convenios' => $filas,
             'recepciones' => $recepciones,
         ]]);
+    }
+
+    /** Plantilla de Excel para importar recepciones (permiso `recepciones.importar`). */
+    public function plantilla(Request $request, LectorRecepciones $lector): BinaryFileResponse
+    {
+        $this->ctx->autorizar($request, self::SUBMODULO, 'importar');
+
+        return response()->download($lector->plantilla(), 'Plantilla_Recepciones.xlsx')->deleteFileAfterSend(true);
+    }
+
+    /**
+     * Da hasta 120 s a las importaciones grandes. Si el límite ya es ilimitado (consola, pruebas) no se toca:
+     * set_time_limit(120) lo fijaría para el resto del proceso y mataría una suite larga.
+     */
+    private function ampliarTiempo(): void
+    {
+        $actual = (int) ini_get('max_execution_time');
+        if ($actual !== 0 && $actual < 120) {
+            set_time_limit(120);
+        }
+    }
+
+    /** Lee y valida el Excel renglón por renglón sin guardar nada. */
+    public function vistaPreviaImportacion(Request $request, LectorRecepciones $lector, ValidadorImportacionRecepciones $validador): JsonResponse
+    {
+        $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'importar');
+        $this->validarArchivo($request);
+        $this->ampliarTiempo(); // hasta 2 000 renglones
+
+        $resultado = $validador->validar($empresa, $lector->leer($request->file('archivo')));
+
+        return response()->json(['success' => true, 'data' => $resultado]);
+    }
+
+    /**
+     * Importa el Excel (se vuelve a leer y validar completo; el front nunca reenvía renglones).
+     * Todo o nada: con un solo renglón con error responde 422 con la lista y no guarda ni gasta folios.
+     */
+    public function importar(Request $request, LectorRecepciones $lector, ValidadorImportacionRecepciones $validador, ImportadorRecepciones $importador): JsonResponse
+    {
+        $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'importar');
+        $this->validarArchivo($request);
+        $this->ampliarTiempo(); // hasta 2 000 renglones: validar, crear y registrar la bitácora de cada uno
+
+        $validado = $validador->validar($empresa, $lector->leer($request->file('archivo')));
+        if ($validado['resumen']['con_error'] > 0) {
+            $conError = array_values(array_filter($validado['filas'], fn (array $f) => $f['estado'] === 'error'));
+            $n = count($conError);
+
+            return response()->json([
+                'success' => false,
+                'message' => ($n === 1 ? '1 renglón tiene errores' : "{$n} renglones tienen errores").'; no se guardó ninguna recepción. Corrige el Excel y vuelve a subirlo.',
+                'errors' => ['filas' => array_map(fn (array $f) => ['fila' => $f['fila'], 'errores' => $f['errores']], $conError)],
+            ], 422);
+        }
+
+        $resultado = $importador->importar($empresa, $request->user(), $validado['filas']);
+
+        // Solo los convenios y cuántas se importaron: sin tickets ni cantidades por renglón.
+        $this->difundir('recepcion', 'imported', [
+            'convenio_ids' => $resultado['convenio_ids'],
+            'cantidad' => $resultado['importadas'],
+        ], $empresa);
+
+        $n = $resultado['importadas'];
+
+        return response()->json([
+            'success' => true,
+            'message' => $n === 1 ? 'Se importó 1 recepción.' : "Se importaron {$n} recepciones.",
+            'data' => [
+                'importadas' => $n,
+                'por_convenio' => $validado['resumen']['por_convenio'],
+                'folios' => $resultado['folios'],
+            ],
+        ], 201);
+    }
+
+    private function validarArchivo(Request $request): void
+    {
+        $request->validate(
+            ['archivo' => ['required', 'file', 'max:5120', 'mimes:xlsx,xls,csv,txt']],
+            [
+                'archivo.required' => 'Sube el archivo de Excel con las recepciones.',
+                'archivo.file' => 'Sube el archivo de Excel con las recepciones.',
+                'archivo.max' => 'El archivo no puede pesar más de 5 MB.',
+                'archivo.mimes' => 'El archivo debe ser un Excel (.xlsx, .xls) o un CSV.',
+                'archivo.uploaded' => 'No se pudo subir el archivo (¿pesa más de 5 MB?).',
+            ],
+        );
     }
 
     public function store(Request $request): JsonResponse

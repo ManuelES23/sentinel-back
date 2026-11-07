@@ -24,9 +24,12 @@ class ReglasRecepcion
      * (en una edición, el del registro o el nuevo si cambió `convenio_id`). El convenio
      * debe estar activo en el alta y al pasar la recepción a otro convenio.
      *
+     * `$precios` permite pasar un PrecioVigente con los precios ya cargados (la importación
+     * valida cientos de renglones sin una consulta por cada uno).
+     *
      * @param  array{fecha: string, tipo_carga_id: int|string, cantidad: int|float|string, kilos?: mixed, rezaga_kg?: mixed}  $datos
      */
-    public static function validar(Convenio $convenio, array $datos, ?Recepcion $actual = null): void
+    public static function validar(Convenio $convenio, array $datos, ?Recepcion $actual = null, ?PrecioVigente $precios = null): void
     {
         if ($actual !== null) {
             self::exigirEditable($actual);
@@ -51,7 +54,7 @@ class ReglasRecepcion
         }
 
         if (! isset($errores['fecha'])
-            && app(PrecioVigente::class)->para($convenio, (int) $datos['tipo_carga_id'], $fecha) === null) {
+            && ($precios ?? app(PrecioVigente::class))->para($convenio, (int) $datos['tipo_carga_id'], $fecha) === null) {
             $errores['tipo_carga_id'] = 'Este tipo de carga no tiene precio en el convenio para esa fecha.';
         }
 

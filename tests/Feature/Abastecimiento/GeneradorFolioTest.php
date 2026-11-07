@@ -72,6 +72,45 @@ class GeneradorFolioTest extends TestCase
         });
     }
 
+    public function test_reservar_da_folios_consecutivos_con_un_solo_update_y_siguiente_sigue_igual(): void
+    {
+        $sbp = $this->empresa('splendidbyporvenir');
+        $gen = new GeneradorFolio;
+
+        DB::transaction(function () use ($gen, $sbp) {
+            $this->assertSame('RC-0001', $gen->siguiente($sbp, 'RC'));
+
+            $sql = [];
+            DB::listen(function ($q) use (&$sql) {
+                $sql[] = strtolower($q->sql);
+            });
+            $folios = $gen->reservar($sbp, 'RC', 1200);
+            $updates = array_filter($sql, fn ($q) => str_starts_with($q, 'update') && str_contains($q, 'abs_folios'));
+
+            $this->assertCount(1, $updates);
+            $this->assertCount(1200, $folios);
+            $this->assertSame('RC-0002', $folios[0]);
+            $this->assertSame('RC-1201', $folios[1199]);
+            $this->assertSame('RC-1202', $gen->siguiente($sbp, 'RC'));
+            $this->assertSame([], $gen->reservar($sbp, 'RC', 0));
+        });
+
+        $this->assertSame(1202, (int) DB::table('abs_folios')->where(['enterprise_id' => $sbp->id, 'prefijo' => 'RC'])->value('ultimo'));
+    }
+
+    public function test_reservar_salta_los_folios_ocupados_incluidos_los_borrados(): void
+    {
+        $sbp = $this->empresa('splendidbyporvenir');
+        $this->folioBorrado('abs_recepciones', $sbp, 'RC-0002');
+        $this->folioBorrado('abs_recepciones', $sbp, 'RC-0004');
+        $gen = new GeneradorFolio;
+
+        $folios = DB::transaction(fn () => $gen->reservar($sbp, 'RC', 4));
+
+        $this->assertSame(['RC-0001', 'RC-0003', 'RC-0005', 'RC-0006'], $folios);
+        $this->assertSame(6, (int) DB::table('abs_folios')->where(['enterprise_id' => $sbp->id, 'prefijo' => 'RC'])->value('ultimo'));
+    }
+
     /** Inserta una fila mínima ya borrada (borrado lógico) sin armar toda la cadena de llaves foráneas. */
     private function folioBorrado(string $tabla, Enterprise $empresa, string $folio): void
     {
