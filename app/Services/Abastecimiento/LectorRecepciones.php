@@ -10,6 +10,7 @@ use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use PhpOffice\PhpSpreadsheet\Cell\DataType;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Reader\Csv;
+use PhpOffice\PhpSpreadsheet\Reader\IReadFilter;
 use PhpOffice\PhpSpreadsheet\Shared\Date as FechaExcel;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Style\Alignment;
@@ -29,11 +30,13 @@ class LectorRecepciones
     public const MAX_FILAS = 2000;
 
     /**
-     * Renglones que la hoja puede declarar (hasta el último con algo, aunque sea formato o una nota suelta) antes de
-     * cargarla. Muy por encima de MAX_FILAS para no rechazar archivos con renglones vacíos al final, pero evita cargar
-     * hojas de cientos de miles de renglones.
+     * Filas (desde la 1) y columnas (A..Z) que se cargan en memoria: sobra para encabezados desplazados, las 7 columnas
+     * y un margen de renglones vacíos. La memoria queda acotada sin importar cuántas filas declare la hoja; lo que
+     * esté más abajo se revisa aparte, con una pasada ligera de una sola columna (`hayDatosMasAbajo`).
      */
-    public const MAX_FILAS_DECLARADAS = 50000;
+    public const FILAS_CARGADAS = self::MAX_FILAS + 100;
+
+    private const COLUMNAS_CARGADAS = 26;
 
     public const ENCABEZADOS = ['Folio del convenio', 'Fecha', 'Tipo de carga', 'Cantidad', 'Kilos', 'Rezaga kg', 'Ticket'];
 
@@ -59,7 +62,8 @@ class LectorRecepciones
      */
     public function leer(UploadedFile $archivo): array
     {
-        $hoja = $this->hojaDeDatos($this->abrir($archivo));
+        [$libro, $totalFilas, $lector] = $this->abrir($archivo);
+        $hoja = $this->hojaDeDatos($libro);
         // Solo las celdas que existen, agrupadas por renglón: la lectura es lineal en ellas
         // y no depende de qué tan abajo esté el último renglón con formato o un valor suelto.
         $celdas = $this->celdasPorFila($hoja);
@@ -73,6 +77,12 @@ class LectorRecepciones
         }
         if ($faltan !== []) {
             throw $this->error('Faltan columnas obligatorias en la hoja «'.$hoja->getTitle().'»: '.implode(', ', $faltan).'. Descarga la plantilla y respeta sus encabezados.');
+        }
+
+        // La hoja llega más abajo de lo que se cargó: si ahí hay renglones con datos, son más de MAX_FILAS (los
+        // renglones vacíos o una nota suelta lejana no cuentan).
+        if ($totalFilas > self::FILAS_CARGADAS && $this->hayDatosMasAbajo($lector, $archivo, $hoja->getTitle(), $columnas['convenio_folio'])) {
+            throw $this->error('El archivo tiene más de '.self::MAX_FILAS.' renglones con datos. Divídelo en partes.');
         }
 
         $filas = [];
@@ -166,7 +176,12 @@ class LectorRecepciones
         return $ruta;
     }
 
-    private function abrir(UploadedFile $archivo): Spreadsheet
+    /**
+     * Carga solo la hoja elegida, las filas 1..FILAS_CARGADAS y las columnas A..Z.
+     *
+     * @return array{0: Spreadsheet, 1: int, 2: \PhpOffice\PhpSpreadsheet\Reader\IReader} libro, filas que declara la hoja y el lector usado
+     */
+    private function abrir(UploadedFile $archivo): array
     {
         try {
             // Solo Excel y CSV: nada de autodetectar HTML, XML u otros formatos.
@@ -179,17 +194,62 @@ class LectorRecepciones
 
             // Antes de cargar nada: cuántos renglones declara la hoja elegida (lectura en flujo, sin cargarla).
             $elegida = $this->nombreDeHoja($lector->listWorksheetInfo($archivo->getRealPath()));
-            if ($elegida !== null && $elegida['totalRows'] > self::MAX_FILAS_DECLARADAS) {
-                throw $this->error('La hoja «'.$elegida['worksheetName'].'» declara '.$elegida['totalRows'].' renglones, muy por encima del máximo de '.self::MAX_FILAS.' renglones con datos. Borra los renglones sobrantes (o la nota suelta al final) y vuelve a subirlo.');
-            }
             // Solo la hoja elegida: las demás (instrucciones, otros libros de trabajo) no se cargan.
             if ($elegida !== null && ! $lector instanceof Csv) {
                 $lector->setLoadSheetsOnly([$elegida['worksheetName']]);
             }
+            $lector->setReadFilter($this->filtro(1, self::FILAS_CARGADAS, null));
 
-            return $lector->load($archivo->getRealPath());
+            return [$lector->load($archivo->getRealPath()), $elegida['totalRows'] ?? 0, $lector];
         } catch (ValidationException $e) {
             throw $e;
+        } catch (Throwable) {
+            throw $this->error('No se pudo leer el archivo. Sube un Excel (.xlsx, .xls) o un CSV.');
+        }
+    }
+
+    /**
+     * Filtro de lectura: filas desde..hasta y, si se da una letra, solo esa columna (si no, A..Z).
+     */
+    private function filtro(int $desde, int $hasta, ?string $columna): IReadFilter
+    {
+        return new class($desde, $hasta, $columna, self::COLUMNAS_CARGADAS) implements IReadFilter
+        {
+            public function __construct(private int $desde, private int $hasta, private ?string $columna, private int $maxColumnas)
+            {
+            }
+
+            public function readCell(string $columnAddress, int $row, string $worksheetName = ''): bool
+            {
+                if ($row < $this->desde || $row > $this->hasta) {
+                    return false;
+                }
+
+                return $this->columna !== null
+                    ? $columnAddress === $this->columna
+                    : Coordinate::columnIndexFromString($columnAddress) <= $this->maxColumnas;
+            }
+        };
+    }
+
+    /**
+     * Segunda pasada ligera sobre las filas que no se cargaron: solo la columna del folio del convenio. Hay datos si
+     * alguna celda de esa columna, debajo de lo cargado, trae algo (una nota suelta en otra columna no cuenta).
+     */
+    private function hayDatosMasAbajo(\PhpOffice\PhpSpreadsheet\Reader\IReader $lector, UploadedFile $archivo, string $hoja, string $columna): bool
+    {
+        try {
+            $lector->setReadFilter($this->filtro(self::FILAS_CARGADAS + 1, PHP_INT_MAX, $columna));
+            $libro = $lector->load($archivo->getRealPath());
+            $coleccion = ($libro->getSheetByName($hoja) ?? $libro->getSheet(0))->getCellCollection();
+            foreach ($coleccion->getCoordinates() as $coordenada) {
+                $celda = $coleccion->get($coordenada);
+                if ($celda !== null && $this->texto($this->valor($celda)) !== null) {
+                    return true;
+                }
+            }
+
+            return false;
         } catch (Throwable) {
             throw $this->error('No se pudo leer el archivo. Sube un Excel (.xlsx, .xls) o un CSV.');
         }
@@ -303,9 +363,13 @@ class LectorRecepciones
             return $valor->format('Y-m-d');
         }
         if (is_float($valor)) {
-            // El ruido binario de Excel (12.100000000000001) no es un dato: se redondea a 10 decimales y se escribe
-            // con number_format, que no depende del `precision` del php.ini ni usa notación científica.
-            $texto = rtrim(rtrim(number_format($valor, 10, '.', ''), '0'), '.');
+            // El ruido binario de Excel (12.100000000000001) no es un dato: se deja en 15 cifras significativas (las
+            // que Excel garantiza; 1234567.89 sigue siendo 1234567.89). `%G` no depende del `precision` del php.ini y
+            // quita los ceros finales; solo la notación científica (muy grande o muy chico) pasa a decimal fijo.
+            $texto = sprintf('%.15G', $valor);
+            if (str_contains($texto, 'E')) {
+                $texto = rtrim(rtrim(number_format((float) $texto, 10, '.', ''), '0'), '.');
+            }
 
             return in_array($texto, ['', '-0'], true) ? '0' : $texto;
         }

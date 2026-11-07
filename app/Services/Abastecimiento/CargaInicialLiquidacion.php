@@ -126,8 +126,8 @@ class CargaInicialLiquidacion
     /**
      * Reglas del modo solo monto que dependen del convenio (ya bloqueado y bajo el bloqueo del productor):
      *  - el periodo cae dentro de las fechas del convenio;
-     *  - no hay recepciones sin liquidar del convenio dentro del periodo: la deuda ya entraría cuando se liquiden,
-     *    y capturarla aquí también la contaría dos veces. Se lee con la transacción READ COMMITTED de
+     *  - no hay recepciones sin liquidar (ni en una liquidación pendiente) del convenio dentro del periodo: la deuda
+     *    ya entraría cuando se liquiden, y capturarla aquí también la contaría dos veces. Se lee con la transacción READ COMMITTED de
      *    `TransaccionDinero`, así que ve lo que otra captura confirmó, y antes de pedir folio.
      */
     private static function validarSoloMonto(Convenio $convenio, array $datos): void
@@ -141,12 +141,17 @@ class CargaInicialLiquidacion
             self::fallar('periodo_fin', "El fin del periodo debe estar dentro de las fechas del convenio ({$desde} a {$hasta}).");
         }
 
-        $sinLiquidar = Recepcion::where('convenio_id', $convenio->id)
-            ->whereNull('liquidacion_id')
+        // Cuentan las que no tienen liquidación y las ligadas a una liquidación pendiente (borrador o en revisión:
+        // rechazarla la regresa a borrador sin soltar sus recepciones, y al aprobarse la deuda quedaría doble).
+        // Las de una aprobada/pagada ya son deuda registrada; las de una cancelada se liberan (quedan sin liquidar).
+        $pendientes = Recepcion::where('convenio_id', $convenio->id)
             ->whereBetween('fecha', [$datos['periodo_inicio'], $datos['periodo_fin']])
+            ->where(fn ($q) => $q->whereNull('liquidacion_id')
+                ->orWhereHas('liquidacion', fn ($l) => $l->whereIn('status', ['borrador', 'en_revision'])))
             ->count();
-        if ($sinLiquidar > 0) {
-            self::fallar('monto', "Hay {$sinLiquidar} recepciones sin liquidar de este convenio dentro del periodo: usa el modo con recepciones o cambia el periodo.");
+        if ($pendientes > 0) {
+            $hay = $pendientes === 1 ? 'Hay 1 recepción' : "Hay {$pendientes} recepciones";
+            self::fallar('monto', "{$hay} sin liquidar o en una liquidación pendiente de este convenio dentro del periodo: usa el modo con recepciones o cambia el periodo.");
         }
     }
 

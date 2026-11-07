@@ -722,7 +722,7 @@ class CargaInicialLiquidacionTest extends TestCase
         $this->crearRecepcion($convenio, ['fecha' => '2026-06-03']);
 
         $this->cargar($this->cuerpoMonto($convenio))->assertStatus(422)->assertJsonValidationErrors('monto')
-            ->assertJsonPath('errors.monto.0', 'Hay 2 recepciones sin liquidar de este convenio dentro del periodo: usa el modo con recepciones o cambia el periodo.');
+            ->assertJsonPath('errors.monto.0', 'Hay 2 recepciones sin liquidar o en una liquidación pendiente de este convenio dentro del periodo: usa el modo con recepciones o cambia el periodo.');
         $this->assertSame(0, Liquidacion::count());
 
         // No consumió folio: la siguiente carga válida (periodo sin recepciones) sigue siendo LQ-0001.
@@ -740,6 +740,39 @@ class CargaInicialLiquidacionTest extends TestCase
         $this->cargar($this->cuerpoMonto($convenio, ['periodo_inicio' => '2026-06-10']))->assertStatus(201);
     }
 
+    public function test_solo_monto_con_una_sola_recepcion_pendiente_usa_el_singular(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        $this->crearRecepcion($convenio, ['fecha' => '2026-06-02']);
+
+        $this->cargar($this->cuerpoMonto($convenio))->assertStatus(422)
+            ->assertJsonPath('errors.monto.0', 'Hay 1 recepción sin liquidar o en una liquidación pendiente de este convenio dentro del periodo: usa el modo con recepciones o cambia el periodo.');
+    }
+
+    public function test_solo_monto_rechaza_recepciones_ligadas_a_un_borrador_o_en_revision_dentro_del_periodo(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        foreach (['borrador', 'en_revision'] as $status) {
+            $liq = $this->crearLiquidacion($convenio, ['status' => $status]);
+            $this->crearRecepcion($convenio, ['fecha' => '2026-06-15', 'liquidacion_id' => $liq->id]);
+
+            $this->cargar($this->cuerpoMonto($convenio, ['periodo_inicio' => '2026-06-10']))->assertStatus(422)
+                ->assertJsonValidationErrors('monto');
+            Recepcion::query()->update(['liquidacion_id' => null, 'deleted_at' => now()]);
+        }
+        $this->assertSame(0, Liquidacion::where('origen', 'carga_inicial')->count());
+    }
+
+    public function test_solo_monto_acepta_recepciones_ligadas_a_aprobada_pagada_o_cancelada_o_borradas(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        foreach (['aprobada', 'pagada', 'cancelada'] as $status) {
+            $liq = $this->crearLiquidacion($convenio, ['status' => $status, 'monto_final' => 10]);
+            $this->crearRecepcion($convenio, ['fecha' => '2026-06-15', 'liquidacion_id' => $liq->id]);
+        }
+
+        $this->cargar($this->cuerpoMonto($convenio, ['periodo_inicio' => '2026-06-10']))->assertStatus(201);
+    }
     public function test_solo_monto_exige_el_periodo_dentro_de_las_fechas_del_convenio(): void
     {
         $convenio = $this->crearConvenio($this->sbp); // 2026-06-01 a 2026-06-28

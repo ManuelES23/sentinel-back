@@ -157,7 +157,7 @@ class LectorRecepcionesTest extends TestCase
         $this->assertLessThan(10, microtime(true) - $inicio);
     }
 
-    public function test_una_hoja_que_declara_cientos_de_miles_de_renglones_da_422_claro_sin_cargarla(): void
+    public function test_una_nota_suelta_lejana_en_otra_columna_se_ignora_sin_cargar_la_hoja_entera(): void
     {
         $filas = array_merge(
             [['CV-1', '2026-07-14', 'Caja empacada', 1, 1]],
@@ -167,11 +167,68 @@ class LectorRecepcionesTest extends TestCase
         $archivo = $this->crearXlsx($filas);
 
         $inicio = microtime(true);
+        $leidas = $this->lector()->leer($archivo);
+
+        $this->assertSame([2], array_column($leidas, 'fila'));
+        $this->assertLessThan(10, microtime(true) - $inicio);
+    }
+
+    public function test_renglones_con_datos_mas_alla_del_rango_cargado_dan_422_claro(): void
+    {
+        // Un renglón normal y otro en la fila 3000 de la columna A (más allá de MAX_FILAS + 100): hay datos que no caben.
+        $filas = array_merge(
+            [['CV-1', '2026-07-14', 'Caja empacada', 1, 1]],
+            array_fill(0, 2998, []),
+            [['CV-2', '2026-07-15', 'Caja empacada', 2, 2]],
+        );
+        $archivo = $this->crearXlsx($filas);
+
         $mensaje = $this->mensajeDe(fn () => $this->lector()->leer($archivo));
 
-        $this->assertStringContainsString('declara 200001 renglones', $mensaje);
-        $this->assertStringContainsString('máximo de '.LectorRecepciones::MAX_FILAS, $mensaje);
-        $this->assertLessThan(10, microtime(true) - $inicio);
+        $this->assertStringContainsString('más de '.LectorRecepciones::MAX_FILAS.' renglones', $mensaje);
+    }
+
+    public function test_la_nota_suelta_de_la_fila_30000_columna_z_se_ignora_y_los_renglones_reales_se_leen(): void
+    {
+        $filas = array_merge(
+            [['CV-1', '2026-07-14', 'Caja empacada', 1, 1], ['CV-2', '2026-07-15', 'Caja empacada', 2, 2]],
+            array_fill(0, 29997, []),
+            [array_merge(array_fill(0, 25, null), ['nota'])],
+        );
+
+        $leidas = $this->lector()->leer($this->crearXlsx($filas));
+
+        $this->assertSame([2, 3], array_column($leidas, 'fila'));
+    }
+
+    public function test_un_csv_con_fecha_dia_mes_anio_y_decimal_con_punto_se_lee(): void
+    {
+        $ruta = tempnam(sys_get_temp_dir(), 'csv').'.csv';
+        file_put_contents($ruta, implode("\n", [
+            'Folio del convenio,Fecha,Tipo de carga,Cantidad,Kilos,Rezaga kg,Ticket',
+            'CV-0001,14/07/2026,Caja empacada,10,120.5,2.25,T-1',
+            'CV-0002,15/07/2026,Caja empacada,20,300,,',
+        ])."\n");
+        $this->beforeApplicationDestroyed(fn () => @unlink($ruta));
+
+        $filas = $this->lector()->leer(new UploadedFile($ruta, 'recepciones.csv', null, null, true));
+
+        $this->assertSame([
+            ['fila' => 2, 'convenio_folio' => 'CV-0001', 'fecha' => '2026-07-14', 'tipo_carga' => 'Caja empacada',
+                'cantidad' => '10', 'kilos' => '120.5', 'rezaga_kg' => '2.25', 'ticket' => 'T-1'],
+            ['fila' => 3, 'convenio_folio' => 'CV-0002', 'fecha' => '2026-07-15', 'tipo_carga' => 'Caja empacada',
+                'cantidad' => '20', 'kilos' => '300', 'rezaga_kg' => null, 'ticket' => null],
+        ], $filas);
+    }
+
+    public function test_los_decimales_grandes_conservan_sus_cifras(): void
+    {
+        $archivo = $this->crearXlsx([['CV-1', '2026-07-14', 'Caja empacada', 10, 1234567.89, 12345678.91]]);
+
+        $fila = $this->lector()->leer($archivo)[0];
+
+        $this->assertSame('1234567.89', $fila['kilos']);
+        $this->assertSame('12345678.91', $fila['rezaga_kg']);
     }
 
     public function test_un_archivo_normal_de_2000_renglones_se_lee_completo_y_rapido(): void
