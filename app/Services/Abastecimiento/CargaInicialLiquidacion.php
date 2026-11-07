@@ -54,6 +54,11 @@ class CargaInicialLiquidacion
             if (in_array($convenio->status, ['borrador', 'cancelado'], true)) {
                 self::fallar('convenio_id', 'El convenio está en borrador o cancelado: no se le puede registrar una carga inicial.');
             }
+            // El productor se leyó antes de bloquear el convenio: si el convenio cambió de productor en medio, el
+            // bloqueo que tenemos ya no es el de su dueño y no se debe registrar dinero a ciegas.
+            if ((int) $convenio->productor_id !== (int) $productorId) {
+                self::fallar('convenio_id', 'El convenio cambió de productor; vuelve a intentarlo.');
+            }
 
             $recepciones = null;
             if ($conRecepciones) {
@@ -73,6 +78,7 @@ class CargaInicialLiquidacion
                     );
                 }
             } else {
+                self::validarSoloMonto($convenio, $datos);
                 $calculo = self::calculoSoloMonto($datos);
             }
 
@@ -115,6 +121,33 @@ class CargaInicialLiquidacion
 
             return $liquidacion->refresh();
         }, 3);
+    }
+
+    /**
+     * Reglas del modo solo monto que dependen del convenio (ya bloqueado y bajo el bloqueo del productor):
+     *  - el periodo cae dentro de las fechas del convenio;
+     *  - no hay recepciones sin liquidar del convenio dentro del periodo: la deuda ya entraría cuando se liquiden,
+     *    y capturarla aquí también la contaría dos veces. Se lee con la transacción READ COMMITTED de
+     *    `TransaccionDinero`, así que ve lo que otra captura confirmó, y antes de pedir folio.
+     */
+    private static function validarSoloMonto(Convenio $convenio, array $datos): void
+    {
+        $desde = $convenio->fecha_inicio->format('Y-m-d');
+        $hasta = $convenio->fecha_fin->format('Y-m-d');
+        if ($datos['periodo_inicio'] < $desde || $datos['periodo_inicio'] > $hasta) {
+            self::fallar('periodo_inicio', "El inicio del periodo debe estar dentro de las fechas del convenio ({$desde} a {$hasta}).");
+        }
+        if ($datos['periodo_fin'] < $desde || $datos['periodo_fin'] > $hasta) {
+            self::fallar('periodo_fin', "El fin del periodo debe estar dentro de las fechas del convenio ({$desde} a {$hasta}).");
+        }
+
+        $sinLiquidar = Recepcion::where('convenio_id', $convenio->id)
+            ->whereNull('liquidacion_id')
+            ->whereBetween('fecha', [$datos['periodo_inicio'], $datos['periodo_fin']])
+            ->count();
+        if ($sinLiquidar > 0) {
+            self::fallar('monto', "Hay {$sinLiquidar} recepciones sin liquidar de este convenio dentro del periodo: usa el modo con recepciones o cambia el periodo.");
+        }
     }
 
     /**

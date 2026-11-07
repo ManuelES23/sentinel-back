@@ -270,7 +270,8 @@ class CargaInicialLiquidacionTest extends TestCase
         $this->assertEqualsWithDelta(1000, $saldoAntes['sin_liquidar'], 0.001);
         $this->assertEqualsWithDelta(0, $saldoAntes['por_pagar'], 0.001);
 
-        $this->cargar($this->cuerpoMonto($convenio, ['monto' => 5000]))->assertStatus(201);
+        // El periodo de la carga no se encima con la recepción sin liquidar del 2 de junio (si no, la deuda se contaría dos veces).
+        $this->cargar($this->cuerpoMonto($convenio, ['monto' => 5000, 'periodo_inicio' => '2026-06-10']))->assertStatus(201);
 
         [$tableroDespues, $fichaDespues, $saldoDespues] = $consultar();
 
@@ -670,7 +671,8 @@ class CargaInicialLiquidacionTest extends TestCase
         $this->assertSame(0, Liquidacion::count());
 
         // Con el campo vacío (null) el modo sigue valiendo.
-        $this->cargar($this->cuerpoMonto($convenio, ['motivo_ajuste' => null, 'monto_ajustado' => null]))->assertStatus(201);
+        // (periodo posterior a la recepción sin liquidar del 2 de junio: no se encima con ella)
+        $this->cargar($this->cuerpoMonto($convenio, ['motivo_ajuste' => null, 'monto_ajustado' => null, 'periodo_inicio' => '2026-06-10']))->assertStatus(201);
     }
 
     public function test_el_monto_tiene_tope(): void
@@ -710,4 +712,107 @@ class CargaInicialLiquidacionTest extends TestCase
         $this->assertSame('carga_inicial', $movs->firstWhere('id', $inicial)['origen']);
         $this->assertSame('normal', $movs->firstWhere('id', $normal->id)['origen']);
     }
-}
+
+    // ---------------------------------------------------------------- revisión final: deuda doble, periodo y productor
+
+    public function test_solo_monto_con_recepcion_sin_liquidar_en_el_periodo_da_422_y_no_deja_nada(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        $this->crearRecepcion($convenio, ['fecha' => '2026-06-02']);
+        $this->crearRecepcion($convenio, ['fecha' => '2026-06-03']);
+
+        $this->cargar($this->cuerpoMonto($convenio))->assertStatus(422)->assertJsonValidationErrors('monto')
+            ->assertJsonPath('errors.monto.0', 'Hay 2 recepciones sin liquidar de este convenio dentro del periodo: usa el modo con recepciones o cambia el periodo.');
+        $this->assertSame(0, Liquidacion::count());
+
+        // No consumió folio: la siguiente carga válida (periodo sin recepciones) sigue siendo LQ-0001.
+        $this->cargar($this->cuerpoMonto($convenio, ['periodo_inicio' => '2026-06-10']))->assertStatus(201)->assertJsonPath('data.folio', 'LQ-0001');
+    }
+
+    public function test_solo_monto_ignora_recepciones_sin_liquidar_fuera_del_periodo_borradas_y_ya_liquidadas(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        $this->crearRecepcion($convenio, ['fecha' => '2026-06-02']); // antes del periodo
+        $this->crearRecepcion($convenio, ['fecha' => '2026-06-20'])->delete(); // borrada, dentro del periodo
+        $liquidada = $this->crearLiquidacion($convenio, ['status' => 'aprobada', 'monto_final' => 10, 'aprobada_at' => now()]);
+        $this->crearRecepcion($convenio, ['fecha' => '2026-06-15', 'liquidacion_id' => $liquidada->id]); // ya liquidada, dentro
+
+        $this->cargar($this->cuerpoMonto($convenio, ['periodo_inicio' => '2026-06-10']))->assertStatus(201);
+    }
+
+    public function test_solo_monto_exige_el_periodo_dentro_de_las_fechas_del_convenio(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp); // 2026-06-01 a 2026-06-28
+
+        $this->cargar($this->cuerpoMonto($convenio, ['periodo_inicio' => '2026-05-20']))->assertStatus(422)->assertJsonValidationErrors('periodo_inicio');
+        $this->cargar($this->cuerpoMonto($convenio, ['periodo_fin' => '2026-06-29']))->assertStatus(422)->assertJsonValidationErrors('periodo_fin');
+        $this->cargar($this->cuerpoMonto($convenio, ['periodo_inicio' => '2026-07-01', 'periodo_fin' => '2026-07-05']))
+            ->assertStatus(422)->assertJsonValidationErrors('periodo_inicio');
+        $this->assertSame(0, Liquidacion::count());
+
+        // Los extremos del convenio valen.
+        $this->cargar($this->cuerpoMonto($convenio))->assertStatus(201);
+    }
+
+    public function test_si_el_convenio_cambia_de_productor_entre_lecturas_falla_sin_guardar_nada(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        $otro = Productor::create(['enterprise_id' => $this->sbp->id, 'nombre' => 'Otro productor', 'tipo' => 'productor', 'is_active' => true]);
+
+        // SQLite no tiene concurrencia real: se simula que, al releer el convenio con bloqueo, su fila ya trae otro
+        // productor (lo que vería la lectura si otro usuario lo cambió entre el bloqueo del productor y esa lectura).
+        // `value('productor_id')` también hidrata un modelo parcial (sin id): solo se altera la lectura completa con bloqueo.
+        Convenio::retrieved(function (Convenio $c) use ($otro) {
+            if ($c->id !== null) {
+                $c->productor_id = $otro->id;
+            }
+        });
+        try {
+            $this->cargar($this->cuerpoMonto($convenio))->assertStatus(422)->assertJsonValidationErrors('convenio_id')
+                ->assertJsonPath('errors.convenio_id.0', 'El convenio cambió de productor; vuelve a intentarlo.');
+        } finally {
+            Convenio::flushEventListeners();
+            Convenio::clearBootedModels();
+        }
+        $this->assertSame(0, Liquidacion::count());
+    }
+
+    public function test_el_estado_de_cuenta_ordena_la_carga_inicial_por_el_fin_de_su_periodo(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        $productor = Productor::findOrFail($convenio->productor_id);
+        // Carga con periodo que termina el 10 de junio, capturada «hoy»; el abono es del 20 de junio.
+        $inicial = $this->cargar($this->cuerpoMonto($convenio, ['monto' => 1000, 'periodo_fin' => '2026-06-10']))->assertStatus(201)->json('data.id');
+        $this->como($this->admin);
+        $this->postJson($this->url('abonos'), [
+            'productor_id' => $productor->id, 'fecha' => '2026-06-20', 'monto' => 400, 'moneda' => 'MXN',
+            'metodo_pago' => 'transferencia', 'aplicaciones' => [['liquidacion_id' => $inicial, 'monto' => 400]],
+        ])->assertStatus(201);
+
+        $movs = $this->getJson($this->url("abonos/productores/{$productor->id}/estado-cuenta?moneda=MXN"))->assertOk()->json('data.movimientos');
+        $this->assertSame(['liquidacion', 'abono'], array_column($movs, 'tipo'));
+        $this->assertSame('2026-06-10', $movs[0]['fecha']);
+        $this->assertSame('2026-06-20', $movs[1]['fecha']);
+        foreach ($movs as $m) {
+            $this->assertGreaterThanOrEqual(0, $m['saldo'], 'ningún saldo corriente intermedio es negativo');
+        }
+        $this->assertEqualsWithDelta(1000, $movs[0]['saldo'], 0.001);
+        $this->assertEqualsWithDelta(600, $movs[1]['saldo'], 0.001);
+    }
+
+    public function test_el_estado_de_cuenta_pone_el_anticipo_anterior_al_fin_del_periodo_antes_de_la_deuda(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        $productor = Productor::findOrFail($convenio->productor_id);
+        $this->crearAbono($productor, ['monto' => 300, 'fecha' => '2026-06-05']); // anticipo previo al fin del periodo
+
+        $this->cargar($this->cuerpoMonto($convenio, ['monto' => 1000, 'periodo_fin' => '2026-06-10']))->assertStatus(201);
+
+        $this->como($this->admin);
+        $movs = $this->getJson($this->url("abonos/productores/{$productor->id}/estado-cuenta?moneda=MXN"))->assertOk()->json('data.movimientos');
+        // Mismas fechas que mandan el orden: el anticipo (5 de junio) va antes que la deuda (fin del periodo, 10 de junio).
+        $this->assertSame(['2026-06-05', '2026-06-10'], array_column($movs, 'fecha'));
+        // Saldo único (deuda − abonos, con el anticipo como crédito): a favor mientras no hay deuda y 700 por pagar al final.
+        $this->assertEqualsWithDelta(-300, $movs[0]['saldo'], 0.001);
+        $this->assertEqualsWithDelta(700, end($movs)['saldo'], 0.001);
+    }}
