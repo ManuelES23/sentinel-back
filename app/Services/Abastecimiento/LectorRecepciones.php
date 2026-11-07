@@ -28,6 +28,13 @@ class LectorRecepciones
 {
     public const MAX_FILAS = 2000;
 
+    /**
+     * Renglones que la hoja puede declarar (hasta el último con algo, aunque sea formato o una nota suelta) antes de
+     * cargarla. Muy por encima de MAX_FILAS para no rechazar archivos con renglones vacíos al final, pero evita cargar
+     * hojas de cientos de miles de renglones.
+     */
+    public const MAX_FILAS_DECLARADAS = 50000;
+
     public const ENCABEZADOS = ['Folio del convenio', 'Fecha', 'Tipo de carga', 'Cantidad', 'Kilos', 'Rezaga kg', 'Ticket'];
 
     private const HOJA_DATOS = 'Recepciones';
@@ -170,10 +177,42 @@ class LectorRecepciones
             }
             $lector->setReadDataOnly(true);
 
+            // Antes de cargar nada: cuántos renglones declara la hoja elegida (lectura en flujo, sin cargarla).
+            $elegida = $this->nombreDeHoja($lector->listWorksheetInfo($archivo->getRealPath()));
+            if ($elegida !== null && $elegida['totalRows'] > self::MAX_FILAS_DECLARADAS) {
+                throw $this->error('La hoja «'.$elegida['worksheetName'].'» declara '.$elegida['totalRows'].' renglones, muy por encima del máximo de '.self::MAX_FILAS.' renglones con datos. Borra los renglones sobrantes (o la nota suelta al final) y vuelve a subirlo.');
+            }
+            // Solo la hoja elegida: las demás (instrucciones, otros libros de trabajo) no se cargan.
+            if ($elegida !== null && ! $lector instanceof Csv) {
+                $lector->setLoadSheetsOnly([$elegida['worksheetName']]);
+            }
+
             return $lector->load($archivo->getRealPath());
+        } catch (ValidationException $e) {
+            throw $e;
         } catch (Throwable) {
             throw $this->error('No se pudo leer el archivo. Sube un Excel (.xlsx, .xls) o un CSV.');
         }
+    }
+
+    /**
+     * La hoja que se leerá: «Recepciones» si existe y, si no, la primera.
+     *
+     * @param  array<int, array<string, mixed>>  $hojas  resultado de `listWorksheetInfo`
+     * @return array{worksheetName: string, totalRows: int}|null
+     */
+    private function nombreDeHoja(array $hojas): ?array
+    {
+        $elegida = null;
+        foreach ($hojas as $hoja) {
+            if (self::normalizar((string) $hoja['worksheetName']) === 'recepciones') {
+                $elegida = $hoja;
+                break;
+            }
+        }
+        $elegida ??= $hojas[0] ?? null;
+
+        return $elegida === null ? null : ['worksheetName' => (string) $elegida['worksheetName'], 'totalRows' => (int) ($elegida['totalRows'] ?? 0)];
     }
 
     private function hojaDeDatos(Spreadsheet $libro): Worksheet
@@ -264,12 +303,11 @@ class LectorRecepciones
             return $valor->format('Y-m-d');
         }
         if (is_float($valor)) {
-            $texto = (string) $valor;
-            if (str_contains($texto, 'E')) {
-                $texto = rtrim(rtrim(number_format($valor, 6, '.', ''), '0'), '.');
-            }
+            // El ruido binario de Excel (12.100000000000001) no es un dato: se redondea a 10 decimales y se escribe
+            // con number_format, que no depende del `precision` del php.ini ni usa notación científica.
+            $texto = rtrim(rtrim(number_format($valor, 10, '.', ''), '0'), '.');
 
-            return $texto;
+            return in_array($texto, ['', '-0'], true) ? '0' : $texto;
         }
         $texto = trim((string) $valor);
 

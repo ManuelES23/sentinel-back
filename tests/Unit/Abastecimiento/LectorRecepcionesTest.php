@@ -157,6 +157,83 @@ class LectorRecepcionesTest extends TestCase
         $this->assertLessThan(10, microtime(true) - $inicio);
     }
 
+    public function test_una_hoja_que_declara_cientos_de_miles_de_renglones_da_422_claro_sin_cargarla(): void
+    {
+        $filas = array_merge(
+            [['CV-1', '2026-07-14', 'Caja empacada', 1, 1]],
+            array_fill(0, 199998, []),
+            [array_merge(array_fill(0, 25, null), ['nota suelta'])],
+        );
+        $archivo = $this->crearXlsx($filas);
+
+        $inicio = microtime(true);
+        $mensaje = $this->mensajeDe(fn () => $this->lector()->leer($archivo));
+
+        $this->assertStringContainsString('declara 200001 renglones', $mensaje);
+        $this->assertStringContainsString('máximo de '.LectorRecepciones::MAX_FILAS, $mensaje);
+        $this->assertLessThan(10, microtime(true) - $inicio);
+    }
+
+    public function test_un_archivo_normal_de_2000_renglones_se_lee_completo_y_rapido(): void
+    {
+        $filas = [];
+        for ($i = 1; $i <= LectorRecepciones::MAX_FILAS; $i++) {
+            $filas[] = ['CV-0001', '2026-07-14', 'Caja empacada', $i, $i * 2];
+        }
+        $archivo = $this->crearXlsx($filas);
+
+        $inicio = microtime(true);
+        $leidas = $this->lector()->leer($archivo);
+
+        $this->assertCount(LectorRecepciones::MAX_FILAS, $leidas);
+        $this->assertSame(LectorRecepciones::MAX_FILAS + 1, end($leidas)['fila']);
+        $this->assertLessThan(10, microtime(true) - $inicio);
+    }
+
+    public function test_solo_se_carga_la_hoja_elegida_y_su_tamano_es_el_que_cuenta(): void
+    {
+        // Una hoja grande que NO es la de datos no estorba: se lee «Recepciones» y la otra ni se carga.
+        $libro = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
+        $otra = $libro->getActiveSheet()->setTitle('Otra');
+        $otra->setCellValue('A100000', 'nota');
+        $datos = $libro->createSheet()->setTitle('Recepciones');
+        foreach (LectorRecepciones::ENCABEZADOS as $j => $titulo) {
+            $datos->setCellValue([$j + 1, 1], $titulo);
+        }
+        foreach (['CV-1', '2026-07-14', 'Caja empacada', 3, 30] as $j => $v) {
+            $datos->setCellValue([$j + 1, 2], $v);
+        }
+        $ruta = tempnam(sys_get_temp_dir(), 'xlsx').'.xlsx';
+        (new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($libro))->save($ruta);
+        $this->beforeApplicationDestroyed(fn () => @unlink($ruta));
+
+        $leidas = $this->lector()->leer(new UploadedFile($ruta, 'recepciones.xlsx', null, null, true));
+
+        $this->assertSame(['CV-1'], array_column($leidas, 'convenio_folio'));
+    }
+
+    public function test_un_decimal_con_ruido_binario_se_lee_redondeado(): void
+    {
+        $archivo = $this->crearXlsx([['CV-1', '2026-07-14', 'Caja empacada', 10, 12.1, 0.3, 'T-1']]);
+        // El escritor redondea a 15 cifras: se inyecta en el XML el valor con ruido, como lo deja Excel tras una cuenta.
+        $zip = new \ZipArchive();
+        $zip->open($archivo->getRealPath());
+        $xml = $zip->getFromName('xl/worksheets/sheet1.xml');
+        $this->assertStringContainsString('<v>12.1</v>', $xml);
+        $zip->addFromString('xl/worksheets/sheet1.xml', str_replace(['<v>12.1</v>', '<v>0.3</v>'], ['<v>12.100000000000001</v>', '<v>0.30000000000000004</v>'], $xml));
+        $zip->close();
+
+        // Con `precision` alta (php.ini de algunos servidores) el cast a texto del float mostraría el ruido.
+        $precision = ini_set('precision', '17');
+        try {
+            $fila = $this->lector()->leer($archivo)[0];
+        } finally {
+            ini_set('precision', $precision);
+        }
+
+        $this->assertSame('12.1', $fila['kilos']);
+        $this->assertSame('0.3', $fila['rezaga_kg']);
+    }
     public function test_el_error_de_columnas_nombra_la_hoja_leida(): void
     {
         $archivo = $this->crearXlsx([['x']], ['Algo']);
