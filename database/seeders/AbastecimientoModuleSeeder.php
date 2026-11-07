@@ -32,16 +32,16 @@ class AbastecimientoModuleSeeder extends Seeder
 {
     public const EMPRESA = 'splendidbyporvenir';
 
-    /** Submódulos en orden de menú. El plan 2 agregó `liquidaciones` y `abonos`. */
+    /** Submódulos en orden de menú. El plan 2 agregó `liquidaciones` y `abonos`; el plan 3, `importar` y `carga-inicial`. */
     public const SUBMODULOS = [
         'tablero' => ['nombre' => 'Tablero', 'icono' => 'LayoutDashboard', 'permisos' => ['view']],
         'convenios' => ['nombre' => 'Convenios', 'icono' => 'FileSignature', 'permisos' => ['view', 'create', 'edit', 'delete']],
-        'recepciones' => ['nombre' => 'Recepciones', 'icono' => 'PackageCheck', 'permisos' => ['view', 'create', 'edit', 'delete']],
+        'recepciones' => ['nombre' => 'Recepciones', 'icono' => 'PackageCheck', 'permisos' => ['view', 'create', 'edit', 'delete', 'importar']],
         'productores' => ['nombre' => 'Productores', 'icono' => 'Users', 'permisos' => ['view', 'create', 'edit', 'delete']],
         'temporadas' => ['nombre' => 'Temporadas', 'icono' => 'CalendarRange', 'permisos' => ['view', 'create', 'edit', 'delete']],
         'variedades' => ['nombre' => 'Cultivos y variedades', 'icono' => 'Sprout', 'permisos' => ['view', 'create', 'edit', 'delete']],
         'tipos-carga' => ['nombre' => 'Tipos de carga', 'icono' => 'Package', 'permisos' => ['view', 'create', 'edit', 'delete']],
-        'liquidaciones' => ['nombre' => 'Liquidaciones', 'icono' => 'Receipt', 'permisos' => ['view', 'create', 'edit', 'delete', 'aprobar']],
+        'liquidaciones' => ['nombre' => 'Liquidaciones', 'icono' => 'Receipt', 'permisos' => ['view', 'create', 'edit', 'delete', 'aprobar', 'carga-inicial']],
         'abonos' => ['nombre' => 'Abonos', 'icono' => 'Wallet', 'permisos' => ['view', 'create', 'edit', 'delete', 'cancelar']],
     ];
 
@@ -52,6 +52,8 @@ class AbastecimientoModuleSeeder extends Seeder
         'delete' => ['name' => 'Eliminar', 'description' => 'Eliminar registros', 'order' => 4],
         'aprobar' => ['name' => 'Aprobar', 'description' => 'Aprobar liquidaciones', 'order' => 5],
         'cancelar' => ['name' => 'Cancelar', 'description' => 'Cancelar abonos', 'order' => 5],
+        'importar' => ['name' => 'Importar', 'description' => 'Importar recepciones desde Excel', 'order' => 5],
+        'carga-inicial' => ['name' => 'Carga inicial', 'description' => 'Registrar liquidaciones de carga inicial', 'order' => 5],
     ];
 
     private const CATALOGO = [

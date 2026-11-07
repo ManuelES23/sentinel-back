@@ -23,6 +23,7 @@ Route::prefix('abastecimiento')->name('abastecimiento.')->group(function () {
 
     // Tablero (submódulo tablero).
     Route::get('tablero', [TableroController::class, 'index'])->name('tablero');
+    Route::get('tablero/exportar', [TableroController::class, 'exportar'])->name('tablero.exportar');
 
     // Cultivos y variedades (submódulo variedades).
     Route::get('cultivos', [CultivoController::class, 'index'])->name('cultivos.index');
@@ -63,6 +64,10 @@ Route::prefix('abastecimiento')->name('abastecimiento.')->group(function () {
 
     // Recepciones (submódulo recepciones). `semana` va antes de cualquier ruta con {id}.
     Route::get('recepciones/semana', [RecepcionController::class, 'semana'])->name('recepciones.semana');
+    // Importación desde Excel (permiso `recepciones.importar`). Los segmentos fijos van antes de las rutas con {id}.
+    Route::get('recepciones/plantilla', [RecepcionController::class, 'plantilla'])->name('recepciones.plantilla');
+    Route::post('recepciones/importar/vista-previa', [RecepcionController::class, 'vistaPreviaImportacion'])->name('recepciones.importar.vista-previa');
+    Route::post('recepciones/importar', [RecepcionController::class, 'importar'])->name('recepciones.importar');
     Route::get('recepciones', [RecepcionController::class, 'index'])->name('recepciones.index');
     Route::post('recepciones', [RecepcionController::class, 'store'])->name('recepciones.store');
     Route::put('recepciones/{id}', [RecepcionController::class, 'update'])->whereNumber('id')->name('recepciones.update');
@@ -71,6 +76,8 @@ Route::prefix('abastecimiento')->name('abastecimiento.')->group(function () {
     // Liquidaciones (submódulo liquidaciones). `recepciones-disponibles` y `previa` van antes de las rutas con {id}.
     Route::get('liquidaciones/recepciones-disponibles', [LiquidacionController::class, 'recepcionesDisponibles'])->name('liquidaciones.recepciones-disponibles');
     Route::post('liquidaciones/previa', [LiquidacionController::class, 'previa'])->name('liquidaciones.previa');
+    // Carga inicial (permiso `liquidaciones.carga-inicial`): nace aprobada, sin cadena. Fija, antes de las rutas con {id}.
+    Route::post('liquidaciones/carga-inicial', [LiquidacionController::class, 'cargaInicial'])->name('liquidaciones.carga-inicial');
     Route::get('liquidaciones', [LiquidacionController::class, 'index'])->name('liquidaciones.index');
     Route::get('liquidaciones/{id}', [LiquidacionController::class, 'show'])->whereNumber('id')->name('liquidaciones.show');
     Route::post('liquidaciones', [LiquidacionController::class, 'store'])->name('liquidaciones.store');

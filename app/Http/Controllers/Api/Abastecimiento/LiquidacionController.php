@@ -12,12 +12,14 @@ use App\Services\Abastecimiento\AprobadorLiquidaciones;
 use App\Services\Abastecimiento\AvisosAbastecimiento;
 use App\Services\Abastecimiento\CadenaLiquidacion;
 use App\Services\Abastecimiento\CalculadoraLiquidacion;
+use App\Services\Abastecimiento\CargaInicialLiquidacion;
 use App\Services\Abastecimiento\DespuesDeDecidirLiquidacion;
 use App\Services\Abastecimiento\FlujoLiquidacion;
 use App\Services\Abastecimiento\GeneradorFolio;
 use App\Services\Abastecimiento\PrecioVigente;
 use App\Services\Abastecimiento\PresentadorLiquidacion;
 use App\Services\Abastecimiento\ReglasLiquidacion;
+use App\Services\Abastecimiento\Semanas;
 use App\Services\Abastecimiento\TransaccionDinero;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -37,11 +39,14 @@ class LiquidacionController extends AbastecimientoController
 
     private const TOPE_LISTADO = 300;
 
+    /** Permisos que abren las lecturas de apoyo del formulario (recepciones disponibles y vista previa). */
+    private const PERMISOS_FORMULARIO = ['create', 'edit', 'carga-inicial'];
+
     /** Recepciones que el formulario puede ofrecer para un convenio y un periodo (más las del borrador que se edita). */
     public function recepcionesDisponibles(Request $request): JsonResponse
     {
-        // Lectura de apoyo del formulario: la usa quien crea y quien corrige un borrador (`create` o `edit`).
-        $empresa = $this->ctx->autorizarAlguno($request, self::SUBMODULO, ['create', 'edit']);
+        // Lectura de apoyo del formulario: la usa quien crea, quien corrige un borrador y quien registra una carga inicial.
+        $empresa = $this->ctx->autorizarAlguno($request, self::SUBMODULO, self::PERMISOS_FORMULARIO);
         $datos = $request->validate([
             'convenio_id' => ['required', 'integer', $this->viva($empresa, 'abs_convenios')],
             'periodo_inicio' => ['required', 'date_format:Y-m-d'],
@@ -78,8 +83,8 @@ class LiquidacionController extends AbastecimientoController
     /** Calcula la liquidación con la selección dada sin guardar nada. */
     public function previa(Request $request): JsonResponse
     {
-        // Vista previa sin guardar: la usa quien crea y quien corrige un borrador (`create` o `edit`).
-        $empresa = $this->ctx->autorizarAlguno($request, self::SUBMODULO, ['create', 'edit']);
+        // Vista previa sin guardar: la usa quien crea, quien corrige un borrador y quien registra una carga inicial.
+        $empresa = $this->ctx->autorizarAlguno($request, self::SUBMODULO, self::PERMISOS_FORMULARIO);
         $datos = $this->validar($request, $empresa, true);
 
         $convenio = Convenio::deEmpresa($empresa->id)->with(['precios', 'variedad:id,nombre'])->findOrFail($datos['convenio_id']);
@@ -180,6 +185,59 @@ class LiquidacionController extends AbastecimientoController
         return response()->json([
             'success' => true,
             'message' => 'Liquidación guardada como borrador.',
+            'data' => $this->presentarCompleta($liquidacion, $empresa, $request->user()),
+        ], 201);
+    }
+
+    /**
+     * Liquidación de carga inicial (`carga-inicial`; no la da `create`): nace `aprobada`, sin cadena ni avisos. O bien
+     * `recepcion_ids` (mismo cálculo que un borrador) o bien `monto` + `motivo` (sin recepciones). Las reglas de
+     * negocio y el dinero viven en `CargaInicialLiquidacion`; aquí se autoriza, se valida la forma y se difunde.
+     */
+    public function cargaInicial(Request $request): JsonResponse
+    {
+        $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'carga-inicial');
+        $datos = $request->validate([
+            'convenio_id' => ['required', 'integer', $this->viva($empresa, 'abs_convenios')],
+            'periodo_inicio' => ['required', 'date_format:Y-m-d'],
+            'periodo_fin' => ['required', 'date_format:Y-m-d', 'after_or_equal:periodo_inicio', 'before_or_equal:'.Semanas::hoy()->toDateString()],
+            'recepcion_ids' => ['required_without:monto', 'prohibits:monto', 'array', 'min:1', 'max:1000'],
+            'recepcion_ids.*' => ['integer'],
+            'monto_ajustado' => ['nullable', 'numeric', 'min:0', 'max:999999999999.99', 'prohibits:monto'],
+            'motivo_ajuste' => ['nullable', 'string', 'max:2000', Rule::prohibitedIf($request->filled('monto'))],
+            'monto' => ['required_without:recepcion_ids', 'numeric', 'gt:0', 'decimal:0,2', 'max:999999999999.99'],
+            'motivo' => ['required_with:monto', Rule::prohibitedIf($request->filled('recepcion_ids')), 'string', 'min:'.CargaInicialLiquidacion::MOTIVO_MINIMO, 'max:2000'],
+            'notas' => ['nullable', 'string', 'max:5000'],
+        ], [
+            'recepcion_ids.required_without' => 'Elige recepciones o captura un monto.',
+            'recepcion_ids.prohibits' => 'Elige recepciones o captura un monto, pero no ambos.',
+            'recepcion_ids.min' => 'Elige al menos una recepción.',
+            'recepcion_ids.*.integer' => 'Las recepciones elegidas no son válidas.',
+            'periodo_inicio.required' => 'Captura el inicio del periodo.',
+            'periodo_fin.required' => 'Captura el fin del periodo.',
+            'periodo_fin.after_or_equal' => 'El fin del periodo no puede ser anterior al inicio.',
+            'periodo_fin.before_or_equal' => 'El periodo no puede terminar en el futuro.',
+            'monto.required_without' => 'Captura el monto de la carga inicial.',
+            'monto.numeric' => 'El monto debe ser un número.',
+            'monto.gt' => 'El monto debe ser mayor a cero.',
+            'monto.decimal' => 'El monto puede tener hasta 2 decimales.',
+            'motivo.required_with' => 'Explica el motivo de la carga inicial.',
+            'motivo.min' => 'Explica el motivo en al menos '.CargaInicialLiquidacion::MOTIVO_MINIMO.' caracteres.',
+            'monto.max' => 'El monto es demasiado grande.',
+            'motivo.prohibited' => 'El motivo es solo del modo de monto; con recepciones usa el motivo del ajuste.',
+            'motivo_ajuste.prohibited' => 'El motivo del ajuste es solo del modo con recepciones; en el modo de monto usa el motivo.',
+            'monto_ajustado.prohibits' => 'El monto ajustado es solo del modo con recepciones.',
+            'monto_ajustado.numeric' => 'El monto ajustado debe ser un número.',
+            'monto_ajustado.min' => 'El monto ajustado no puede ser negativo.',
+        ]);
+
+        $liquidacion = CargaInicialLiquidacion::crear($empresa, $request->user(), $datos);
+
+        $this->difundir('liquidacion', 'created', PresentadorLiquidacion::evento($liquidacion), $empresa);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Liquidación de carga inicial registrada.',
             'data' => $this->presentarCompleta($liquidacion, $empresa, $request->user()),
         ], 201);
     }
