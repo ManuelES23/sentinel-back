@@ -177,12 +177,24 @@ class RecepcionController extends AbastecimientoController
         return response()->download($lector->plantilla(), 'Plantilla_Recepciones.xlsx')->deleteFileAfterSend(true);
     }
 
+    /**
+     * Da hasta 120 s a las importaciones grandes. Si el límite ya es ilimitado (consola, pruebas) no se toca:
+     * set_time_limit(120) lo fijaría para el resto del proceso y mataría una suite larga.
+     */
+    private function ampliarTiempo(): void
+    {
+        $actual = (int) ini_get('max_execution_time');
+        if ($actual !== 0 && $actual < 120) {
+            set_time_limit(120);
+        }
+    }
+
     /** Lee y valida el Excel renglón por renglón sin guardar nada. */
     public function vistaPreviaImportacion(Request $request, LectorRecepciones $lector, ValidadorImportacionRecepciones $validador): JsonResponse
     {
         $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'importar');
         $this->validarArchivo($request);
-        set_time_limit(120); // hasta 2 000 renglones
+        $this->ampliarTiempo(); // hasta 2 000 renglones
 
         $resultado = $validador->validar($empresa, $lector->leer($request->file('archivo')));
 
@@ -197,7 +209,7 @@ class RecepcionController extends AbastecimientoController
     {
         $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'importar');
         $this->validarArchivo($request);
-        set_time_limit(120); // hasta 2 000 renglones: validar, crear y registrar la bitácora de cada uno
+        $this->ampliarTiempo(); // hasta 2 000 renglones: validar, crear y registrar la bitácora de cada uno
 
         $validado = $validador->validar($empresa, $lector->leer($request->file('archivo')));
         if ($validado['resumen']['con_error'] > 0) {
