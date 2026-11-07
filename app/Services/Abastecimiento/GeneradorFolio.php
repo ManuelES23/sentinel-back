@@ -28,8 +28,9 @@ class GeneradorFolio
     /**
      * Reserva `$cantidad` folios consecutivos con UN solo bloqueo del contador y UN solo UPDATE
      * (la importación de cientos de recepciones). Mismo formato y misma lógica que `siguiente`:
-     * salta los folios ocupados, también por registros borrados. Debe llamarse dentro de la
-     * transacción del alta.
+     * solo para CV y RC salta los folios ya ocupados, también por registros borrados; para LQ y AB
+     * (`ocupados()` devuelve []) el contador es la única fuente y no se revisa ninguna tabla.
+     * Debe llamarse dentro de la transacción del alta.
      *
      * @return list<string>
      */

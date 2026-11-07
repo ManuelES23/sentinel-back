@@ -17,7 +17,7 @@ use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
 
 /**
- * Excel del tablero de Abastecimiento (spec 5.7, Ruling 9): las mismas cifras de `GET tablero`
+ * Excel del tablero de Abastecimiento (spec §5.1 (Exportar), Ruling 9): las mismas cifras de `GET tablero`
  * en cuatro hojas (Resumen, Convenios, Semanas y Avisos), de UNA temporada y UNA moneda.
  *
  * Solo valores, nunca fórmulas: los textos del usuario (productor, folio…) se escriben SIEMPRE como
