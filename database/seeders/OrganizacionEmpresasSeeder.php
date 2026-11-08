@@ -12,19 +12,18 @@ use App\Models\UserApplicationAccess;
 use App\Models\UserModuleAccess;
 use App\Models\UserSubmoduleAccess;
 use App\Models\UserSubmodulePermission;
-use App\Services\ActivosFijos\AlcanceActivos;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
 
 /**
  * Seeder del módulo "Organización" (Sucursales, Tipos de Entidades, Entidades y
  * Áreas) dentro de la app Administración, para las empresas que todavía no lo
- * tienen (Canes Agro, Splendid Logistic y las que se agreguen).
+ * tienen (Grupo Espléndido, Canes Agro, Splendid Logistic y las que se agreguen).
  *
- * Recorre TODAS las empresas activas EXCEPTO Grupo Espléndido (corporativo: solo
- * consolida, no captura su propia organización). Las empresas que ya tienen el
- * módulo (Splendid Farms, Splendid by Porvenir) se omiten sin tocarlas. Las
- * inactivas se omiten.
+ * Recorre TODAS las empresas activas, incluido Grupo Espléndido: sus propios
+ * activos fijos necesitan sucursal, entidad y área de la empresa dueña. Las
+ * empresas que ya tienen el módulo (Splendid Farms, Splendid by Porvenir, Canes
+ * Agro y Splendid Logistic) se omiten sin tocarlas. Las inactivas se omiten.
  *
  * Estructura final (por empresa nueva):
  *   Administración
@@ -66,7 +65,6 @@ class OrganizacionEmpresasSeeder extends Seeder
         $nuevas = [];
 
         $empresas = Enterprise::where('is_active', true)
-            ->where('slug', '!=', AlcanceActivos::EMPRESA_CORPORATIVA)
             ->orderBy('id')
             ->get();
 

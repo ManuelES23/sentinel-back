@@ -12,9 +12,10 @@ use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
 
 /**
- * Datos de apoyo de la pantalla de Activos Fijos. El formulario no puede usar
- * las rutas de Organización porque Grupo Espléndido no las tiene y, en la
- * vista corporativa, necesita las ubicaciones de la empresa elegida.
+ * Datos de apoyo de la pantalla de Activos Fijos. En la vista corporativa
+ * (Grupo Espléndido) el formulario necesita las ubicaciones de la empresa
+ * elegida (otra, o la propia GE), no solo las de la URL; por eso no usa las
+ * rutas de Organización.
  */
 class ContextoActivosController extends Controller
 {

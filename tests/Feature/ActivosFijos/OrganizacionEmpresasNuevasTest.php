@@ -5,6 +5,8 @@ namespace Tests\Feature\ActivosFijos;
 use App\Models\Application;
 use App\Models\Branch;
 use App\Models\Enterprise;
+use App\Models\Entity;
+use App\Models\EntityType;
 use App\Models\Module;
 use App\Models\Submodule;
 use App\Models\SubmodulePermissionType;
@@ -15,15 +17,16 @@ use App\Models\UserSubmoduleAccess;
 use App\Models\UserSubmodulePermission;
 use Database\Seeders\OrganizacionEmpresasSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Laravel\Sanctum\Sanctum;
 use Tests\Concerns\CreatesAssetFixtures;
 use Tests\TestCase;
 
 /**
  * Organización (sucursales, tipos de entidades, entidades y áreas) y rutas de
- * Administración para Canes Agro y Splendid Logistic: el seeder la deja lista
- * en las empresas activas que no la tienen (salvo el corporativo) y las rutas
- * de /api/{empresa}/administration existen para ambas.
+ * Administración para Grupo Espléndido, Canes Agro y Splendid Logistic: el
+ * seeder la deja lista en todas las empresas activas que no la tienen y las
+ * rutas de /api/{empresa}/administration existen para todas.
  */
 class OrganizacionEmpresasNuevasTest extends TestCase
 {
@@ -127,13 +130,26 @@ class OrganizacionEmpresasNuevasTest extends TestCase
         $this->assertSame(6, $this->moduloOrganizacion($this->canes)->order);
     }
 
-    public function test_el_corporativo_no_recibe_organizacion(): void
+    public function test_el_corporativo_recibe_organizacion_con_sus_cuatro_submodulos_y_permisos_sin_duplicar(): void
     {
         $this->sembrar();
+        $this->sembrar();
 
-        $this->assertNull($this->moduloOrganizacion($this->corporativo));
-        $this->assertSame(0, Submodule::whereIn('slug', self::SUBMODULOS)
-            ->whereHas('module.application', fn ($q) => $q->where('enterprise_id', $this->corporativo->id))->count());
+        $app = Application::where('slug', 'administration')->where('enterprise_id', $this->corporativo->id)->first();
+        $this->assertSame(1, Module::where('application_id', $app->id)->where('slug', 'organizacion')->count());
+
+        $modulo = $this->moduloOrganizacion($this->corporativo);
+        $this->assertNotNull($modulo, 'grupoesplendido no recibió Organización');
+        $this->assertSame('Organización', $modulo->name);
+        $this->assertTrue($modulo->is_active);
+
+        $submodulos = Submodule::where('module_id', $modulo->id)->orderBy('order')->get();
+        $this->assertSame(self::SUBMODULOS, $submodulos->pluck('slug')->all());
+        foreach ($submodulos as $submodulo) {
+            $tipos = SubmodulePermissionType::where('submodule_id', $submodulo->id)->pluck('slug')->all();
+            $this->assertCount(4, $tipos, $submodulo->slug);
+            $this->assertEqualsCanonicalizing(['view', 'create', 'edit', 'delete'], $tipos, $submodulo->slug);
+        }
     }
 
     public function test_si_la_empresa_no_tenia_app_administracion_se_crea(): void
@@ -202,7 +218,7 @@ class OrganizacionEmpresasNuevasTest extends TestCase
 
         $this->sembrar();
 
-        foreach ([$this->canes, $this->logistic] as $empresa) {
+        foreach ([$this->corporativo, $this->canes, $this->logistic] as $empresa) {
             $modulo = $this->moduloOrganizacion($empresa);
             $submodulos = Submodule::where('module_id', $modulo->id)->pluck('id');
 
@@ -219,7 +235,6 @@ class OrganizacionEmpresasNuevasTest extends TestCase
         }
 
         $this->assertSame(0, UserModuleAccess::where('module_id', $moduloSf->id)->count());
-        $this->assertSame(0, UserModuleAccess::where('module_id', $this->moduloOrganizacion($this->corporativo)?->id ?? 0)->count());
     }
 
     // ------------------------------------------------------------------ Rutas
@@ -314,21 +329,99 @@ class OrganizacionEmpresasNuevasTest extends TestCase
         $this->getJson('/api/splendid-logistic/administration/activos-fijos/mis-permisos')->assertUnauthorized();
     }
 
-    public function test_el_corporativo_conserva_activos_fijos_y_sigue_sin_organizacion(): void
+    public function test_el_corporativo_conserva_activos_fijos_y_organizacion_responde_solo_con_lo_suyo(): void
     {
         Sanctum::actingAs($this->actingUser);
 
         $this->getJson('/api/grupoesplendido/administration/activos-fijos/mis-permisos')->assertOk();
 
-        // Las rutas son genéricas por empresa: a nivel API responden para GE
-        // (solo con lo suyo), pero GE no tiene el módulo en la BD, así que no
-        // aparece en su menú.
+        // Las rutas son genéricas por empresa y GE ya tiene el módulo en la BD:
+        // responde solo con lo suyo (no mezcla las sucursales de otras empresas).
         $this->sembrar();
-        $this->assertNull($this->moduloOrganizacion($this->corporativo));
+        $this->assertNotNull($this->moduloOrganizacion($this->corporativo));
+        $this->crearUbicacion($this->canes, 'CA');
         $respuesta = $this->getJson('/api/grupoesplendido/administration/organizacion/sucursales', $this->headersDe($this->corporativo))->assertOk();
         $this->assertSame([], $respuesta->json('data'));
     }
 
+    // ------------------------------------------------- Grupo Espléndido (propio)
+
+    public function test_un_usuario_de_ge_crea_sucursal_entidad_y_area_de_ge(): void
+    {
+        $this->sembrar();
+        Sanctum::actingAs($this->usuarioDe($this->corporativo));
+        $headers = $this->headersDe($this->corporativo);
+
+        $sucursalId = $this->postJson('/api/grupoesplendido/administration/organizacion/sucursales', ['name' => 'Corporativo GE'], $headers)
+            ->assertCreated()->json('data.id');
+        $this->assertSame($this->corporativo->id, Branch::find($sucursalId)->enterprise_id);
+
+        $tipoEntidad = EntityType::firstOrCreate(['code' => 'OFICINA'], ['name' => 'Oficina', 'slug' => 'oficina', 'is_active' => true]);
+        $entidadId = $this->postJson('/api/grupoesplendido/administration/organizacion/entidades', [
+            'branch_id' => $sucursalId, 'entity_type_id' => $tipoEntidad->id, 'name' => 'Oficinas Corporativas',
+        ], $headers)->assertCreated()->json('data.id');
+        $entidad = Entity::find($entidadId);
+        $this->assertSame($sucursalId, $entidad->branch_id);
+        $this->assertSame($this->corporativo->id, $entidad->branch->enterprise_id);
+
+        $areaId = $this->postJson('/api/grupoesplendido/administration/organizacion/areas', ['name' => 'Dirección GE'], $headers)
+            ->assertCreated()->json('data.id');
+        $this->postJson("/api/grupoesplendido/administration/organizacion/areas/{$areaId}/assign", ['entity_id' => $entidadId], $headers)
+            ->assertOk();
+        $this->assertTrue(DB::table('entity_area')->where('entity_id', $entidadId)->where('area_id', $areaId)->exists());
+
+        // Una entidad de GE no se puede colgar de una sucursal de otra empresa.
+        [$sucursalAjena] = $this->crearUbicacion($this->canes, 'CA');
+        $this->postJson('/api/grupoesplendido/administration/organizacion/entidades', [
+            'branch_id' => $sucursalAjena->id, 'entity_type_id' => $tipoEntidad->id, 'name' => 'Intrusa',
+        ], $headers)->assertStatus(422);
+    }
+
+    public function test_un_activo_de_ge_se_da_de_alta_con_la_ubicacion_de_ge_desde_la_vista_ge(): void
+    {
+        // La ubicación de GE, creada por la API de Organización de GE.
+        $this->sembrar();
+        Sanctum::actingAs($this->actingUser);
+        $headers = $this->headersDe($this->corporativo);
+
+        $sucursalId = $this->postJson('/api/grupoesplendido/administration/organizacion/sucursales', ['name' => 'Corporativo GE'], $headers)->assertCreated()->json('data.id');
+        $tipoEntidad = EntityType::firstOrCreate(['code' => 'OFICINA'], ['name' => 'Oficina', 'slug' => 'oficina', 'is_active' => true]);
+        $entidadId = $this->postJson('/api/grupoesplendido/administration/organizacion/entidades', [
+            'branch_id' => $sucursalId, 'entity_type_id' => $tipoEntidad->id, 'name' => 'Oficinas Corporativas',
+        ], $headers)->assertCreated()->json('data.id');
+        $areaId = $this->postJson('/api/grupoesplendido/administration/organizacion/areas', ['name' => 'Dirección GE'], $headers)->assertCreated()->json('data.id');
+        $this->postJson("/api/grupoesplendido/administration/organizacion/areas/{$areaId}/assign", ['entity_id' => $entidadId], $headers)->assertOk();
+
+        // La vista GE ve esa ubicación al elegir GE como empresa dueña (y no la de SF).
+        $catalogos = $this->getJson('/api/grupoesplendido/administration/activos-fijos/catalogos?enterprise_id='.$this->corporativo->id)
+            ->assertOk()
+            ->assertJsonPath('data.empresa_id', $this->corporativo->id)
+            ->assertJsonCount(1, 'data.sucursales')
+            ->assertJsonPath('data.sucursales.0.id', $sucursalId)
+            ->assertJsonPath('data.sucursales.0.entidades.0.id', $entidadId)
+            ->assertJsonPath('data.sucursales.0.entidades.0.areas.0.id', $areaId);
+        $this->assertNotContains($this->branch->id, collect($catalogos->json('data.sucursales'))->pluck('id')->all());
+
+        // Alta de un activo cuya empresa dueña es GE.
+        $respuesta = $this->postJson('/api/grupoesplendido/administration/activos-fijos/activos', $this->validFixedAssetPayload([
+            'enterprise_id' => $this->corporativo->id,
+            'branch_id' => $sucursalId,
+            'entity_id' => $entidadId,
+            'area_id' => $areaId,
+            'brand_id' => null,
+        ]))->assertCreated()
+            ->assertJsonPath('data.enterprise_id', $this->corporativo->id)
+            ->assertJsonPath('data.branch_id', $sucursalId)
+            ->assertJsonPath('data.entity_id', $entidadId)
+            ->assertJsonPath('data.area_id', $areaId);
+        $this->assertSame('GE-AF-000001', $respuesta->json('data.code'));
+
+        // Con la ubicación de SF el alta de un activo de GE sigue rechazándose.
+        $this->postJson('/api/grupoesplendido/administration/activos-fijos/activos', $this->validFixedAssetPayload([
+            'enterprise_id' => $this->corporativo->id,
+            'brand_id' => null,
+        ]))->assertStatus(422)->assertJsonValidationErrors(['branch_id']);
+    }
     public function test_las_rutas_de_organizacion_de_sf_y_sbp_siguen_respondiendo(): void
     {
         $porvenir = $this->crearEmpresaActivos('splendidbyporvenir', 'Splendid by Porvenir', 'SBP');
