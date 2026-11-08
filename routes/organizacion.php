@@ -10,7 +10,8 @@ use Illuminate\Support\Facades\Route;
  * Administración → Organización (sucursales, tipos de entidades, entidades y
  * áreas). Se incluye UNA vez en el grupo genérico {empresa}/administration de
  * routes/api.php: responde para cualquier empresa existente (el menú lo da la
- * BD; Grupo Espléndido no tiene el módulo). Los controladores filtran por el
+ * BD; OrganizacionEmpresasSeeder crea el módulo en todas las activas, también
+ * en Grupo Espléndido). Los controladores filtran por el
  * header X-Enterprise-Slug, que el middleware EmpresaDeLaRuta fija siempre al
  * slug de la URL.
  */
