@@ -59,6 +59,9 @@ class DevicePairingAdminController extends Controller
 
     public function revoke(Request $request, DevicePairing $devicePairing): JsonResponse
     {
+        // Los dispositivos del checador de campo SF no pertenecen a RH de GE.
+        abort_if($devicePairing->mode === DevicePairing::MODE_SF_FIELD, 404);
+
         // Si es un kiosco, cualquier admin de RH autenticado puede revocarlo.
         // Si es un emparejamiento personal (self), solo el admin de RH que tiene
         // acceso a la empresa del empleado puede revocarlo.

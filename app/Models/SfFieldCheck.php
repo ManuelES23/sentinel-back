@@ -21,6 +21,8 @@ class SfFieldCheck extends Model
     public const STATUS_MANUALLY_APPROVED = 'manually_approved';
     public const STATUS_REJECTED = 'rejected';
 
+    public const REVIEW_REASON_DISPOSITIVO_REVOCADO = 'dispositivo_revocado';
+
     protected $fillable = [
         'enterprise_id',
         'client_uuid',
@@ -40,6 +42,9 @@ class SfFieldCheck extends Model
         'longitude',
         'device_info',
         'clock_skew_seconds',
+        'device_pairing_id',
+        'rescued_by_user_id',
+        'review_reason',
     ];
 
     protected $casts = [
@@ -65,5 +70,15 @@ class SfFieldCheck extends Model
     public function reviewedBy()
     {
         return $this->belongsTo(User::class, 'reviewed_by_user_id');
+    }
+
+    public function rescuedBy()
+    {
+        return $this->belongsTo(User::class, 'rescued_by_user_id');
+    }
+
+    public function devicePairing()
+    {
+        return $this->belongsTo(DevicePairing::class, 'device_pairing_id');
     }
 }

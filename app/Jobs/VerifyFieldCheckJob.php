@@ -119,7 +119,10 @@ class VerifyFieldCheckJob implements ShouldQueue
         // 0.0 = coinciden exactamente, valores mayores = más disímiles.
         $clampedDistance = min($distance, 1);
 
-        if ($check->manual_override || ! $clockSkewOk) {
+        // Un check con motivo de revisión (p. ej. tomado con un celular revocado o
+        // vencido y rescatado) nunca se verifica ni consolida solo, aunque el rostro
+        // coincida y el reloj esté bien: queda en la bandeja para aprobación humana.
+        if ($check->manual_override || ! $clockSkewOk || $check->review_reason !== null) {
             $check->update([
                 'verification_status' => SfFieldCheck::STATUS_LOW_CONFIDENCE,
                 'server_confidence' => $clampedDistance,

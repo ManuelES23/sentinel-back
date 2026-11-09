@@ -405,7 +405,10 @@ Route::middleware('auth:sanctum')->group(function () {
                 // Checador de campo (Plan 2)
                 Route::get('field-checks/crew-package', [App\Http\Controllers\Api\SplendidFarms\Administration\SfFieldCheckController::class, 'crewPackage']);
                 Route::post('field-checks/sync', [App\Http\Controllers\Api\SplendidFarms\Administration\SfFieldCheckController::class, 'sync']);
-                Route::get('field-checks', [App\Http\Controllers\Api\SplendidFarms\Administration\SfFieldCheckController::class, 'index']);
+                // Celulares emparejados (app directa): antes de cualquier {fieldCheck}
+                Route::get('field-checks/dispositivos', [App\Http\Controllers\Api\SplendidFarms\Administration\SfFieldDeviceAdminController::class, 'index']);
+                Route::post('field-checks/dispositivos/{devicePairing}/revocar', [App\Http\Controllers\Api\SplendidFarms\Administration\SfFieldDeviceAdminController::class, 'revocar']);
+                Route::get('field-checks',[App\Http\Controllers\Api\SplendidFarms\Administration\SfFieldCheckController::class, 'index']);
                 Route::post('field-checks/{fieldCheck}/review', [App\Http\Controllers\Api\SplendidFarms\Administration\SfFieldCheckController::class, 'review']);
                 Route::get('field-checks/{fieldCheck}/evidence-photo', [App\Http\Controllers\Api\SplendidFarms\Administration\SfFieldCheckController::class, 'evidencePhoto']);
 
@@ -1207,6 +1210,30 @@ Route::prefix('checador')->middleware('throttle:30,1')->group(function () {
         ->middleware('auth:sanctum');
     Route::get('roster-package', App\Http\Controllers\Api\GrupoEsplendido\RH\RosterPackageController::class)
         ->middleware('device.token');
+});
+
+// =====================================================
+// CHECADOR DE CAMPO SF — APP DIRECTA (público, fuera de auth:sanctum)
+// El celular se empareja UNA vez con usuario y contraseña de Sentinel
+// ('emparejar') y de ahí en adelante usa el token de dispositivo
+// (X-Device-Token, middleware 'sf.field.device', solo emparejamientos
+// sf_field). No crea token Sanctum y no abre ninguna otra ruta de la API.
+// Como en /checador/pair, el tercer segmento ('emparejar-campo') le da a
+// 'emparejar' su propia clave en el RateLimiter, aislada del throttle:30,1
+// del grupo (si no, comparten clave y el cupo real sería mucho menor).
+// =====================================================
+Route::prefix('checador-campo')->middleware('throttle:30,1')->group(function () {
+    $controller = App\Http\Controllers\Api\SplendidFarms\ChecadorCampo\ChecadorCampoDispositivoController::class;
+
+    Route::post('emparejar', [$controller, 'emparejar'])
+        ->middleware('throttle:5,1,emparejar-campo');
+
+    Route::middleware('sf.field.device')->group(function () use ($controller) {
+        Route::get('paquete', [$controller, 'paquete']);
+        Route::post('sync', [$controller, 'sync']);
+        Route::post('rescatar', [$controller, 'rescatar']);
+        Route::post('desemparejar', [$controller, 'desemparejar']);
+    });
 });
 
 // =====================================================

@@ -20,9 +20,11 @@ class AuthenticateDeviceToken
             ], 401);
         }
 
-        $pairing = DevicePairing::findActiveByToken($rawToken);
+        // Solo los modos de Grupo Espléndido: un token sf_field (checador de
+        // campo SF) no debe poder bajar plantillas faciales de GE.
+        $pairing = DevicePairing::findByToken($rawToken, [DevicePairing::MODE_SELF, DevicePairing::MODE_KIOSK]);
 
-        if (! $pairing) {
+        if (! $pairing || $pairing->isRevoked()) {
             return response()->json([
                 'status' => 'error',
                 'message' => 'Dispositivo no emparejado o token revocado. Vuelve a emparejarlo.',
