@@ -405,7 +405,10 @@ Route::middleware('auth:sanctum')->group(function () {
                 // Checador de campo (Plan 2)
                 Route::get('field-checks/crew-package', [App\Http\Controllers\Api\SplendidFarms\Administration\SfFieldCheckController::class, 'crewPackage']);
                 Route::post('field-checks/sync', [App\Http\Controllers\Api\SplendidFarms\Administration\SfFieldCheckController::class, 'sync']);
-                Route::get('field-checks', [App\Http\Controllers\Api\SplendidFarms\Administration\SfFieldCheckController::class, 'index']);
+                // Celulares emparejados (app directa): antes de cualquier {fieldCheck}
+                Route::get('field-checks/dispositivos', [App\Http\Controllers\Api\SplendidFarms\Administration\SfFieldDeviceAdminController::class, 'index']);
+                Route::post('field-checks/dispositivos/{devicePairing}/revocar', [App\Http\Controllers\Api\SplendidFarms\Administration\SfFieldDeviceAdminController::class, 'revocar']);
+                Route::get('field-checks',[App\Http\Controllers\Api\SplendidFarms\Administration\SfFieldCheckController::class, 'index']);
                 Route::post('field-checks/{fieldCheck}/review', [App\Http\Controllers\Api\SplendidFarms\Administration\SfFieldCheckController::class, 'review']);
                 Route::get('field-checks/{fieldCheck}/evidence-photo', [App\Http\Controllers\Api\SplendidFarms\Administration\SfFieldCheckController::class, 'evidencePhoto']);
 
