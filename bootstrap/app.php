@@ -32,6 +32,7 @@ return Application::configure(basePath: dirname(__DIR__))
 
         $middleware->alias([
             'device.token' => \App\Http\Middleware\AuthenticateDeviceToken::class,
+            'sf.field.device' => \App\Http\Middleware\AuthenticateSfFieldDevice::class,
             'admin' => \App\Http\Middleware\EnsureUserIsAdmin::class,
             'password.changed' => \App\Http\Middleware\EnsurePasswordIsChanged::class,
             'portal.vacaciones' => \App\Http\Middleware\AuthenticatePortalSession::class,
