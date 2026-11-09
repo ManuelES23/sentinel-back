@@ -1210,6 +1210,30 @@ Route::prefix('checador')->middleware('throttle:30,1')->group(function () {
 });
 
 // =====================================================
+// CHECADOR DE CAMPO SF — APP DIRECTA (público, fuera de auth:sanctum)
+// El celular se empareja UNA vez con usuario y contraseña de Sentinel
+// ('emparejar') y de ahí en adelante usa el token de dispositivo
+// (X-Device-Token, middleware 'sf.field.device', solo emparejamientos
+// sf_field). No crea token Sanctum y no abre ninguna otra ruta de la API.
+// Como en /checador/pair, el tercer segmento ('emparejar-campo') le da a
+// 'emparejar' su propia clave en el RateLimiter, aislada del throttle:30,1
+// del grupo (si no, comparten clave y el cupo real sería mucho menor).
+// =====================================================
+Route::prefix('checador-campo')->middleware('throttle:30,1')->group(function () {
+    $controller = App\Http\Controllers\Api\SplendidFarms\ChecadorCampo\ChecadorCampoDispositivoController::class;
+
+    Route::post('emparejar', [$controller, 'emparejar'])
+        ->middleware('throttle:5,1,emparejar-campo');
+
+    Route::middleware('sf.field.device')->group(function () use ($controller) {
+        Route::get('paquete', [$controller, 'paquete']);
+        Route::post('sync', [$controller, 'sync']);
+        Route::post('rescatar', [$controller, 'rescatar']);
+        Route::post('desemparejar', [$controller, 'desemparejar']);
+    });
+});
+
+// =====================================================
 // PORTAL DE VACACIONES (público, sin usuario del sistema)
 // El empleado entra con número + PIN y recibe un token propio (X-Portal-Token,
 // ver AuthenticatePortalSession). No usa Sanctum ni el emparejamiento del
