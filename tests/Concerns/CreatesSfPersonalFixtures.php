@@ -2,10 +2,14 @@
 
 namespace Tests\Concerns;
 
+use App\Models\Application;
 use App\Models\Enterprise;
+use App\Models\Module;
 use App\Models\SfEmployee;
+use App\Models\Submodule;
 use App\Models\User;
 use App\Models\UserEnterpriseAccess;
+use App\Models\UserSubmoduleAccess;
 use Laravel\Sanctum\Sanctum;
 
 /**
@@ -59,6 +63,34 @@ trait CreatesSfPersonalFixtures
         Sanctum::actingAs($user);
 
         return [$user, $enterprise];
+    }
+
+    /**
+     * Da al usuario el acceso al submódulo administration/personal/checador-campo
+     * de la empresa (user_submodule_access). Crea, si faltan, la aplicación, el
+     * módulo y el submódulo. $acceso sobrescribe is_active / expires_at.
+     */
+    protected function darAccesoChecadorCampo(User $user, Enterprise $empresa, array $acceso = []): Submodule
+    {
+        $app = Application::firstOrCreate(
+            ['enterprise_id' => $empresa->id, 'slug' => 'administration'],
+            ['name' => 'Administración', 'path' => '/' . $empresa->slug . '/administration', 'description' => 'Administración', 'is_active' => true]
+        );
+        $modulo = Module::firstOrCreate(
+            ['application_id' => $app->id, 'slug' => 'personal'],
+            ['name' => 'Personal', 'is_active' => true]
+        );
+        $submodulo = Submodule::firstOrCreate(
+            ['module_id' => $modulo->id, 'slug' => 'checador-campo'],
+            ['name' => 'Checador de campo', 'is_active' => true]
+        );
+
+        UserSubmoduleAccess::updateOrCreate(
+            ['user_id' => $user->id, 'submodule_id' => $submodulo->id],
+            array_merge(['is_active' => true, 'granted_at' => now(), 'expires_at' => null], $acceso)
+        );
+
+        return $submodulo;
     }
 
     protected function createSfEmployee(int $enterpriseId, array $overrides = []): SfEmployee

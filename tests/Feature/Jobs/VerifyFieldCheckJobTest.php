@@ -158,6 +158,34 @@ class VerifyFieldCheckJobTest extends TestCase
         $this->assertDatabaseCount('sf_attendance_records', 0);
     }
 
+    public function test_check_con_motivo_de_revision_queda_en_low_confidence_aunque_coincida(): void
+    {
+        [$user, $enterprise] = $this->createAuthenticatedUserWithEnterprise();
+        $employee = $this->createSfEmployee($enterprise->id, ['status' => 'active']);
+        $embedding = array_fill(0, 128, 0.2);
+        SfEmployeeFaceTemplate::create([
+            'sf_employee_id' => $employee->id,
+            'embedding' => $embedding,
+            'photo_path' => 'private/sf-face-templates/x.jpg',
+            'model_version' => 'faceapi-v1',
+            'enrolled_at' => now(),
+            'consent_signed_at' => now(),
+            'status' => SfEmployeeFaceTemplate::STATUS_ACTIVE,
+        ]);
+        $this->fakeEmbedResponse($embedding); // match perfecto y reloj bien, pero el motivo de revisión obliga a revisión humana
+
+        $check = $this->makeCheck($employee->id, $user->id, [
+            'review_reason' => SfFieldCheck::REVIEW_REASON_DISPOSITIVO_REVOCADO,
+        ]);
+
+        (new VerifyFieldCheckJob($check->id))->handle();
+
+        $check->refresh();
+        $this->assertSame(SfFieldCheck::STATUS_LOW_CONFIDENCE, $check->verification_status);
+        $this->assertEqualsWithDelta(0.0, (float) $check->server_confidence, 0.0001);
+        $this->assertDatabaseCount('sf_attendance_records', 0);
+    }
+
     public function test_clock_skew_beyond_tolerance_forces_review(): void
     {
         [$user, $enterprise] = $this->createAuthenticatedUserWithEnterprise();

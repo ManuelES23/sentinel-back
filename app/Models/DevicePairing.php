@@ -13,6 +13,7 @@ class DevicePairing extends Model
 
     public const MODE_SELF = 'self';
     public const MODE_KIOSK = 'kiosk';
+    public const MODE_SF_FIELD = 'sf_field';
 
     /**
      * Atributos que Loggable nunca debe copiar a ActivityLog.old_values /
@@ -28,6 +29,7 @@ class DevicePairing extends Model
         'mode',
         'paired_by_employee_id',
         'paired_by_user_id',
+        'enterprise_id',
         'label',
         'last_used_at',
         'revoked_at',
@@ -48,6 +50,51 @@ class DevicePairing extends Model
     public function pairedByUser()
     {
         return $this->belongsTo(User::class, 'paired_by_user_id');
+    }
+
+    public function enterprise()
+    {
+        return $this->belongsTo(Enterprise::class);
+    }
+
+    public function isRevoked(): bool
+    {
+        return $this->revoked_at !== null;
+    }
+
+    /**
+     * Caduca tras N días sin uso (config biometrics.sf_field_device_idle_days),
+     * medido contra last_used_at o, si nunca se usó, contra created_at.
+     */
+    public function isExpired(): bool
+    {
+        $referencia = $this->last_used_at ?? $this->created_at;
+        if ($referencia === null) {
+            return false;
+        }
+
+        $dias = (int) config('biometrics.sf_field_device_idle_days');
+
+        return $referencia->lt(now()->subDays($dias));
+    }
+
+    /** No revocado y no caducado. */
+    public function estaVigente(): bool
+    {
+        return ! $this->isRevoked() && ! $this->isExpired();
+    }
+
+    /**
+     * Busca por token crudo restringido a ciertos modos; incluye revocados
+     * (a diferencia de findActiveByToken) para poder distinguir el motivo.
+     *
+     * @param  list<string>  $modes
+     */
+    public static function findByToken(string $raw, array $modes): ?self
+    {
+        return self::where('device_token_hash', self::hashToken($raw))
+            ->whereIn('mode', $modes)
+            ->first();
     }
 
     /**
