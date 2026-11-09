@@ -23,4 +23,12 @@ return [
     // de sobra antes de asumir que el job se perdió (worker muerto, cola
     // vaciada, etc.) en vez de que solo esté reintentando.
     'stale_pending_requeue_minutes' => (int) env('BIOMETRICS_STALE_PENDING_REQUEUE_MINUTES', 60),
+
+    // Checador de campo SF como app directa (dispositivo emparejado, modo sf_field):
+    // días sin uso tras los cuales el dispositivo caduca (se mide contra last_used_at,
+    // o created_at si nunca se usó).
+    'sf_field_device_idle_days' => (int) env('BIOMETRICS_SF_FIELD_DEVICE_IDLE_DAYS', 30),
+
+    // Slug de la empresa a la que pertenece el checador de campo.
+    'sf_field_enterprise_slug' => env('BIOMETRICS_SF_FIELD_ENTERPRISE_SLUG', 'splendidfarms'),
 ];
