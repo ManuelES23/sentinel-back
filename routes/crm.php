@@ -49,6 +49,12 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('productos/buscar', [
         App\Http\Controllers\Api\CRM\ProductoController::class, 'buscar'
     ]);
+    Route::post('productos/importar/revisar', [
+        App\Http\Controllers\Api\CRM\ImportacionCatalogoController::class, 'revisar'
+    ]);
+    Route::post('productos/importar', [
+        App\Http\Controllers\Api\CRM\ImportacionCatalogoController::class, 'importar'
+    ]);
     Route::patch('productos/{producto}/toggle-activo', [
         App\Http\Controllers\Api\CRM\ProductoController::class, 'toggleActivo'
     ]);
