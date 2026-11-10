@@ -3,13 +3,18 @@
 namespace App\Http\Controllers\Api\CRM;
 
 use App\Events\CRM\ProductoUpdated;
+use App\Models\CRM\CrmConfiguracionComercial;
+use App\Models\CRM\CrmLinea;
 use App\Models\CRM\CrmProducto;
+use App\Models\CRM\CrmSublinea;
 use App\Services\CRM\OpcionesCotizacionService;
+use App\Support\CRM\NombreCatalogo;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 /**
  * ProductoController
@@ -25,7 +30,13 @@ class ProductoController extends CrmBaseController
     private const UNIDADES = ['pieza', 'kg', 'litro', 'servicio', 'hora', 'caja'];
 
     /** Columnas que devuelven la lista simple (all=1) y el buscador. */
-    private const COLUMNAS_LISTA = ['id', 'nombre', 'precio', 'unidad_medida', 'commodity', 'activo'];
+    private const COLUMNAS_LISTA = [
+        'id', 'nombre', 'precio', 'unidad_medida', 'commodity', 'activo',
+        'clave', 'marca_id', 'linea_id', 'sublinea_id',
+    ];
+
+    /** Relaciones de clasificación, con columnas mínimas. */
+    private const RELACIONES = ['marca:id,nombre', 'linea:id,nombre', 'sublinea:id,nombre'];
 
     /**
      * GET /crm/productos
@@ -42,9 +53,12 @@ class ProductoController extends CrmBaseController
             ->when($request->search, function ($q, $search) {
                 $q->where(function ($sub) use ($search) {
                     $sub->where('nombre', 'like', "%{$search}%")
-                        ->orWhere('descripcion', 'like', "%{$search}%");
+                        ->orWhere('descripcion', 'like', "%{$search}%")
+                        ->orWhere('clave', 'like', "%{$search}%");
                 });
             })
+            ->tap(fn ($q) => $this->filtrarClasificacion($q, $request))
+            ->with(self::RELACIONES)
             ->orderBy('nombre');
 
         // Modo lista simple para selects (sin paginación): sólo activos.
@@ -61,7 +75,7 @@ class ProductoController extends CrmBaseController
 
     /**
      * GET /crm/productos/buscar?q=
-     * Typeahead para oportunidades: devuelve máximo 10 productos activos.
+     * Typeahead para oportunidades y cotizaciones: máximo 20 productos activos (por nombre o clave).
      */
     public function buscar(Request $request): JsonResponse
     {
@@ -73,11 +87,14 @@ class ProductoController extends CrmBaseController
             ->when($term !== '', function ($q) use ($term) {
                 $q->where(function ($sub) use ($term) {
                     $sub->where('nombre', 'like', "%{$term}%")
-                        ->orWhere('descripcion', 'like', "%{$term}%");
+                        ->orWhere('descripcion', 'like', "%{$term}%")
+                        ->orWhere('clave', 'like', "%{$term}%");
                 });
             })
+            ->tap(fn ($q) => $this->filtrarClasificacion($q, $request))
+            ->with(self::RELACIONES)
             ->orderBy('nombre')
-            ->limit(10)
+            ->limit(20)
             ->get(self::COLUMNAS_LISTA);
 
         return $this->jsonSuccess($productos);
@@ -127,28 +144,35 @@ class ProductoController extends CrmBaseController
         $empresaId = $this->getEmpresaId($request);
         $this->exigirPermisoSubmodulo($empresaId, 'catalogos', 'productos', 'crear', 'No tienes permiso para crear productos.');
 
+        // Con el catálogo por líneas el precio es opcional (se cotiza por renglón).
+        $precioOpcional = CrmConfiguracionComercial::catalogoPorLineas((int) $empresaId);
+
         $validated = $request->validate([
             'nombre'        => 'required|string|max:255',
             'descripcion'   => 'nullable|string',
-            'precio'        => 'required|numeric|min:0',
+            'precio'        => $precioOpcional ? 'nullable|numeric|min:0' : 'required|numeric|min:0',
             'unidad_medida' => ['required', Rule::in(self::UNIDADES)],
             'commodity'     => 'nullable|string|max:100',
             'activo'        => 'nullable|boolean',
-        ]);
+        ] + $this->reglasClasificacion((int) $empresaId));
+
+        $this->validarClave($validated['clave'] ?? null, (int) $empresaId);
+        $clasificacion = $this->resolverClasificacion($validated, null);
 
         $producto = CrmProducto::create([
             'empresa_id'    => $empresaId,
             'nombre'        => $validated['nombre'],
             'descripcion'   => $validated['descripcion'] ?? null,
-            'precio'        => $validated['precio'],
+            'precio'        => $validated['precio'] ?? 0,
             'unidad_medida' => $validated['unidad_medida'],
             'commodity'     => $this->normalizarCommodity($validated['commodity'] ?? null),
             'activo'        => $validated['activo'] ?? true,
-        ]);
+            'clave'         => $validated['clave'] ?? null,
+        ] + $clasificacion);
 
         $this->difundir(new ProductoUpdated('created', $producto->toArray()));
 
-        return $this->jsonSuccess($producto, 'Producto creado correctamente', 201);
+        return $this->jsonSuccess($producto->load(self::RELACIONES), 'Producto creado correctamente', 201);
     }
 
     /**
@@ -166,17 +190,21 @@ class ProductoController extends CrmBaseController
             'unidad_medida' => ['sometimes', 'required', Rule::in(self::UNIDADES)],
             'commodity'     => 'sometimes|nullable|string|max:100',
             'activo'        => 'sometimes|boolean',
-        ]);
+        ] + $this->reglasClasificacion((int) $producto->empresa_id));
 
         if (array_key_exists('commodity', $validated)) {
             $validated['commodity'] = $this->normalizarCommodity($validated['commodity']);
         }
 
-        $producto->update($validated);
+        if (array_key_exists('clave', $validated)) {
+            $this->validarClave($validated['clave'], (int) $producto->empresa_id, $producto->id);
+        }
+
+        $producto->update($this->resolverClasificacion($validated, $producto) + $validated);
 
         $this->difundir(new ProductoUpdated('updated', $producto->toArray()));
 
-        return $this->jsonSuccess($producto, 'Producto actualizado correctamente');
+        return $this->jsonSuccess($producto->load(self::RELACIONES), 'Producto actualizado correctamente');
     }
 
     /**
@@ -212,6 +240,86 @@ class ProductoController extends CrmBaseController
         $this->difundir(new ProductoUpdated('deleted', $data));
 
         return $this->jsonSuccess(null, 'Producto eliminado correctamente');
+    }
+
+    /** Filtros opcionales marca_id / linea_id / sublinea_id del listado y del buscador. */
+    private function filtrarClasificacion($query, Request $request): void
+    {
+        foreach (['marca_id', 'linea_id', 'sublinea_id'] as $campo) {
+            if ($request->filled($campo)) {
+                $query->where($campo, (int) $request->query($campo));
+            }
+        }
+    }
+
+    /** Reglas de clave y clasificación: marca, línea y sublínea deben ser de la empresa. */
+    private function reglasClasificacion(int $empresaId): array
+    {
+        return [
+            'clave'       => 'sometimes|nullable|string|max:60',
+            'marca_id'    => ['sometimes', 'nullable', 'integer', Rule::exists('crm_marcas', 'id')->where('empresa_id', $empresaId)],
+            'linea_id'    => ['sometimes', 'nullable', 'integer', Rule::exists('crm_lineas', 'id')->where('empresa_id', $empresaId)],
+            'sublinea_id' => ['sometimes', 'nullable', 'integer', Rule::exists('crm_sublineas', 'id')
+                ->whereIn('linea_id', CrmLinea::where('empresa_id', $empresaId)->select('id'))],
+        ];
+    }
+
+    /** La clave no se repite en la empresa (sin distinguir mayúsculas, acentos ni espacios). */
+    private function validarClave(?string $clave, int $empresaId, ?int $ignorarId = null): void
+    {
+        $normalizada = NombreCatalogo::clave($clave);
+        if ($normalizada === '') {
+            return;
+        }
+
+        $existe = CrmProducto::where('empresa_id', $empresaId)
+            ->where('clave_normalizada', $normalizada)
+            ->when($ignorarId, fn ($q) => $q->where('id', '!=', $ignorarId))
+            ->exists();
+
+        if ($existe) {
+            throw ValidationException::withMessages(['clave' => 'Ya existe un producto con esa clave.']);
+        }
+    }
+
+    /**
+     * Campos marca_id/linea_id/sublinea_id a guardar (solo los enviados).
+     * La sublínea debe pertenecer a la línea; si no llega línea se toma la de la sublínea.
+     * Cambiar de línea sin enviar sublínea limpia la sublínea anterior.
+     */
+    private function resolverClasificacion(array $validated, ?CrmProducto $actual): array
+    {
+        $salida = [];
+        if (array_key_exists('marca_id', $validated)) {
+            $salida['marca_id'] = $validated['marca_id'];
+        }
+
+        $tocaLinea = array_key_exists('linea_id', $validated);
+        $tocaSub = array_key_exists('sublinea_id', $validated);
+        if (! $tocaLinea && ! $tocaSub) {
+            return $salida;
+        }
+
+        $lineaId = $tocaLinea ? $validated['linea_id'] : $actual?->linea_id;
+        $subId = $tocaSub ? $validated['sublinea_id'] : $actual?->sublinea_id;
+
+        if ($subId) {
+            $sub = CrmSublinea::find($subId);
+            if ($tocaSub) {
+                if ($lineaId && (int) $sub->linea_id !== (int) $lineaId) {
+                    throw ValidationException::withMessages(['sublinea_id' => 'La sublínea no pertenece a la línea elegida.']);
+                }
+                $lineaId = $sub->linea_id;
+            } elseif ((int) $sub->linea_id !== (int) $lineaId) {
+                // Cambió la línea sin tocar la sublínea: la anterior ya no aplica.
+                $subId = null;
+            }
+        }
+
+        $salida['linea_id'] = $lineaId;
+        $salida['sublinea_id'] = $subId;
+
+        return $salida;
     }
 
     /** Texto recortado; vacío equivale a sin commodity. */

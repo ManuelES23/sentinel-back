@@ -27,4 +27,9 @@ class CrmMarca extends Model
     {
         return $this->belongsTo(Enterprise::class, 'empresa_id');
     }
+
+    public function productos(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(CrmProducto::class, 'marca_id');
+    }
 }

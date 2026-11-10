@@ -55,6 +55,21 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::apiResource('productos', App\Http\Controllers\Api\CRM\ProductoController::class)
         ->parameters(['productos' => 'producto']);
 
+    // Catálogo de marcas, líneas y sublíneas (CanAgro): lectura abierta, escrituras con catalogos.productos
+    Route::prefix('catalogo-lineas')->group(function () {
+        $c = App\Http\Controllers\Api\CRM\CatalogoLineasController::class;
+        Route::get('/', [$c, 'index']);
+        Route::post('marcas', [$c, 'storeMarca']);
+        Route::put('marcas/{marca}', [$c, 'updateMarca'])->whereNumber('marca');
+        Route::delete('marcas/{marca}', [$c, 'destroyMarca'])->whereNumber('marca');
+        Route::post('lineas', [$c, 'storeLinea']);
+        Route::put('lineas/{linea}', [$c, 'updateLinea'])->whereNumber('linea');
+        Route::delete('lineas/{linea}', [$c, 'destroyLinea'])->whereNumber('linea');
+        Route::post('lineas/{linea}/sublineas', [$c, 'storeSublinea'])->whereNumber('linea');
+        Route::put('sublineas/{sublinea}', [$c, 'updateSublinea'])->whereNumber('sublinea');
+        Route::delete('sublineas/{sublinea}', [$c, 'destroySublinea'])->whereNumber('sublinea');
+    });
+
     // Calibres propios por producto (los agrícolas solo se leen) y presentaciones por commodity
     Route::get('productos/{producto}/calibres', [App\Http\Controllers\Api\CRM\CalibreProductoController::class, 'index']);
     Route::post('productos/{producto}/calibres', [App\Http\Controllers\Api\CRM\CalibreProductoController::class, 'store']);

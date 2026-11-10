@@ -26,4 +26,9 @@ class CrmSublinea extends Model
     {
         return $this->belongsTo(CrmLinea::class, 'linea_id');
     }
+
+    public function productos(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(CrmProducto::class, 'sublinea_id');
+    }
 }
