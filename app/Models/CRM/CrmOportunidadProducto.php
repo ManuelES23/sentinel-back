@@ -23,6 +23,7 @@ class CrmOportunidadProducto extends Model
         'precio_unitario',
         'calibre',
         'presentacion',
+        'unidad',
     ];
 
     protected $casts = [

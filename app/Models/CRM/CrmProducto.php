@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use App\Support\CRM\NombreCatalogo;
 use Illuminate\Support\Collection;
 
 class CrmProducto extends Model
@@ -25,12 +26,40 @@ class CrmProducto extends Model
         'precio',
         'unidad_medida',
         'activo',
+        'clave',
+        'marca_id',
+        'linea_id',
+        'sublinea_id',
     ];
 
     protected $casts = [
         'precio'  => 'decimal:2',
         'activo'  => 'boolean',
     ];
+
+    protected static function booted(): void
+    {
+        static::saving(function (self $producto) {
+            $limpia = NombreCatalogo::limpio($producto->clave);
+            $producto->clave = $limpia === '' ? null : $limpia;
+            $producto->clave_normalizada = $limpia === '' ? null : NombreCatalogo::clave($limpia);
+        });
+    }
+
+    public function marca(): BelongsTo
+    {
+        return $this->belongsTo(CrmMarca::class, 'marca_id');
+    }
+
+    public function linea(): BelongsTo
+    {
+        return $this->belongsTo(CrmLinea::class, 'linea_id');
+    }
+
+    public function sublinea(): BelongsTo
+    {
+        return $this->belongsTo(CrmSublinea::class, 'sublinea_id');
+    }
 
     public function empresa(): BelongsTo
     {
