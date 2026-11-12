@@ -2,12 +2,11 @@
 
 namespace App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion;
 
-use App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\Concerns\PermisoProgramaSemanal;
+use App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\Concerns\PermisoPlaneacion;
 use App\Http\Controllers\Controller;
 use App\Models\CRM\CrmCliente;
 use App\Models\Enterprise;
 use App\Models\Planeacion\Presentacion;
-use App\Models\Planeacion\ProgramaAcuerdo;
 use App\Models\Planeacion\ProgramaNecesidad;
 use App\Models\Planeacion\ProgramaSemanal;
 use App\Services\Planeacion\ProgramaSemanalService;
@@ -22,15 +21,15 @@ use Illuminate\Validation\ValidationException;
 /**
  * Necesidades de ventas de la semana: un renglón por cliente, bodega y
  * presentación, con las cajas de cada día y una o más variedades aceptadas
- * del mismo grupo de balance. Todas las escrituras exigen `capturar-ventas`,
- * quedan en el historial del programa (si ya hay junta) y avisan en tiempo real.
+ * del mismo grupo de balance. Todas las escrituras exigen
+ * `necesidades-venta.capturar` y avisan en tiempo real.
  *
  * Los servicios se inyectan por método y no por constructor: guardan cálculos
  * en memoria y el controlador puede quedar vivo entre peticiones.
  */
 class ProgramaNecesidadController extends Controller
 {
-    use PermisoProgramaSemanal;
+    use PermisoPlaneacion;
 
     private const MAX_CAJAS = 999999;
 
@@ -42,7 +41,7 @@ class ProgramaNecesidadController extends Controller
     /** Crea un renglón de necesidad en la semana. */
     public function store(Request $request, ProgramaSemanal $programa, ProgramaSemanalService $servicio, RegistroCambiosPrograma $registro): JsonResponse
     {
-        $this->exigirPermiso('capturar-ventas');
+        $this->exigirPermiso('necesidades-venta', 'capturar');
 
         $datos = $this->validarCompleto($request, $servicio);
         $this->exigirTemporadaAbierta($programa, $datos['cultivo_id'], $servicio);
@@ -54,7 +53,7 @@ class ProgramaNecesidadController extends Controller
                 'updated_by' => Auth::id(),
             ]);
             $necesidad->variedades()->sync($datos['variedad_ids']);
-            $registro->registrar($programa, 'necesidad', $necesidad->id, 'creado', null, $this->instantanea($necesidad));
+            $registro->emitir($programa);
 
             return $necesidad;
         });
@@ -72,7 +71,7 @@ class ProgramaNecesidadController extends Controller
      */
     public function update(Request $request, ProgramaNecesidad $necesidad, ProgramaSemanalService $servicio, RegistroCambiosPrograma $registro): JsonResponse
     {
-        $this->exigirPermiso('capturar-ventas');
+        $this->exigirPermiso('necesidades-venta', 'capturar');
 
         $programa = $necesidad->programa()->firstOrFail();
 
@@ -112,17 +111,9 @@ class ProgramaNecesidadController extends Controller
                 $actual->variedades()->sync($datos['variedad_ids']);
             }
 
-            // Sin cambio de valor no hay historial ni aviso.
-            $despues = $this->instantanea($actual);
-            if ($antes != $despues) {
-                $registro->registrar($programa, 'necesidad', $actual->id, 'actualizado', $antes, $despues);
-
-                // Lo que llega a las semanas destino de sus «mover pedido» también pudo cambiar.
-                $movimientos = ProgramaAcuerdo::where('necesidad_id', $actual->id)
-                    ->where('tipo', 'mover_pedido')
-                    ->where('activo', true)
-                    ->get();
-                $this->avisarDestinos($programa, $movimientos, $registro);
+            // Sin cambio de valor no hay aviso.
+            if ($antes != $this->instantanea($actual)) {
+                $registro->emitir($programa);
             }
 
             $necesidad->setRawAttributes($actual->getAttributes(), true);
@@ -137,23 +128,13 @@ class ProgramaNecesidadController extends Controller
 
     public function destroy(ProgramaNecesidad $necesidad, RegistroCambiosPrograma $registro): JsonResponse
     {
-        $this->exigirPermiso('capturar-ventas');
+        $this->exigirPermiso('necesidades-venta', 'capturar');
 
         $programa = $necesidad->programa()->firstOrFail();
 
         DB::transaction(function () use ($necesidad, $programa, $registro) {
-            $antes = $this->instantanea($necesidad);
-
-            // Sus «mover pedido» se borran en cascada: quedan en el historial
-            // y se avisa a las semanas destino antes de borrar el renglón.
-            $movimientos = ProgramaAcuerdo::where('necesidad_id', $necesidad->id)->orderBy('id')->get();
-            foreach ($movimientos as $acuerdo) {
-                $registro->registrar($programa, 'acuerdo', $acuerdo->id, 'borrado', $acuerdo->instantaneaHistorial(), null);
-            }
-            $this->avisarDestinos($programa, $movimientos, $registro);
-
             $necesidad->delete();
-            $registro->registrar($programa, 'necesidad', $necesidad->id, 'borrado', $antes, null);
+            $registro->emitir($programa);
         });
 
         return response()->json(['success' => true, 'message' => 'Necesidad eliminada.']);
@@ -166,7 +147,7 @@ class ProgramaNecesidadController extends Controller
      */
     public function copiarAnterior(ProgramaSemanal $programa, ProgramaSemanalService $servicio, RegistroCambiosPrograma $registro): JsonResponse
     {
-        $this->exigirPermiso('capturar-ventas');
+        $this->exigirPermiso('necesidades-venta', 'capturar');
 
         $copiadas = DB::transaction(function () use ($programa, $servicio, $registro) {
             // Se bloquea el programa para que dos copias a la vez no dupliquen renglones.
@@ -201,7 +182,7 @@ class ProgramaNecesidadController extends Controller
                     'updated_by' => Auth::id(),
                 ] + $this->atributosCajas($o->cajasPorDia()));
                 $copia->variedades()->sync($o->variedades->pluck('id')->all());
-                $registro->registrar($programa, 'necesidad', $copia->id, 'creado', null, $this->instantanea($copia));
+                $registro->emitir($programa);
             }
 
             return $origen->count();
@@ -274,7 +255,7 @@ class ProgramaNecesidadController extends Controller
 
     /**
      * El cultivo del renglón debe tener una temporada abierta que toque la
-     * semana (como en los viajes): una necesidad en una semana sin producción
+     * semana: una necesidad en una semana sin producción
      * arrastraría su negativo al inventario inicial de las siguientes.
      */
     private function exigirTemporadaAbierta(ProgramaSemanal $programa, int $cultivoId, ProgramaSemanalService $servicio, string $campo = 'presentacion_id'): void
@@ -320,31 +301,6 @@ class ProgramaNecesidadController extends Controller
         }
     }
 
-    /**
-     * Avisa a cada semana destino distinta (de otra semana) de los «mover
-     * pedido» dados. Si el programa destino no existe no hay quién lo tenga abierto.
-     *
-     * @param  iterable<ProgramaAcuerdo>  $movimientos
-     */
-    private function avisarDestinos(ProgramaSemanal $programa, iterable $movimientos, RegistroCambiosPrograma $registro): void
-    {
-        $propio = $programa->lunes->toDateString();
-        $lunes = [];
-        foreach ($movimientos as $acuerdo) {
-            $destino = $acuerdo->destino_lunes?->toDateString();
-            if ($destino !== null && $destino !== $propio) {
-                $lunes[$destino] = true;
-            }
-        }
-
-        foreach (array_keys($lunes) as $fecha) {
-            $destino = ProgramaSemanal::whereDate('lunes', $fecha)->first();
-            if ($destino) {
-                $registro->emitir($destino);
-            }
-        }
-    }
-
     // ── Salidas ─────────────────────────────────────────
 
     /**
@@ -379,7 +335,7 @@ class ProgramaNecesidadController extends Controller
         return $salida;
     }
 
-    /** Valores del renglón para el historial (mismas llaves antes y después). */
+    /** Valores del renglón para la respuesta y para saber si una edición cambió algo. */
     private function instantanea(ProgramaNecesidad $n): array
     {
         $variedades = DB::table('programa_necesidad_variedad')

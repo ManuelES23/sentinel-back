@@ -2,7 +2,7 @@
 
 namespace App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion;
 
-use App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\Concerns\PermisoProgramaSemanal;
+use App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\Concerns\PermisoPlaneacion;
 use App\Http\Controllers\Controller;
 use App\Models\CRM\CrmCliente;
 use App\Models\Enterprise;
@@ -15,13 +15,13 @@ use Illuminate\Http\Request;
  */
 class ClientesSbpController extends Controller
 {
-    use PermisoProgramaSemanal;
+    use PermisoPlaneacion;
 
     private const LIMITE = 20;
 
     public function index(Request $request): JsonResponse
     {
-        $this->exigirPermiso('view');
+        $this->exigirPermiso('necesidades-venta', 'view');
 
         $datos = $request->validate(['q' => ['nullable', 'string', 'max:100']]);
         $q = trim($datos['q'] ?? '');

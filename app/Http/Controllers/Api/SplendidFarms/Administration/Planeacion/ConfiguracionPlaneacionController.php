@@ -2,18 +2,22 @@
 
 namespace App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion;
 
-use App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\Concerns\PermisoProgramaSemanal;
+use App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\Concerns\PermisoPlaneacion;
 use App\Http\Controllers\Controller;
 use App\Models\Planeacion\BodegaDestino;
 use App\Models\Planeacion\ConfiguracionPlaneacion;
 use App\Models\Planeacion\GrupoBalance;
 use App\Models\Planeacion\Presentacion;
+use App\Models\Planeacion\ProgramaInventarioInicial;
+use App\Models\Planeacion\ProgramaSemanal;
 use App\Models\Planeacion\RecetaCombinacion;
 use App\Models\Planeacion\RendimientoVariedad;
 use App\Models\Planeacion\TipoEmpaque;
 use App\Models\Recipe;
 use App\Models\Temporada;
 use App\Models\Variedad;
+use App\Services\Planeacion\ProgramaSemanalService;
+use App\Services\Planeacion\RegistroCambiosPrograma;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -22,17 +26,20 @@ use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
 /**
- * Configuración del Programa semanal: catálogos (bodegas, presentaciones y
- * tipos de empaque), grupos de balance, receta por combinación, rangos de
- * rendimiento y cajas por carga de referencia.
+ * Configuración de Planeación: catálogos (bodegas, presentaciones y tipos de
+ * empaque), grupos de balance, receta por combinación, rangos de rendimiento,
+ * cajas por carga de referencia e inventario inicial manual de una semana.
+ * Leer exige `configuracion.view`; escribir, `configuracion.editar`.
  *
- * Las escrituras de configuración no se anotan en el historial del programa
- * (programa_cambios) ni emiten el evento de tiempo real: no son datos de una
- * semana.
+ * Las escrituras de configuración no emiten el evento de tiempo real: no son
+ * datos de una semana. La excepción es el inventario inicial, que sí lo es.
+ *
+ * Los servicios se inyectan por método y no por constructor: guardan cálculos
+ * en memoria y el controlador puede quedar vivo entre peticiones.
  */
 class ConfiguracionPlaneacionController extends Controller
 {
-    use PermisoProgramaSemanal;
+    use PermisoPlaneacion;
 
     private const MENSAJE_EN_USO = 'Está en uso; desactívalo';
 
@@ -44,7 +51,7 @@ class ConfiguracionPlaneacionController extends Controller
     private const CATALOGOS = [
         'bodegas' => [
             'modelo' => BodegaDestino::class,
-            'usos' => [['programa_necesidades', 'bodega_id'], ['programa_viajes', 'bodega_id']],
+            'usos' => [['programa_necesidades', 'bodega_id'], ['programa_embarques', 'bodega_id'], ['programa_viajes', 'bodega_id']],
         ],
         'presentaciones' => [
             'modelo' => Presentacion::class,
@@ -59,7 +66,7 @@ class ConfiguracionPlaneacionController extends Controller
     /** Toda la configuración en una sola lectura. */
     public function show(): JsonResponse
     {
-        $this->exigirPermiso('view');
+        $this->exigirPermiso('configuracion', 'view');
 
         return response()->json([
             'success' => true,
@@ -85,7 +92,7 @@ class ConfiguracionPlaneacionController extends Controller
 
     public function store(Request $request, string $catalogo): JsonResponse
     {
-        $this->exigirPermiso('configurar');
+        $this->exigirPermiso('configuracion', 'editar');
         $modelo = $this->modeloDe($catalogo);
 
         $datos = $request->validate($this->reglas($catalogo, true));
@@ -105,7 +112,7 @@ class ConfiguracionPlaneacionController extends Controller
 
     public function update(Request $request, string $catalogo, int $id): JsonResponse
     {
-        $this->exigirPermiso('configurar');
+        $this->exigirPermiso('configuracion', 'editar');
         $fila = $this->modeloDe($catalogo)::findOrFail($id);
 
         $datos = $request->validate($this->reglas($catalogo, false));
@@ -130,7 +137,7 @@ class ConfiguracionPlaneacionController extends Controller
 
     public function destroy(string $catalogo, int $id): JsonResponse
     {
-        $this->exigirPermiso('configurar');
+        $this->exigirPermiso('configuracion', 'editar');
         $fila = $this->modeloDe($catalogo)::findOrFail($id);
 
         foreach (self::CATALOGOS[$catalogo]['usos'] as [$tabla, $columna]) {
@@ -147,7 +154,7 @@ class ConfiguracionPlaneacionController extends Controller
     /** Reemplaza los grupos de balance de un cultivo (conserva los ids que lleguen). */
     public function grupos(Request $request): JsonResponse
     {
-        $this->exigirPermiso('configurar');
+        $this->exigirPermiso('configuracion', 'editar');
 
         $datos = $request->validate([
             'cultivo_id' => ['required', 'integer', Rule::exists('cultivos', 'id')],
@@ -208,7 +215,7 @@ class ConfiguracionPlaneacionController extends Controller
     /** Reemplaza todas las recetas por combinación. */
     public function guardarRecetasCombinacion(Request $request): JsonResponse
     {
-        $this->exigirPermiso('configurar');
+        $this->exigirPermiso('configuracion', 'editar');
 
         $datos = $request->validate([
             'filas' => ['present', 'array'],
@@ -255,7 +262,7 @@ class ConfiguracionPlaneacionController extends Controller
     /** Guarda (crea o actualiza) los rangos de rendimiento de las variedades de una temporada. */
     public function guardarRendimientos(Request $request): JsonResponse
     {
-        $this->exigirPermiso('configurar');
+        $this->exigirPermiso('configuracion', 'editar');
 
         $datos = $request->validate([
             'temporada_id' => ['required', 'integer', Rule::exists('temporadas', 'id')],
@@ -298,7 +305,7 @@ class ConfiguracionPlaneacionController extends Controller
     /** Copia los rangos de una temporada a otra (los de la misma variedad se sobrescriben). */
     public function copiarRendimientos(Request $request): JsonResponse
     {
-        $this->exigirPermiso('configurar');
+        $this->exigirPermiso('configuracion', 'editar');
 
         $datos = $request->validate([
             'desde_temporada_id' => ['required', 'integer', Rule::exists('temporadas', 'id')],
@@ -330,7 +337,7 @@ class ConfiguracionPlaneacionController extends Controller
 
     public function cajasPorCarga(Request $request): JsonResponse
     {
-        $this->exigirPermiso('configurar');
+        $this->exigirPermiso('configuracion', 'editar');
 
         $datos = $request->validate(['valor' => ['required', 'integer', 'min:1', 'max:5000']]);
 
@@ -346,7 +353,92 @@ class ConfiguracionPlaneacionController extends Controller
         ]);
     }
 
+    /**
+     * Inventario inicial manual de un grupo en esta semana (crea o actualiza).
+     * Con `cajas: null` se quita y el grupo vuelve a arrastrar el final del
+     * programa anterior. Solo avisa en tiempo real si el valor cambió.
+     */
+    public function inventarioInicial(Request $request, ProgramaSemanal $programa, ProgramaSemanalService $servicio, RegistroCambiosPrograma $registro): JsonResponse
+    {
+        $this->exigirPermiso('configuracion', 'editar');
+
+        $datos = $request->validate([
+            'grupo_clave' => ['required', 'string', 'regex:/^(\d+|v\d+)$/'],
+            'cajas' => ['present', 'nullable', 'integer', 'min:0', 'max:100000000'],
+        ]);
+        // Sin ceros a la izquierda: «007» y «7» son el mismo grupo.
+        $clave = $this->normalizarClave($datos['grupo_clave']);
+
+        if (! $this->esGrupoValido($clave, $servicio)) {
+            throw ValidationException::withMessages(['grupo_clave' => 'El grupo de variedades no existe.']);
+        }
+
+        $cajas = $datos['cajas'] === null ? null : (int) $datos['cajas'];
+
+        DB::transaction(function () use ($programa, $clave, $cajas, $registro) {
+            $existente = ProgramaInventarioInicial::where('programa_id', $programa->id)
+                ->where('grupo_clave', $clave)
+                ->lockForUpdate()
+                ->first();
+
+            if ($cajas === null) {
+                // Ya se arrastraba: no hay escritura ni aviso.
+                if ($existente) {
+                    $existente->delete();
+                    $registro->emitir($programa);
+                }
+
+                return;
+            }
+
+            // Sin cambio de valor no hay escritura ni aviso.
+            if ($existente && $existente->cajas === $cajas) {
+                return;
+            }
+
+            ProgramaInventarioInicial::updateOrCreate(
+                ['programa_id' => $programa->id, 'grupo_clave' => $clave],
+                ['cajas' => $cajas],
+            );
+            $registro->emitir($programa);
+        });
+
+        $servicio->olvidar();
+
+        return response()->json([
+            'success' => true,
+            'message' => $cajas === null
+                ? 'Inventario inicial quitado: vuelve a arrastrarse de la semana anterior.'
+                : 'Inventario inicial guardado.',
+            'data' => [
+                'grupo_clave' => $clave,
+                'cajas' => $cajas,
+                'balance' => $servicio->balanceDe($programa)[$clave] ?? null,
+            ],
+        ]);
+    }
+
     // ── Apoyos ──────────────────────────────────────────────────
+
+    /** «007» -> «7», «v007» -> «v7» (la clave ya pasó el formato `^(\d+|v\d+)$`). */
+    private function normalizarClave(string $clave): string
+    {
+        return str_starts_with($clave, 'v')
+            ? 'v'.(int) substr($clave, 1)
+            : (string) (int) $clave;
+    }
+
+    /** Un grupo con id existente, o «v{id}» de una variedad que no pertenece a ningún grupo. */
+    private function esGrupoValido(string $clave, ProgramaSemanalService $servicio): bool
+    {
+        if (ctype_digit($clave)) {
+            return GrupoBalance::whereKey((int) $clave)->exists();
+        }
+
+        $variedadId = (int) substr($clave, 1);
+
+        return Variedad::whereKey($variedadId)->exists() && $servicio->grupoDeVariedad($variedadId) === $clave;
+    }
 
     /** @return class-string<Model> */
     private function modeloDe(string $catalogo): string

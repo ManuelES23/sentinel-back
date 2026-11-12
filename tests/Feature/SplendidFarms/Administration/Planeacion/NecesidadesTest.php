@@ -6,7 +6,6 @@ use App\Events\ProgramaSemanalUpdated;
 use App\Models\CRM\CrmCliente;
 use App\Models\Cultivo;
 use App\Models\Enterprise;
-use App\Models\Planeacion\ProgramaCambio;
 use App\Models\Planeacion\ProgramaNecesidad;
 use App\Models\Planeacion\ProgramaSemanal;
 use App\Models\Variedad;
@@ -36,9 +35,9 @@ class NecesidadesTest extends TestCase
         $this->programa = ProgramaSemanal::create(['lunes' => '2026-11-23']);
     }
 
-    private function comoVendedor(array $extra = []): void
+    private function comoVendedor(): void
     {
-        Sanctum::actingAs($this->usuarioCon(array_merge(['view', 'capturar-ventas'], $extra)));
+        Sanctum::actingAs($this->usuarioCon(['necesidades-venta' => ['view', 'capturar']]));
     }
 
     private function url(?ProgramaSemanal $p = null, string $sufijo = ''): string
@@ -259,28 +258,18 @@ class NecesidadesTest extends TestCase
         $this->assertSame([], $this->semana()['necesidades']);
     }
 
-    public function test_con_junta_cada_escritura_deja_historial_con_las_mismas_llaves(): void
+    public function test_editar_sin_cambio_real_no_avisa(): void
     {
         $this->comoVendedor();
-        $this->programa->update(['junta_registrada_at' => now()]);
-
         $id = $this->postJson($this->url(), $this->datos())->assertCreated()->json('data.id');
-        $this->putJson(self::BASE.'/necesidades/'.$id, ['dia' => 0, 'cajas' => 77])->assertOk();
-        // Sin cambio real no hay escritura ni historial.
-        $this->putJson(self::BASE.'/necesidades/'.$id, ['dia' => 0, 'cajas' => 77])->assertOk();
-        $this->deleteJson(self::BASE.'/necesidades/'.$id)->assertOk();
+        Event::fake([ProgramaSemanalUpdated::class]);
 
-        $cambios = ProgramaCambio::where('entidad', 'necesidad')->orderBy('id')->get();
-        $this->assertSame(['creado', 'actualizado', 'borrado'], $cambios->pluck('accion')->all());
-        $this->assertSame($id, $cambios[0]->entidad_id);
-        $this->assertNull($cambios[0]->antes);
-        $llaves = array_keys($cambios[0]->despues);
-        $this->assertSame($llaves, array_keys($cambios[1]->antes));
-        $this->assertSame($llaves, array_keys($cambios[1]->despues));
-        $this->assertSame($llaves, array_keys($cambios[2]->antes));
-        $this->assertNull($cambios[2]->despues);
-        $this->assertSame(0, $cambios[1]->antes['cajas'][0]);
-        $this->assertSame(77, $cambios[1]->despues['cajas'][0]);
+        $this->putJson(self::BASE.'/necesidades/'.$id, ['dia' => 0, 'cajas' => 77])->assertOk();
+        // Sin cambio real no hay escritura ni aviso.
+        $this->putJson(self::BASE.'/necesidades/'.$id, ['dia' => 0, 'cajas' => 77])->assertOk();
+
+        Event::assertDispatchedTimes(ProgramaSemanalUpdated::class, 1);
+        $this->assertSame(77, ProgramaNecesidad::find($id)->cajas_0);
     }
 
     public function test_copiar_semana_anterior(): void
@@ -398,10 +387,13 @@ class NecesidadesTest extends TestCase
 
     public function test_sin_permiso_capturar_ventas_es_403(): void
     {
-        Sanctum::actingAs($this->usuarioCon(['view', 'capturar-corte']));
+        // Ver las necesidades y capturar cortes no basta para capturar necesidades.
+        Sanctum::actingAs($this->usuarioCon(['necesidades-venta' => ['view'], 'plan-corte' => ['view', 'capturar']]));
         $necesidad = $this->necesidad($this->programa, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [1, 0, 0, 0, 0, 0]);
 
-        $this->postJson($this->url(), $this->datos())->assertForbidden();
+        $this->postJson($this->url(), $this->datos())
+            ->assertForbidden()
+            ->assertJsonPath('message', 'No tienes permiso para esta acción de Planeación.');
         $this->putJson(self::BASE.'/necesidades/'.$necesidad->id, ['dia' => 0, 'cajas' => 5])->assertForbidden();
         $this->deleteJson(self::BASE.'/necesidades/'.$necesidad->id)->assertForbidden();
         $this->postJson($this->url(null, '/copiar-anterior'))->assertForbidden();

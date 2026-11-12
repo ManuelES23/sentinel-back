@@ -3,31 +3,29 @@
 namespace Tests\Feature\SplendidFarms\Administration\Planeacion;
 
 use App\Events\ProgramaSemanalUpdated;
-use App\Models\Planeacion\ProgramaCambio;
 use App\Models\Planeacion\ProgramaInventarioInicial;
-use App\Models\Planeacion\ProgramaJunta;
 use App\Models\Planeacion\ProgramaSemanal;
-use App\Models\User;
 use App\Services\Planeacion\RegistroCambiosPrograma;
-use Illuminate\Broadcasting\BroadcastManager;
 use Illuminate\Broadcasting\Broadcasters\NullBroadcaster;
+use Illuminate\Broadcasting\BroadcastManager;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Testing\TestResponse;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
 /**
- * Junta de la semana (foto del programa), historial de cambios posteriores a
- * la junta, evento de tiempo real e inventario inicial manual.
+ * Evento de tiempo real del Programa semanal e inventario inicial manual
+ * (Configuración: `configuracion.editar`).
  */
-class JuntaYCambiosTest extends TestCase
+class TiempoRealYInventarioTest extends TestCase
 {
     use ConstruyePrograma;
     use RefreshDatabase;
 
     private const URL = '/api/splendidfarms/administration/planeacion/programa';
+
+    private const CONFIGURADOR = ['configuracion' => ['view', 'editar'], 'tablero-semanal' => ['view']];
 
     private ProgramaSemanal $programa;
 
@@ -40,106 +38,16 @@ class JuntaYCambiosTest extends TestCase
         $this->cargarWk48($this->programa);
     }
 
-    private function registrarJunta(array $permisos = ['view', 'acuerdos']): TestResponse
-    {
-        Sanctum::actingAs($this->usuarioCon($permisos));
-
-        return $this->postJson(self::URL.'/'.$this->programa->id.'/registrar-junta');
-    }
-
-    public function test_registrar_junta_guarda_foto_y_fecha(): void
-    {
-        $this->registrarJunta()->assertOk()->assertJsonPath('success', true);
-
-        $programa = $this->programa->fresh();
-        $this->assertNotNull($programa->junta_registrada_at);
-        $this->assertNotNull($programa->junta_registrada_por);
-
-        $junta = ProgramaJunta::where('programa_id', $programa->id)->firstOrFail();
-        $this->assertSame($programa->junta_registrada_por, $junta->registrada_por);
-        $this->assertSame('2026-11-23', $junta->foto['programa']['lunes']);
-        $this->assertSame(-2893, $junta->foto['balance'][(string) $this->grupo('Blanco')->id]['final']);
-        $this->assertSame(36483, collect($junta->foto['balance'])->sum(fn ($g) => array_sum($g['necesidad'])));
-
-        // La semana ya trae la junta registrada.
-        $this->getJson(self::URL.'?lunes=2026-11-23')
-            ->assertOk()
-            ->assertJsonPath('data.programa.junta_registrada_por', $programa->junta_registrada_por);
-    }
-
-    public function test_registrar_junta_exige_permiso_acuerdos(): void
-    {
-        $this->registrarJunta(['view', 'configurar'])->assertForbidden();
-
-        $this->assertNull($this->programa->fresh()->junta_registrada_at);
-        $this->assertSame(0, ProgramaJunta::count());
-    }
-
-    public function test_volver_a_registrar_conserva_las_juntas_y_manda_la_ultima(): void
-    {
-        $this->registrarJunta()->assertOk();
-        $primera = $this->programa->fresh()->junta_registrada_at;
-
-        $this->travel(2)->hours();
-        $this->postJson(self::URL.'/'.$this->programa->id.'/registrar-junta')->assertOk();
-
-        $this->assertSame(2, ProgramaJunta::where('programa_id', $this->programa->id)->count());
-        $this->assertTrue($this->programa->fresh()->junta_registrada_at->gt($primera));
-    }
-
-    public function test_registrar_sin_junta_no_guarda_cambios(): void
-    {
-        Event::fake([ProgramaSemanalUpdated::class]);
-
-        $necesidad = $this->programa->necesidades()->first();
-        app(RegistroCambiosPrograma::class)->registrar(
-            $this->programa, 'necesidad', $necesidad->id, 'actualizado', ['cajas_2' => 6584], ['cajas_2' => 5584],
-        );
-
-        $this->assertSame(0, ProgramaCambio::count());
-        Event::assertDispatched(ProgramaSemanalUpdated::class, 1);
-    }
-
-    public function test_con_junta_se_guardan_cambios_y_salen_en_el_payload(): void
-    {
-        $this->registrarJunta()->assertOk();
-        $this->programa->refresh();
-        $usuario = User::find($this->programa->junta_registrada_por);
-
-        app(RegistroCambiosPrograma::class)->registrar(
-            $this->programa, 'necesidad', 5, 'actualizado', ['cajas_2' => 6584], ['cajas_2' => 5584],
-        );
-
-        $this->assertSame(1, ProgramaCambio::count());
-
-        $cambios = $this->getJson(self::URL.'?lunes=2026-11-23')->assertOk()->json('data.cambios');
-        $this->assertCount(1, $cambios);
-        $this->assertSame('actualizado', $cambios[0]['accion']);
-        $this->assertSame('necesidad', $cambios[0]['entidad']);
-        $this->assertSame($usuario->name, $cambios[0]['usuario']);
-        $this->assertStringContainsString('6584', $cambios[0]['resumen']);
-    }
-
     public function test_emitir_solo_emite_el_evento(): void
     {
         Event::fake([ProgramaSemanalUpdated::class]);
 
         app(RegistroCambiosPrograma::class)->emitir($this->programa);
 
-        $this->assertSame(0, ProgramaCambio::count());
         Event::assertDispatched(
             ProgramaSemanalUpdated::class,
             fn ($e) => $e->data['programa_id'] === $this->programa->id && $e->data['lunes'] === '2026-11-23',
         );
-    }
-
-    public function test_registrar_junta_emite_el_evento(): void
-    {
-        Event::fake([ProgramaSemanalUpdated::class]);
-
-        $this->registrarJunta()->assertOk();
-
-        Event::assertDispatched(ProgramaSemanalUpdated::class, 1);
     }
 
     public function test_evento_cabe_en_reverb(): void
@@ -158,7 +66,7 @@ class JuntaYCambiosTest extends TestCase
     public function test_inventario_inicial_manual(): void
     {
         Event::fake([ProgramaSemanalUpdated::class]);
-        Sanctum::actingAs($this->usuarioCon(['view', 'configurar']));
+        Sanctum::actingAs($this->usuarioCon(self::CONFIGURADOR));
         $blanco = (string) $this->grupo('Blanco')->id;
         $url = self::URL.'/'.$this->programa->id.'/inventario-inicial';
 
@@ -182,8 +90,7 @@ class JuntaYCambiosTest extends TestCase
         $url = self::URL.'/'.$wk49->id.'/inventario-inicial';
         $balanceWk49 = fn () => $this->getJson(self::URL.'?lunes=2026-11-30')->assertOk()->json("data.balance.{$blanco}");
 
-        Sanctum::actingAs($this->usuarioCon(['view', 'acuerdos', 'configurar']));
-        $this->postJson(self::URL.'/'.$wk49->id.'/registrar-junta')->assertOk();
+        Sanctum::actingAs($this->usuarioCon(self::CONFIGURADOR));
 
         // Sin captura: arrastra el final de WK48.
         $g = $balanceWk49();
@@ -209,26 +116,19 @@ class JuntaYCambiosTest extends TestCase
         $this->assertSame('arrastrado', $balanceWk49()['inicial_origen']);
         Event::assertDispatchedTimes(ProgramaSemanalUpdated::class, 1);
 
-        // Queda en el historial de la semana.
-        $cambio = ProgramaCambio::where('programa_id', $wk49->id)->latest('id')->firstOrFail();
-        $this->assertSame('borrado', $cambio->accion);
-        $this->assertSame(['grupo_clave' => $blanco, 'cajas' => 0], $cambio->antes);
-        $this->assertNull($cambio->despues);
-
         // Quitar otra vez no escribe ni avisa.
         $this->putJson($url, ['grupo_clave' => $blanco, 'cajas' => null])->assertOk();
-        $this->assertSame(2, ProgramaCambio::where('programa_id', $wk49->id)->count());
         Event::assertDispatchedTimes(ProgramaSemanalUpdated::class, 1);
 
-        // `cajas` debe venir (null para quitar), y quitar también exige `configurar`.
+        // `cajas` debe venir (null para quitar), y quitar también exige `configuracion.editar`.
         $this->putJson($url, ['grupo_clave' => $blanco])->assertStatus(422);
-        Sanctum::actingAs($this->usuarioCon(['view', 'capturar-corte']));
+        Sanctum::actingAs($this->usuarioCon(['configuracion' => ['view'], 'plan-corte' => ['view', 'capturar']]));
         $this->putJson($url, ['grupo_clave' => $blanco, 'cajas' => null])->assertForbidden();
     }
 
     public function test_inventario_inicial_rechaza_variedad_con_grupo(): void
     {
-        Sanctum::actingAs($this->usuarioCon(['view', 'configurar']));
+        Sanctum::actingAs($this->usuarioCon(self::CONFIGURADOR));
         $clave = 'v'.$this->variedades['Amarillo']->id;
 
         // Amarillo pertenece a un grupo: su clave implícita no es válida.
@@ -238,7 +138,7 @@ class JuntaYCambiosTest extends TestCase
 
     public function test_inventario_inicial_valida_grupo_cajas_y_permiso(): void
     {
-        Sanctum::actingAs($this->usuarioCon(['view', 'configurar']));
+        Sanctum::actingAs($this->usuarioCon(self::CONFIGURADOR));
         $url = self::URL.'/'.$this->programa->id.'/inventario-inicial';
         $blanco = (string) $this->grupo('Blanco')->id;
 
@@ -247,49 +147,32 @@ class JuntaYCambiosTest extends TestCase
         $this->putJson($url, ['grupo_clave' => $blanco, 'cajas' => 'mucho'])->assertStatus(422);
         $this->putJson($url, ['grupo_clave' => $blanco, 'cajas' => -5])->assertStatus(422);
 
-        Sanctum::actingAs($this->usuarioCon(['view', 'capturar-corte']));
-        $this->putJson($url, ['grupo_clave' => $blanco, 'cajas' => 10])->assertForbidden();
+        Sanctum::actingAs($this->usuarioCon(['configuracion' => ['view'], 'plan-corte' => ['view', 'capturar']]));
+        $this->putJson($url, ['grupo_clave' => $blanco, 'cajas' => 10])
+            ->assertForbidden()
+            ->assertJsonPath('message', 'No tienes permiso para esta acción de Planeación.');
+        $this->assertSame(0, ProgramaInventarioInicial::count());
     }
 
-    public function test_con_junta_el_inventario_inicial_queda_en_el_historial(): void
+    public function test_inventario_inicial_sin_cambio_de_valor_no_escribe_ni_avisa(): void
     {
-        $this->registrarJunta(['view', 'acuerdos', 'configurar'])->assertOk();
-        $blanco = (string) $this->grupo('Blanco')->id;
-
-        $this->putJson(self::URL.'/'.$this->programa->id.'/inventario-inicial', ['grupo_clave' => $blanco, 'cajas' => 3000])->assertOk();
-
-        $cambio = ProgramaCambio::firstOrFail();
-        $this->assertSame('inventario_inicial', $cambio->entidad);
-        $this->assertSame('creado', $cambio->accion);
-        $this->assertSame(3000, $cambio->despues['cajas']);
-        $this->assertSame(['grupo_clave' => $blanco, 'cajas' => null], $cambio->antes);
-        $this->assertSame(['grupo_clave' => $blanco, 'cajas' => 3000], $cambio->despues);
-
-        // Actualizar: mismas llaves antes y después, y el resumen solo dice lo que cambió.
-        $this->putJson(self::URL.'/'.$this->programa->id.'/inventario-inicial', ['grupo_clave' => $blanco, 'cajas' => 2000])->assertOk();
-        $this->assertSame(2, ProgramaCambio::count());
-        $cambios = $this->getJson(self::URL.'?lunes=2026-11-23')->json('data.cambios');
-        $this->assertSame('cajas: 3000 → 2000', $cambios[0]['resumen']);
-        $this->assertStringContainsString('cajas: 3000', $cambios[1]['resumen']);
-    }
-
-    public function test_inventario_inicial_sin_cambio_de_valor_no_escribe_ni_registra(): void
-    {
-        $this->registrarJunta(['view', 'acuerdos', 'configurar'])->assertOk();
+        Sanctum::actingAs($this->usuarioCon(self::CONFIGURADOR));
         $blanco = (string) $this->grupo('Blanco')->id;
         $url = self::URL.'/'.$this->programa->id.'/inventario-inicial';
 
         $this->putJson($url, ['grupo_clave' => $blanco, 'cajas' => 3000])->assertOk();
+        $actualizado = ProgramaInventarioInicial::firstOrFail()->updated_at;
         Event::fake([ProgramaSemanalUpdated::class]);
+        $this->travel(5)->minutes();
         $this->putJson($url, ['grupo_clave' => $blanco, 'cajas' => 3000])->assertOk()->assertJsonPath('data.cajas', 3000);
 
-        $this->assertSame(1, ProgramaCambio::count());
+        $this->assertEquals($actualizado, ProgramaInventarioInicial::firstOrFail()->updated_at);
         Event::assertNotDispatched(ProgramaSemanalUpdated::class);
     }
 
     public function test_inventario_inicial_normaliza_ceros_a_la_izquierda(): void
     {
-        Sanctum::actingAs($this->usuarioCon(['view', 'configurar']));
+        Sanctum::actingAs($this->usuarioCon(self::CONFIGURADOR));
         $blanco = (string) $this->grupo('Blanco')->id;
         $url = self::URL.'/'.$this->programa->id.'/inventario-inicial';
 
@@ -313,15 +196,12 @@ class JuntaYCambiosTest extends TestCase
                 throw new \RuntimeException('Reverb caído');
             }
         });
-
-        $this->registrarJunta(['view', 'acuerdos', 'configurar'])->assertOk();
-        $this->assertNotNull($this->programa->fresh()->junta_registrada_at);
+        Sanctum::actingAs($this->usuarioCon(self::CONFIGURADOR));
 
         $this->putJson(self::URL.'/'.$this->programa->id.'/inventario-inicial', ['grupo_clave' => (string) $this->grupo('Blanco')->id, 'cajas' => 10])
             ->assertOk();
         $this->assertSame(1, ProgramaInventarioInicial::count());
-        $this->assertSame(1, ProgramaCambio::count());
         // El fallo sí se intentó emitir y quedó anotado.
-        Log::shouldHaveReceived('warning')->atLeast()->twice();
+        Log::shouldHaveReceived('warning')->once();
     }
 }

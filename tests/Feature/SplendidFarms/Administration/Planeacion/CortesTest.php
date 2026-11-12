@@ -5,7 +5,7 @@ namespace Tests\Feature\SplendidFarms\Administration\Planeacion;
 use App\Events\ProgramaSemanalUpdated;
 use App\Models\Cultivo;
 use App\Models\Lote;
-use App\Models\Planeacion\ProgramaCambio;
+use App\Models\Planeacion\ProgramaAcuerdo;
 use App\Models\Planeacion\ProgramaCorte;
 use App\Models\Planeacion\ProgramaRendimiento;
 use App\Models\Planeacion\ProgramaSemanal;
@@ -37,9 +37,9 @@ class CortesTest extends TestCase
         $this->programa = ProgramaSemanal::create(['lunes' => '2026-11-23']);
     }
 
-    private function comoCapturista(array $extra = []): void
+    private function comoCapturista(): void
     {
-        Sanctum::actingAs($this->usuarioCon(array_merge(['view', 'capturar-corte'], $extra)));
+        Sanctum::actingAs($this->usuarioCon(['plan-corte' => ['view', 'capturar']]));
     }
 
     private function urlCortes(?ProgramaSemanal $p = null, string $sufijo = ''): string
@@ -100,6 +100,20 @@ class CortesTest extends TestCase
         // Justo lo que queda sí cabe.
         $this->postJson($this->urlCortes($siguiente), [
             'temporada_id' => $this->temporada->id, 'etapa_id' => $etapa->id, 'dia' => 1, 'hectareas' => 4,
+        ])->assertCreated();
+    }
+
+    public function test_un_adelanto_viejo_ya_no_resta_hectareas(): void
+    {
+        $this->comoCapturista();
+        $etapa = $this->crearEtapa('Amarillo', 10);
+        ProgramaAcuerdo::create([
+            'programa_id' => $this->programa->id, 'tipo' => 'adelantar_etapa', 'activo' => true, 'etapa_id' => $etapa->id,
+            'temporada_id' => $this->temporada->id, 'variedad_id' => $this->variedades['Amarillo']->id, 'dia' => 0, 'hectareas' => 6,
+        ]);
+
+        $this->postJson($this->urlCortes(), [
+            'temporada_id' => $this->temporada->id, 'etapa_id' => $etapa->id, 'dia' => 0, 'hectareas' => 10,
         ])->assertCreated();
     }
 
@@ -212,40 +226,6 @@ class CortesTest extends TestCase
         $this->assertSame(0, ProgramaCorte::count());
     }
 
-    public function test_repartir_crea_varios_cortes_y_valida_la_suma(): void
-    {
-        $this->comoCapturista();
-        $etapa = $this->crearEtapa('Bicolor', 10);
-        $datos = fn (array $reparto) => [
-            'etapa_id' => $etapa->id, 'temporada_id' => $this->temporada->id, 'reparto' => $reparto,
-        ];
-
-        // La suma (11) rebasa las 10 ha aunque cada parte quepa sola.
-        $this->postJson($this->urlCortes(null, '/repartir'), $datos([['dia' => 0, 'hectareas' => 6], ['dia' => 1, 'hectareas' => 5]]))
-            ->assertUnprocessable()->assertJsonPath('errors.hectareas.0', 'La etapa tiene 10.00 ha disponibles');
-        $this->assertSame(0, ProgramaCorte::count());
-
-        $this->postJson($this->urlCortes(null, '/repartir'), $datos([['dia' => 0, 'hectareas' => 6], ['dia' => 1, 'hectareas' => 4]]))
-            ->assertCreated()->assertJsonCount(2, 'data');
-
-        $this->assertSame(2, ProgramaCorte::where('etapa_id', $etapa->id)->count());
-        $this->assertSame($this->variedades['Bicolor']->id, ProgramaCorte::first()->variedad_id);
-    }
-
-    public function test_repartir_es_atomico(): void
-    {
-        $this->comoCapturista();
-        $etapa = $this->crearEtapa('Bicolor', 10);
-
-        $this->postJson($this->urlCortes(null, '/repartir'), [
-            'etapa_id' => $etapa->id,
-            'temporada_id' => $this->temporada->id,
-            'reparto' => [['dia' => 0, 'hectareas' => 2], ['dia' => 6, 'hectareas' => 2]],
-        ])->assertUnprocessable()->assertJsonValidationErrors('reparto.1.dia');
-
-        $this->assertSame(0, ProgramaCorte::count());
-    }
-
     public function test_dia_fuera_de_rango_es_422(): void
     {
         $this->comoCapturista();
@@ -271,35 +251,11 @@ class CortesTest extends TestCase
         $this->assertSame([], $this->semana()['cortes']);
     }
 
-    public function test_con_junta_cada_escritura_deja_historial_con_las_mismas_llaves(): void
-    {
-        $this->comoCapturista();
-        $this->programa->update(['junta_registrada_at' => now()]);
-        $datos = [
-            'temporada_id' => $this->temporada->id, 'variedad_id' => $this->variedades['Blanco']->id, 'dia' => 1, 'hectareas' => 3,
-        ];
-
-        $id = $this->postJson($this->urlCortes(), $datos)->assertCreated()->json('data.id');
-        $this->putJson(self::BASE.'/cortes/'.$id, array_merge($datos, ['hectareas' => 4]))->assertOk();
-        $this->deleteJson(self::BASE.'/cortes/'.$id)->assertOk();
-
-        $cambios = ProgramaCambio::where('entidad', 'corte')->orderBy('id')->get();
-        $this->assertSame(['creado', 'actualizado', 'borrado'], $cambios->pluck('accion')->all());
-        $this->assertSame($id, $cambios[0]->entidad_id);
-        $this->assertNull($cambios[0]->antes);
-        $llaves = array_keys($cambios[0]->despues);
-        $this->assertSame($llaves, array_keys($cambios[1]->antes));
-        $this->assertSame($llaves, array_keys($cambios[1]->despues));
-        $this->assertSame($llaves, array_keys($cambios[2]->antes));
-        $this->assertNull($cambios[2]->despues);
-        $this->assertEquals(3, $cambios[1]->antes['hectareas']);
-        $this->assertEquals(4, $cambios[1]->despues['hectareas']);
-    }
-
     public function test_editar_un_corte_usa_el_programa_del_corte(): void
     {
+        Event::fake([ProgramaSemanalUpdated::class]);
         $this->comoCapturista();
-        $otra = ProgramaSemanal::create(['lunes' => '2026-11-30', 'junta_registrada_at' => now()]);
+        $otra = ProgramaSemanal::create(['lunes' => '2026-11-30']);
         $corte = ProgramaCorte::create([
             'programa_id' => $otra->id,
             'temporada_id' => $this->temporada->id,
@@ -312,7 +268,9 @@ class CortesTest extends TestCase
             'temporada_id' => $this->temporada->id, 'variedad_id' => $this->variedades['Blanco']->id, 'dia' => 4, 'hectareas' => 2,
         ])->assertOk();
 
-        $this->assertSame($otra->id, ProgramaCambio::where('entidad', 'corte')->value('programa_id'));
+        // El aviso sale para la semana del corte, no para la del setUp.
+        Event::assertDispatchedTimes(ProgramaSemanalUpdated::class, 1);
+        Event::assertDispatched(ProgramaSemanalUpdated::class, fn ($e) => $e->data['programa_id'] === $otra->id);
     }
 
     public function test_rendimiento_exacto_sin_valor_es_422(): void
@@ -384,32 +342,18 @@ class CortesTest extends TestCase
         Event::assertDispatchedTimes(ProgramaSemanalUpdated::class, 4);
     }
 
-    public function test_repartir_en_varios_dias_emite_un_solo_evento(): void
-    {
-        Event::fake([ProgramaSemanalUpdated::class]);
-        $this->comoCapturista();
-        $etapa = $this->crearEtapa('Amarillo', 10);
-
-        $this->postJson($this->urlCortes(null, '/repartir'), [
-            'temporada_id' => $this->temporada->id,
-            'etapa_id' => $etapa->id,
-            'reparto' => [['dia' => 0, 'hectareas' => 2], ['dia' => 1, 'hectareas' => 2], ['dia' => 2, 'hectareas' => 2]],
-        ])->assertCreated();
-
-        $this->assertSame(3, ProgramaCorte::count());
-        Event::assertDispatchedTimes(ProgramaSemanalUpdated::class, 1);
-    }
-
     public function test_sin_permiso_capturar_corte_es_403(): void
     {
-        Sanctum::actingAs($this->usuarioCon(['view', 'capturar-ventas']));
+        // Ver el plan de corte y capturar necesidades no basta para capturar cortes.
+        Sanctum::actingAs($this->usuarioCon(['plan-corte' => ['view'], 'necesidades-venta' => ['view', 'capturar']]));
         $corte = $this->corte($this->programa, 'Blanco', 0, 1);
         $datos = ['temporada_id' => $this->temporada->id, 'variedad_id' => $this->variedades['Blanco']->id, 'dia' => 1, 'hectareas' => 3];
 
-        $this->postJson($this->urlCortes(), $datos)->assertForbidden();
+        $this->postJson($this->urlCortes(), $datos)
+            ->assertForbidden()
+            ->assertJsonPath('message', 'No tienes permiso para esta acción de Planeación.');
         $this->putJson(self::BASE.'/cortes/'.$corte->id, $datos)->assertForbidden();
         $this->deleteJson(self::BASE.'/cortes/'.$corte->id)->assertForbidden();
-        $this->postJson($this->urlCortes(null, '/repartir'), ['etapa_id' => 1, 'temporada_id' => 1, 'reparto' => []])->assertForbidden();
         $this->putJson($this->urlRendimientos(), ['filas' => []])->assertForbidden();
 
         $this->assertSame(1, ProgramaCorte::count());

@@ -10,7 +10,7 @@ use App\Models\Planeacion\BodegaDestino;
 use App\Models\Planeacion\ConfiguracionPlaneacion;
 use App\Models\Planeacion\GrupoBalance;
 use App\Models\Planeacion\Presentacion;
-use App\Models\Planeacion\ProgramaCambio;
+use App\Models\Planeacion\ProgramaEmbarque;
 use App\Models\Planeacion\ProgramaNecesidad;
 use App\Models\Planeacion\ProgramaSemanal;
 use App\Models\Planeacion\ProgramaViaje;
@@ -43,7 +43,7 @@ class ConfiguracionTest extends TestCase
         $this->crearElote();
     }
 
-    private function conPermisos(array $permisos = ['view', 'configurar']): void
+    private function conPermisos(array $permisos = ['configuracion' => ['view', 'editar']]): void
     {
         Sanctum::actingAs($this->usuarioCon($permisos));
     }
@@ -62,7 +62,7 @@ class ConfiguracionTest extends TestCase
 
     public function test_lee_toda_la_configuracion(): void
     {
-        $this->conPermisos(['view']);
+        $this->conPermisos(['configuracion' => ['view']]);
         $empaque = $this->receta('R-1', 'Bulk RPC');
         $this->receta('R-2', 'Otra cosa', 'produccion');
         $borrada = $this->receta('R-3', 'Receta borrada');
@@ -101,11 +101,13 @@ class ConfiguracionTest extends TestCase
         $this->assertSame(1100, $datos['cajas_por_carga']);
     }
 
-    public function test_sin_permiso_configurar_es_403(): void
+    public function test_sin_permiso_editar_es_403(): void
     {
-        $this->conPermisos(['view']);
+        $this->conPermisos(['configuracion' => ['view'], 'plan-corte' => ['view', 'capturar']]);
 
-        $this->putJson(self::URL.'/configuracion/cajas-por-carga', ['valor' => 900])->assertForbidden();
+        $this->putJson(self::URL.'/configuracion/cajas-por-carga', ['valor' => 900])
+            ->assertForbidden()
+            ->assertJsonPath('message', 'No tienes permiso para esta acción de Planeación.');
         $this->postJson(self::URL.'/configuracion/bodegas', ['nombre' => 'Chicago'])->assertForbidden();
         $this->putJson(self::URL.'/configuracion/grupos', ['cultivo_id' => $this->cultivo->id, 'grupos' => []])->assertForbidden();
         $this->assertDatabaseMissing('plan_bodegas_destino', ['nombre' => 'Chicago']);
@@ -114,7 +116,8 @@ class ConfiguracionTest extends TestCase
 
     public function test_sin_permiso_ver_no_lee_configuracion_ni_clientes(): void
     {
-        $this->conPermisos(['configurar']);
+        // Editar la configuración no da `configuracion.view`; los clientes piden `necesidades-venta.view`.
+        $this->conPermisos(['configuracion' => ['editar'], 'tablero-semanal' => ['view']]);
 
         $this->getJson(self::URL.'/configuracion')->assertForbidden();
         $this->getJson(self::URL.'/clientes?q=wal')->assertForbidden();
@@ -354,16 +357,25 @@ class ConfiguracionTest extends TestCase
         $this->conPermisos();
         $programa = ProgramaSemanal::create(['lunes' => '2026-11-23']);
         $this->necesidad($programa, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [100, 0, 0, 0, 0, 0]);
+        ProgramaEmbarque::create([
+            'programa_id' => $programa->id,
+            'cultivo_id' => $this->cultivo->id,
+            'bodega_id' => $this->bodega('Nogales')->id,
+            'tipo' => 'full',
+            'dia' => 1,
+            'cargas' => 2,
+        ]);
+        // Un viaje viejo (tabla sin uso) también la ocupa: su llave foránea no dejaría borrarla.
         ProgramaViaje::create([
             'programa_id' => $programa->id,
             'dia' => 1,
-            'bodega_id' => $this->bodega('Nogales')->id,
+            'bodega_id' => $this->bodega('Nacional')->id,
             'cultivo_id' => $this->cultivo->id,
             'tipo' => 'full',
             'cajas_caja_1' => 500,
         ]);
 
-        foreach (['Texas', 'Nogales'] as $nombre) {
+        foreach (['Texas', 'Nogales', 'Nacional'] as $nombre) {
             $this->deleteJson(self::URL.'/configuracion/bodegas/'.$this->bodega($nombre)->id)
                 ->assertStatus(422)
                 ->assertJsonPath('message', 'Está en uso; desactívalo');
@@ -398,22 +410,21 @@ class ConfiguracionTest extends TestCase
         $this->assertSame(1, ProgramaNecesidad::count());
     }
 
-    public function test_la_configuracion_no_registra_cambios_ni_emite_evento(): void
+    public function test_la_configuracion_no_emite_evento(): void
     {
         $this->conPermisos();
         Event::fake();
-        $programa = ProgramaSemanal::create(['lunes' => '2026-11-23', 'junta_registrada_at' => now()]);
+        ProgramaSemanal::create(['lunes' => '2026-11-23']);
 
         $this->postJson(self::URL.'/configuracion/bodegas', ['nombre' => 'Chicago'])->assertCreated();
         $this->putJson(self::URL.'/configuracion/cajas-por-carga', ['valor' => 1000])->assertOk();
 
-        $this->assertSame(0, ProgramaCambio::where('programa_id', $programa->id)->count());
         Event::assertNotDispatched(ProgramaSemanalUpdated::class);
     }
 
     public function test_clientes_solo_de_sbp(): void
     {
-        $this->conPermisos(['view']);
+        $this->conPermisos(['necesidades-venta' => ['view']]);
         $sf = Enterprise::firstOrCreate(['slug' => 'splendidfarms'], ['name' => 'Splendid Farms', 'description' => 'SF', 'is_active' => true]);
         $sbp = Enterprise::create(['slug' => 'splendidbyporvenir', 'name' => 'Splendid by Porvenir', 'description' => 'SBP', 'is_active' => true]);
 
@@ -430,7 +441,7 @@ class ConfiguracionTest extends TestCase
 
     public function test_clientes_sin_busqueda_devuelve_los_primeros_20_en_orden(): void
     {
-        $this->conPermisos(['view']);
+        $this->conPermisos(['necesidades-venta' => ['view']]);
         $sbp = Enterprise::create(['slug' => 'splendidbyporvenir', 'name' => 'Splendid by Porvenir', 'description' => 'SBP', 'is_active' => true]);
         for ($i = 25; $i >= 1; $i--) {
             CrmCliente::create(['empresa_id' => $sbp->id, 'nombre' => sprintf('Cliente %02d', $i)]);
@@ -445,7 +456,7 @@ class ConfiguracionTest extends TestCase
 
     public function test_clientes_sin_empresa_sbp_devuelve_lista_vacia(): void
     {
-        $this->conPermisos(['view']);
+        $this->conPermisos(['necesidades-venta' => ['view']]);
 
         $this->getJson(self::URL.'/clientes?q=wal')->assertOk()->assertJsonPath('data', []);
     }
