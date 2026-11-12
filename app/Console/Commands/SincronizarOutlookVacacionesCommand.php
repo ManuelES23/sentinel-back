@@ -27,7 +27,7 @@ class SincronizarOutlookVacacionesCommand extends Command
                 $outlook->sincronizar($conexion);
                 $procesadas++;
             } catch (\Throwable $e) {
-                Log::error("Error al sincronizar Outlook (vacaciones) de la conexión #{$conexion->id}: {$e->getMessage()}");
+                Log::error("Error al sincronizar Outlook (vacaciones) de la conexión #{$conexion->id} (".get_class($e).").");
                 $conexion->update(['ultimo_error' => 'No se pudo sincronizar con Outlook; se reintentará en la siguiente corrida.']);
             }
         }

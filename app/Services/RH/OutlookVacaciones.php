@@ -113,11 +113,11 @@ class OutlookVacaciones
                 try {
                     $this->sincronizar($conexion);
                 } catch (\Throwable $e) {
-                    Log::error("Error al sincronizar Outlook (vacaciones) de la conexión #{$conexion->id}: {$e->getMessage()}");
+                    Log::error("Error al sincronizar Outlook (vacaciones) de la conexión #{$conexion->id} (".get_class($e).").");
                 }
             }
         } catch (\Throwable $e) {
-            Log::error("Error al sincronizar Outlook (vacaciones) de la solicitud #{$s->id}: {$e->getMessage()}");
+            Log::error("Error al sincronizar Outlook (vacaciones) de la solicitud #{$s->id} (".get_class($e).").");
         }
     }
 
@@ -130,12 +130,12 @@ class OutlookVacaciones
                     try {
                         $this->graph($c)->delete(self::GRAPH_BASE."/me/events/{$mapeo->outlook_event_id}");
                     } catch (\Throwable $e) {
-                        Log::warning("No se pudo borrar el evento de Outlook {$mapeo->outlook_event_id} al desvincular: {$e->getMessage()}");
+                        Log::warning("No se pudo borrar el evento de Outlook {$mapeo->outlook_event_id} al desvincular (".get_class($e).").");
                     }
                 }
             }
         } catch (\Throwable $e) {
-            Log::warning("No se pudo limpiar Outlook al desvincular la conexión #{$c->id}: {$e->getMessage()}");
+            Log::warning("No se pudo limpiar Outlook al desvincular la conexión #{$c->id} (".get_class($e).").");
         }
 
         $c->eventos()->delete();
@@ -234,12 +234,12 @@ class OutlookVacaciones
 
                     // Otro fallo de BD: el evento ya existe en Outlook sin mapeo; se quita para no dejarlo huérfano.
                     $fallos++;
-                    Log::error("No se pudo guardar el mapeo de la solicitud de vacaciones #{$solicitud->id} (conexión #{$c->id}): ".($e->getPrevious()?->getMessage() ?? 'error de base de datos'));
+                    Log::error("No se pudo guardar el mapeo de la solicitud de vacaciones #{$solicitud->id} (conexión #{$c->id}) (".get_class($e).").");
                     $this->borrarEnGraphSinLanzar($c, $eventoId);
                 }
             } catch (\Throwable $e) {
                 $fallos++;
-                Log::error("Error al agendar en Outlook la solicitud de vacaciones #{$solicitud->id}: {$e->getMessage()}");
+                Log::error("Error al agendar en Outlook la solicitud de vacaciones #{$solicitud->id} (".get_class($e).").");
             }
         }
 
@@ -273,7 +273,7 @@ class OutlookVacaciones
                 $borrados++;
             } catch (\Throwable $e) {
                 $fallos++;
-                Log::error("Error al borrar en Outlook el evento {$mapeo->outlook_event_id}: {$e->getMessage()}");
+                Log::error("Error al borrar en Outlook el evento {$mapeo->outlook_event_id} (".get_class($e).").");
             }
         }
 

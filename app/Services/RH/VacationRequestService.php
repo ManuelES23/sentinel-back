@@ -339,7 +339,7 @@ class VacationRequestService
             try {
                 app(OutlookVacaciones::class)->sincronizarSolicitud($solicitud);
             } catch (\Throwable $e) {
-                Log::warning('No se pudo sincronizar la solicitud de vacaciones '.$solicitud->id.' con Outlook: '.$e->getMessage());
+                Log::warning('No se pudo sincronizar la solicitud de vacaciones '.$solicitud->id.' con Outlook ('.get_class($e).').');
             }
         });
     }

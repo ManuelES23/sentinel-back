@@ -119,7 +119,7 @@ class ProfileOutlookVacacionesController extends Controller
                 (int) ($microsoft->expiresIn ?? 3600),
             );
         } catch (\Throwable $e) {
-            Log::error("No se pudo vincular Outlook (vacaciones) del usuario #{$usuario->id}: {$e->getMessage()}");
+            Log::error("No se pudo vincular Outlook (vacaciones) del usuario #{$usuario->id} (".get_class($e).").");
 
             return $this->redirigir('error');
         }
@@ -129,7 +129,7 @@ class ProfileOutlookVacacionesController extends Controller
             try {
                 app(OutlookVacaciones::class)->sincronizar($conexion);
             } catch (\Throwable $e) {
-                Log::warning("No se pudo sincronizar Outlook (vacaciones) de la conexión #{$conexion->id} tras vincular: {$e->getMessage()}");
+                Log::warning("No se pudo sincronizar Outlook (vacaciones) de la conexión #{$conexion->id} tras vincular (".get_class($e).").");
             }
         });
 

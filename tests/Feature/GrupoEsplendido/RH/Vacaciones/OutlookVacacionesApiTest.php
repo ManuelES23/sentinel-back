@@ -7,8 +7,13 @@ use App\Models\User;
 use App\Models\VacationOutlookConnection;
 use App\Models\VacationOutlookEvent;
 use App\Models\VacationRequest;
+use App\Services\RH\OutlookVacaciones;
 use App\Services\RH\VacationRequestService;
 use Carbon\Carbon;
+use Illuminate\Database\QueryException;
+use Illuminate\Log\Events\MessageLogged;
+use Illuminate\Support\Defer\DeferredCallbackCollection;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -308,6 +313,90 @@ class OutlookVacacionesApiTest extends TestCase
         Sanctum::actingAs($this->ajeno);
 
         $this->deleteJson(self::BASE)->assertOk()->assertJsonPath('message', 'Outlook desvinculado.');
+    }
+
+    /** Escucha todo lo que se registra en el log (mensaje + contexto serializado) durante la prueba. */
+    private function capturarLog(): \ArrayObject
+    {
+        $registros = new \ArrayObject();
+        Event::listen(MessageLogged::class, function (MessageLogged $e) use ($registros) {
+            $registros[] = $e->message.' '.json_encode($e->context, JSON_PARTIAL_OUTPUT_ON_ERROR);
+        });
+
+        return $registros;
+    }
+
+    private function assertLogSinSecreto(\ArrayObject $registros, string $pista): void
+    {
+        $this->assertTrue(
+            collect($registros)->contains(fn ($r) => str_contains($r, $pista)),
+            'Se esperaba un registro con «'.$pista.'»: '.json_encode($registros->getArrayCopy()),
+        );
+        foreach ($registros as $registro) {
+            $this->assertStringNotContainsString('SECRET-TOKEN', $registro);
+        }
+    }
+
+    private function excepcionConSecreto(): QueryException
+    {
+        return new QueryException('sqlite', 'insert into t (access_token) values (?)', ['SECRET-TOKEN'], new \PDOException('SECRET-TOKEN duplicado'));
+    }
+
+    public function test_si_vincular_falla_por_la_base_el_log_no_lleva_el_mensaje_ni_los_bindings(): void
+    {
+        VacationOutlookConnection::creating(function () {
+            throw $this->excepcionConSecreto();
+        });
+        $registros = $this->capturarLog();
+        $this->nonceVacaciones('nonce-vac');
+        $this->simularSocialite();
+
+        $respuesta = $this->get(self::CALLBACK.'?state=nonce-vac');
+
+        $this->assertStringEndsWith('/profile?tab=approvals&outlook=error', $respuesta->headers->get('Location'));
+        $this->assertDatabaseCount('vacation_outlook_connections', 0);
+        $this->assertLogSinSecreto($registros, "usuario #{$this->director->id}");
+    }
+
+    public function test_si_la_primera_sincronizacion_falla_el_log_no_lleva_el_mensaje(): void
+    {
+        $this->app->bind(OutlookVacaciones::class, fn () => new class extends OutlookVacaciones
+        {
+            public function sincronizar(VacationOutlookConnection $c): array
+            {
+                throw new QueryException('sqlite', 'update t set access_token = ?', ['SECRET-TOKEN'], new \PDOException('SECRET-TOKEN'));
+            }
+        });
+        $registros = $this->capturarLog();
+        $this->nonceVacaciones('nonce-vac');
+        $this->simularSocialite();
+
+        $respuesta = $this->get(self::CALLBACK.'?state=nonce-vac');
+        app(DeferredCallbackCollection::class)->invoke();
+
+        $this->assertStringEndsWith('outlook=ok', $respuesta->headers->get('Location'));
+        $this->assertLogSinSecreto($registros, 'tras vincular');
+    }
+
+    public function test_si_el_defer_de_aprobar_falla_el_log_no_lleva_el_mensaje(): void
+    {
+        $this->app->bind(OutlookVacaciones::class, fn () => new class extends OutlookVacaciones
+        {
+            public function sincronizarSolicitud(VacationRequest $s): void
+            {
+                throw new QueryException('sqlite', 'insert into t (access_token) values (?)', ['SECRET-TOKEN'], new \PDOException('SECRET-TOKEN'));
+            }
+        });
+        $registros = $this->capturarLog();
+        $solicitante = $this->empleadoConUsuario($this->empresa);
+        $lunes = today()->next(Carbon::MONDAY)->addWeeks(2);
+        $servicio = app(VacationRequestService::class);
+        $solicitud = $servicio->crear($solicitante, $lunes, $lunes->copy()->addDays(4), 'Descanso familiar largo', VacationRequest::SOURCE_PORTAL);
+
+        $servicio->aprobarPaso($solicitud, $this->director);
+        app(DeferredCallbackCollection::class)->invoke();
+
+        $this->assertLogSinSecreto($registros, "solicitud de vacaciones {$solicitud->id}");
     }
 
     public function test_las_rutas_exigen_sesion(): void
