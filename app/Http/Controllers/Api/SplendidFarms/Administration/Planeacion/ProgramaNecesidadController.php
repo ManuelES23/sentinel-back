@@ -4,15 +4,11 @@ namespace App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion;
 
 use App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\Concerns\PermisoPlaneacion;
 use App\Http\Controllers\Controller;
-use App\Models\CRM\CrmCliente;
-use App\Models\Enterprise;
-use App\Models\Planeacion\Presentacion;
 use App\Models\Planeacion\ProgramaNecesidad;
 use App\Models\Planeacion\ProgramaSemanal;
 use App\Services\Planeacion\ProgramaSemanalService;
 use App\Services\Planeacion\RegistroCambiosPrograma;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
@@ -21,8 +17,11 @@ use Illuminate\Validation\ValidationException;
 /**
  * Necesidades de ventas de la semana: un renglón por cliente, bodega y
  * presentación, con las cajas de cada día y una o más variedades aceptadas
- * del mismo grupo de balance. Todas las escrituras exigen
- * `necesidades-venta.capturar` y avisan en tiempo real.
+ * del mismo grupo de balance.
+ *
+ * La captura renglón por renglón vive en `HojaNecesidadesController` (guardado
+ * en lote); aquí queda copiar la semana anterior y las reglas de un renglón
+ * que la Hoja reutiliza. Exige `necesidades-venta.capturar` y avisa en tiempo real.
  *
  * Los servicios se inyectan por método y no por constructor: guardan cálculos
  * en memoria y el controlador puede quedar vivo entre peticiones.
@@ -31,113 +30,41 @@ class ProgramaNecesidadController extends Controller
 {
     use PermisoPlaneacion;
 
-    private const MAX_CAJAS = 999999;
-
-    private const MENSAJE_GRUPO = 'Las variedades deben ser del mismo grupo de balance';
-
-    /** Campos que, si llegan, hacen de la actualización una edición completa del renglón. */
-    private const CAMPOS_COMPLETOS = ['bodega_id', 'cliente_id', 'cliente_nombre', 'presentacion_id', 'tipo_empaque_id', 'variedad_ids'];
-
-    /** Crea un renglón de necesidad en la semana. */
-    public function store(Request $request, ProgramaSemanal $programa, ProgramaSemanalService $servicio, RegistroCambiosPrograma $registro): JsonResponse
-    {
-        $this->exigirPermiso('necesidades-venta', 'capturar');
-
-        $datos = $this->validarCompleto($request, $servicio);
-        $this->exigirTemporadaAbierta($programa, $datos['cultivo_id'], $servicio);
-
-        $necesidad = DB::transaction(function () use ($programa, $datos, $registro) {
-            $necesidad = ProgramaNecesidad::create($this->atributos($datos) + [
-                'programa_id' => $programa->id,
-                'created_by' => Auth::id(),
-                'updated_by' => Auth::id(),
-            ]);
-            $necesidad->variedades()->sync($datos['variedad_ids']);
-            $registro->emitir($programa);
-
-            return $necesidad;
-        });
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Necesidad guardada.',
-            'data' => $this->payload($necesidad),
-        ], 201);
-    }
+    public const MAX_CAJAS = 999999;
 
     /**
-     * Cambia un renglón. Acepta los campos completos, solo las seis cajas, o
-     * un solo día `{dia, cajas}` (la Hoja edita celda por celda).
+     * Reglas de validación de un renglón completo. `$prefijo` es la ruta del
+     * renglón dentro del cuerpo con su punto final (`'nuevas.*.'`, o `''` si el
+     * renglón es el cuerpo mismo).
+     *
+     * El color se manda como `variedad_ids` o como `grupo_id` (un grupo de
+     * balance: su id, o «v{id}» si la variedad no tiene grupo), nunca los dos.
+     * Esto solo revisa forma y catálogos activos; las reglas de negocio
+     * (cultivo, grupo, temporada) las aplica quien guarda.
+     *
+     * @return array<string, list<mixed>>
      */
-    public function update(Request $request, ProgramaNecesidad $necesidad, ProgramaSemanalService $servicio, RegistroCambiosPrograma $registro): JsonResponse
+    public static function reglasRenglon(string $prefijo): array
     {
-        $this->exigirPermiso('necesidades-venta', 'capturar');
+        $p = $prefijo;
 
-        $programa = $necesidad->programa()->firstOrFail();
-
-        if ($request->has('dia')) {
-            $datos = $request->validate([
-                'dia' => ['required', 'integer', 'between:0,5'],
-                'cajas' => ['required', 'integer', 'min:0', 'max:'.self::MAX_CAJAS],
-            ]);
-            $modo = 'dia';
-        } elseif ($request->hasAny(self::CAMPOS_COMPLETOS)) {
-            $datos = $this->validarCompleto($request, $servicio);
-            $modo = 'completo';
-        } else {
-            $datos = $request->validate($this->reglasCajas());
-            $modo = 'cajas';
-        }
-        $this->exigirTemporadaAbierta($programa, $modo === 'completo' ? $datos['cultivo_id'] : (int) $necesidad->cultivo_id, $servicio);
-
-        DB::transaction(function () use ($necesidad, $programa, $datos, $modo, $registro) {
-            // Se relee con bloqueo: dos celdas editadas a la vez no se pisan.
-            $actual = ProgramaNecesidad::whereKey($necesidad->id)->lockForUpdate()->firstOrFail();
-            $antes = $this->instantanea($actual);
-
-            if ($modo === 'dia') {
-                $actual->{"cajas_{$datos['dia']}"} = (int) $datos['cajas'];
-            } elseif ($modo === 'cajas') {
-                $actual->fill($this->atributosCajas($datos['cajas']));
-            } else {
-                $actual->fill($this->atributos($datos));
-            }
-
-            if ($actual->isDirty()) {
-                $actual->updated_by = Auth::id();
-                $actual->save();
-            }
-            if ($modo === 'completo') {
-                $actual->variedades()->sync($datos['variedad_ids']);
-            }
-
-            // Sin cambio de valor no hay aviso.
-            if ($antes != $this->instantanea($actual)) {
-                $registro->emitir($programa);
-            }
-
-            $necesidad->setRawAttributes($actual->getAttributes(), true);
-        });
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Necesidad actualizada.',
-            'data' => $this->payload($necesidad),
-        ]);
-    }
-
-    public function destroy(ProgramaNecesidad $necesidad, RegistroCambiosPrograma $registro): JsonResponse
-    {
-        $this->exigirPermiso('necesidades-venta', 'capturar');
-
-        $programa = $necesidad->programa()->firstOrFail();
-
-        DB::transaction(function () use ($necesidad, $programa, $registro) {
-            $necesidad->delete();
-            $registro->emitir($programa);
-        });
-
-        return response()->json(['success' => true, 'message' => 'Necesidad eliminada.']);
+        return [
+            "{$p}bodega_id" => ['required', 'integer', Rule::exists('plan_bodegas_destino', 'id')->where('is_active', true)],
+            "{$p}cliente_id" => ['nullable', 'integer'],
+            "{$p}cliente_nombre" => ['nullable', "required_without:{$p}cliente_id", 'string', 'max:150'],
+            "{$p}presentacion_id" => ['required', 'integer', Rule::exists('plan_presentaciones', 'id')->where('is_active', true)],
+            "{$p}tipo_empaque_id" => ['nullable', 'integer', Rule::exists('plan_tipos_empaque', 'id')->where('is_active', true)],
+            // Sin `distinct`: con comodines compara contra las variedades de todos los renglones.
+            "{$p}variedad_ids" => ['nullable', "required_without:{$p}grupo_id", "prohibits:{$p}grupo_id", 'array', 'min:1', 'max:50', function ($atributo, $valor, $falla) {
+                if (is_array($valor) && count(array_unique($valor)) !== count($valor)) {
+                    $falla('Hay variedades repetidas.');
+                }
+            }],
+            "{$p}variedad_ids.*" => ['required', 'integer'],
+            "{$p}grupo_id" => ['nullable', "required_without:{$p}variedad_ids", 'regex:/^v?\d{1,10}$/'],
+            "{$p}cajas" => ['required', 'array', 'size:6'],
+            "{$p}cajas.*" => ['required', 'integer', 'min:0', 'max:'.self::MAX_CAJAS],
+        ];
     }
 
     /**
@@ -166,7 +93,7 @@ class ProgramaNecesidadController extends Controller
                 throw ValidationException::withMessages(['semana' => 'La semana anterior no tiene necesidades']);
             }
             foreach ($origen->pluck('cultivo_id')->unique() as $cultivoId) {
-                $this->exigirTemporadaAbierta($programa, (int) $cultivoId, $servicio, 'semana');
+                $this->exigirTemporadaAbierta($programa, (int) $cultivoId, $servicio);
             }
 
             foreach ($origen as $o) {
@@ -195,130 +122,16 @@ class ProgramaNecesidadController extends Controller
         ]);
     }
 
-    // ── Validación ──────────────────────────────────────
-
-    /** @return array<string, list<mixed>> */
-    private function reglasCajas(): array
-    {
-        return [
-            'cajas' => ['required', 'array', 'size:6'],
-            'cajas.*' => ['required', 'integer', 'min:0', 'max:'.self::MAX_CAJAS],
-        ];
-    }
-
     /**
-     * Campos completos ya validados, con el nombre del cliente resuelto (el
-     * del CRM si hay `cliente_id`) y las variedades comprobadas contra la
-     * presentación (cultivo) y el grupo de balance.
-     *
-     * @return array{bodega_id: int, cliente_id: ?int, cliente_nombre: string, presentacion_id: int, cultivo_id: int, tipo_empaque_id: ?int, variedad_ids: list<int>, cajas: list<int>}
+     * Cada cultivo copiado debe tener una temporada abierta que toque la
+     * semana: una necesidad en una semana sin producción arrastraría su
+     * negativo al inventario inicial de las siguientes.
      */
-    private function validarCompleto(Request $request, ProgramaSemanalService $servicio): array
-    {
-        // El nombre se guarda sin espacios sobrantes.
-        if (is_string($request->input('cliente_nombre'))) {
-            $nombre = trim($request->input('cliente_nombre'));
-            $request->merge(['cliente_nombre' => $nombre === '' ? null : $nombre]);
-        }
-
-        $datos = $request->validate([
-            'bodega_id' => ['required', 'integer', Rule::exists('plan_bodegas_destino', 'id')->where('is_active', true)],
-            'cliente_id' => ['nullable', 'integer'],
-            'cliente_nombre' => ['nullable', 'required_without:cliente_id', 'string', 'max:150'],
-            'presentacion_id' => ['required', 'integer', Rule::exists('plan_presentaciones', 'id')->where('is_active', true)],
-            'tipo_empaque_id' => ['nullable', 'integer', Rule::exists('plan_tipos_empaque', 'id')->where('is_active', true)],
-            'variedad_ids' => ['required', 'array', 'min:1', 'max:50'],
-            'variedad_ids.*' => ['required', 'integer', 'distinct'],
-        ] + $this->reglasCajas());
-
-        $nombre = $datos['cliente_nombre'] ?? null;
-        $clienteId = isset($datos['cliente_id']) ? (int) $datos['cliente_id'] : null;
-        if ($clienteId !== null) {
-            $nombre = $this->nombreClienteSbp($clienteId);
-        }
-
-        $cultivoId = (int) Presentacion::whereKey($datos['presentacion_id'])->value('cultivo_id');
-        $variedadIds = array_map('intval', $datos['variedad_ids']);
-        $this->exigirMismoGrupo($variedadIds, $cultivoId, $servicio);
-
-        return [
-            'bodega_id' => (int) $datos['bodega_id'],
-            'cliente_id' => $clienteId,
-            'cliente_nombre' => $nombre,
-            'presentacion_id' => (int) $datos['presentacion_id'],
-            'cultivo_id' => $cultivoId,
-            'tipo_empaque_id' => isset($datos['tipo_empaque_id']) ? (int) $datos['tipo_empaque_id'] : null,
-            'variedad_ids' => $variedadIds,
-            'cajas' => array_map('intval', array_values($datos['cajas'])),
-        ];
-    }
-
-    /**
-     * El cultivo del renglón debe tener una temporada abierta que toque la
-     * semana: una necesidad en una semana sin producción
-     * arrastraría su negativo al inventario inicial de las siguientes.
-     */
-    private function exigirTemporadaAbierta(ProgramaSemanal $programa, int $cultivoId, ProgramaSemanalService $servicio, string $campo = 'presentacion_id'): void
+    private function exigirTemporadaAbierta(ProgramaSemanal $programa, int $cultivoId, ProgramaSemanalService $servicio): void
     {
         if (! $servicio->temporadasDeSemana($programa)->contains(fn ($t) => (int) $t->cultivo_id === $cultivoId)) {
-            throw ValidationException::withMessages([$campo => 'El cultivo no tiene una temporada abierta en esta semana.']);
+            throw ValidationException::withMessages(['semana' => 'El cultivo no tiene una temporada abierta en esta semana.']);
         }
-    }
-
-    /** Nombre del cliente del CRM de Splendid by Porvenir; 422 si no es de esa empresa. */
-    private function nombreClienteSbp(int $clienteId): string
-    {
-        $empresaId = Enterprise::where('slug', 'splendidbyporvenir')->value('id');
-        $nombre = $empresaId
-            ? CrmCliente::where('empresa_id', $empresaId)->whereKey($clienteId)->value('nombre')
-            : null;
-
-        if ($nombre === null) {
-            throw ValidationException::withMessages(['cliente_id' => 'El cliente no es del CRM de Splendid by Porvenir.']);
-        }
-
-        return $nombre;
-    }
-
-    /**
-     * Todas las variedades deben existir, ser del cultivo de la presentación
-     * y caer en el mismo grupo de balance.
-     *
-     * @param  list<int>  $variedadIds
-     */
-    private function exigirMismoGrupo(array $variedadIds, int $cultivoId, ProgramaSemanalService $servicio): void
-    {
-        $grupos = [];
-        foreach ($variedadIds as $variedadId) {
-            if ($servicio->cultivoDeVariedad($variedadId) !== $cultivoId) {
-                throw ValidationException::withMessages(['variedad_ids' => self::MENSAJE_GRUPO]);
-            }
-            $grupos[$servicio->grupoDeVariedad($variedadId)] = true;
-        }
-
-        if (count($grupos) !== 1) {
-            throw ValidationException::withMessages(['variedad_ids' => self::MENSAJE_GRUPO]);
-        }
-    }
-
-    // ── Salidas ─────────────────────────────────────────
-
-    /**
-     * Atributos de la tabla a partir de los campos completos validados.
-     *
-     * @param  array<string, mixed>  $datos
-     * @return array<string, mixed>
-     */
-    private function atributos(array $datos): array
-    {
-        return [
-            'bodega_id' => $datos['bodega_id'],
-            'cliente_id' => $datos['cliente_id'],
-            'cliente_nombre' => $datos['cliente_nombre'],
-            'cultivo_id' => $datos['cultivo_id'],
-            'presentacion_id' => $datos['presentacion_id'],
-            'tipo_empaque_id' => $datos['tipo_empaque_id'],
-        ] + $this->atributosCajas($datos['cajas']);
     }
 
     /**
@@ -333,37 +146,5 @@ class ProgramaNecesidadController extends Controller
         }
 
         return $salida;
-    }
-
-    /** Valores del renglón para la respuesta y para saber si una edición cambió algo. */
-    private function instantanea(ProgramaNecesidad $n): array
-    {
-        $variedades = DB::table('programa_necesidad_variedad')
-            ->where('necesidad_id', $n->id)
-            ->pluck('variedad_id')
-            ->map(fn ($id) => (int) $id)
-            ->sort()
-            ->values()
-            ->all();
-
-        return [
-            'bodega_id' => $n->bodega_id,
-            'cliente_id' => $n->cliente_id,
-            'cliente_nombre' => $n->cliente_nombre,
-            'presentacion_id' => $n->presentacion_id,
-            'tipo_empaque_id' => $n->tipo_empaque_id,
-            'variedad_ids' => $variedades,
-            'cajas' => $n->cajasPorDia(),
-        ];
-    }
-
-    private function payload(ProgramaNecesidad $n): array
-    {
-        return [
-            'id' => $n->id,
-            'programa_id' => $n->programa_id,
-            'cultivo_id' => $n->cultivo_id,
-            'en_crm' => $n->cliente_id !== null,
-        ] + $this->instantanea($n);
     }
 }
