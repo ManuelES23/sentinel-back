@@ -37,6 +37,7 @@ class Convenio extends Model
         'fecha_inicio',
         'fecha_fin',
         'modo_volumen',
+        'usa_calibres',
         'volumen_total',
         'status',
         'notas',
@@ -46,6 +47,7 @@ class Convenio extends Model
     protected $attributes = [
         'status' => 'borrador',
         'porcentaje_rezaga' => 0,
+        'usa_calibres' => false,
     ];
 
     protected $casts = [
@@ -58,6 +60,7 @@ class Convenio extends Model
         'fecha_inicio' => 'date:Y-m-d',
         'fecha_fin' => 'date:Y-m-d',
         'volumen_total' => 'decimal:2',
+        'usa_calibres' => 'boolean',
         'created_by' => 'integer',
     ];
 
@@ -94,6 +97,11 @@ class Convenio extends Model
     public function metas(): HasMany
     {
         return $this->hasMany(ConvenioMeta::class, 'convenio_id');
+    }
+
+    public function calibres(): HasMany
+    {
+        return $this->hasMany(ConvenioCalibre::class, 'convenio_id');
     }
 
     public function recepciones(): HasMany

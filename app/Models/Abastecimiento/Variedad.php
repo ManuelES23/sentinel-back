@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 /** Variedad de un cultivo de Abastecimiento (p. ej. Biloxi). */
@@ -36,5 +37,11 @@ class Variedad extends Model
     public function cultivo(): BelongsTo
     {
         return $this->belongsTo(Cultivo::class, 'cultivo_id');
+    }
+
+    /** Calibres de la variedad; se consumen ordenados por `orden` y `nombre`. */
+    public function calibres(): HasMany
+    {
+        return $this->hasMany(VariedadCalibre::class, 'variedad_id');
     }
 }

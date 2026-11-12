@@ -18,12 +18,14 @@ class ConvenioMeta extends Model
 
     protected $fillable = [
         'convenio_id',
+        'calibre_id',
         'semana',
         'cantidad',
     ];
 
     protected $casts = [
         'convenio_id' => 'integer',
+        'calibre_id' => 'integer',
         'semana' => 'date:Y-m-d',
         'cantidad' => 'decimal:2',
     ];
@@ -31,5 +33,10 @@ class ConvenioMeta extends Model
     public function convenio(): BelongsTo
     {
         return $this->belongsTo(Convenio::class, 'convenio_id');
+    }
+
+    public function calibre(): BelongsTo
+    {
+        return $this->belongsTo(VariedadCalibre::class, 'calibre_id');
     }
 }
