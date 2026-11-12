@@ -12,7 +12,7 @@ use App\Models\VacationRequestApproval;
 use App\Services\RH\OutlookVacaciones;
 use App\Services\RH\VacationRequestService;
 use Carbon\Carbon;
-use Illuminate\Client\Request;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -324,6 +324,72 @@ class OutlookVacacionesSincronizacionTest extends TestCase
         $this->assertSame(2, VacationOutlookEvent::count());
         $this->assertNull($conexion->fresh()->ultimo_error);
         $this->assertSame($primera->id, VacationOutlookEvent::where('outlook_event_id', 'evt-3')->value('vacation_request_id'));
+    }
+
+    public function test_conflicto_del_indice_unico_borra_el_evento_sobrante_y_no_cuenta_como_fallo(): void
+    {
+        $solicitud = $this->aprobadaPorElDirector();
+        $conexion = $this->conexion();
+        Http::fake([
+            // Otro proceso agenda la misma solicitud entre nuestro POST y el guardado del mapeo.
+            'graph.microsoft.com/v1.0/me/events' => function () use ($conexion, $solicitud) {
+                VacationOutlookEvent::create([
+                    'vacation_outlook_connection_id' => $conexion->id,
+                    'vacation_request_id' => $solicitud->id,
+                    'outlook_event_id' => 'evt-otro-proceso',
+                    'enviado_at' => now(),
+                ]);
+
+                return Http::response(['id' => 'evt-sobrante'], 201);
+            },
+            'graph.microsoft.com/v1.0/me/events/*' => Http::response(null, 204),
+        ]);
+
+        $resultado = $this->outlook()->sincronizar($conexion);
+
+        $this->assertSame(0, $resultado['creados']);
+        Http::assertSent(fn ($request) => $request->method() === 'DELETE' && $request->url() === self::EVENTOS.'/evt-sobrante');
+        Http::assertNotSent(fn ($request) => $request->method() === 'DELETE' && $request->url() === self::EVENTOS.'/evt-otro-proceso');
+        $this->assertSame(['evt-otro-proceso'], VacationOutlookEvent::pluck('outlook_event_id')->all());
+        $this->assertNull($conexion->fresh()->ultimo_error);
+        $this->assertNotNull($conexion->fresh()->ultimo_sync_at);
+    }
+
+    public function test_un_fallo_de_bd_distinto_al_guardar_el_mapeo_cuenta_como_fallo_y_borra_el_evento(): void
+    {
+        $this->aprobadaPorElDirector();
+        $conexion = $this->conexion();
+        $this->fakeGraph();
+        VacationOutlookEvent::creating(fn () => throw new QueryException('mysql', 'insert into vacation_outlook_events', [], new \Exception('conexión perdida')));
+
+        try {
+            $resultado = $this->outlook()->sincronizar($conexion);
+        } finally {
+            VacationOutlookEvent::flushEventListeners();
+        }
+
+        $this->assertSame(0, $resultado['creados']);
+        $this->assertSame(0, VacationOutlookEvent::count());
+        // El evento recién creado no queda huérfano en Outlook.
+        Http::assertSent(fn ($request) => $request->method() === 'DELETE' && $request->url() === self::EVENTOS.'/evt-1');
+        $conexion = $conexion->fresh();
+        $this->assertSame('Algunos eventos no se pudieron sincronizar con Outlook; se reintentará en la siguiente corrida.', $conexion->ultimo_error);
+        $this->assertNull($conexion->ultimo_sync_at);
+    }
+
+    public function test_graph_2xx_sin_id_cuenta_como_fallo_y_no_guarda_mapeo_vacio(): void
+    {
+        $this->aprobadaPorElDirector();
+        $conexion = $this->conexion();
+        Http::fake(['graph.microsoft.com/v1.0/me/events' => Http::response([], 201)]);
+
+        $resultado = $this->outlook()->sincronizar($conexion);
+
+        $this->assertSame(0, $resultado['creados']);
+        $this->assertSame(0, VacationOutlookEvent::count());
+        $conexion = $conexion->fresh();
+        $this->assertSame('Algunos eventos no se pudieron sincronizar con Outlook; se reintentará en la siguiente corrida.', $conexion->ultimo_error);
+        $this->assertNull($conexion->ultimo_sync_at);
     }
 
     public function test_si_el_candado_esta_tomado_no_hace_nada(): void

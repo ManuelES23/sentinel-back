@@ -201,17 +201,41 @@ class OutlookVacaciones
                 }
                 $respuesta->throw();
 
+                $eventoId = $respuesta->json('id');
+                if (! is_string($eventoId) || $eventoId === '') {
+                    // Sin id no hay mapeo posible (ni forma de borrarlo después): se reintenta en la siguiente corrida.
+                    $fallos++;
+                    Log::error("Graph respondió sin id al agendar la solicitud de vacaciones #{$solicitud->id} (conexión #{$c->id}).");
+
+                    continue;
+                }
+
                 try {
                     VacationOutlookEvent::create([
                         'vacation_outlook_connection_id' => $c->id,
                         'vacation_request_id' => $solicitud->id,
-                        'outlook_event_id' => $respuesta->json('id'),
+                        'outlook_event_id' => $eventoId,
                         'enviado_at' => now(),
                     ]);
                     $creados++;
                 } catch (QueryException $e) {
-                    // Índice único (conexión, solicitud): ya había un mapeo; el transactionId evitó el duplicado en Outlook.
-                    Log::warning("Evento de vacaciones #{$solicitud->id} ya estaba mapeado en la conexión #{$c->id}.");
+                    if ($this->esConflictoUnico($e)) {
+                        // Otro proceso ya mapeó (conexión, solicitud) entre el POST y este guardado: se quita el sobrante.
+                        $mapeado = VacationOutlookEvent::where('vacation_outlook_connection_id', $c->id)
+                            ->where('vacation_request_id', $solicitud->id)
+                            ->value('outlook_event_id');
+                        Log::warning("Evento de vacaciones #{$solicitud->id} ya estaba mapeado en la conexión #{$c->id}.");
+                        if ($mapeado !== $eventoId) {
+                            $this->borrarEnGraphSinLanzar($c, $eventoId);
+                        }
+
+                        continue;
+                    }
+
+                    // Otro fallo de BD: el evento ya existe en Outlook sin mapeo; se quita para no dejarlo huérfano.
+                    $fallos++;
+                    Log::error("No se pudo guardar el mapeo de la solicitud de vacaciones #{$solicitud->id} (conexión #{$c->id}): ".($e->getPrevious()?->getMessage() ?? 'error de base de datos'));
+                    $this->borrarEnGraphSinLanzar($c, $eventoId);
                 }
             } catch (\Throwable $e) {
                 $fallos++;
@@ -254,6 +278,26 @@ class OutlookVacaciones
         }
 
         return $borrados;
+    }
+
+    /** Violación del índice único (MySQL 1062, SQLite 19 con UNIQUE, Postgres 23505); no otras restricciones ni fallos de conexión. */
+    private function esConflictoUnico(QueryException $e): bool
+    {
+        $estado = (string) ($e->errorInfo[0] ?? '');
+        $codigo = (int) ($e->errorInfo[1] ?? 0);
+        $mensaje = $e->getPrevious()?->getMessage() ?? '';
+
+        return $estado === '23505'
+            || ($estado === '23000' && ($codigo === 1062 || str_contains($mensaje, 'UNIQUE constraint failed') || str_contains($mensaje, 'Duplicate entry')));
+    }
+
+    private function borrarEnGraphSinLanzar(VacationOutlookConnection $c, string $eventoId): void
+    {
+        try {
+            $this->graph($c)->delete(self::GRAPH_BASE."/me/events/{$eventoId}");
+        } catch (\Throwable $e) {
+            Log::warning("No se pudo borrar el evento sobrante {$eventoId} de Outlook (conexión #{$c->id}).");
+        }
     }
 
     private function asegurarTokenVigente(VacationOutlookConnection $c): bool
