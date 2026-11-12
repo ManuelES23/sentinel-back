@@ -27,7 +27,7 @@ return new class extends Migration
             'icon' => 'LayoutDashboard',
             'permisos' => [
                 ['slug' => 'view', 'name' => 'Ver', 'description' => 'Ver el tablero semanal'],
-                ['slug' => 'editar-notas', 'name' => 'Editar notas', 'description' => 'Editar las notas de la semana y los acuerdos de la junta'],
+                ['slug' => 'editar-notas', 'name' => 'Editar notas', 'description' => 'Editar las notas de la semana'],
             ],
         ],
         'plan-corte' => [
@@ -67,11 +67,11 @@ return new class extends Migration
         ],
         'configuracion' => [
             'name' => 'Configuración',
-            'description' => 'Catálogos, grupos de balance, recetas y rendimientos',
+            'description' => 'Catálogos, grupos de balance, rendimientos e inventario inicial',
             'icon' => 'Settings',
             'permisos' => [
                 ['slug' => 'view', 'name' => 'Ver', 'description' => 'Ver la configuración de Planeación'],
-                ['slug' => 'editar', 'name' => 'Editar', 'description' => 'Editar catálogos, grupos, recetas y rendimientos'],
+                ['slug' => 'editar', 'name' => 'Editar', 'description' => 'Editar rendimientos, grupos, catálogos e inventario inicial'],
             ],
         ],
     ];
