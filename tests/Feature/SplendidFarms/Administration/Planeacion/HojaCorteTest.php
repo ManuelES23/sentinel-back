@@ -160,8 +160,8 @@ class HojaCorteTest extends TestCase
             ->assertJsonMissingValidationErrors('celdas.1.hectareas');
 
         $texto = $respuesta->json('errors')['celdas.0.hectareas'][0];
-        $this->assertStringContainsString($etapa->codigo, $texto);
-        $this->assertStringContainsString('8.00', $texto);
+        // 8 ha de superficie − 5 en WK47 = 3 libres; pedir 4 pasa 1.
+        $this->assertSame($etapa->codigo.': pasa 1.00 ha de las 3.00 disponibles (superficie 8.00 ha).', $texto);
 
         $this->assertSame(1, ProgramaCorte::count());
         Event::assertNotDispatched(ProgramaSemanalUpdated::class);
@@ -196,6 +196,57 @@ class HojaCorteTest extends TestCase
         // Quedan 7.85: con 1 decimal diría 7.9 y escribir 7.9 volvería a dar 422.
         $this->putJson($this->urlHoja(), ['celdas' => [$this->celda($etapa, 1, 7.9)]])->assertUnprocessable();
         $this->putJson($this->urlHoja(), ['celdas' => [$this->celda($etapa, 1, 7.85)]])->assertOk();
+    }
+
+    public function test_con_la_superficie_reducida_bajar_pasa_y_subir_no(): void
+    {
+        $this->comoCapturista();
+        $etapa = $this->crearEtapa('Amarillo', 10);
+        $this->corte($this->programa, 'Amarillo', 0, 6, $etapa);
+        $etapa->update(['superficie' => 5]); // ahora hay 6 cortadas en 5 ha
+
+        // Bajar de 6 a 4 no hace que se pase más.
+        $this->putJson($this->urlHoja(), ['celdas' => [$this->celda($etapa, 0, 4)]])->assertOk();
+        $this->assertSame('4.00', ProgramaCorte::first()->hectareas);
+
+        // Subir sobre lo libre (5) sí se rechaza.
+        $this->putJson($this->urlHoja(), ['celdas' => [$this->celda($etapa, 0, 5.5)]])
+            ->assertUnprocessable()->assertJsonValidationErrors('celdas.0.hectareas');
+        $this->assertSame('4.00', ProgramaCorte::first()->hectareas);
+    }
+
+    public function test_con_otra_semana_rebasando_la_etapa_se_puede_bajar_y_limpiar(): void
+    {
+        $this->comoCapturista();
+        $etapa = $this->crearEtapa('Amarillo', 10);
+        $anterior = ProgramaSemanal::create(['lunes' => '2026-11-16']);
+        $this->corte($anterior, 'Amarillo', 0, 6, $etapa);
+        $this->corte($this->programa, 'Amarillo', 1, 2, $etapa);
+        $etapa->update(['superficie' => 5]); // libres: 5 − 6 = −1
+
+        $this->putJson($this->urlHoja(), ['celdas' => [$this->celda($etapa, 1, 1)]])->assertOk();
+        $this->putJson($this->urlHoja(), ['celdas' => [$this->celda($etapa, 1, 3)]])->assertUnprocessable();
+        $this->putJson($this->urlHoja(), ['celdas' => [$this->celda($etapa, 1, 0)]])->assertOk();
+
+        $this->assertSame(0, ProgramaCorte::where('programa_id', $this->programa->id)->count());
+        $this->assertSame(1, ProgramaCorte::where('programa_id', $anterior->id)->count());
+    }
+
+    public function test_una_celda_en_cero_limpia_un_corte_fuera_de_regla(): void
+    {
+        $this->comoCapturista();
+        $etapa = $this->crearEtapa('Amarillo', 10);
+        $this->corte($this->programa, 'Amarillo', 2, 3, $etapa);
+        $this->lote->update(['is_active' => false]);
+        $etapa->update(['is_active' => false]);
+
+        // Con valor, la etapa ya no es válida; en cero solo borra.
+        $this->putJson($this->urlHoja(), ['celdas' => [$this->celda($etapa, 2, 4)]])
+            ->assertUnprocessable()->assertJsonValidationErrors('celdas.0.etapa_id');
+        $this->assertSame('3.00', ProgramaCorte::first()->hectareas);
+
+        $this->putJson($this->urlHoja(), ['celdas' => [$this->celda($etapa, 2, 0)]])->assertOk();
+        $this->assertSame(0, ProgramaCorte::count());
     }
 
     // ── Validación de celdas ────────────────────────────

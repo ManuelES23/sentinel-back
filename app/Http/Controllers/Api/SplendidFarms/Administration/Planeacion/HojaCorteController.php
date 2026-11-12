@@ -55,6 +55,19 @@ class HojaCorteController extends Controller
         $sinEtapa = $datos['sin_etapa'] ?? [];
 
         DB::transaction(function () use ($programa, $celdas, $sinEtapa, $servicio, $registro) {
+            // El bloqueo de las etapas DEBE ser la primera sentencia de la
+            // transacción. MySQL corre en REPEATABLE READ: la «foto» se toma en
+            // la primera lectura sin bloqueo, así que si cualquier lectura
+            // (temporadas, etapas, suma de cortes) va antes, quien espera el
+            // bloqueo obtiene la etapa pero sigue viendo la foto vieja, no ve
+            // los cortes que la otra captura acaba de confirmar y las dos
+            // rebasan la superficie. (SQLite en pruebas no puede ejercitarlo.)
+            $etapaIds = array_values(array_unique(array_map(fn ($c) => (int) $c['etapa_id'], $celdas)));
+            sort($etapaIds);
+            if ($etapaIds !== []) {
+                Etapa::whereIn('id', $etapaIds)->orderBy('id')->lockForUpdate()->pluck('id');
+            }
+
             $cambios = $this->planearCeldas($programa, $celdas, $servicio);
             $bajas = $this->planearSinEtapa($programa, $sinEtapa);
 
@@ -81,8 +94,12 @@ class HojaCorteController extends Controller
      * lote aplicados. Devuelve lo que hay que escribir; si algo falla lanza
      * un 422 y no se ha tocado nada.
      *
+     * Una celda en 0 o vacía solo borra: no se valida temporada, etapa ni
+     * variedad (un corte que quedó fuera de regla porque se cerró la
+     * temporada o se desactivó el lote debe poder limpiarse) y no entra al tope.
+     *
      * @param  list<array{temporada_id: int|string, etapa_id: int|string, dia: int|string, hectareas: mixed}>  $celdas
-     * @return list<array{temporada_id: int, etapa_id: int, variedad_id: int, dia: int, hectareas: float}>
+     * @return list<array{temporada_id: ?int, etapa_id: int, variedad_id: ?int, dia: int, hectareas: float}>
      */
     private function planearCeldas(ProgramaSemanal $programa, array $celdas, ProgramaSemanalService $servicio): array
     {
@@ -101,6 +118,19 @@ class HojaCorteController extends Controller
             $temporadaId = (int) $celda['temporada_id'];
             $etapaId = (int) $celda['etapa_id'];
             $dia = (int) $celda['dia'];
+            $hectareas = round((float) ($celda['hectareas'] ?? 0), 2);
+
+            $llave = $etapaId.'-'.$dia;
+            if (isset($vistas[$llave])) {
+                throw ValidationException::withMessages(["celdas.$i.dia" => 'La etapa y el día están repetidos en la petición.']);
+            }
+            $vistas[$llave] = true;
+
+            if ($hectareas <= 0) {
+                $planeadas[$i] = ['temporada_id' => null, 'etapa_id' => $etapaId, 'variedad_id' => null, 'dia' => $dia, 'hectareas' => 0.0];
+
+                continue;
+            }
 
             $temporada = $temporadas->get($temporadaId);
             if (! $temporada) {
@@ -117,18 +147,12 @@ class HojaCorteController extends Controller
                 throw ValidationException::withMessages(["celdas.$i.etapa_id" => 'La variedad de la etapa no es del cultivo de la temporada.']);
             }
 
-            $llave = $etapaId.'-'.$dia;
-            if (isset($vistas[$llave])) {
-                throw ValidationException::withMessages(["celdas.$i.dia" => 'La etapa y el día están repetidos en la petición.']);
-            }
-            $vistas[$llave] = true;
-
             $planeadas[$i] = [
                 'temporada_id' => $temporadaId,
                 'etapa_id' => $etapaId,
                 'variedad_id' => (int) $etapa->variedad_id,
                 'dia' => $dia,
-                'hectareas' => round((float) ($celda['hectareas'] ?? 0), 2),
+                'hectareas' => $hectareas,
             ];
         }
 
@@ -139,45 +163,57 @@ class HojaCorteController extends Controller
 
     /**
      * Ninguna etapa puede pasar de su superficie sumando sus cortes de todas
-     * las semanas, con los cambios de este lote ya aplicados. Se bloquean las
-     * etapas (en orden) para que dos capturas a la vez no la rebasen. El error
-     * se marca en la primera celda que la hace pasarse.
+     * las semanas, con los cambios de este lote ya aplicados. Las etapas ya
+     * están bloqueadas (ver `guardar`). El error se marca en la primera celda
+     * que hace pasarse a la etapa.
      *
-     * @param  array<int, array{etapa_id: int, dia: int, hectareas: float}>  $planeadas  Con la posición original de cada celda.
-     * @param  Collection<int, Etapa>  $etapas
+     * Bajar nunca hace que se pase más: si la superficie se redujo y la etapa
+     * ya estaba rebasada, se acepta cualquier total que no suba respecto de lo
+     * que las celdas del lote ya tenían guardado. Por eso el límite es
+     * `max(libres, ya_guardado)`.
+     *
+     * @param  array<int, array{etapa_id: int, dia: int, hectareas: float}>  $planeadas  Con la posición original de cada celda (las de 0 también, solo cuentan para saber qué reemplazan).
+     * @param  Collection<int, Etapa>  $etapas  Las etapas de las celdas con hectáreas.
      */
     private function exigirTope(ProgramaSemanal $programa, array $planeadas, Collection $etapas, ProgramaSemanalService $servicio): void
     {
-        Etapa::whereIn('id', $etapas->keys()->all())->orderBy('id')->lockForUpdate()->pluck('id');
-
-        // Lo que queda libre en cada etapa sin contar los cortes que esta hoja reemplaza.
-        $libres = [];
+        // Libre de la etapa sin contar los cortes que esta hoja reemplaza, y
+        // lo que esos cortes tenían guardado.
+        $limites = [];
         foreach ($etapas as $etapaId => $etapa) {
-            $dias = array_column(array_filter($planeadas, fn ($c) => $c['etapa_id'] === $etapaId), 'dia');
+            $deLaEtapa = array_filter($planeadas, fn ($c) => $c['etapa_id'] === $etapaId);
+            if (array_sum(array_column($deLaEtapa, 'hectareas')) <= 0) {
+                continue; // solo borra: no entra al tope
+            }
+            $dias = array_column($deLaEtapa, 'dia');
             $reemplazados = ProgramaCorte::where('programa_id', $programa->id)
                 ->where('etapa_id', $etapaId)
                 ->whereIn('dia', $dias)
-                ->pluck('id')
-                ->all();
-            $libres[$etapaId] = $servicio->haDisponibles($etapaId, $reemplazados);
+                ->get(['id', 'hectareas']);
+            $libres = $servicio->haDisponibles($etapaId, $reemplazados->pluck('id')->all());
+            $guardado = round((float) $reemplazados->sum('hectareas'), 2);
+
+            $limites[$etapaId] = max($libres, $guardado);
         }
 
         $acumulado = [];
         foreach ($planeadas as $i => $celda) {
             $etapaId = $celda['etapa_id'];
+            if ($celda['hectareas'] <= 0 || ! isset($limites[$etapaId])) {
+                continue;
+            }
             $acumulado[$etapaId] = round(($acumulado[$etapaId] ?? 0.0) + $celda['hectareas'], 2);
 
-            if ($acumulado[$etapaId] - $libres[$etapaId] > self::TOLERANCIA) {
+            if ($acumulado[$etapaId] - $limites[$etapaId] > self::TOLERANCIA) {
                 $etapa = $etapas->get($etapaId);
-                $superficie = (float) $etapa->superficie;
-                $otros = round($superficie - $libres[$etapaId], 2);
+                $exceso = round($acumulado[$etapaId] - $limites[$etapaId], 2);
 
                 throw ValidationException::withMessages(["celdas.$i.hectareas" => sprintf(
-                    '%s: pasa de las %s ha disponibles (otros cortes %s ha + esta hoja %s ha).',
+                    '%s: pasa %s ha de las %s disponibles (superficie %s ha).',
                     $etapa->codigo ?: $etapa->nombre,
-                    number_format($superficie, 2, '.', ''),
-                    number_format($otros, 2, '.', ''),
-                    number_format($acumulado[$etapaId], 2, '.', ''),
+                    number_format($exceso, 2, '.', ''),
+                    number_format(max(0.0, $limites[$etapaId]), 2, '.', ''),
+                    number_format((float) $etapa->superficie, 2, '.', ''),
                 )]);
             }
         }
