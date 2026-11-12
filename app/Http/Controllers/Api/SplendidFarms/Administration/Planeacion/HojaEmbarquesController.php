@@ -62,16 +62,27 @@ class HojaEmbarquesController extends Controller
 
         try {
             DB::transaction(function () use ($programa, $celdas, $servicio, $registro) {
-                // El bloqueo de las filas de embarque de la semana DEBE ser la
-                // primera sentencia de la transacción. MySQL corre en REPEATABLE
+                // El bloqueo de la fila del programa (la semana) DEBE ser la
+                // primera sentencia de la transacción. Se bloquea el padre y no
+                // las filas de embarque: con la semana vacía un `lockForUpdate`
+                // sobre `programa_id` solo toma un bloqueo de hueco, y los
+                // bloqueos de hueco no chocan entre sí: dos primeras capturas
+                // simultáneas lo pasarían, verían la semana vacía y sus INSERT
+                // se bloquearían mutuamente (deadlock 1213, un 500). Con el
+                // padre bloqueado todas las escrituras de la semana se
+                // serializan, haya o no filas. Además MySQL corre en REPEATABLE
                 // READ: la «foto» se toma en la primera lectura sin bloqueo, así
-                // que si cualquier otra lectura (bodegas, temporadas) va antes,
-                // quien espera el bloqueo obtiene las filas pero decide con la
-                // foto vieja: no ve lo que la otra captura acaba de confirmar y
-                // la pisa. (SQLite en pruebas no puede ejercitarlo.)
+                // que si cualquier otra lectura (embarques, bodegas, temporadas)
+                // va antes, quien espera el bloqueo decide con la foto vieja: no
+                // ve lo que la otra captura acaba de confirmar y la pisa.
+                // (SQLite en pruebas no puede ejercitarlo.)
+                if ($celdas !== []) {
+                    ProgramaSemanal::whereKey($programa->id)->lockForUpdate()->value('id');
+                }
+
                 $existentes = $celdas === []
                     ? collect()
-                    : ProgramaEmbarque::where('programa_id', $programa->id)->orderBy('id')->lockForUpdate()->get()
+                    : ProgramaEmbarque::where('programa_id', $programa->id)->get()
                         ->keyBy(fn (ProgramaEmbarque $e) => self::clave($e->cultivo_id, $e->bodega_id, $e->tipo, $e->dia));
 
                 $plan = $this->planear($programa, $celdas, $existentes, $servicio);
