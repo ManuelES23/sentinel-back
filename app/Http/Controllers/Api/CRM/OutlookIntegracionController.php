@@ -3,6 +3,7 @@
 
 namespace App\Http\Controllers\Api\CRM;
 
+use App\Http\Controllers\Api\ProfileOutlookVacacionesController;
 use App\Models\CRM\CrmOutlookConexion;
 use App\Models\CRM\CrmVendedor;
 use App\Models\Enterprise;
@@ -50,8 +51,9 @@ class OutlookIntegracionController extends CrmBaseController
     use FiltraPorEmpresa;
     use VerificaPermisoSubmodulo;
 
-    private const CACHE_PREFIX = 'outlook_connect_nonce:';
-    private const NONCE_TTL_MINUTOS = 10;
+    // Públicas: las comparte el flujo de vacaciones (ProfileOutlookVacacionesController) -- mismo Azure, mismo callback.
+    public const CACHE_PREFIX = 'outlook_connect_nonce:';
+    public const NONCE_TTL_MINUTOS = 10;
 
     // Duplicada de SincronizarOutlookCommand::GRAPH_BASE a propósito -- ambas
     // clases son pequeñas y autocontenidas (mismo criterio del resto del
@@ -59,7 +61,7 @@ class OutlookIntegracionController extends CrmBaseController
     // constante.
     private const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
 
-    private const SCOPES = [
+    public const SCOPES = [
         'openid', 'profile', 'email', 'offline_access',
         'https://graph.microsoft.com/Calendars.ReadWrite',
     ];
@@ -126,6 +128,12 @@ class OutlookIntegracionController extends CrmBaseController
 
         if (! $contexto) {
             return $this->redirigirAlFrontend(null, 'error');
+        }
+
+        // Un solo callback registrado en Azure: el nonce de vacaciones (Mi Perfil) se reparte aquí; el del CRM
+        // no trae `proposito` y sigue exactamente el flujo de abajo.
+        if (($contexto['proposito'] ?? null) === 'vacaciones') {
+            return app(ProfileOutlookVacacionesController::class)->completarVinculo($contexto);
         }
 
         try {
