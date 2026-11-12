@@ -97,6 +97,23 @@ class DetalleBandejaRevisionTest extends TestCase
         $this->assertSame(self::COMENTARIO, $vistoBueno['comentario']);
     }
 
+    public function test_el_detalle_trae_la_tabla_de_periodos_y_cuadra_con_el_saldo(): void
+    {
+        $solicitud = $this->enManosDelDirector();
+        Sanctum::actingAs($this->director);
+
+        $review = $this->detalle($solicitud)->assertOk()->json('data.review');
+
+        $periodos = $review['periodos'];
+        // El fixture ingresó hace 3 años y un día: tres aniversarios cumplidos.
+        $this->assertSame([1, 2, 3], array_column($periodos['filas'], 'numero'));
+        // Esta solicitud (5 días) está pendiente: sale en su columna y se descuenta del periodo más antiguo.
+        $this->assertSame(5, $periodos['total']['esta']);
+        $this->assertSame(5, $periodos['filas'][0]['esta']);
+        // Cuadra con el saldo que ya muestra el detalle.
+        $this->assertSame($review['saldo']['despues'], $periodos['total']['quedan'] - $periodos['adelanto']);
+    }
+
     public function test_el_jefe_ve_el_detalle_completo_en_su_paso(): void
     {
         $solicitud = $this->nueva();
