@@ -3,18 +3,16 @@
 namespace App\Services\Planeacion;
 
 use App\Events\ProgramaSemanalUpdated;
-use App\Models\Planeacion\ProgramaCambio;
 use App\Models\Planeacion\ProgramaSemanal;
 use Illuminate\Container\Attributes\Scoped;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Historial de cambios del Programa semanal y aviso en tiempo real.
+ * Aviso en tiempo real de que el Programa semanal de una semana cambió.
  *
- * Solo se guardan cambios cuando el programa ya tiene junta registrada: antes
- * de la junta todo es borrador. El aviso sale siempre, haya junta o no.
+ * Sin junta ya no hay historial de cambios: la tabla `programa_cambios` se
+ * queda sin uso hasta la limpieza posterior.
  *
  * Una sola instancia por petición (`Scoped`): los avisos de un mismo programa
  * dentro de una transacción se juntan en uno solo al confirmarla (copiar la
@@ -27,37 +25,11 @@ class RegistroCambiosPrograma
     private array $pendientes = [];
 
     /**
-     * Guarda el cambio (si hay junta registrada) y avisa a quien tenga abierta la semana.
-     *
-     * @param  string  $accion  creado | actualizado | borrado | activado | desactivado
-     * @param  array<string, mixed>|null  $antes
-     * @param  array<string, mixed>|null  $despues
-     */
-    public function registrar(ProgramaSemanal $programa, string $entidad, int $entidadId, string $accion, ?array $antes, ?array $despues): void
-    {
-        if ($programa->junta_registrada_at !== null) {
-            ProgramaCambio::create([
-                'programa_id' => $programa->id,
-                'entidad' => $entidad,
-                'entidad_id' => $entidadId,
-                'accion' => $accion,
-                'antes' => $antes,
-                'despues' => $despues,
-                'user_id' => Auth::id(),
-                'created_at' => now(),
-            ]);
-        }
-
-        $this->emitir($programa);
-    }
-
-    /**
-     * Solo avisa: para escrituras que no son cambios del programa (p. ej.
-     * registrar la junta). Si hay una transacción abierta, el aviso sale al
-     * confirmarla, uno solo por programa aunque se pida varias veces. Un Reverb
-     * caído (o un mensaje demasiado grande) nunca convierte en 500 una
-     * escritura ya guardada: se anota y se sigue (mismo criterio que
-     * `EtapaController::difundir()`).
+     * Avisa a quien tenga abierta la semana. Si hay una transacción abierta,
+     * el aviso sale al confirmarla, uno solo por programa aunque se pida
+     * varias veces. Un Reverb caído (o un mensaje demasiado grande) nunca
+     * convierte en 500 una escritura ya guardada: se anota y se sigue (mismo
+     * criterio que `EtapaController::difundir()`).
      */
     public function emitir(ProgramaSemanal $programa): void
     {

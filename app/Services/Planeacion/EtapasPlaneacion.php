@@ -3,26 +3,32 @@
 namespace App\Services\Planeacion;
 
 use App\Models\Etapa;
-use App\Models\Planeacion\ProgramaAcuerdo;
 use App\Models\Planeacion\ProgramaCorte;
 use App\Models\Temporada;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Etapas del plan de siembra vistas desde el Programa semanal: cuáles entran
- * a cosecha en un rango de fechas y cuántas hectáreas les quedan por asignar
- * (superficie − cortes de todas las semanas − etapas adelantadas activas).
+ * Etapas del plan de siembra vistas desde Planeación: las de las temporadas
+ * de una semana y cuántas hectáreas les quedan por asignar (superficie −
+ * cortes de todas las semanas).
  */
 class EtapasPlaneacion
 {
+    /** Una etapa es «próxima» si cosecha entre el lunes y 20 días después. */
+    private const DIAS_PROXIMA = 20;
+
     public function __construct(private readonly CatalogoPlaneacion $catalogo) {}
 
     /**
-     * Hectáreas de la etapa que aún no se asignan a un corte ni a un adelanto
-     * activo. Se puede ignorar un corte o un acuerdo (el que se está editando).
+     * Hectáreas de la etapa que aún no se asignan a un corte de ninguna
+     * semana, redondeadas a 2 decimales. Se pueden ignorar cortes (los que se
+     * están editando).
+     *
+     * @param  int[]  $ignorarCorteIds
      */
-    public function haDisponibles(int $etapaId, ?int $ignorarCorteId = null, ?int $ignorarAcuerdoId = null): float
+    public function haDisponibles(int $etapaId, array $ignorarCorteIds = []): float
     {
         $superficie = Etapa::whereKey($etapaId)->value('superficie');
         if ($superficie === null) {
@@ -30,16 +36,10 @@ class EtapasPlaneacion
         }
 
         $cortes = (float) ProgramaCorte::where('etapa_id', $etapaId)
-            ->when($ignorarCorteId, fn ($q) => $q->whereKeyNot($ignorarCorteId))
+            ->when($ignorarCorteIds, fn ($q) => $q->whereKeyNot($ignorarCorteIds))
             ->sum('hectareas');
 
-        $adelantos = (float) ProgramaAcuerdo::where('etapa_id', $etapaId)
-            ->where('tipo', 'adelantar_etapa')
-            ->where('activo', true)
-            ->when($ignorarAcuerdoId, fn ($q) => $q->whereKeyNot($ignorarAcuerdoId))
-            ->sum('hectareas');
-
-        return round((float) $superficie - $cortes - $adelantos, 2);
+        return round((float) $superficie - $cortes, 2);
     }
 
     /**
@@ -61,15 +61,15 @@ class EtapasPlaneacion
     }
 
     /**
-     * Etapas activas de lotes activos en las temporadas dadas cuya fecha de
-     * cosecha (proyectada, o estimada si no hay) cae en [$desde, $hasta], con
-     * sus hectáreas asignadas y disponibles, ordenadas por fecha. Incluye las
-     * que ya no tienen hectáreas disponibles: quien las usa decide.
+     * Todas las etapas activas de lotes activos de las temporadas dadas (las
+     * abiertas que tocan la semana), con sus hectáreas disponibles y si son
+     * «próximas» (cosechan entre el lunes y 20 días después). Ordenadas por
+     * fecha de cosecha (proyectada, o estimada si no hay; sin fecha al final).
      *
      * @param  Collection<int, Temporada>  $temporadas
-     * @return list<array{etapa_id: int, temporada_id: int, lote_nombre: ?string, etapa_nombre: string, variedad_id: ?int, fecha_cosecha: string, superficie: float, ha_asignadas: float, ha_disponibles: float}>
+     * @return list<array{etapa_id: int, temporada_id: int, lote_id: int, lote_nombre: ?string, etapa_nombre: string, codigo: ?string, variedad_id: ?int, superficie: float, ha_disponibles: float, fecha_cosecha: ?string, proxima: bool}>
      */
-    public function candidatas(Collection $temporadas, string $desde, string $hasta): array
+    public function paraSemana(Collection $temporadas, string $lunes): array
     {
         if ($temporadas->isEmpty()) {
             return [];
@@ -92,12 +92,8 @@ class EtapasPlaneacion
         $etapas = Etapa::with('lote:id,nombre,is_active')
             ->whereIn('lote_id', array_keys($temporadasDeLote))
             ->where('is_active', true)
-            ->get(['id', 'lote_id', 'nombre', 'superficie', 'variedad_id', 'fecha_cosecha_estimada', 'fecha_cosecha_proyectada'])
-            ->filter(function (Etapa $e) use ($desde, $hasta) {
-                $fecha = $this->fechaCosecha($e);
-
-                return $e->lote && $e->lote->is_active && $fecha !== null && $fecha >= $desde && $fecha <= $hasta;
-            })
+            ->get(['id', 'lote_id', 'nombre', 'codigo', 'superficie', 'variedad_id', 'fecha_cosecha_estimada', 'fecha_cosecha_proyectada'])
+            ->filter(fn (Etapa $e) => $e->lote && $e->lote->is_active)
             ->values();
 
         if ($etapas->isEmpty()) {
@@ -105,27 +101,31 @@ class EtapasPlaneacion
         }
 
         $asignadas = $this->haAsignadas($etapas->pluck('id')->all());
+        $hastaProxima = Carbon::parse($lunes)->addDays(self::DIAS_PROXIMA)->toDateString();
 
         $salida = [];
         foreach ($etapas as $etapa) {
             $superficie = round((float) $etapa->superficie, 2);
-            $ha = round($asignadas[$etapa->id] ?? 0.0, 2);
+            $fecha = $this->fechaCosecha($etapa);
 
             $salida[] = [
                 'etapa_id' => $etapa->id,
                 'temporada_id' => $this->temporadaDeEtapa($etapa, $temporadasDeLote[$etapa->lote_id], $cultivoDeTemporada),
+                'lote_id' => (int) $etapa->lote_id,
                 'lote_nombre' => $etapa->lote->nombre,
                 'etapa_nombre' => $etapa->nombre,
+                'codigo' => $etapa->codigo,
                 'variedad_id' => $etapa->variedad_id ? (int) $etapa->variedad_id : null,
-                'fecha_cosecha' => $this->fechaCosecha($etapa),
                 'superficie' => $superficie,
-                'ha_asignadas' => $ha,
-                'ha_disponibles' => round($superficie - $ha, 2),
+                'ha_disponibles' => round($superficie - ($asignadas[$etapa->id] ?? 0.0), 2),
+                'fecha_cosecha' => $fecha,
+                'proxima' => $fecha !== null && $fecha >= $lunes && $fecha <= $hastaProxima,
             ];
         }
 
-        usort($salida, fn ($a, $b) => [$a['fecha_cosecha'], $a['lote_nombre'], $a['etapa_nombre'], $a['etapa_id']]
-            <=> [$b['fecha_cosecha'], $b['lote_nombre'], $b['etapa_nombre'], $b['etapa_id']]);
+        // Sin fecha de cosecha van al final.
+        usort($salida, fn ($a, $b) => [$a['fecha_cosecha'] === null, $a['fecha_cosecha'], $a['lote_nombre'], $a['etapa_nombre'], $a['etapa_id']]
+            <=> [$b['fecha_cosecha'] === null, $b['fecha_cosecha'], $b['lote_nombre'], $b['etapa_nombre'], $b['etapa_id']]);
 
         return $salida;
     }
@@ -155,7 +155,7 @@ class EtapasPlaneacion
     }
 
     /**
-     * Σ cortes (todas las semanas) + Σ adelantos activos, por etapa.
+     * Σ cortes de todas las semanas, por etapa.
      *
      * @param  int[]  $etapaIds
      * @return array<int, float>
@@ -163,25 +163,13 @@ class EtapasPlaneacion
     private function haAsignadas(array $etapaIds): array
     {
         $ha = [];
-        $sumar = function ($filas) use (&$ha) {
-            foreach ($filas as $fila) {
-                $ha[(int) $fila->etapa_id] = ($ha[(int) $fila->etapa_id] ?? 0.0) + (float) $fila->ha;
-            }
-        };
-
-        $sumar(ProgramaCorte::whereIn('etapa_id', $etapaIds)
+        foreach (ProgramaCorte::whereIn('etapa_id', $etapaIds)
             ->groupBy('etapa_id')
             ->selectRaw('etapa_id, SUM(hectareas) AS ha')
             ->toBase()
-            ->get());
-
-        $sumar(ProgramaAcuerdo::whereIn('etapa_id', $etapaIds)
-            ->where('tipo', 'adelantar_etapa')
-            ->where('activo', true)
-            ->groupBy('etapa_id')
-            ->selectRaw('etapa_id, SUM(hectareas) AS ha')
-            ->toBase()
-            ->get());
+            ->get() as $fila) {
+            $ha[(int) $fila->etapa_id] = (float) $fila->ha;
+        }
 
         return $ha;
     }
