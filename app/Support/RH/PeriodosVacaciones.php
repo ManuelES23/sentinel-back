@@ -10,21 +10,22 @@ use Carbon\Carbon;
  * se toma se descuenta del periodo más antiguo que aún tenga días (los días son acumulables). No cambia el
  * saldo: solo lo reparte por periodo para ver cuántos días quedan y de cuál año.
  *
- * Se consume en este orden: lo ya tomado (aprobado + historial de RH), lo que otras solicitudes tienen en
- * revisión y, al final, la solicitud que se está revisando. Lo que rebasa todo lo asignado es adelanto.
+ * Se consume en este orden: lo ya tomado (aprobado + historial de RH), los ajustes negativos de RH, lo que otras
+ * solicitudes tienen en revisión y, al final, la solicitud que se está revisando. Lo que rebasa todo lo asignado
+ * es adelanto. Un ajuste positivo de RH es un renglón aparte que va primero (como días asignados).
  */
 final class PeriodosVacaciones
 {
     /**
      * @return array{
-     *     filas: list<array{tipo: string, numero: ?int, inicio: ?string, fin: ?string, asignados: int, tomados: int, en_revision: int, esta: int, quedan: int}>,
+     *     filas: list<array{tipo: string, numero: ?int, inicio: ?string, fin: ?string, asignados: int, tomados: int, ajuste: int, en_revision: int, esta: int, quedan: int}>,
      *     adelanto: int,
-     *     total: array{asignados: int, tomados: int, en_revision: int, esta: int, quedan: int}
+     *     total: array{asignados: int, tomados: int, ajuste: int, en_revision: int, esta: int, quedan: int}
      * }
      */
     public static function tabla(?Carbon $ingreso, Carbon $hoy, int $ajustes, int $usados, int $otrasEnRevision, int $estaSolicitud): array
     {
-        $vacia = ['asignados' => 0, 'tomados' => 0, 'en_revision' => 0, 'esta' => 0, 'quedan' => 0];
+        $vacia = ['asignados' => 0, 'tomados' => 0, 'ajuste' => 0, 'en_revision' => 0, 'esta' => 0, 'quedan' => 0];
         if ($ingreso === null) {
             return ['filas' => [], 'adelanto' => 0, 'total' => $vacia];
         }
@@ -32,8 +33,9 @@ final class PeriodosVacaciones
         $ingreso = $ingreso->copy()->startOfDay();
         $filas = [];
 
-        // Un ajuste de RH es una fila aparte y va primero (lo más antiguo); uno negativo solo resta.
-        if ($ajustes !== 0) {
+        // Un ajuste positivo de RH es una fila aparte y va primero (lo más antiguo); uno negativo se descuenta
+        // de los periodos como lo tomado, en su propia columna.
+        if ($ajustes > 0) {
             $filas[] = self::fila('ajuste', null, null, null, $ajustes);
         }
 
@@ -49,7 +51,7 @@ final class PeriodosVacaciones
         }
 
         $adelanto = 0;
-        foreach ([['tomados', $usados], ['en_revision', $otrasEnRevision], ['esta', $estaSolicitud]] as [$columna, $dias]) {
+        foreach ([['tomados', $usados], ['ajuste', max(0, -$ajustes)], ['en_revision', $otrasEnRevision], ['esta', $estaSolicitud]] as [$columna, $dias]) {
             $dias = max(0, $dias);
             foreach ($filas as &$fila) {
                 if ($dias === 0) {
@@ -83,6 +85,7 @@ final class PeriodosVacaciones
             'fin' => $fin,
             'asignados' => $asignados,
             'tomados' => 0,
+            'ajuste' => 0,
             'en_revision' => 0,
             'esta' => 0,
             'quedan' => $asignados,
