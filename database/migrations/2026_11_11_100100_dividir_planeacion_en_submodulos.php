@@ -142,15 +142,22 @@ return new class extends Migration
         // Quien tenía permisos concedidos en «Programa semanal».
         $viejoId = DB::table('submodules')->where('module_id', $moduloId)->where('slug', self::VIEJO)->value('id');
         if ($viejoId) {
+            // Solo cuenta quien conserva el acceso activo al submódulo viejo: si el
+            // panel se lo desactivó, sus filas de permisos viejas no abren nada nuevo.
             $concedidos = DB::table('user_submodule_permissions')
                 ->join('submodule_permission_types', 'submodule_permission_types.id', '=', 'user_submodule_permissions.permission_type_id')
+                ->join('user_submodule_access', function ($join) {
+                    $join->on('user_submodule_access.user_id', '=', 'user_submodule_permissions.user_id')
+                        ->on('user_submodule_access.submodule_id', '=', 'user_submodule_permissions.submodule_id');
+                })
                 ->where('user_submodule_permissions.submodule_id', $viejoId)
                 ->where('user_submodule_permissions.is_granted', true)
+                ->where('user_submodule_access.is_active', true)
                 ->get(['user_submodule_permissions.user_id', 'submodule_permission_types.slug as permiso']);
 
             foreach ($concedidos as $fila) {
                 foreach (self::MAPA[$fila->permiso] ?? [] as [$submodulo, $permiso]) {
-                    $this->conceder((int) $fila->user_id, $submoduloIds[$submodulo], $tipoIds[$submodulo.'/'.$permiso]);
+                    $this->conceder((int) $fila->user_id, $submoduloIds[$submodulo], $tipoIds[$submodulo.'/'.$permiso], false);
                 }
             }
         }
@@ -163,7 +170,7 @@ return new class extends Migration
                 ['is_active' => true, 'granted_at' => now(), 'updated_at' => now(), 'created_at' => now()],
             );
             foreach ($tipoIds as $clave => $tipoId) {
-                $this->conceder((int) $userId, $submoduloIds[explode('/', $clave)[0]], $tipoId);
+                $this->conceder((int) $userId, $submoduloIds[explode('/', $clave)[0]], $tipoId, true);
             }
         }
 
@@ -201,18 +208,33 @@ return new class extends Migration
             ->update(['is_active' => true, 'updated_at' => now()]);
     }
 
-    /** Acceso al submódulo y permiso concedido; no pisa nada que ya esté bien. */
-    private function conceder(int $userId, int $submoduloId, int $tipoId): void
+    /**
+     * Acceso al submódulo y permiso concedido. Con `$forzar` (admin@ y demo@) se
+     * deja siempre activo; sin él solo se crea lo que falta, para que una segunda
+     * corrida no reactive lo que alguien revocó a mano en un submódulo nuevo.
+     */
+    private function conceder(int $userId, int $submoduloId, int $tipoId, bool $forzar): void
     {
-        DB::table('user_submodule_access')->updateOrInsert(
-            ['user_id' => $userId, 'submodule_id' => $submoduloId],
-            ['is_active' => true, 'granted_at' => now(), 'updated_at' => now(), 'created_at' => now()],
-        );
+        $acceso = DB::table('user_submodule_access')->where('user_id', $userId)->where('submodule_id', $submoduloId);
+        if (! $acceso->exists()) {
+            DB::table('user_submodule_access')->insert([
+                'user_id' => $userId, 'submodule_id' => $submoduloId,
+                'is_active' => true, 'granted_at' => now(), 'created_at' => now(), 'updated_at' => now(),
+            ]);
+        } elseif ($forzar) {
+            $acceso->update(['is_active' => true, 'granted_at' => now(), 'updated_at' => now()]);
+        }
 
-        DB::table('user_submodule_permissions')->updateOrInsert(
-            ['user_id' => $userId, 'submodule_id' => $submoduloId, 'permission_type_id' => $tipoId],
-            ['is_granted' => true, 'updated_at' => now(), 'created_at' => now()],
-        );
+        $permiso = DB::table('user_submodule_permissions')
+            ->where('user_id', $userId)->where('submodule_id', $submoduloId)->where('permission_type_id', $tipoId);
+        if (! $permiso->exists()) {
+            DB::table('user_submodule_permissions')->insert([
+                'user_id' => $userId, 'submodule_id' => $submoduloId, 'permission_type_id' => $tipoId,
+                'is_granted' => true, 'created_at' => now(), 'updated_at' => now(),
+            ]);
+        } elseif ($forzar) {
+            $permiso->update(['is_granted' => true, 'updated_at' => now()]);
+        }
     }
 
     /**

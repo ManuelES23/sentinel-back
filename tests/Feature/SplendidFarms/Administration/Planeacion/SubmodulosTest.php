@@ -171,6 +171,62 @@ class SubmodulosTest extends TestCase
         }
     }
 
+    public function test_acceso_inactivo_al_submodulo_viejo_no_recibe_nada_en_los_nuevos(): void
+    {
+        $this->sembrarEstructura();
+        $desactivado = User::factory()->create();
+
+        $this->concederViejos($desactivado, ['view', 'capturar-ventas', 'configurar']);
+        // El panel le apagó el acceso, pero sus filas de permisos siguen con is_granted = true.
+        DB::table('user_submodule_access')
+            ->where('user_id', $desactivado->id)
+            ->update(['is_active' => false]);
+
+        $this->correr(self::MIGRACION_DIVIDIR);
+
+        foreach (array_keys(self::SUBMODULOS) as $slug) {
+            $this->assertSame([], $this->concedidos($desactivado, $slug), $slug);
+            $this->assertFalse($this->conAcceso($desactivado, $slug), $slug);
+        }
+        $this->assertSame(0, DB::table('user_submodule_access')
+            ->join('submodules', 'submodules.id', '=', 'user_submodule_access.submodule_id')
+            ->where('user_submodule_access.user_id', $desactivado->id)
+            ->where('submodules.slug', '!=', 'programa-semanal')
+            ->count());
+    }
+
+    public function test_una_segunda_corrida_no_reactiva_lo_revocado_a_mano(): void
+    {
+        $this->sembrarEstructura();
+        $usuario = User::factory()->create();
+        $this->concederViejos($usuario, ['view', 'capturar-ventas']);
+
+        $this->correr(self::MIGRACION_DIVIDIR);
+
+        // El panel revoca a mano el acceso a Resumen y el permiso de capturar en Necesidades.
+        $resumenId = DB::table('submodules')->where('slug', 'resumen-temporada')->value('id');
+        $necesidadesId = DB::table('submodules')->where('slug', 'necesidades-venta')->value('id');
+        DB::table('user_submodule_access')
+            ->where('user_id', $usuario->id)->where('submodule_id', $resumenId)
+            ->update(['is_active' => false]);
+        $capturarId = DB::table('submodule_permission_types')->where('submodule_id', $necesidadesId)->where('slug', 'capturar')->value('id');
+        DB::table('user_submodule_permissions')
+            ->where('user_id', $usuario->id)->where('permission_type_id', $capturarId)
+            ->update(['is_granted' => false]);
+        $creado = DB::table('user_submodule_access')
+            ->where('user_id', $usuario->id)->where('submodule_id', $necesidadesId)->value('created_at');
+
+        $this->correr(self::MIGRACION_DIVIDIR);
+
+        $this->assertFalse($this->conAcceso($usuario, 'resumen-temporada'));
+        $this->assertSame(['view'], $this->concedidos($usuario, 'necesidades-venta'));
+        $this->assertSame($creado, DB::table('user_submodule_access')
+            ->where('user_id', $usuario->id)->where('submodule_id', $necesidadesId)->value('created_at'));
+        // Lo que no se tocó sigue igual.
+        $this->assertSame(['view'], $this->concedidos($usuario, 'tablero-semanal'));
+        $this->assertTrue($this->conAcceso($usuario, 'tablero-semanal'));
+    }
+
     public function test_sin_modulo_planeacion_no_falla(): void
     {
         $this->correr(self::MIGRACION_DIVIDIR);
