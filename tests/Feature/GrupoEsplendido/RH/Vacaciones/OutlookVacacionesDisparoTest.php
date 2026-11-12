@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Models\VacationOutlookConnection;
 use App\Models\VacationOutlookEvent;
 use App\Models\VacationRequest;
+use App\Services\RH\OutlookVacaciones;
 use App\Services\RH\VacationRequestService;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -104,15 +105,39 @@ class OutlookVacacionesDisparoTest extends TestCase
         $this->assertSame([$solicitud->id], VacationOutlookEvent::pluck('vacation_request_id')->all());
     }
 
+    /** Espía de `OutlookVacaciones`: discrimina por si se invoca, no por si salen peticiones (sin conexión no saldrían). */
+    private function espia(): \Mockery\MockInterface
+    {
+        return $this->spy(OutlookVacaciones::class);
+    }
+
+    private function conexionDelJefe(): void
+    {
+        VacationOutlookConnection::create([
+            'user_id' => $this->jefe->user->id,
+            'email_outlook' => 'jefe@outlook.com',
+            'access_token' => 'access-jefe',
+            'refresh_token' => 'refresh-jefe',
+            'token_expires_at' => now()->addHour(),
+        ]);
+    }
+
     public function test_aprobar_un_paso_intermedio_no_llama_a_outlook(): void
     {
         $this->fakeGraph();
+        $this->conexionDelJefe(); // el jefe decide un paso intermedio y SÍ tiene conexión
+        $outlook = $this->espia();
 
         $solicitud = $this->servicio()->aprobarPaso($this->nueva(), $this->jefe->user);
-        $this->servicio()->darVistoBueno($solicitud, $this->rh, 'Va bien');
+        $solicitud = $this->servicio()->darVistoBueno($solicitud, $this->rh, 'Va bien');
 
+        $this->assertSame('pending', $solicitud->status);
+        $outlook->shouldNotHaveReceived('sincronizarSolicitud');
         Http::assertNothingSent();
-        $this->assertSame(0, VacationOutlookEvent::count());
+
+        // Control positivo: al cerrar la cadena el espía sí recibe la llamada, una sola vez.
+        $this->servicio()->aprobarPaso($solicitud, $this->director);
+        $outlook->shouldHaveReceived('sincronizarSolicitud')->once();
     }
 
     public function test_cancelar_una_aprobada_la_borra_de_outlook(): void
@@ -155,15 +180,27 @@ class OutlookVacacionesDisparoTest extends TestCase
         $this->assertSame('cancelled', $cancelada->status);
     }
 
-    public function test_cancelar_una_pendiente_o_rechazar_no_llama_a_outlook(): void
+    public function test_cancelar_una_pendiente_no_llama_a_outlook(): void
     {
-        $this->fakeGraph();
-        $pendiente = $this->nueva();
-        $this->servicio()->cancelar($pendiente, VacationRequestService::CANCELA_EMPLEADO);
+        $this->conexionDelJefe();
+        $solicitud = $this->enPasoDelDirector(); // el jefe (con conexión) ya aprobó un paso
+        $outlook = $this->espia();
 
-        $otra = $this->servicio()->crear($this->solicitante, today()->next(Carbon::MONDAY)->addWeeks(6), today()->next(Carbon::MONDAY)->addWeeks(6)->addDays(2), null, VacationRequest::SOURCE_PORTAL);
-        $this->servicio()->rechazar($otra, $this->jefe->user, 'Cierre de mes');
+        $cancelada = $this->servicio()->cancelar($solicitud, VacationRequestService::CANCELA_EMPLEADO);
 
-        Http::assertNothingSent();
+        $this->assertSame('cancelled', $cancelada->status);
+        $outlook->shouldNotHaveReceived('sincronizarSolicitud');
+    }
+
+    public function test_rechazar_no_llama_a_outlook(): void
+    {
+        $this->conexionDelJefe();
+        $solicitud = $this->enPasoDelDirector(); // el jefe (con conexión) ya aprobó un paso
+        $outlook = $this->espia();
+
+        $rechazada = $this->servicio()->rechazar($solicitud, $this->director, 'Cierre de mes');
+
+        $this->assertSame('rejected', $rechazada->status);
+        $outlook->shouldNotHaveReceived('sincronizarSolicitud');
     }
 }
