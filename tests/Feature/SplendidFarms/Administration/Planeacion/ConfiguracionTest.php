@@ -101,6 +101,71 @@ class ConfiguracionTest extends TestCase
         $this->assertSame(1100, $datos['cajas_por_carga']);
     }
 
+    public function test_configuracion_trae_temporadas_cultivos_y_variedades(): void
+    {
+        // Solo `configuracion.view`: no hace falta poder ver el Tablero.
+        $this->conPermisos(['configuracion' => ['view']]);
+        $grupo = GrupoBalance::where('cultivo_id', $this->cultivo->id)->where('nombre', 'Amarillo / Bicolor')->firstOrFail();
+        $otro = Cultivo::create(['nombre' => 'Cultivo sin temporada ni catálogo']);
+        $sinGrupo = Variedad::create(['cultivo_id' => $this->cultivo->id, 'nombre' => 'Morado', 'user_id' => $this->autor->id]);
+
+        $datos = $this->getJson(self::URL.'/configuracion')->assertOk()->json('data');
+
+        $this->assertSame([[
+            'id' => $this->temporada->id,
+            'nombre' => 'OI 2026-2027',
+            'cultivo_id' => $this->cultivo->id,
+            'locacion' => 'Los Mochis',
+            'fecha_inicio' => '2026-11-23',
+            'fecha_fin' => '2027-06-05',
+        ]], $datos['temporadas']);
+        $this->assertSame([['id' => $this->cultivo->id, 'nombre' => 'Elote Dulce']], $datos['cultivos']);
+        $this->assertNotContains($otro->id, collect($datos['cultivos'])->pluck('id')->all());
+
+        $this->assertCount(4, $datos['variedades']);
+        $amarillo = collect($datos['variedades'])->firstWhere('nombre', 'Amarillo');
+        $this->assertSame(
+            ['id' => $this->variedades['Amarillo']->id, 'cultivo_id' => $this->cultivo->id, 'nombre' => 'Amarillo', 'grupo_id' => $grupo->id],
+            $amarillo,
+        );
+        // Sin grupo explícito, la clave es la implícita «v{id}», igual que en el programa.
+        $this->assertSame('v'.$sinGrupo->id, collect($datos['variedades'])->firstWhere('nombre', 'Morado')['grupo_id']);
+    }
+
+    public function test_configuracion_incluye_temporadas_abiertas_que_no_tocan_la_semana_y_excluye_cerradas_y_borradas(): void
+    {
+        $this->conPermisos(['configuracion' => ['view']]);
+        $otro = Cultivo::create(['nombre' => 'Fresa']);
+        $campos = ['locacion' => 'Guasave', 'año_inicio' => 2027, 'año_fin' => 2028, 'user_id' => $this->autor->id];
+        $lejana = Temporada::create($campos + [
+            'cultivo_id' => $otro->id, 'nombre' => 'PV 2027', 'folio_temporada' => $otro->id.'-001',
+            'fecha_inicio' => '2027-08-01', 'fecha_fin' => '2028-01-31', 'estado' => 'abierta',
+        ]);
+        Temporada::create($campos + [
+            'cultivo_id' => $otro->id, 'nombre' => 'Cerrada', 'folio_temporada' => $otro->id.'-002',
+            'fecha_inicio' => '2026-01-01', 'fecha_fin' => '2026-05-01', 'estado' => 'cerrada',
+        ]);
+        $borrada = Temporada::create($campos + [
+            'cultivo_id' => $otro->id, 'nombre' => 'Borrada', 'folio_temporada' => $otro->id.'-003',
+            'fecha_inicio' => '2027-02-01', 'fecha_fin' => '2027-03-01', 'estado' => 'abierta',
+        ]);
+        $borrada->delete();
+        $zanahoria = Cultivo::create(['nombre' => 'Zanahoria']);
+        Presentacion::create(['cultivo_id' => $zanahoria->id, 'nombre' => 'Bolsa 1 kg', 'orden' => 1, 'is_active' => true]);
+        Variedad::create(['cultivo_id' => $otro->id, 'nombre' => 'Albion', 'user_id' => $this->autor->id]);
+        Variedad::create(['cultivo_id' => $otro->id, 'nombre' => 'Variedad borrada', 'user_id' => $this->autor->id])->delete();
+
+        $datos = $this->getJson(self::URL.'/configuracion')->assertOk()->json('data');
+
+        // Ordenadas por fecha de inicio: la de elote (nov 2026) y luego la lejana (ago 2027).
+        $this->assertSame([$this->temporada->id, $lejana->id], collect($datos['temporadas'])->pluck('id')->all());
+        // Cultivos con temporada abierta o con presentaciones, por nombre.
+        $this->assertSame(['Elote Dulce', 'Fresa', 'Zanahoria'], collect($datos['cultivos'])->pluck('nombre')->all());
+        $nombres = collect($datos['variedades'])->pluck('nombre')->all();
+        $this->assertContains('Albion', $nombres);
+        $this->assertNotContains('Variedad borrada', $nombres);
+    }
+
     public function test_sin_permiso_editar_es_403(): void
     {
         $this->conPermisos(['configuracion' => ['view'], 'plan-corte' => ['view', 'capturar']]);

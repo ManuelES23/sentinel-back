@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion;
 
 use App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\Concerns\PermisoPlaneacion;
 use App\Http\Controllers\Controller;
+use App\Models\Cultivo;
 use App\Models\Planeacion\BodegaDestino;
 use App\Models\Planeacion\ConfiguracionPlaneacion;
 use App\Models\Planeacion\GrupoBalance;
@@ -68,16 +69,37 @@ class ConfiguracionPlaneacionController extends Controller
     {
         $this->exigirPermiso('configuracion', 'view');
 
+        $presentaciones = Presentacion::orderBy('cultivo_id')->orderBy('orden')->orderBy('id')->get();
+        $grupos = $this->gruposDe(null);
+        $temporadas = Temporada::where('estado', 'abierta')->orderBy('fecha_inicio')->orderBy('id')->get();
+        // Cultivos con temporada abierta o con catálogo (presentaciones o grupos): siguen editables
+        // aunque su temporada no toque la semana en curso.
+        $cultivoIds = $temporadas->pluck('cultivo_id')
+            ->merge($presentaciones->pluck('cultivo_id'))
+            ->merge(array_column($grupos, 'cultivo_id'))
+            ->map(fn ($id) => (int) $id)->unique()->values()->all();
+
         return response()->json([
             'success' => true,
             'data' => [
                 'bodegas' => BodegaDestino::orderBy('orden')->orderBy('id')->get()
                     ->map(fn ($m) => $this->catalogo($m))->all(),
-                'presentaciones' => Presentacion::orderBy('cultivo_id')->orderBy('orden')->orderBy('id')->get()
+                'presentaciones' => $presentaciones
                     ->map(fn ($m) => $this->catalogo($m) + ['cultivo_id' => $m->cultivo_id])->all(),
                 'tipos_empaque' => TipoEmpaque::orderBy('orden')->orderBy('id')->get()
                     ->map(fn ($m) => $this->catalogo($m))->all(),
-                'grupos' => $this->gruposDe(null),
+                'grupos' => $grupos,
+                'temporadas' => $temporadas->map(fn ($t) => [
+                    'id' => $t->id,
+                    'nombre' => $t->nombre,
+                    'cultivo_id' => (int) $t->cultivo_id,
+                    'locacion' => $t->locacion,
+                    'fecha_inicio' => $t->fecha_inicio?->toDateString(),
+                    'fecha_fin' => $t->fecha_fin?->toDateString(),
+                ])->all(),
+                'cultivos' => Cultivo::whereIn('id', $cultivoIds)->orderBy('nombre')->get(['id', 'nombre'])
+                    ->map(fn ($c) => ['id' => $c->id, 'nombre' => $c->nombre])->all(),
+                'variedades' => $this->variedadesDe($cultivoIds, $grupos),
                 'recetas_combinacion' => $this->filasRecetas(),
                 'recetas_empaque' => Recipe::where('recipe_type', 'empaque')
                     ->orderBy('name')
@@ -500,6 +522,32 @@ class ConfiguracionPlaneacionController extends Controller
                 'nombre' => $g->nombre,
                 'orden' => $g->orden,
                 'variedad_ids' => $g->variedades->pluck('id')->map(fn ($id) => (int) $id)->sort()->values()->all(),
+            ])->all();
+    }
+
+    /**
+     * Variedades vigentes de los cultivos, con la forma del programa: `grupo_id` es el
+     * del grupo explícito o la clave implícita «v{id}» si no tiene grupo.
+     *
+     * @param  int[]  $cultivoIds
+     * @param  array<int, array{id: int, variedad_ids: int[]}>  $grupos
+     */
+    private function variedadesDe(array $cultivoIds, array $grupos): array
+    {
+        $grupoDe = [];
+        foreach ($grupos as $g) {
+            foreach ($g['variedad_ids'] as $variedadId) {
+                $grupoDe[$variedadId] = $g['id'];
+            }
+        }
+
+        return Variedad::whereIn('cultivo_id', $cultivoIds)->orderBy('nombre')->orderBy('id')
+            ->get(['id', 'cultivo_id', 'nombre'])
+            ->map(fn ($v) => [
+                'id' => $v->id,
+                'cultivo_id' => (int) $v->cultivo_id,
+                'nombre' => $v->nombre,
+                'grupo_id' => $grupoDe[$v->id] ?? 'v'.$v->id,
             ])->all();
     }
 
