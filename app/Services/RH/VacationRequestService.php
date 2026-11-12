@@ -10,6 +10,7 @@ use App\Models\VacationRequestApproval;
 use App\Services\VacationCalculatorService;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Punto único de las reglas de vacaciones (spec §4). Lo usan RH, el perfil,
@@ -215,9 +216,11 @@ class VacationRequestService
 
     public function cancelar(VacationRequest $solicitud, string $quien): VacationRequest
     {
-        $solicitud = DB::transaction(function () use ($solicitud, $quien) {
+        $estabaAprobada = false;
+        $solicitud = DB::transaction(function () use ($solicitud, $quien, &$estabaAprobada) {
             $solicitud = VacationRequest::whereKey($solicitud->id)->lockForUpdate()->firstOrFail();
             $aprobada = $solicitud->status === 'approved';
+            $estabaAprobada = $aprobada;
             $permitido = $solicitud->status === 'pending'
                 || ($quien === self::CANCELA_RH && $aprobada && $solicitud->start_date->isAfter(today()));
 
@@ -237,6 +240,9 @@ class VacationRequestService
         });
 
         $this->avisos->cancelada($solicitud->fresh(['employee.enterprise']), $quien);
+        if ($estabaAprobada) {
+            $this->sincronizarOutlook($solicitud);
+        }
 
         return $solicitud->fresh(['employee', 'approvals']);
     }
@@ -259,6 +265,9 @@ class VacationRequestService
 
         $solicitud = $solicitud->fresh(['employee.user', 'employee.enterprise', 'approvals']);
         $terminada ? $this->avisos->resuelta($solicitud) : $this->avisos->pasoAprobado($solicitud);
+        if ($terminada) {
+            $this->sincronizarOutlook($solicitud);
+        }
 
         return $solicitud;
     }
@@ -317,6 +326,24 @@ class VacationRequestService
         $this->avisos->resuelta($solicitud);
 
         return $solicitud;
+    }
+
+    /**
+     * Agenda (o borra) en el Outlook de quien autoriza. Va después de los avisos y fuera de la transacción, con
+     * `defer`; el servicio se resuelve aquí para no tocar el constructor. `defer` corre después de la respuesta solo
+     * con FPM/Octane (usa fastcgi_finish_request); con mod_php corre al terminar la petición, antes de cerrar la
+     * conexión, y quien aprueba o cancela espera las llamadas a Microsoft (acotadas: conexión 5 s y respuesta 10 s
+     * por llamada). Un fallo de Microsoft jamás rompe aprobar ni cancelar.
+     */
+    private function sincronizarOutlook(VacationRequest $solicitud): void
+    {
+        defer(function () use ($solicitud) {
+            try {
+                app(OutlookVacaciones::class)->sincronizarSolicitud($solicitud);
+            } catch (\Throwable $e) {
+                Log::warning('No se pudo sincronizar la solicitud de vacaciones '.$solicitud->id.' con Outlook ('.get_class($e).').');
+            }
+        });
     }
 
     private function pasoDecidible(VacationRequest $solicitud, User|Employee $quien, string $accion): VacationRequestApproval

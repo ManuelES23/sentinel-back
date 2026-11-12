@@ -54,6 +54,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/vacation-request', [App\Http\Controllers\Api\ProfileController::class, 'requestVacation']);
         Route::delete('/vacation-request/{vacationRequest}', [App\Http\Controllers\Api\ProfileController::class, 'cancelVacationRequest']);
         Route::get('/vacation-history', [App\Http\Controllers\Api\ProfileController::class, 'vacationHistory']);
+
+        // Outlook de quien autoriza vacaciones (el callback es el público del CRM, que reparte por `proposito`)
+        Route::get('/outlook-vacaciones', [App\Http\Controllers\Api\ProfileOutlookVacacionesController::class, 'estado']);
+        Route::get('/outlook-vacaciones/conectar', [App\Http\Controllers\Api\ProfileOutlookVacacionesController::class, 'conectar']);
+        Route::post('/outlook-vacaciones/sincronizar', [App\Http\Controllers\Api\ProfileOutlookVacacionesController::class, 'sincronizar']);
+        Route::delete('/outlook-vacaciones', [App\Http\Controllers\Api\ProfileOutlookVacacionesController::class, 'desconectar']);
     });
 
     // Rutas de pendientes por aprobar
