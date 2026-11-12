@@ -13,6 +13,7 @@ use App\Services\RH\OutlookVacaciones;
 use App\Services\RH\VacationRequestService;
 use Carbon\Carbon;
 use Illuminate\Database\QueryException;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -497,6 +498,219 @@ class OutlookVacacionesSincronizacionTest extends TestCase
         $this->assertNull($conexion->ultimo_error);
         $this->assertSame('nuevo@outlook.com', $conexion->email_outlook);
         $this->assertTrue($conexion->token_expires_at->isFuture());
+    }
+
+    /** Conexión con un evento ya agendado (evt-1) para una solicitud aprobada por el director. */
+    private function conexionAgendada(array $atributos = []): VacationOutlookConnection
+    {
+        $this->aprobadaPorElDirector();
+        $conexion = $this->conexion(null, $atributos);
+        $this->fakeGraph();
+        $this->outlook()->sincronizar($conexion);
+        $this->assertSame(1, VacationOutlookEvent::count());
+
+        return $conexion->fresh();
+    }
+
+    public function test_vincular_con_la_misma_cuenta_conserva_los_mapeos(): void
+    {
+        $this->conexionAgendada(['microsoft_user_id' => 'ms-1', 'email_outlook' => 'director@outlook.com']);
+        Http::fake(['*' => Http::response(null, 204)]);
+
+        $this->outlook()->vincular($this->director->id, 'director@outlook.com', 'tok-nuevo', 'ref-nuevo', 3600, 'ms-1');
+
+        $this->assertSame(1, VacationOutlookEvent::count());
+        Http::assertNothingSent();
+        $this->assertSame('tok-nuevo', VacationOutlookConnection::first()->access_token);
+        $this->assertSame('ms-1', VacationOutlookConnection::first()->microsoft_user_id);
+    }
+
+    public function test_vincular_con_otra_cuenta_borra_los_eventos_con_el_token_viejo_y_limpia_los_mapeos(): void
+    {
+        $conexion = $this->conexionAgendada(['microsoft_user_id' => 'ms-1', 'access_token' => 'access-viejo']);
+        $conexion->update(['ultimo_error' => 'error viejo']);
+        Http::fake(['*' => Http::response(null, 204)]);
+
+        $nueva = $this->outlook()->vincular($this->director->id, 'otro@outlook.com', 'access-de-la-otra', 'ref-otra', 3600, 'ms-2');
+
+        Http::assertSent(fn ($request) => $request->method() === 'DELETE'
+            && $request->url() === self::EVENTOS.'/evt-1'
+            && $request->hasHeader('Authorization', 'Bearer access-viejo'));
+        Http::assertNotSent(fn ($request) => $request->hasHeader('Authorization', 'Bearer access-de-la-otra'));
+        $this->assertSame(0, VacationOutlookEvent::count());
+        $this->assertSame($conexion->id, $nueva->id);
+        $nueva = $nueva->fresh();
+        $this->assertSame('access-de-la-otra', $nueva->access_token);
+        $this->assertSame('ms-2', $nueva->microsoft_user_id);
+        $this->assertSame('otro@outlook.com', $nueva->email_outlook);
+        $this->assertNull($nueva->ultimo_error);
+    }
+
+    public function test_tras_cambiar_de_cuenta_la_siguiente_sincronizacion_recrea_el_evento_en_el_calendario_nuevo(): void
+    {
+        $this->conexionAgendada(['microsoft_user_id' => 'ms-1']);
+        Http::fake(['*' => Http::response(null, 204)]);
+        $nueva = $this->outlook()->vincular($this->director->id, 'otro@outlook.com', 'access-de-la-otra', 'ref-otra', 3600, 'ms-2');
+        $this->fakeGraph();
+
+        $this->outlook()->sincronizar($nueva);
+
+        Http::assertSent(fn ($request) => $request->method() === 'POST' && $request->url() === self::EVENTOS
+            && $request->hasHeader('Authorization', 'Bearer access-de-la-otra'));
+        $this->assertSame(1, VacationOutlookEvent::count());
+    }
+
+    public function test_sin_id_de_microsoft_compara_el_correo_sin_distinguir_mayusculas(): void
+    {
+        $this->conexionAgendada(['microsoft_user_id' => null, 'email_outlook' => 'Director@Outlook.com']);
+        Http::fake(['*' => Http::response(null, 204)]);
+
+        $this->outlook()->vincular($this->director->id, 'director@outlook.COM', 'tok-nuevo', 'ref', 3600, 'ms-9');
+
+        $this->assertSame(1, VacationOutlookEvent::count());
+        Http::assertNothingSent();
+        $this->assertSame('ms-9', VacationOutlookConnection::first()->microsoft_user_id);
+    }
+
+    public function test_sin_id_de_microsoft_un_correo_distinto_cuenta_como_otra_cuenta(): void
+    {
+        $this->conexionAgendada(['microsoft_user_id' => null]);
+        Http::fake(['*' => Http::response(null, 204)]);
+
+        // Firma vieja (sin id): también compara por correo.
+        $this->outlook()->vincular($this->director->id, 'otro@outlook.com', 'tok-nuevo', 'ref', 3600);
+
+        $this->assertSame(0, VacationOutlookEvent::count());
+        Http::assertSent(fn ($request) => $request->method() === 'DELETE');
+    }
+
+    public function test_si_el_id_nuevo_es_nulo_compara_el_correo(): void
+    {
+        $this->conexionAgendada(['microsoft_user_id' => 'ms-1']);
+        Http::fake(['*' => Http::response(null, 204)]);
+
+        $this->outlook()->vincular($this->director->id, 'director@outlook.com', 'tok-nuevo', 'ref', 3600, null);
+
+        $this->assertSame(1, VacationOutlookEvent::count());
+        Http::assertNothingSent();
+    }
+
+    public function test_un_correo_vacio_cuenta_como_cuenta_distinta(): void
+    {
+        $this->conexionAgendada(['microsoft_user_id' => null, 'email_outlook' => '']);
+        Http::fake(['*' => Http::response(null, 204)]);
+
+        $this->outlook()->vincular($this->director->id, '', 'tok-nuevo', 'ref', 3600);
+
+        $this->assertSame(0, VacationOutlookEvent::count());
+    }
+
+    public function test_si_graph_falla_al_limpiar_al_cambiar_de_cuenta_igual_se_vincula(): void
+    {
+        $this->conexionAgendada(['microsoft_user_id' => 'ms-1']);
+        Http::fake(['*' => Http::response('boom', 500)]);
+
+        $nueva = $this->outlook()->vincular($this->director->id, 'otro@outlook.com', 'access-de-la-otra', 'ref', 3600, 'ms-2');
+
+        Http::assertSent(fn ($request) => $request->method() === 'DELETE');
+        $this->assertSame(0, VacationOutlookEvent::count());
+        $this->assertSame('access-de-la-otra', $nueva->fresh()->access_token);
+        $this->assertSame('ms-2', $nueva->fresh()->microsoft_user_id);
+    }
+
+    public function test_si_graph_lanza_excepcion_al_limpiar_al_cambiar_de_cuenta_igual_se_vincula(): void
+    {
+        $this->conexionAgendada(['microsoft_user_id' => 'ms-1']);
+        Http::fake(fn () => throw new ConnectionException('timeout'));
+
+        $nueva = $this->outlook()->vincular($this->director->id, 'otro@outlook.com', 'access-de-la-otra', 'ref', 3600, 'ms-2');
+
+        $this->assertSame(0, VacationOutlookEvent::count());
+        $this->assertSame('access-de-la-otra', $nueva->fresh()->access_token);
+    }
+
+    public function test_un_timeout_de_graph_cuenta_como_fallo_parcial_y_no_lanza(): void
+    {
+        $this->aprobadaPorElDirector();
+        $conexion = $this->conexion();
+        Http::fake(['graph.microsoft.com/*' => fn () => throw new ConnectionException('cURL error 28: timeout')]);
+
+        $resultado = $this->outlook()->sincronizar($conexion);
+
+        $this->assertSame(['creados' => 0, 'borrados' => 0], $resultado);
+        $this->assertSame(0, VacationOutlookEvent::count());
+        $this->assertSame('Algunos eventos no se pudieron sincronizar con Outlook; se reintentará en la siguiente corrida.', $conexion->fresh()->ultimo_error);
+    }
+
+    public function test_un_timeout_al_renovar_el_token_guarda_el_error_y_no_lanza(): void
+    {
+        $this->aprobadaPorElDirector();
+        $conexion = $this->conexion(null, ['token_expires_at' => now()->subMinute()]);
+        Http::fake(['login.microsoftonline.com/*' => fn () => throw new ConnectionException('cURL error 28: timeout')]);
+
+        $resultado = $this->outlook()->sincronizar($conexion);
+
+        $this->assertSame(['creados' => 0, 'borrados' => 0], $resultado);
+        $this->assertSame(OutlookVacaciones::MENSAJE_TOKEN, $conexion->fresh()->ultimo_error);
+    }
+
+    public function test_todas_las_llamadas_a_microsoft_llevan_timeout_de_conexion_y_de_respuesta(): void
+    {
+        $this->aprobadaPorElDirector();
+        $conexion = $this->conexion(null, ['token_expires_at' => now()->subMinute()]);
+        $opciones = [];
+        Http::fake(function ($request, $options) use (&$opciones) {
+            $opciones[$request->method().' '.$request->url()] = [$options['connect_timeout'] ?? null, $options['timeout'] ?? null];
+
+            return str_contains($request->url(), 'login.microsoftonline.com')
+                ? Http::response(['access_token' => 'access-nuevo', 'refresh_token' => 'refresh-nuevo', 'expires_in' => 3600])
+                : Http::response(['id' => 'evt-1'], 201);
+        });
+
+        $this->outlook()->sincronizar($conexion);
+        // Y el borrado de los eventos del vínculo anterior.
+        $this->outlook()->vincular($this->director->id, 'otro@outlook.com', 'tok', 'ref', 3600, 'ms-2');
+
+        $this->assertArrayHasKey('POST https://login.microsoftonline.com/common/oauth2/v2.0/token', $opciones);
+        $this->assertArrayHasKey('POST '.self::EVENTOS, $opciones);
+        $this->assertArrayHasKey('DELETE '.self::EVENTOS.'/evt-1', $opciones);
+        foreach ($opciones as $llamada => $tiempos) {
+            $this->assertEquals([5, 10], $tiempos, "Sin timeout esperado en {$llamada}");
+        }
+    }
+
+    public function test_una_instancia_vieja_dentro_del_candado_se_recarga_y_no_pisa_el_vinculo_nuevo(): void
+    {
+        $this->aprobadaPorElDirector();
+        $vieja = $this->conexion(null, [
+            'access_token' => 'access-viejo', 'refresh_token' => 'refresh-muerto', 'token_expires_at' => now()->subHour(),
+        ]);
+        // El usuario se vincula de nuevo mientras el comando ya cargó la instancia vieja.
+        VacationOutlookConnection::whereKey($vieja->id)->first()->update([
+            'access_token' => 'access-fresco', 'refresh_token' => 'refresh-fresco', 'token_expires_at' => now()->addHour(),
+        ]);
+        $this->fakeGraph();
+
+        $resultado = $this->outlook()->sincronizar($vieja);
+
+        $this->assertSame(['creados' => 1, 'borrados' => 0], $resultado);
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), 'login.microsoftonline.com'));
+        Http::assertSent(fn ($request) => $request->url() === self::EVENTOS && $request->hasHeader('Authorization', 'Bearer access-fresco'));
+        $this->assertNull($vieja->fresh()->ultimo_error);
+        $this->assertSame('access-fresco', $vieja->fresh()->access_token);
+    }
+
+    public function test_si_la_conexion_ya_no_existe_dentro_del_candado_no_hace_nada(): void
+    {
+        $this->aprobadaPorElDirector();
+        $conexion = $this->conexion();
+        VacationOutlookConnection::whereKey($conexion->id)->delete();
+        $this->fakeGraph();
+
+        $resultado = $this->outlook()->sincronizar($conexion);
+
+        $this->assertSame(['creados' => 0, 'borrados' => 0], $resultado);
+        Http::assertNothingSent();
     }
 
     public function test_el_comando_sincroniza_todas_y_sigue_si_una_falla(): void

@@ -330,8 +330,10 @@ class VacationRequestService
 
     /**
      * Agenda (o borra) en el Outlook de quien autoriza. Va después de los avisos y fuera de la transacción, con
-     * `defer` (corre tras enviar la respuesta); el servicio se resuelve aquí para no tocar el constructor.
-     * Un fallo de Microsoft jamás rompe aprobar ni cancelar.
+     * `defer`; el servicio se resuelve aquí para no tocar el constructor. `defer` corre después de la respuesta solo
+     * con FPM/Octane (usa fastcgi_finish_request); con mod_php corre al terminar la petición, antes de cerrar la
+     * conexión, y quien aprueba o cancela espera las llamadas a Microsoft (acotadas: conexión 5 s y respuesta 10 s
+     * por llamada). Un fallo de Microsoft jamás rompe aprobar ni cancelar.
      */
     private function sincronizarOutlook(VacationRequest $solicitud): void
     {

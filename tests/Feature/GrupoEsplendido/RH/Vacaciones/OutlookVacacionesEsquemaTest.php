@@ -8,6 +8,7 @@ use App\Models\VacationOutlookEvent;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Tests\Concerns\CreatesVacacionesFixtures;
 use Tests\TestCase;
 
@@ -52,6 +53,17 @@ class OutlookVacacionesEsquemaTest extends TestCase
         $arreglo = $conexion->fresh()->toArray();
         $this->assertArrayNotHasKey('access_token', $arreglo);
         $this->assertArrayNotHasKey('refresh_token', $arreglo);
+    }
+
+    public function test_la_conexion_guarda_el_id_de_la_cuenta_de_microsoft(): void
+    {
+        $this->assertTrue(Schema::hasColumn('vacation_outlook_connections', 'microsoft_user_id'));
+
+        $conexion = $this->conexion(User::factory()->create());
+        $this->assertNull($conexion->fresh()->microsoft_user_id);
+
+        $conexion->update(['microsoft_user_id' => 'ms-abc']);
+        $this->assertSame('ms-abc', $conexion->fresh()->microsoft_user_id);
     }
 
     public function test_un_usuario_tiene_una_sola_conexion(): void

@@ -19,6 +19,7 @@ class VacationOutlookConnection extends Model
     protected $fillable = [
         'user_id',
         'email_outlook',
+        'microsoft_user_id',
         'access_token',
         'refresh_token',
         'token_expires_at',

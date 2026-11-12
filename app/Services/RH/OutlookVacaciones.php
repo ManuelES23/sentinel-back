@@ -11,6 +11,7 @@ use App\Models\VacationRequest;
 use App\Models\VacationRequestApproval;
 use App\Support\RH\PresentadorPortalVacaciones;
 use Carbon\Carbon;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
@@ -35,6 +36,11 @@ class OutlookVacaciones
 
     private const ZONA = 'America/Mazatlan';
 
+    /** Segundos para conectar y para recibir respuesta de Microsoft (token y Graph). */
+    private const TIMEOUT_CONEXION = 5;
+
+    private const TIMEOUT_RESPUESTA = 10;
+
     private const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
 
     /** Quien es «usuario específico» en la cadena de vacaciones, o ya tiene una cuenta vinculada. */
@@ -53,12 +59,27 @@ class OutlookVacaciones
             ->exists();
     }
 
-    public function vincular(int $userId, string $email, string $accessToken, ?string $refreshToken, int $expiraEn): VacationOutlookConnection
+    /**
+     * Guarda (o renueva) la cuenta vinculada. Si «vincular de nuevo» cambió de cuenta de Microsoft, los eventos
+     * ya agendados viven en el calendario de la cuenta anterior: se borran allí (con el token anterior,
+     * best-effort) y se limpian los mapeos, para que la siguiente sincronización los cree en el calendario nuevo.
+     * Con la misma cuenta (renovar el token vencido, lo más común) los mapeos se conservan.
+     */
+    public function vincular(int $userId, string $email, string $accessToken, ?string $refreshToken, int $expiraEn, ?string $microsoftUserId = null): VacationOutlookConnection
     {
+        $existente = VacationOutlookConnection::where('user_id', $userId)->first();
+        $cambioDeCuenta = $existente !== null && $this->cambioDeCuenta($existente, $email, $microsoftUserId);
+
+        if ($cambioDeCuenta) {
+            $this->borrarEventosEnOutlook($existente);
+            $existente->eventos()->delete();
+        }
+
         return VacationOutlookConnection::updateOrCreate(
             ['user_id' => $userId],
             [
                 'email_outlook' => $email,
+                'microsoft_user_id' => $cambioDeCuenta ? $microsoftUserId : ($microsoftUserId ?? $existente?->microsoft_user_id),
                 'access_token' => $accessToken,
                 'refresh_token' => $refreshToken,
                 'token_expires_at' => now()->addSeconds($expiraEn),
@@ -78,6 +99,15 @@ class OutlookVacaciones
         }
 
         try {
+            // La instancia pudo cargarse antes de esperar el candado (p. ej. el comando carga todas al inicio): si el
+            // usuario se vinculó de nuevo mientras tanto, trae tokens vencidos y renovarlos con un refresh_token
+            // muerto pisaría el vínculo nuevo con el mensaje de error.
+            try {
+                $c->refresh();
+            } catch (ModelNotFoundException) {
+                return $ceros;
+            }
+
             if (! $this->asegurarTokenVigente($c)) {
                 return $ceros;
             }
@@ -124,22 +154,47 @@ class OutlookVacaciones
     /** Borra en Outlook cada evento agendado (best-effort; 404 = ya no existe) y elimina la conexión. */
     public function desvincular(VacationOutlookConnection $c): void
     {
+        $this->borrarEventosEnOutlook($c);
+
+        $c->eventos()->delete();
+        $c->delete();
+    }
+
+    /**
+     * Borra en Graph, con los tokens de la conexión, cada evento mapeado. Best-effort: un fallo se registra
+     * (solo la clase de la excepción) y nunca impide desvincular ni vincular otra cuenta.
+     */
+    private function borrarEventosEnOutlook(VacationOutlookConnection $c): void
+    {
         try {
             if ($this->asegurarTokenVigente($c)) {
                 foreach ($c->eventos()->get() as $mapeo) {
                     try {
                         $this->graph($c)->delete(self::GRAPH_BASE."/me/events/{$mapeo->outlook_event_id}");
                     } catch (\Throwable $e) {
-                        Log::warning("No se pudo borrar el evento de Outlook {$mapeo->outlook_event_id} al desvincular (".get_class($e).").");
+                        Log::warning("No se pudo borrar el evento de Outlook {$mapeo->outlook_event_id} al quitar el vínculo (".get_class($e).").");
                     }
                 }
             }
         } catch (\Throwable $e) {
-            Log::warning("No se pudo limpiar Outlook al desvincular la conexión #{$c->id} (".get_class($e).").");
+            Log::warning("No se pudo limpiar Outlook al quitar el vínculo de la conexión #{$c->id} (".get_class($e).").");
+        }
+    }
+
+    /**
+     * ¿La cuenta nueva es otra? Con el id de Microsoft de ambas se compara ese; si falta alguno (conexiones sin id
+     * o un perfil que no lo trae) se compara el correo sin distinguir mayúsculas, y un correo vacío cuenta como cambio.
+     */
+    private function cambioDeCuenta(VacationOutlookConnection $c, string $email, ?string $microsoftUserId): bool
+    {
+        if (filled($c->microsoft_user_id) && filled($microsoftUserId)) {
+            return $c->microsoft_user_id !== $microsoftUserId;
         }
 
-        $c->eventos()->delete();
-        $c->delete();
+        $actual = mb_strtolower(trim((string) $c->email_outlook));
+        $nuevo = mb_strtolower(trim($email));
+
+        return $actual === '' || $nuevo === '' || $actual !== $nuevo;
     }
 
     /** Payload del evento de día completo (fin exclusivo). Nunca incluye el motivo ni comentarios. */
@@ -307,7 +362,7 @@ class OutlookVacaciones
         }
 
         try {
-            $respuesta = Http::asForm()->post(self::TOKEN_URL, [
+            $respuesta = $this->http()->asForm()->post(self::TOKEN_URL, [
                 'client_id' => config('services.microsoft.client_id'),
                 'client_secret' => config('services.microsoft.client_secret'),
                 'grant_type' => 'refresh_token',
@@ -339,7 +394,16 @@ class OutlookVacaciones
 
     private function graph(VacationOutlookConnection $c): PendingRequest
     {
-        return Http::withToken($c->access_token)->acceptJson();
+        return $this->http()->withToken($c->access_token)->acceptJson();
+    }
+
+    /**
+     * Toda llamada a Microsoft lleva timeout explícito. Con mod_php el `defer` corre antes de cerrar la respuesta
+     * (no hay fastcgi_finish_request): sin límite, un Graph lento dejaría al usuario esperando 30 s por llamada.
+     */
+    private function http(): PendingRequest
+    {
+        return Http::connectTimeout(self::TIMEOUT_CONEXION)->timeout(self::TIMEOUT_RESPUESTA);
     }
 
     private function esRateLimit(Response $respuesta): bool

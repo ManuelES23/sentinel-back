@@ -61,12 +61,13 @@ class OutlookVacacionesApiTest extends TestCase
         ]);
     }
 
-    private function simularSocialite(string $correo = 'director@outlook.com'): void
+    private function simularSocialite(string $correo = 'director@outlook.com', string $id = 'ms-id-123'): void
     {
         $socialiteUser = new SocialiteUser();
         $socialiteUser->token = 'access-token-fake';
         $socialiteUser->refreshToken = 'refresh-token-fake';
         $socialiteUser->expiresIn = 3600;
+        $socialiteUser->id = $id;
         $socialiteUser->email = $correo;
 
         $proveedor = \Mockery::mock(AbstractProvider::class);
@@ -229,6 +230,51 @@ class OutlookVacacionesApiTest extends TestCase
 
         $this->assertStringEndsWith('/profile?tab=approvals&outlook=error', $respuesta->headers->get('Location'));
         $this->assertDatabaseCount('vacation_outlook_connections', 0);
+    }
+
+    public function test_callback_de_vacaciones_guarda_el_id_de_la_cuenta_de_microsoft(): void
+    {
+        $this->nonceVacaciones('nonce-vac');
+        $this->simularSocialite('director@outlook.com', 'ms-id-123');
+        Http::fake(['*' => Http::response(['id' => 'evt-x'], 201)]);
+
+        $this->get(self::CALLBACK.'?state=nonce-vac')->assertRedirect();
+
+        $this->assertDatabaseHas('vacation_outlook_connections', ['user_id' => $this->director->id, 'microsoft_user_id' => 'ms-id-123']);
+    }
+
+    public function test_callback_de_vacaciones_con_otra_cuenta_de_microsoft_limpia_los_eventos_de_la_anterior(): void
+    {
+        $conexion = $this->conexion();
+        $conexion->update(['microsoft_user_id' => 'ms-vieja']);
+        $solicitud = $this->solicitud($this->empleado($this->empresa), 'approved', 5);
+        $conexion->eventos()->create(['vacation_request_id' => $solicitud->id, 'outlook_event_id' => 'evt-viejo', 'enviado_at' => now()]);
+        Http::fake(['*' => Http::response(null, 204)]);
+        $this->nonceVacaciones('nonce-vac');
+        $this->simularSocialite('otra@outlook.com', 'ms-nueva');
+
+        $this->get(self::CALLBACK.'?state=nonce-vac')->assertRedirect();
+
+        Http::assertSent(fn ($request) => $request->method() === 'DELETE'
+            && $request->url() === 'https://graph.microsoft.com/v1.0/me/events/evt-viejo'
+            && $request->hasHeader('Authorization', 'Bearer access-secreto-123'));
+        $this->assertDatabaseCount('vacation_outlook_events', 0);
+        $this->assertDatabaseHas('vacation_outlook_connections', ['user_id' => $this->director->id, 'microsoft_user_id' => 'ms-nueva', 'email_outlook' => 'otra@outlook.com']);
+    }
+
+    public function test_si_socialite_falla_en_el_callback_de_vacaciones_el_log_lleva_la_clase_y_el_usuario_sin_el_mensaje(): void
+    {
+        $registros = $this->capturarLog();
+        $this->nonceVacaciones('nonce-vac');
+        $proveedor = \Mockery::mock(AbstractProvider::class);
+        $proveedor->shouldReceive('stateless')->once()->andReturnSelf();
+        $proveedor->shouldReceive('user')->once()->andThrow(new \RuntimeException('SECRET-TOKEN boom'));
+        Socialite::shouldReceive('driver')->once()->with('microsoft')->andReturn($proveedor);
+
+        $this->get(self::CALLBACK.'?state=nonce-vac')->assertRedirect();
+
+        $this->assertLogSinSecreto($registros, "usuario #{$this->director->id}");
+        $this->assertTrue(collect($registros)->contains(fn ($r) => str_contains($r, 'RuntimeException')), 'El log debe llevar la clase de la excepción.');
     }
 
     public function test_callback_de_vacaciones_sin_disponibilidad_redirige_a_error_sin_vincular(): void

@@ -49,4 +49,4 @@ Schedule::command('vacaciones:limpiar-sesiones-portal')->dailyAt('03:30');
 
 // Vacaciones en Outlook: respaldo de la sincronizacion inmediata; agenda las
 // que aprobo cada usuario vinculado y borra las canceladas.
-Schedule::command('vacaciones:sincronizar-outlook')->everyFiveMinutes()->withoutOverlapping();
+Schedule::command('vacaciones:sincronizar-outlook')->everyFiveMinutes()->withoutOverlapping(10);

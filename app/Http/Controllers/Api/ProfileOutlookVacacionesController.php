@@ -106,7 +106,10 @@ class ProfileOutlookVacacionesController extends Controller
 
         try {
             $microsoft = Socialite::driver('microsoft')->stateless()->user();
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
+            // Solo la clase: el mensaje o la traza pueden traer el código de autorización o tokens.
+            Log::warning("Falló Socialite al vincular Outlook (vacaciones) del usuario #{$usuario->id} (".get_class($e).").");
+
             return $this->redirigir('error');
         }
 
@@ -117,6 +120,7 @@ class ProfileOutlookVacacionesController extends Controller
                 (string) $microsoft->token,
                 $microsoft->refreshToken,
                 (int) ($microsoft->expiresIn ?? 3600),
+                filled($microsoft->getId()) ? (string) $microsoft->getId() : null,
             );
         } catch (\Throwable $e) {
             Log::error("No se pudo vincular Outlook (vacaciones) del usuario #{$usuario->id} (".get_class($e).").");

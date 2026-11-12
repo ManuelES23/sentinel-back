@@ -18,12 +18,21 @@ return new class extends Migration
                 // unique: un usuario solo puede tener una conexión a la vez.
                 $table->foreignId('user_id')->unique()->constrained('users')->cascadeOnDelete();
                 $table->string('email_outlook')->nullable();
+                // Id de la cuenta de Microsoft: permite saber si «vincular de nuevo» cambió de cuenta.
+                $table->string('microsoft_user_id')->nullable();
                 $table->text('access_token');
                 $table->text('refresh_token')->nullable();
                 $table->timestamp('token_expires_at');
                 $table->timestamp('ultimo_sync_at')->nullable();
                 $table->text('ultimo_error')->nullable();
                 $table->timestamps();
+            });
+        }
+
+        // Idempotente para entornos donde la tabla ya se creó sin esta columna.
+        if (! Schema::hasColumn('vacation_outlook_connections', 'microsoft_user_id')) {
+            Schema::table('vacation_outlook_connections', function (Blueprint $table) {
+                $table->string('microsoft_user_id')->nullable()->after('email_outlook');
             });
         }
 
