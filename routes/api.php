@@ -237,6 +237,10 @@ Route::middleware('auth:sanctum')->group(function () {
                 // Hoja de necesidades de ventas (guardado en lote) y copia de la semana anterior (necesidades-venta.capturar)
                 Route::put('programa/{programa}/necesidades/hoja', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\HojaNecesidadesController::class, 'guardar']);
                 Route::post('programa/{programa}/necesidades/copiar-anterior', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ProgramaNecesidadController::class, 'copiarAnterior']);
+
+                // Hoja de embarques por cargas (embarques.capturar) y notas de la semana (tablero-semanal.editar-notas)
+                Route::put('programa/{programa}/embarques/hoja', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\HojaEmbarquesController::class, 'guardar']);
+                Route::put('programa/{programa}/notas', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\NotasProgramaController::class, 'guardar']);
             });
 
             // Módulo Catálogos (catálogos generales de la empresa)
