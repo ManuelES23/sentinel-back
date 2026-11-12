@@ -91,16 +91,37 @@ class PeriodosVacacionesTest extends TestCase
         $this->assertSame($this->dias(1), $t['filas'][1]['quedan']);
     }
 
-    public function test_un_ajuste_negativo_resta_sin_consumir(): void
+    public function test_un_ajuste_negativo_se_descuenta_del_periodo_mas_antiguo_con_dias(): void
     {
-        $t = $this->tabla(usados: 2, ajustes: -3);
+        $t = $this->tabla(usados: $this->dias(1) + 2, ajustes: -3);
 
-        $ajuste = collect($t['filas'])->firstWhere('tipo', 'ajuste');
-        $this->assertSame(-3, $ajuste['asignados']);
-        $this->assertSame(-3, $ajuste['quedan']);
-        $this->assertSame($this->dias(1) - 2, collect($t['filas'])->firstWhere('numero', 1)['quedan']);
-        // El total cuadra con el saldo: asignados + ajuste - tomados.
-        $this->assertSame($this->dias(1) + $this->dias(2) + $this->dias(3) - 3 - 2, $t['total']['quedan']);
+        // Lo tomado agota el periodo 1 y toma 2 del 2; el ajuste de -3 sale de lo que sigue (periodo 2), en su columna.
+        $this->assertNull(collect($t['filas'])->firstWhere('tipo', 'ajuste'));
+        $this->assertSame([$this->dias(1), 2, 0], array_column($t['filas'], 'tomados'));
+        $this->assertSame([0, 3, 0], array_column($t['filas'], 'ajuste'));
+        $this->assertSame([0, $this->dias(2) - 5, $this->dias(3)], array_column($t['filas'], 'quedan'));
+        $this->assertSame(3, $t['total']['ajuste']);
+        // El total cuadra con el saldo: asignados - tomados - ajuste.
+        $this->assertSame($this->dias(2) - 5 + $this->dias(3), $t['total']['quedan']);
+    }
+
+    public function test_un_ajuste_negativo_puede_repartirse_en_varios_periodos(): void
+    {
+        $t = $this->tabla(ajustes: -($this->dias(1) + 2));
+
+        $this->assertSame([$this->dias(1), 2, 0], array_column($t['filas'], 'ajuste'));
+        $this->assertSame([0, $this->dias(2) - 2, $this->dias(3)], array_column($t['filas'], 'quedan'));
+        $this->assertSame(0, $t['adelanto']);
+    }
+
+    public function test_un_ajuste_negativo_que_rebasa_todo_es_adelanto(): void
+    {
+        $todo = $this->dias(1) + $this->dias(2) + $this->dias(3);
+        $t = $this->tabla(ajustes: -($todo + 2));
+
+        $this->assertSame([0, 0, 0], array_column($t['filas'], 'quedan'));
+        $this->assertSame(2, $t['adelanto']);
+        $this->assertSame(-2, $t['total']['quedan'] - $t['adelanto']);
     }
 
     public function test_sin_aniversarios_cumplidos_o_sin_ingreso_no_hay_filas(): void
