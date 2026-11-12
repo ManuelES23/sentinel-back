@@ -4,24 +4,19 @@ namespace App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion;
 
 use App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\Concerns\PermisoPlaneacion;
 use App\Http\Controllers\Controller;
-use App\Models\Etapa;
-use App\Models\Planeacion\ProgramaCorte;
 use App\Models\Planeacion\ProgramaRendimiento;
 use App\Models\Planeacion\ProgramaSemanal;
-use App\Models\Temporada;
 use App\Services\Planeacion\ProgramaSemanalService;
 use App\Services\Planeacion\RegistroCambiosPrograma;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
 /**
- * Corte de la semana (hectáreas por etapa y día) y rendimiento elegido para
- * cada variedad. Todas las escrituras exigen `plan-corte.capturar` y avisan en
- * tiempo real.
+ * Rendimiento elegido para cada variedad de la semana (el corte se captura en
+ * `HojaCorteController`). Exige `plan-corte.capturar` y avisa en tiempo real.
  *
  * Los servicios se inyectan por método y no por constructor: guardan cálculos
  * en memoria y el controlador puede quedar vivo entre peticiones.
@@ -31,70 +26,6 @@ class ProgramaCorteController extends Controller
     use PermisoPlaneacion;
 
     private const MODOS_RENDIMIENTO = ['minimo', 'medio', 'maximo', 'exacto'];
-
-    /** Crea un renglón de corte en la semana. */
-    public function store(Request $request, ProgramaSemanal $programa, ProgramaSemanalService $servicio, RegistroCambiosPrograma $registro): JsonResponse
-    {
-        $this->exigirPermiso('plan-corte', 'capturar');
-
-        $datos = $this->validarCorte($request, $programa, $servicio);
-
-        $corte = DB::transaction(function () use ($programa, $datos, $servicio, $registro) {
-            $this->exigirHectareas($datos['etapa_id'], (float) $datos['hectareas'], $servicio);
-
-            $corte = ProgramaCorte::create($datos + [
-                'programa_id' => $programa->id,
-                'created_by' => Auth::id(),
-                'updated_by' => Auth::id(),
-            ]);
-            $registro->emitir($programa);
-
-            return $corte;
-        });
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Corte guardado.',
-            'data' => $this->payload($corte),
-        ], 201);
-    }
-
-    /** Cambia un renglón de corte; el programa es el del corte. */
-    public function update(Request $request, ProgramaCorte $corte, ProgramaSemanalService $servicio, RegistroCambiosPrograma $registro): JsonResponse
-    {
-        $this->exigirPermiso('plan-corte', 'capturar');
-
-        $programa = $corte->programa()->firstOrFail();
-        $datos = $this->validarCorte($request, $programa, $servicio);
-
-        DB::transaction(function () use ($corte, $programa, $datos, $servicio, $registro) {
-            // Sus propias hectáreas no cuentan contra la etapa.
-            $this->exigirHectareas($datos['etapa_id'], (float) $datos['hectareas'], $servicio, $corte->id);
-
-            $corte->update($datos + ['updated_by' => Auth::id()]);
-            $registro->emitir($programa);
-        });
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Corte actualizado.',
-            'data' => $this->payload($corte->fresh()),
-        ]);
-    }
-
-    public function destroy(ProgramaCorte $corte, RegistroCambiosPrograma $registro): JsonResponse
-    {
-        $this->exigirPermiso('plan-corte', 'capturar');
-
-        $programa = $corte->programa()->firstOrFail();
-
-        DB::transaction(function () use ($corte, $programa, $registro) {
-            $corte->delete();
-            $registro->emitir($programa);
-        });
-
-        return response()->json(['success' => true, 'message' => 'Corte eliminado.']);
-    }
 
     /** Rendimiento elegido por (temporada, variedad) para esta semana; crea o actualiza cada fila. */
     public function rendimientos(Request $request, ProgramaSemanal $programa, ProgramaSemanalService $servicio, RegistroCambiosPrograma $registro): JsonResponse
@@ -166,128 +97,7 @@ class ProgramaCorteController extends Controller
         ]);
     }
 
-    // ── Validación ──────────────────────────────────────
-
-    /** @return list<mixed> */
-    private function reglasHectareas(): array
-    {
-        return ['required', 'numeric', 'gt:0', 'max:999999.99', 'decimal:0,2'];
-    }
-
-    /**
-     * Campos del corte ya validados, con `variedad_id` resuelta (la de la
-     * etapa, o la elegida si no hay etapa).
-     *
-     * @return array{temporada_id: int, etapa_id: ?int, variedad_id: int, dia: int, hectareas: string, notas: ?string}
-     */
-    private function validarCorte(Request $request, ProgramaSemanal $programa, ProgramaSemanalService $servicio): array
-    {
-        $datos = $request->validate([
-            'temporada_id' => ['required', 'integer'],
-            'etapa_id' => ['nullable', 'integer', Rule::exists('etapas', 'id')],
-            'variedad_id' => ['nullable', 'integer'],
-            'dia' => ['required', 'integer', 'between:0,5'],
-            'hectareas' => $this->reglasHectareas(),
-            'notas' => ['nullable', 'string', 'max:1000'],
-        ]);
-
-        $temporada = $this->temporadaDeSemana($programa, (int) $datos['temporada_id'], $servicio);
-        [$etapaId, $variedadId] = $this->etapaYVariedad(
-            $temporada,
-            isset($datos['etapa_id']) ? (int) $datos['etapa_id'] : null,
-            isset($datos['variedad_id']) ? (int) $datos['variedad_id'] : null,
-            $servicio,
-        );
-
-        return [
-            'temporada_id' => $temporada->id,
-            'etapa_id' => $etapaId,
-            'variedad_id' => $variedadId,
-            'dia' => (int) $datos['dia'],
-            'hectareas' => $datos['hectareas'],
-            'notas' => $datos['notas'] ?? null,
-        ];
-    }
-
-    /** La temporada debe estar abierta y tocar la semana del programa. */
-    private function temporadaDeSemana(ProgramaSemanal $programa, int $temporadaId, ProgramaSemanalService $servicio): Temporada
-    {
-        $temporada = $servicio->temporadasDeSemana($programa)->firstWhere('id', $temporadaId);
-        if (! $temporada) {
-            throw ValidationException::withMessages(['temporada_id' => 'La temporada no está abierta en esta semana.']);
-        }
-
-        return $temporada;
-    }
-
-    /**
-     * Con etapa, la etapa debe ser de un lote activo de la temporada y la
-     * variedad sale de ella (si no tiene, se usa la elegida). Sin etapa la
-     * variedad es obligatoria. En ambos casos debe ser del cultivo de la temporada.
-     *
-     * @return array{0: ?int, 1: int}
-     */
-    private function etapaYVariedad(Temporada $temporada, ?int $etapaId, ?int $variedadId, ProgramaSemanalService $servicio): array
-    {
-        $campo = 'variedad_id';
-        if ($etapaId !== null) {
-            if (! $servicio->etapaEnTemporada($etapaId, $temporada->id)) {
-                throw ValidationException::withMessages(['etapa_id' => 'La etapa no pertenece a un lote activo de esta temporada.']);
-            }
-            $deEtapa = Etapa::whereKey($etapaId)->value('variedad_id');
-            if ($deEtapa !== null) {
-                $variedadId = (int) $deEtapa;
-                $campo = 'etapa_id';
-            }
-        }
-
-        if ($variedadId === null) {
-            throw ValidationException::withMessages([$campo => $etapaId !== null
-                ? 'La etapa no tiene variedad: elige la variedad del corte.'
-                : 'Elige la variedad del corte.']);
-        }
-        if ($servicio->cultivoDeVariedad($variedadId) !== (int) $temporada->cultivo_id) {
-            throw ValidationException::withMessages([$campo => 'La variedad no es del cultivo de la temporada.']);
-        }
-
-        return [$etapaId, $variedadId];
-    }
-
-    /**
-     * Las hectáreas pedidas deben caber en lo que le queda a la etapa (cortes
-     * de todas las semanas). Se bloquea la etapa para que dos capturas a la
-     * vez no la rebasen. Sin etapa no hay tope.
-     */
-    private function exigirHectareas(?int $etapaId, float $hectareas, ProgramaSemanalService $servicio, ?int $ignorarCorteId = null): void
-    {
-        if ($etapaId === null) {
-            return;
-        }
-
-        Etapa::whereKey($etapaId)->lockForUpdate()->value('id');
-        $disponibles = $servicio->haDisponibles($etapaId, $ignorarCorteId === null ? [] : [$ignorarCorteId]);
-
-        if (round($hectareas, 2) - $disponibles > 0.004) {
-            throw ValidationException::withMessages([
-                'hectareas' => 'La etapa tiene '.number_format(max(0.0, $disponibles), 2, '.', '').' ha disponibles',
-            ]);
-        }
-    }
-
     // ── Salidas ─────────────────────────────────────────
-
-    /** Valores del corte para la respuesta. */
-    private function instantanea(ProgramaCorte $corte): array
-    {
-        return [
-            'temporada_id' => $corte->temporada_id,
-            'etapa_id' => $corte->etapa_id,
-            'variedad_id' => $corte->variedad_id,
-            'dia' => $corte->dia,
-            'hectareas' => (float) $corte->hectareas,
-            'notas' => $corte->notas,
-        ];
-    }
 
     private function instantaneaRendimiento(ProgramaRendimiento $r): array
     {
@@ -297,11 +107,5 @@ class ProgramaCorteController extends Controller
             'modo' => $r->modo,
             'valor_exacto' => $r->valor_exacto !== null ? (float) $r->valor_exacto : null,
         ];
-    }
-
-    private function payload(ProgramaCorte $corte): array
-    {
-        return ['id' => $corte->id, 'programa_id' => $corte->programa_id, 'sin_etapa' => $corte->etapa_id === null]
-            + $this->instantanea($corte);
     }
 }

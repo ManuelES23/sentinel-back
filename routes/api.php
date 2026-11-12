@@ -230,11 +230,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
                 Route::get('clientes', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ClientesSbpController::class, 'index']);
 
-                // Corte y rendimiento de la semana (plan-corte.capturar)
-                Route::post('programa/{programa}/cortes', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ProgramaCorteController::class, 'store']);
+                // Hoja de corte (guardado en lote) y rendimiento de la semana (plan-corte.capturar)
+                Route::put('programa/{programa}/cortes/hoja', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\HojaCorteController::class, 'guardar']);
                 Route::put('programa/{programa}/rendimientos', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ProgramaCorteController::class, 'rendimientos']);
-                Route::put('cortes/{corte}', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ProgramaCorteController::class, 'update']);
-                Route::delete('cortes/{corte}', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ProgramaCorteController::class, 'destroy']);
 
                 // Necesidades de ventas (necesidades-venta.capturar; copiar-anterior va antes que cualquier {necesidad})
                 Route::post('programa/{programa}/necesidades/copiar-anterior', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ProgramaNecesidadController::class, 'copiarAnterior']);
