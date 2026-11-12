@@ -16,7 +16,7 @@ class ReglasConvenio
      *
      * @param  array<int, array<string, mixed>>  $precios
      */
-    public static function validarPrecios(array $precios, string $modalidad): void
+    public static function validarPrecios(array $precios, string $modalidad, bool $usaCalibres = false): void
     {
         $errores = [];
         $vistos = [];
@@ -32,7 +32,15 @@ class ReglasConvenio
                 }
             }
 
-            $clave = ($precio['tipo_carga_id'] ?? '').'|'.($precio['vigencia_inicio'] ?? '');
+            $calibre = $precio['calibre_id'] ?? null;
+            $calibre = ($calibre === null || $calibre === '') ? null : $calibre;
+            if ($usaCalibres && $calibre === null) {
+                $errores["precios.{$i}.calibre_id"] = 'Elige el calibre.';
+            } elseif (! $usaCalibres && $calibre !== null) {
+                $errores["precios.{$i}.calibre_id"] = 'Este convenio no es por calibre.';
+            }
+
+            $clave = ($precio['tipo_carga_id'] ?? '').'|'.($calibre ?? '').'|'.($precio['vigencia_inicio'] ?? '');
             if (isset($vistos[$clave])) {
                 $errores["precios.{$i}.vigencia_inicio"] = 'Ya hay un precio de este tipo de carga con esa fecha de vigencia.';
             }
@@ -60,6 +68,7 @@ class ReglasConvenio
      * Filas listas para guardar: el porcentaje del productor solo existe en
      * consignación y `es_principal` identifica un TIPO de carga (todas sus
      * vigencias comparten el valor; el primer tipo de la lista si ninguno se marcó).
+     * `calibre_id` es null en convenios sin calibres.
      *
      * @param  array<int, array<string, mixed>>  $precios
      * @return array<int, array<string, mixed>>
@@ -80,10 +89,59 @@ class ReglasConvenio
             'tipo_carga_id' => (int) $p['tipo_carga_id'],
             'precio' => $p['precio'],
             'porcentaje_productor' => $modalidad === 'consignacion' ? ($p['porcentaje_productor'] ?? null) : null,
+            'calibre_id' => isset($p['calibre_id']) && $p['calibre_id'] !== '' ? (int) $p['calibre_id'] : null,
             'vigencia_inicio' => $p['vigencia_inicio'],
             'es_principal' => (int) $p['tipo_carga_id'] === $principal,
             'notas' => $p['notas'] ?? null,
         ], $precios);
+    }
+
+    /**
+     * Calibres del convenio: al menos uno, todos de los `$permitidos` (activos y de la
+     * variedad), sin precios de calibres no elegidos y con precio del tipo de carga
+     * principal en CADA calibre. `$precios` son las filas ya normalizadas.
+     *
+     * @param  array<int, array<string, mixed>>  $calibres  [['calibre_id', 'volumen_total'], ...]
+     * @param  array<int, int|string>  $permitidos
+     * @param  array<int, array<string, mixed>>  $precios
+     */
+    public static function validarCalibres(array $calibres, array $permitidos, array $precios): void
+    {
+        $calibres = array_values($calibres);
+        if ($calibres === []) {
+            throw ValidationException::withMessages(['calibres' => 'Elige al menos un calibre.']);
+        }
+
+        $errores = [];
+        $permitidos = array_map('intval', $permitidos);
+        $elegidos = array_map(fn ($c) => (int) ($c['calibre_id'] ?? 0), $calibres);
+
+        // Calibres con precio del tipo principal.
+        $conPrincipal = [];
+        foreach ($precios as $p) {
+            if (self::marcado($p) && ($p['calibre_id'] ?? null) !== null) {
+                $conPrincipal[(int) $p['calibre_id']] = true;
+            }
+        }
+
+        foreach ($elegidos as $i => $id) {
+            if (! in_array($id, $permitidos, true)) {
+                $errores["calibres.{$i}.calibre_id"] = 'El calibre no es de la variedad del convenio o está inactivo.';
+            } elseif (! isset($conPrincipal[$id])) {
+                $errores["calibres.{$i}.calibre_id"] = 'Falta el precio del tipo de carga principal para este calibre.';
+            }
+        }
+
+        foreach (array_values($precios) as $i => $p) {
+            $id = $p['calibre_id'] ?? null;
+            if ($id !== null && ! in_array((int) $id, $elegidos, true)) {
+                $errores["precios.{$i}.calibre_id"] = 'El calibre no está en el convenio.';
+            }
+        }
+
+        if ($errores !== []) {
+            throw ValidationException::withMessages($errores);
+        }
     }
 
     /**
@@ -95,6 +153,8 @@ class ReglasConvenio
      * las metas no vienen en la petición sino de la base: entonces no hay un renglón
      * que señalar y un choque con las fechas se reporta en `fecha_inicio`/`fecha_fin`.
      * Las semanas repetidas ya las rechaza la validación `distinct` del controlador.
+     * Con `usa_calibres` el volumen total vive en `calibres` ([calibre_id, volumen_total])
+     * y cada meta lleva su `calibre_id`; el par (semana, calibre) no se repite.
      *
      * @param  array<string, mixed>  $datos
      */
@@ -103,20 +163,52 @@ class ReglasConvenio
         $unidad = $datos['unidad'];
         $metas = is_array($datos['metas'] ?? null) ? array_values($datos['metas']) : [];
         $errores = [];
+        $usaCalibres = (bool) ($datos['usa_calibres'] ?? false);
+        $calibres = $usaCalibres && is_array($datos['calibres'] ?? null) ? array_values($datos['calibres']) : [];
+        $elegidos = array_map(fn ($c) => (int) ($c['calibre_id'] ?? 0), $calibres);
 
         if ($datos['modo_volumen'] === 'total') {
-            $total = $datos['volumen_total'] ?? null;
-            if (! is_numeric($total) || (float) $total <= 0) {
-                $errores['volumen_total'] = 'Indica el volumen total pactado (mayor a cero).';
-            } elseif (! self::cantidadValida($total, $unidad)) {
-                $errores['volumen_total'] = self::mensajeCantidad($unidad);
+            if ($usaCalibres) {
+                foreach ($calibres as $i => $calibre) {
+                    $total = $calibre['volumen_total'] ?? null;
+                    if (! is_numeric($total) || (float) $total <= 0) {
+                        $errores["calibres.{$i}.volumen_total"] = 'Indica el volumen total pactado (mayor a cero).';
+                    } elseif (! self::cantidadValida($total, $unidad)) {
+                        $errores["calibres.{$i}.volumen_total"] = self::mensajeCantidad($unidad);
+                    }
+                }
+            } else {
+                $total = $datos['volumen_total'] ?? null;
+                if (! is_numeric($total) || (float) $total <= 0) {
+                    $errores['volumen_total'] = 'Indica el volumen total pactado (mayor a cero).';
+                } elseif (! self::cantidadValida($total, $unidad)) {
+                    $errores['volumen_total'] = self::mensajeCantidad($unidad);
+                }
             }
             if (! $metasGuardadas && $metas !== []) {
                 $errores['metas'] = 'En volumen total no se capturan metas semanales.';
             }
         } elseif ($metas === []) {
             $errores['metas'] = 'Captura al menos una meta semanal.';
+            foreach ($elegidos as $i => $id) {
+                $errores["calibres.{$i}.calibre_id"] = 'Captura al menos una meta semanal para este calibre.';
+            }
         } else {
+            if ($usaCalibres) {
+                $conMeta = [];
+                foreach ($metas as $meta) {
+                    if (isset($meta['calibre_id']) && $meta['calibre_id'] !== '') {
+                        $conMeta[(int) $meta['calibre_id']] = true;
+                    }
+                }
+                foreach ($elegidos as $i => $id) {
+                    if (! isset($conMeta[$id])) {
+                        $errores["calibres.{$i}.calibre_id"] = 'Captura al menos una meta semanal para este calibre.';
+                    }
+                }
+            }
+            $pares = [];
+
             $semanas = Semanas::entre($datos['fecha_inicio'], $datos['fecha_fin']);
             $primera = $semanas[0] ?? null;
             $ultima = $semanas[count($semanas) - 1] ?? null;
@@ -132,6 +224,21 @@ class ReglasConvenio
                     }
                     if (! self::cantidadValida($meta['cantidad'], $unidad)) {
                         $errores["metas.{$i}.cantidad"] = self::mensajeCantidad($unidad);
+                    }
+
+                    if ($usaCalibres) {
+                        $calibreMeta = $meta['calibre_id'] ?? null;
+                        if ($calibreMeta === null || $calibreMeta === '') {
+                            $errores["metas.{$i}.calibre_id"] = 'Elige el calibre.';
+                        } elseif (! in_array((int) $calibreMeta, $elegidos, true)) {
+                            $errores["metas.{$i}.calibre_id"] = 'El calibre no está en el convenio.';
+                        } else {
+                            $par = $semana.'|'.(int) $calibreMeta;
+                            if (isset($pares[$par])) {
+                                $errores["metas.{$i}.semana"] = 'Ya hay una meta de ese calibre en esa semana.';
+                            }
+                            $pares[$par] = true;
+                        }
                     }
 
                     continue;
