@@ -230,6 +230,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
                 Route::get('clientes', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ClientesSbpController::class, 'index']);
 
+                // Resumen de temporada (resumen-temporada.view)
+                Route::get('resumen', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ResumenTemporadaController::class, 'show']);
+
                 // Hoja de corte (guardado en lote) y rendimiento de la semana (plan-corte.capturar)
                 Route::put('programa/{programa}/cortes/hoja', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\HojaCorteController::class, 'guardar']);
                 Route::put('programa/{programa}/rendimientos', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ProgramaCorteController::class, 'rendimientos']);
