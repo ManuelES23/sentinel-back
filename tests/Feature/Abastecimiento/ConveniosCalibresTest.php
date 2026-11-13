@@ -14,9 +14,11 @@ use App\Models\Abastecimiento\Variedad;
 use App\Models\Abastecimiento\VariedadCalibre;
 use App\Models\Abastecimiento\Recepcion;
 use App\Models\User;
+use App\Services\Abastecimiento\ReglasRecepcion;
 use App\Services\Abastecimiento\ValidadorImportacionRecepciones;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Validation\ValidationException;
 use Laravel\Sanctum\Sanctum;
 use Tests\Concerns\CreatesAbastecimientoFixtures;
 use Tests\TestCase;
@@ -502,9 +504,7 @@ class ConveniosCalibresTest extends TestCase
         $this->assertSame(2, ConvenioPrecio::withTrashed()->where('convenio_id', $convenio->id)->count());
     }
 
-    // ---- Recepciones: bloqueadas hasta el plan 2 ----
-
-    private const MENSAJE_CALIBRE = 'Este convenio es por calibre: la captura de recepciones por calibre llega en la siguiente entrega.';
+    // ---- Recepciones: reglas por tipo de convenio ----
 
     private function convenioPorCalibre(): Convenio
     {
@@ -514,29 +514,57 @@ class ConveniosCalibresTest extends TestCase
         ]);
     }
 
-    public function test_no_se_captura_recepcion_en_convenio_por_calibre(): void
+    public function test_recepcion_clasica_con_renglones_da_422(): void
     {
-        $convenio = $this->convenioPorCalibre();
-        $cuerpo = [
-            'convenio_id' => $convenio->id, 'fecha' => '2026-06-10',
-            'tipo_carga_id' => $this->tipo()->id, 'cantidad' => 10,
-        ];
-
-        $this->postJson($this->url('recepciones'), $cuerpo)
-            ->assertStatus(422)
-            ->assertJsonValidationErrors(['convenio_id'])
-            ->assertJsonPath('errors.convenio_id.0', self::MENSAJE_CALIBRE);
-        $this->assertSame(0, Recepcion::count());
-
-        // Tampoco se pasa una recepción existente a un convenio por calibre.
         $clasico = $this->crearConvenio($this->sbp, [
             'temporada_id' => $this->temporada->id, 'productor_id' => $this->productor->id, 'variedad_id' => $this->variedad->id,
         ]);
-        $recepcion = $this->crearRecepcion($clasico);
-        $this->putJson($this->url('recepciones/'.$recepcion->id), $cuerpo)
-            ->assertStatus(422)
-            ->assertJsonPath('errors.convenio_id.0', self::MENSAJE_CALIBRE);
-        $this->assertSame($clasico->id, $recepcion->refresh()->convenio_id);
+
+        try {
+            ReglasRecepcion::validar($clasico, [
+                'fecha' => '2026-06-10', 'tipo_carga_id' => $this->tipo()->id, 'cantidad' => 10,
+                'renglones' => [['calibre_id' => $this->calibre('A')->id, 'cantidad' => 10]],
+            ]);
+            $this->fail('Se esperaba una ValidationException.');
+        } catch (ValidationException $e) {
+            $this->assertSame('Este convenio no es por calibre.', $e->errors()['renglones'][0]);
+        }
+    }
+
+    public function test_reglas_aceptan_renglones_y_el_importe_suma_cada_calibre(): void
+    {
+        $a = $this->calibre('A');
+        $b = $this->calibre('B');
+        $convenio = $this->crearConvenioPorCalibre($this->sbp, [
+            ['calibre' => $a, 'volumen' => 100, 'precio' => 20.0],
+            ['calibre' => $b, 'volumen' => 100, 'precio' => 35.5],
+        ]);
+        $renglones = [
+            ['calibre_id' => $a->id, 'cantidad' => 10],
+            ['calibre_id' => $b->id, 'cantidad' => 4],
+        ];
+
+        ReglasRecepcion::validar($convenio, [
+            'fecha' => '2026-06-10', 'tipo_carga_id' => $this->tipo()->id, 'renglones' => $renglones,
+        ]);
+
+        $recepcion = $this->crearRecepcionConRenglones($convenio, $renglones);
+        $this->assertSame(342.0, ReglasRecepcion::importeRenglones($convenio, $recepcion));
+
+        // Un renglón sin precio a la fecha de la recepción deja el importe en nulo.
+        $recepcion->update(['fecha' => '2026-05-15']);
+        $this->assertNull(ReglasRecepcion::importeRenglones($convenio, $recepcion->refresh()->load('renglones')));
+    }
+
+    public function test_recepcion_por_calibre_con_cantidad_y_sin_renglones_da_422(): void
+    {
+        $convenio = $this->convenioPorCalibre();
+
+        $this->postJson($this->url('recepciones'), [
+            'convenio_id' => $convenio->id, 'fecha' => '2026-06-10',
+            'tipo_carga_id' => $this->tipo()->id, 'cantidad' => 10,
+        ])->assertStatus(422)->assertJsonPath('errors.renglones.0', 'Captura la recepción por calibre.');
+        $this->assertSame(0, Recepcion::count());
     }
 
     public function test_importacion_rechaza_convenio_por_calibre(): void
@@ -549,7 +577,10 @@ class ConveniosCalibresTest extends TestCase
         ]]);
 
         $this->assertSame('error', $r['filas'][0]['estado']);
-        $this->assertSame([self::MENSAJE_CALIBRE], $r['filas'][0]['errores']);
+        $this->assertSame(
+            ['Este convenio es por calibre: la importación por calibre llegará con el formato de Excel.'],
+            $r['filas'][0]['errores'],
+        );
         $this->assertSame(1, $r['resumen']['con_error']);
     }
 

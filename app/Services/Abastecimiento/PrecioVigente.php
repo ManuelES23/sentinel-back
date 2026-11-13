@@ -16,10 +16,13 @@ use Illuminate\Support\Collection;
  */
 class PrecioVigente
 {
-    /** El precio del tipo de carga con la mayor `vigencia_inicio` menor o igual a la fecha. */
-    public function para(Convenio $convenio, int $tipoCargaId, string $fecha): ?ConvenioPrecio
+    /**
+     * El precio del tipo de carga con la mayor `vigencia_inicio` menor o igual a la fecha.
+     * Con `$calibreId`, solo cuentan los precios de ese calibre (convenios por calibre).
+     */
+    public function para(Convenio $convenio, int $tipoCargaId, string $fecha, ?int $calibreId = null): ?ConvenioPrecio
     {
-        return self::enColeccion($this->precios($convenio), $tipoCargaId, $fecha);
+        return self::enColeccion($this->precios($convenio), $tipoCargaId, $fecha, $calibreId);
     }
 
     /**
