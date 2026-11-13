@@ -60,7 +60,10 @@ class LiquidacionController extends AbastecimientoController
         )->load('tipoCarga:id,nombre');
 
         $data = $recepciones->map(function (Recepcion $r) use ($convenio) {
-            $precio = PrecioVigente::enColeccion($convenio->precios, (int) $r->tipo_carga_id, $r->fecha->format('Y-m-d'));
+            // Convenio por calibre: sin precio por recepción y no liquidable hasta el plan 3 (ver `ReglasLiquidacion`).
+            $precio = $convenio->usa_calibres
+                ? null
+                : PrecioVigente::enColeccion($convenio->precios, (int) $r->tipo_carga_id, $r->fecha->format('Y-m-d'));
 
             return [
                 'id' => $r->id,
@@ -74,7 +77,7 @@ class LiquidacionController extends AbastecimientoController
                 'ticket_proveedor' => $r->ticket_proveedor,
                 'precio' => $precio === null ? null : (float) $precio->precio,
                 'liquidacion_id' => $r->liquidacion_id,
-            ];
+            ] + ($convenio->usa_calibres ? ['liquidable' => false] : []);
         })->values();
 
         return response()->json(['success' => true, 'data' => $data]);
