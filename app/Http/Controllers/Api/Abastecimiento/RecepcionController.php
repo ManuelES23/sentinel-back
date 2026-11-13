@@ -597,8 +597,6 @@ class RecepcionController extends AbastecimientoController
 
         return $r->renglones->map(function (RecepcionCalibre $g) use ($c, $r, $fecha) {
             $precio = PrecioVigente::enColeccion($c->precios, (int) $r->tipo_carga_id, $fecha, (int) $g->calibre_id);
-            $cantidad = (float) ($c->unidad === 'kg' ? $g->kilos : $g->cantidad);
-            $porcentaje = $precio?->porcentaje_productor === null ? 100.0 : (float) $precio->porcentaje_productor;
 
             return [
                 'id' => $g->id,
@@ -609,8 +607,7 @@ class RecepcionController extends AbastecimientoController
                 'rezaga_kg' => $g->rezaga_kg === null ? null : (float) $g->rezaga_kg,
                 'precio' => $precio === null ? null : (float) $precio->precio,
                 'porcentaje_productor' => $precio?->porcentaje_productor === null ? null : (float) $precio->porcentaje_productor,
-                // Misma fórmula que ReglasRenglonesRecepcion::importe, renglón por renglón.
-                'importe_estimado' => $precio === null ? null : round($cantidad * (float) $precio->precio * $porcentaje / 100, 2),
+                'importe_estimado' => ReglasRenglonesRecepcion::importeRenglon($c, $g, $precio),
             ];
         })->values()->all();
     }

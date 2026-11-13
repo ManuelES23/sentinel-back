@@ -453,6 +453,58 @@ class RecepcionesCalibresTest extends TestCase
         $this->getJson($this->url("convenios/{$clasico->id}"))->assertOk()->assertJsonPath('data.recepciones.0.renglones', []);
     }
 
+    public function test_por_kilo_en_consignacion_valora_cada_renglon_por_sus_kilos(): void
+    {
+        $c = $this->convenioAB(['unidad' => 'kg', 'modalidad' => 'consignacion']);
+        ConvenioPrecio::where('convenio_id', $c->id)->update(['porcentaje_productor' => 37.5]);
+
+        $r = $this->postJson($this->url(), $this->cuerpo($c, [
+            $this->renglon('A', 10, 100.55),
+            $this->renglon('B', 4, 40.25),
+        ]))->assertStatus(201);
+
+        $a = round(100.55 * 20 * 37.5 / 100, 2);   // 754.13
+        $b = round(40.25 * 35.5 * 37.5 / 100, 2);  // 535.83
+        $this->assertEqualsWithDelta($a, $r->json('data.renglones.0.importe_estimado'), 0.001);
+        $this->assertEqualsWithDelta($b, $r->json('data.renglones.1.importe_estimado'), 0.001);
+        $this->assertEqualsWithDelta(37.5, $r->json('data.renglones.0.porcentaje_productor'), 0.001);
+        $this->assertEqualsWithDelta($a + $b, $r->json('data.importe_estimado'), 0.001);
+        $this->assertEqualsWithDelta(140.8, $r->json('data.kilos'), 0.001);
+
+        // Mismo valor en el listado, en la ficha del convenio y en sus indicadores.
+        $fila = $this->getJson($this->url("recepciones?temporada_id={$c->temporada_id}"))->assertOk()->json('data.data.0');
+        $this->assertEqualsWithDelta($a + $b, $fila['importe_estimado'], 0.001);
+        $ficha = $this->getJson($this->url("convenios/{$c->id}"))->assertOk();
+        $this->assertEqualsWithDelta($b, $ficha->json('data.recepciones.0.renglones.1.importe_estimado'), 0.001);
+        $this->assertEqualsWithDelta($a + $b, $ficha->json('data.indicadores.valor_recibido'), 0.01);
+    }
+
+    public function test_cabecera_por_calibre_sin_renglones_no_se_valora_en_cero(): void
+    {
+        $c = $this->convenioAB();
+        $this->crearRecepcion($c, ['fecha' => '2026-06-10', 'cantidad' => 10]); // cabecera sin renglones
+
+        $fila = $this->getJson($this->url("recepciones?temporada_id={$c->temporada_id}"))->assertOk()->json('data.data.0');
+
+        $this->assertSame([], $fila['renglones']);
+        $this->assertNull($fila['importe_estimado']);
+        $this->assertNull($fila['precio']);
+    }
+
+    public function test_suma_de_renglones_que_desborda_la_cabecera_da_422(): void
+    {
+        $c = $this->convenioAB();
+
+        $this->postJson($this->url(), $this->cuerpo($c, [
+            $this->renglon('A', 999999999999),
+            $this->renglon('B', 999999999999),
+        ]))
+            ->assertStatus(422)
+            ->assertJsonPath('errors.renglones.0', ReglasRenglonesRecepcion::MENSAJE_SUMA);
+
+        $this->assertSame(0, Recepcion::count());
+    }
+
     public function test_borrar_deja_los_renglones_con_la_cabecera_borrada(): void
     {
         $c = $this->convenioAB();

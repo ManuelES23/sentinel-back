@@ -240,7 +240,7 @@ class ConvenioController extends AbastecimientoController
             }
 
             return $convenio;
-        });
+        }, 3); // Reintentos ante interbloqueo: todo lo que escribe vive aquí dentro y el convenio se relee, así que repetir no duplica nada.
 
         $data = $this->presentar($convenio->refresh());
         $this->difundir('convenio', 'updated', $data, $empresa);

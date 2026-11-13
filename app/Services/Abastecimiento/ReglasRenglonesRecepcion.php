@@ -3,7 +3,9 @@
 namespace App\Services\Abastecimiento;
 
 use App\Models\Abastecimiento\Convenio;
+use App\Models\Abastecimiento\ConvenioPrecio;
 use App\Models\Abastecimiento\Recepcion;
+use App\Models\Abastecimiento\RecepcionCalibre;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -17,6 +19,11 @@ class ReglasRenglonesRecepcion
     public const MENSAJE_SIN_RENGLONES = 'Agrega al menos un calibre.';
 
     public const MENSAJE_PRECIO = 'Este calibre no tiene precio vigente para ese tipo de carga en esa fecha.';
+
+    public const MENSAJE_SUMA = 'La suma de los renglones es demasiado grande.';
+
+    /** Tope de las columnas decimal(14,2) de la cabecera (cantidad, kilos, rezaga). */
+    private const MAXIMO_CABECERA = 999999999999.99;
 
     /**
      * @param  array{fecha: string, tipo_carga_id: int|string, renglones?: array<int, array<string, mixed>>}  $datos
@@ -74,6 +81,12 @@ class ReglasRenglonesRecepcion
             self::kilosYRezaga($convenio, $r, $hayKilosEnAlguno, $clave, $errores);
         }
 
+        // La cabecera es decimal(14,2): la suma de los renglones no debe desbordarla.
+        $suma = fn (string $campo) => array_sum(array_map(fn ($r) => is_numeric($r[$campo] ?? null) ? abs((float) $r[$campo]) : 0.0, $renglones));
+        if ($suma('cantidad') > self::MAXIMO_CABECERA || $suma('kilos') > self::MAXIMO_CABECERA || $suma('rezaga_kg') > self::MAXIMO_CABECERA) {
+            $errores['renglones'] = self::MENSAJE_SUMA;
+        }
+
         return $errores;
     }
 
@@ -105,21 +118,45 @@ class ReglasRenglonesRecepcion
      */
     public static function importe(Convenio $convenio, Recepcion $recepcion, ?PrecioVigente $precios = null): ?float
     {
+        // Una cabecera sin renglones en un convenio por calibre no se valora (nunca se muestra como $0).
+        if ($recepcion->renglones->isEmpty()) {
+            return null;
+        }
+
         $precios ??= app(PrecioVigente::class);
         $fecha = $recepcion->fecha->format('Y-m-d');
         $total = 0.0;
 
         foreach ($recepcion->renglones as $renglon) {
-            $precio = $precios->para($convenio, (int) $recepcion->tipo_carga_id, $fecha, (int) $renglon->calibre_id);
-            if ($precio === null) {
+            $importe = self::importeRenglon(
+                $convenio,
+                $renglon,
+                $precios->para($convenio, (int) $recepcion->tipo_carga_id, $fecha, (int) $renglon->calibre_id),
+            );
+            if ($importe === null) {
                 return null;
             }
-            $cantidad = (float) ($convenio->unidad === 'kg' ? $renglon->kilos : $renglon->cantidad);
-            $porcentaje = $precio->porcentaje_productor === null ? 100.0 : (float) $precio->porcentaje_productor;
-            $total += round($cantidad * (float) $precio->precio * $porcentaje / 100, 2);
+            $total += $importe;
         }
 
         return round($total, 2);
+    }
+
+    /**
+     * Importe de UN renglón con su precio vigente ya resuelto: kilos si el convenio se paga por kilo
+     * (si no, las piezas) × precio × % del productor ÷ 100 (100 % sin porcentaje), a centavos.
+     * Nulo sin precio. Única implementación de la fórmula (la usan `importe` y la presentación).
+     */
+    public static function importeRenglon(Convenio $convenio, RecepcionCalibre $renglon, ?ConvenioPrecio $precio): ?float
+    {
+        if ($precio === null) {
+            return null;
+        }
+
+        $cantidad = (float) ($convenio->unidad === 'kg' ? $renglon->kilos : $renglon->cantidad);
+        $porcentaje = $precio->porcentaje_productor === null ? 100.0 : (float) $precio->porcentaje_productor;
+
+        return round($cantidad * (float) $precio->precio * $porcentaje / 100, 2);
     }
 
     /** @param  array<string, string>  $errores */
