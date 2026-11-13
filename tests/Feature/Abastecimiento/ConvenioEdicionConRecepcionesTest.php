@@ -199,4 +199,29 @@ class ConvenioEdicionConRecepcionesTest extends TestCase
             'precios' => [['tipo_carga_id' => $tipo, 'precio' => 99999999.9999, 'vigencia_inicio' => '2026-06-01', 'es_principal' => true]],
         ]))->assertOk();
     }
+
+    /** Las reglas por calibre (plan 2) no tocan a los clásicos: la cobertura sigue por (tipo de carga, fecha). */
+    public function test_los_clasicos_con_recepciones_siguen_igual(): void
+    {
+        $c = $this->convenioConRecepcion();
+        $tipo = $c->precios->first()->tipo_carga_id;
+
+        // Una vigencia que deja la recepción del 10 sin precio: mismo 422 y nada de `calibres`.
+        $this->putJson($this->url($c), $this->cuerpoDe($c, [
+            'precios' => [['tipo_carga_id' => $tipo, 'precio' => 100, 'vigencia_inicio' => '2026-06-11', 'es_principal' => true]],
+        ]))
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['precios'])
+            ->assertJsonMissingValidationErrors(['calibres'])
+            ->assertJsonPath('errors.precios.0', 'No se puede: el precio dejaría recepciones ya capturadas sin precio vigente.');
+
+        // Una vigencia nueva después de la recepción se acepta y el convenio sigue clásico.
+        $this->putJson($this->url($c), $this->cuerpoDe($c, [
+            'precios' => [
+                ['tipo_carga_id' => $tipo, 'precio' => 100, 'vigencia_inicio' => '2026-06-01', 'es_principal' => true],
+                ['tipo_carga_id' => $tipo, 'precio' => 110, 'vigencia_inicio' => '2026-06-12', 'es_principal' => true],
+            ],
+        ]))->assertOk()->assertJsonPath('data.usa_calibres', false)->assertJsonPath('data.calibres', []);
+        $this->assertFalse($c->fresh()->usa_calibres);
+    }
 }

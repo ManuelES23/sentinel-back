@@ -413,7 +413,8 @@ class ConvenioController extends AbastecimientoController
     /**
      * Con recepciones vivas: la unidad, la moneda, el productor, la variedad y la temporada no cambian
      * (reinterpretarían lo capturado); las fechas deben seguir cubriendo todas las recepciones y la lista
-     * de precios debe dejar un precio vigente para cada tipo de carga y fecha ya recibidos.
+     * de precios debe dejar un precio vigente para cada tipo de carga y fecha ya recibidos. En un convenio por
+     * calibre eso se mira por renglón (tipo, calibre, fecha) y un calibre con renglones no se quita.
      *
      * @return array<string, string>
      */
@@ -437,7 +438,7 @@ class ConvenioController extends AbastecimientoController
             }
         }
         // Pasar a calibres (o dejarlos) reinterpretaría lo recibido o liquidado. Lo demás de los calibres con
-        // recepciones (cobertura por calibre, no quitar uno usado) llega con los renglones de recepción (plan 2).
+        // recepciones (cobertura por calibre, no quitar uno usado) se revisa contra los renglones, más abajo.
         if ((bool) $datos['usa_calibres'] !== (bool) $convenio->usa_calibres) {
             $errores['usa_calibres'] = $sinCambio;
         }
@@ -457,8 +458,19 @@ class ConvenioController extends AbastecimientoController
             $errores['fecha_fin'] = $fueraDeFechas;
         }
 
-        // Cada par (tipo de carga, fecha) ya recibido necesita precio vigente con la lista que se va a guardar.
         $nuevos = collect($datos['precios'])->map(fn (array $p) => new ConvenioPrecio($p));
+
+        if ($convenio->usa_calibres) {
+            // Por calibre (C7/C14) se mira lo recibido en los renglones. Si además cambia `usa_calibres`, ese
+            // error ya basta: no se suman los de calibres contra una lista de otro modo.
+            if ((bool) $datos['usa_calibres']) {
+                $errores += CalibresConvenio::erroresConRecepciones($convenio, $datos['calibres'], $nuevos);
+            }
+
+            return $errores;
+        }
+
+        // Cada par (tipo de carga, fecha) ya recibido necesita precio vigente con la lista que se va a guardar.
         $sinPrecio = $convenio->recepciones()->select('tipo_carga_id', 'fecha')->distinct()->get()
             ->contains(fn ($r) => PrecioVigente::enColeccion(
                 $nuevos,
@@ -466,7 +478,7 @@ class ConvenioController extends AbastecimientoController
                 Carbon::parse($r->fecha)->format('Y-m-d'),
             ) === null);
         if ($sinPrecio) {
-            $errores['precios'] = 'No se puede: el precio dejaría recepciones ya capturadas sin precio vigente.';
+            $errores['precios'] = CalibresConvenio::SIN_PRECIO_VIGENTE;
         }
 
         return $errores;

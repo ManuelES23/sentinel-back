@@ -5,8 +5,12 @@ namespace App\Services\Abastecimiento;
 use App\Models\Abastecimiento\Convenio;
 use App\Models\Abastecimiento\ConvenioCalibre;
 use App\Models\Abastecimiento\ConvenioMeta;
+use App\Models\Abastecimiento\ConvenioPrecio;
 use App\Models\Abastecimiento\VariedadCalibre;
+use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -136,6 +140,49 @@ class CalibresConvenio
         if ($calibres->isEmpty() || $calibres->contains(fn (int $id) => ($pactado[$id] ?? 0.0) <= 0)) {
             throw ValidationException::withMessages(['status' => 'Define el volumen pactado de cada calibre antes de activar el convenio.']);
         }
+    }
+
+    /** Mismo texto que la cobertura de un convenio clásico (ConvenioController::erroresConRecepciones). */
+    public const SIN_PRECIO_VIGENTE = 'No se puede: el precio dejaría recepciones ya capturadas sin precio vigente.';
+
+    /**
+     * Edición de un convenio por calibre con recepciones vivas (spec C7/C14), contra sus renglones:
+     * un calibre con renglones no se quita, y cada (tipo de carga, calibre, fecha) ya recibido debe
+     * seguir con precio vigente en la lista que se va a guardar. Agregar calibres, cambiar volúmenes
+     * y agregar vigencias sí se permite. Una sola consulta `distinct` sobre los renglones de las
+     * recepciones no borradas.
+     *
+     * @param  array<int, array{calibre_id: int}>  $calibres  calibres que se van a guardar (normalizados)
+     * @param  Collection<int, ConvenioPrecio>  $precios  lista de precios que se va a guardar
+     * @return array<string, string>
+     */
+    public static function erroresConRecepciones(Convenio $convenio, array $calibres, Collection $precios): array
+    {
+        $recibido = DB::table('abs_recepcion_calibres as rc')
+            ->join('abs_recepciones as r', 'r.id', '=', 'rc.recepcion_id')
+            ->where('r.convenio_id', $convenio->id)
+            ->whereNull('r.deleted_at')
+            ->select('r.tipo_carga_id', 'rc.calibre_id', 'r.fecha')
+            ->distinct()
+            ->get();
+
+        $errores = [];
+        $quedan = array_map(fn (array $c) => (int) $c['calibre_id'], $calibres);
+        if ($recibido->contains(fn ($r) => ! in_array((int) $r->calibre_id, $quedan, true))) {
+            $errores['calibres'] = 'No se puede quitar un calibre que ya tiene recepciones.';
+        }
+
+        $sinPrecio = $recibido->contains(fn ($r) => PrecioVigente::enColeccion(
+            $precios,
+            (int) $r->tipo_carga_id,
+            Carbon::parse($r->fecha)->format('Y-m-d'),
+            (int) $r->calibre_id,
+        ) === null);
+        if ($sinPrecio) {
+            $errores['precios'] = self::SIN_PRECIO_VIGENTE;
+        }
+
+        return $errores;
     }
 
     /**

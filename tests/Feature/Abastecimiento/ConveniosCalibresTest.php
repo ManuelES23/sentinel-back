@@ -602,4 +602,90 @@ class ConveniosCalibresTest extends TestCase
         $this->putJson($this->url('recepciones/'.$id), $cuerpo + ['notas' => 'ok'])->assertOk();
         $this->assertSame(1, Recepcion::count());
     }
+
+    // ---- Edición de un convenio por calibre con recepciones (C7, C14) ----
+
+    /**
+     * Convenio activo por calibre (Jumbo y Grande, precio desde el 1 de junio) con una recepción
+     * el 10 de junio que solo trae renglón de Jumbo.
+     *
+     * @return array{0: Convenio, 1: VariedadCalibre, 2: VariedadCalibre}
+     */
+    private function porCalibreConRecepcion(): array
+    {
+        $jumbo = $this->calibre('Jumbo', 1);
+        $grande = $this->calibre('Grande', 2);
+        $convenio = $this->crearConvenioPorCalibre($this->sbp, [
+            ['calibre' => $jumbo, 'volumen' => 100],
+            ['calibre' => $grande, 'volumen' => 100],
+        ], ['temporada_id' => $this->temporada->id, 'productor_id' => $this->productor->id, 'variedad_id' => $this->variedad->id]);
+        $this->crearRecepcionConRenglones($convenio, [['calibre_id' => $jumbo->id, 'cantidad' => 10]], ['fecha' => '2026-06-10']);
+
+        return [$convenio, $jumbo, $grande];
+    }
+
+    public function test_no_se_quita_un_calibre_con_recepciones(): void
+    {
+        [$convenio, $jumbo, $grande] = $this->porCalibreConRecepcion();
+
+        $this->putJson($this->url("convenios/{$convenio->id}"), $this->cuerpoCalibres([[$grande, 100]]))
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['calibres'])
+            ->assertJsonPath('errors.calibres.0', 'No se puede quitar un calibre que ya tiene recepciones.');
+        $this->assertEqualsCanonicalizing(
+            [$jumbo->id, $grande->id],
+            ConvenioCalibre::where('convenio_id', $convenio->id)->pluck('calibre_id')->all(),
+        );
+
+        // Grande no tiene renglones: ese sí se quita.
+        $this->putJson($this->url("convenios/{$convenio->id}"), $this->cuerpoCalibres([[$jumbo, 100]]))
+            ->assertOk()->assertJsonCount(1, 'data.calibres')->assertJsonPath('data.calibres.0.calibre_id', $jumbo->id);
+    }
+
+    public function test_se_agrega_un_calibre_con_recepciones(): void
+    {
+        [$convenio, $jumbo, $grande] = $this->porCalibreConRecepcion();
+        $chico = $this->calibre('Chico', 3);
+
+        // Agregar un calibre y cambiar volúmenes se permite (C14).
+        $this->putJson($this->url("convenios/{$convenio->id}"), $this->cuerpoCalibres([[$jumbo, 150], [$grande, 80], [$chico, 40]]))
+            ->assertOk()
+            ->assertJsonCount(3, 'data.calibres')
+            ->assertJsonPath('data.calibres.0.calibre_id', $jumbo->id)
+            ->assertJsonPath('data.calibres.0.pactado', 150);
+        $this->assertSame(3, ConvenioCalibre::where('convenio_id', $convenio->id)->count());
+    }
+
+    public function test_cobertura_por_calibre_bloquea_un_precio_que_deja_renglones_sin_precio(): void
+    {
+        [$convenio, $jumbo, $grande] = $this->porCalibreConRecepcion();
+        $tipo = $this->tipo()->id;
+        $precios = fn (string $desdeJumbo, string $desdeGrande) => [
+            ['tipo_carga_id' => $tipo, 'calibre_id' => $jumbo->id, 'precio' => 100, 'vigencia_inicio' => $desdeJumbo],
+            ['tipo_carga_id' => $tipo, 'calibre_id' => $grande->id, 'precio' => 100, 'vigencia_inicio' => $desdeGrande],
+        ];
+
+        // El precio de Jumbo empezaría el 15: el renglón de Jumbo del 10 se quedaría sin precio.
+        $this->putJson($this->url("convenios/{$convenio->id}"), $this->cuerpoCalibres([[$jumbo, 100], [$grande, 100]], [
+            'precios' => $precios('2026-06-15', '2026-06-01'),
+        ]))
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['precios'])
+            ->assertJsonPath('errors.precios.0', 'No se puede: el precio dejaría recepciones ya capturadas sin precio vigente.');
+
+        // Grande no tiene renglones: su precio sí puede empezar después.
+        $this->putJson($this->url("convenios/{$convenio->id}"), $this->cuerpoCalibres([[$jumbo, 100], [$grande, 100]], [
+            'precios' => $precios('2026-06-01', '2026-06-15'),
+        ]))->assertOk();
+    }
+
+    public function test_nueva_vigencia_de_precio_por_calibre_con_recepciones_se_acepta(): void
+    {
+        [$convenio, $jumbo, $grande] = $this->porCalibreConRecepcion();
+        $body = $this->cuerpoCalibres([[$jumbo, 100], [$grande, 100]]);
+        $body['precios'][] = ['tipo_carga_id' => $this->tipo()->id, 'calibre_id' => $jumbo->id, 'precio' => 130, 'vigencia_inicio' => '2026-06-20'];
+
+        $this->putJson($this->url("convenios/{$convenio->id}"), $body)->assertOk()->assertJsonCount(3, 'data.precios');
+        $this->assertSame(3, ConvenioPrecio::where('convenio_id', $convenio->id)->count());
+    }
 }
