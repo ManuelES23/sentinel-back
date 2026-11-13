@@ -16,7 +16,9 @@ use App\Models\Abastecimiento\Recepcion;
 use App\Models\User;
 use App\Services\Abastecimiento\ReglasRecepcion;
 use App\Services\Abastecimiento\ValidadorImportacionRecepciones;
+use Illuminate\Database\Events\TransactionBeginning;
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Validation\ValidationException;
 use Laravel\Sanctum\Sanctum;
@@ -687,5 +689,63 @@ class ConveniosCalibresTest extends TestCase
 
         $this->putJson($this->url("convenios/{$convenio->id}"), $body)->assertOk()->assertJsonCount(3, 'data.precios');
         $this->assertSame(3, ConvenioPrecio::where('convenio_id', $convenio->id)->count());
+    }
+
+    /**
+     * Carrera: una recepción confirmada entre la primera lectura y la escritura no debe quedar huérfana.
+     *
+     * Técnica: el convenio no tiene recepciones, así que la revisión previa (fuera de la transacción) pasa.
+     * Un listener de `TransactionBeginning` crea la recepción justo cuando `update` abre su transacción, es
+     * decir, después de esa revisión y antes de escribir; así la única forma de dar 422 es repetir la revisión
+     * dentro de la transacción (tras el `lockForUpdate` del convenio). Sin esa recomprobación el PUT da 200.
+     * El listener actúa una sola vez por caso (`$pendiente` se limpia antes de crear, porque la recepción abre su
+     * propia transacción). Al dar 422, la transacción de `update` se deshace y con ella esa recepción. En SQLite `lockForUpdate` no hace nada: aquí se prueba la recomprobación, no el bloqueo;
+     * en MySQL el bloqueo exclusivo serializa la edición con el `sharedLock` de RecepcionController::store.
+     */
+    public function test_la_edicion_revisa_de_nuevo_dentro_de_la_transaccion(): void
+    {
+        $jumbo = $this->calibre('Jumbo', 1);
+        $grande = $this->calibre('Grande', 2);
+        $convenio = $this->crearConvenioPorCalibre($this->sbp, [
+            ['calibre' => $jumbo, 'volumen' => 100],
+            ['calibre' => $grande, 'volumen' => 100],
+        ], ['temporada_id' => $this->temporada->id, 'productor_id' => $this->productor->id, 'variedad_id' => $this->variedad->id]);
+
+        // Calibre de la recepción que se cuela en la próxima transacción (null = ninguna).
+        $pendiente = null;
+        Event::listen(TransactionBeginning::class, function () use (&$pendiente, $convenio) {
+            if ($pendiente === null) {
+                return;
+            }
+            $calibreId = $pendiente;
+            $pendiente = null;
+            $this->crearRecepcionConRenglones($convenio, [['calibre_id' => $calibreId, 'cantidad' => 5]], ['fecha' => '2026-06-10']);
+        });
+
+        // Quitar Grande mientras llega una recepción de Grande.
+        $pendiente = $grande->id;
+        $this->putJson($this->url("convenios/{$convenio->id}"), $this->cuerpoCalibres([[$jumbo, 100]]))
+            ->assertStatus(422)
+            ->assertJsonPath('errors.calibres.0', 'No se puede quitar un calibre que ya tiene recepciones.');
+        $this->assertEqualsCanonicalizing(
+            [$jumbo->id, $grande->id],
+            ConvenioCalibre::where('convenio_id', $convenio->id)->pluck('calibre_id')->all(),
+        );
+
+        // Mover el precio de Jumbo al 15 mientras llega una recepción de Jumbo del 10.
+        $pendiente = $jumbo->id;
+        $tipo = $this->tipo()->id;
+        $this->putJson($this->url("convenios/{$convenio->id}"), $this->cuerpoCalibres([[$jumbo, 100], [$grande, 100]], [
+            'precios' => [
+                ['tipo_carga_id' => $tipo, 'calibre_id' => $jumbo->id, 'precio' => 100, 'vigencia_inicio' => '2026-06-15'],
+                ['tipo_carga_id' => $tipo, 'calibre_id' => $grande->id, 'precio' => 100, 'vigencia_inicio' => '2026-06-01'],
+            ],
+        ]))
+            ->assertStatus(422)
+            ->assertJsonPath('errors.precios.0', 'No se puede: el precio dejaría recepciones ya capturadas sin precio vigente.');
+        $this->assertSame(
+            '2026-06-01',
+            ConvenioPrecio::where('convenio_id', $convenio->id)->where('calibre_id', $jumbo->id)->first()->vigencia_inicio->format('Y-m-d'),
+        );
     }
 }

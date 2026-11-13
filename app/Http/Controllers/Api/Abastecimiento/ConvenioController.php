@@ -210,7 +210,20 @@ class ConvenioController extends AbastecimientoController
         }
         ReglasConvenio::validarVolumen($final, ! $metasEnviadas);
 
-        DB::transaction(function () use ($convenio, $datos, $metasEnviadas, $idsCalibres) {
+        $convenio = DB::transaction(function () use ($empresa, $id, $datos, $metasEnviadas, $idsCalibres) {
+            // Se relee con bloqueo exclusivo y se repite la revisión: una recepción confirmada entre la lectura de
+            // arriba y esta escritura no debe quedar huérfana (calibre quitado o sin precio vigente). El alta de
+            // recepciones toma `sharedLock` del convenio, así que una espera a la otra. Lo de arriba solo adelanta
+            // el mismo 422 sin abrir la transacción.
+            $convenio = Convenio::deEmpresa($empresa->id)->lockForUpdate()->findOrFail($id);
+            if (in_array($convenio->status, ['finalizado', 'cancelado'], true)) {
+                throw ValidationException::withMessages(['status' => 'Un convenio finalizado o cancelado no se edita.']);
+            }
+            $errores = $this->erroresConRecepciones($convenio, $datos);
+            if ($errores !== []) {
+                throw ValidationException::withMessages($errores);
+            }
+
             $convenio->update($this->columnas($datos));
 
             // Los calibres y los precios se reemplazan por la lista enviada (sin calibres, se borran). Las metas
@@ -225,6 +238,8 @@ class ConvenioController extends AbastecimientoController
                 // Conserva las guardadas del modo final; se van las del otro modo y las de calibres quitados.
                 CalibresConvenio::borrarMetasFueraDelModo($convenio, $datos['usa_calibres'], $idsCalibres);
             }
+
+            return $convenio;
         });
 
         $data = $this->presentar($convenio->refresh());
