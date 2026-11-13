@@ -31,6 +31,8 @@ class CompraAntesService
             ->where('o.empresa_id', $oportunidad->empresa_id)
             ->where('c.empresa_id', $oportunidad->empresa_id)
             ->where('p.empresa_id', $oportunidad->empresa_id)
+            ->whereNull('o.deleted_at')
+            ->whereNull('c.deleted_at')
             ->where('c.estado', 'aprobado')
             ->whereDate('c.fecha_emision', '>=', now()->subMonths(self::MESES)->toDateString())
             ->where('p.activo', true)

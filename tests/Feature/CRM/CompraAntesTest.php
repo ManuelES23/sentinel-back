@@ -179,6 +179,21 @@ class CompraAntesTest extends TestCase
         $this->assertSame(['Activo'], $this->nombres($this->consultar()));
     }
 
+    public function test_ignora_cotizaciones_y_oportunidades_eliminadas(): void
+    {
+        $a = $this->producto('A');
+        $b = $this->producto('B');
+        $c = $this->producto('C');
+        $op = $this->oportunidad($this->cliente);
+        $this->cotizacion($op, [$a])->delete();
+        $opEliminada = $this->oportunidad($this->cliente);
+        $this->cotizacion($opEliminada, [$b]);
+        $opEliminada->delete();
+        $this->cotizacion($op, [$c]);
+
+        $this->assertSame(['C'], $this->nombres($this->consultar()));
+    }
+
     public function test_tope_de_8(): void
     {
         $productos = [];
