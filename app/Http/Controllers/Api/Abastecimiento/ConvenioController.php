@@ -331,7 +331,11 @@ class ConvenioController extends AbastecimientoController
         $viva = fn (string $tabla) => Rule::exists($tabla, 'id')->where('enterprise_id', $empresa->id)->whereNull('deleted_at');
 
         // Con calibres la misma semana se repite (una meta por calibre); el par lo revisa ReglasConvenio.
-        $usaCalibres = $request->boolean('usa_calibres');
+        // Sin la llave (front viejo en caché) se conserva el valor guardado: en un convenio por calibre falla
+        // cerrado (422 `calibres`) en lugar de volverlo clásico en silencio. En el alta, por omisión false.
+        $usaCalibres = $request->has('usa_calibres')
+            ? $request->boolean('usa_calibres')
+            : (bool) ($convenio?->usa_calibres ?? false);
 
         $datos = $request->validate([
             'usa_calibres' => ['sometimes', 'boolean'],
@@ -392,6 +396,12 @@ class ConvenioController extends AbastecimientoController
             if ($conCalibre !== []) {
                 throw ValidationException::withMessages($conCalibre);
             }
+        }
+
+        // Sin calibres en un convenio por calibre (p. ej. un front viejo) el error va en `calibres`, antes que los
+        // de cada precio sin calibre (mismo mensaje que ReglasConvenio::validarCalibres).
+        if ($usaCalibres && $calibres === []) {
+            throw ValidationException::withMessages(['calibres' => 'Elige al menos un calibre.']);
         }
 
         ReglasConvenio::validarPrecios($datos['precios'], $datos['modalidad'], $usaCalibres);

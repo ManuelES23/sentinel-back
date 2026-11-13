@@ -448,7 +448,32 @@ class ConveniosCalibresTest extends TestCase
 
         $this->getJson("/api/splendidbyporvenir/administration/abastecimiento/tablero?temporada_id={$this->temporada->id}")->assertOk();
         $convenio->update(['status' => 'activo']);
-        $this->getJson("/api/splendidbyporvenir/administration/abastecimiento/tablero?temporada_id={$this->temporada->id}")->assertOk();
+        $tablero = $this->getJson("/api/splendidbyporvenir/administration/abastecimiento/tablero?temporada_id={$this->temporada->id}")
+            ->assertOk()->json('data');
+        // Σ por calibre: Jumbo 40 × 100 + Grande 0 × 100.
+        $fila = collect($tablero['convenios'])->firstWhere('id', $convenio->id);
+        $this->assertEquals(4000, $fila['indicadores']['comprometido']);
+        $this->get("/api/splendidbyporvenir/administration/abastecimiento/tablero/exportar?temporada_id={$this->temporada->id}")->assertOk();
+    }
+
+    public function test_put_sin_usa_calibres_conserva_el_convenio_por_calibre(): void
+    {
+        $jumbo = $this->calibre('Jumbo', 1);
+        $convenio = $this->crear($this->cuerpoCalibres([[$jumbo, null]], [
+            'modo_volumen' => 'semanal',
+            'metas' => [['semana' => '2026-06-01', 'cantidad' => 10, 'calibre_id' => $jumbo->id]],
+        ]));
+
+        // Un front viejo (en caché) no manda `usa_calibres` ni calibres: falla cerrado, sin tocar nada.
+        $this->putJson($this->url("convenios/{$convenio->id}"), $this->cuerpo())
+            ->assertStatus(422)
+            ->assertJsonPath('errors.calibres.0', 'Elige al menos un calibre.');
+
+        $this->assertTrue($convenio->refresh()->usa_calibres);
+        $this->assertSame([$jumbo->id], ConvenioCalibre::where('convenio_id', $convenio->id)->pluck('calibre_id')->all());
+        $this->assertSame([$jumbo->id], ConvenioPrecio::where('convenio_id', $convenio->id)->pluck('calibre_id')->all());
+        $this->assertSame(1, ConvenioPrecio::withTrashed()->where('convenio_id', $convenio->id)->count());
+        $this->assertSame([$jumbo->id], ConvenioMeta::where('convenio_id', $convenio->id)->pluck('calibre_id')->all());
     }
 
     public function test_precio_clasico_borrado_choca_en_la_base_y_se_restaura(): void
