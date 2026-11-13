@@ -155,6 +155,16 @@ class ReglasConvenioCalibresTest extends TestCase
         $this->assertSame(['calibres.1.calibre_id' => 'Falta el precio del tipo de carga principal para este calibre.'], $e);
     }
 
+    public function test_calibre_repetido(): void
+    {
+        $e = $this->errores(fn () => ReglasConvenio::validarCalibres(
+            [['calibre_id' => 10, 'volumen_total' => null], ['calibre_id' => 11, 'volumen_total' => null], ['calibre_id' => 10, 'volumen_total' => 5]],
+            [10, 11],
+            $this->preciosNormalizados([1 => [10, 11]]),
+        ));
+        $this->assertSame(['calibres.2.calibre_id' => 'El calibre está repetido.'], $e);
+    }
+
     // ---- validarVolumen ----
 
     private function datos(array $extra = []): array

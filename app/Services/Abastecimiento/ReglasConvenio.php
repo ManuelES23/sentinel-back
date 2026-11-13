@@ -124,7 +124,14 @@ class ReglasConvenio
             }
         }
 
+        $vistos = [];
         foreach ($elegidos as $i => $id) {
+            if (isset($vistos[$id])) {
+                $errores["calibres.{$i}.calibre_id"] = 'El calibre está repetido.';
+                continue;
+            }
+            $vistos[$id] = true;
+
             if (! in_array($id, $permitidos, true)) {
                 $errores["calibres.{$i}.calibre_id"] = 'El calibre no es de la variedad del convenio o está inactivo.';
             } elseif (! isset($conPrincipal[$id])) {

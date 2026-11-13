@@ -16,6 +16,9 @@ class ConvenioMeta extends Model
 
     protected $table = 'abs_convenio_metas';
 
+    /** Columna virtual de la base (ifnull(calibre_id, 0)) para el índice único: nunca se escribe ni se expone. */
+    protected $hidden = ['calibre_clave'];
+
     protected $fillable = [
         'convenio_id',
         'calibre_id',
