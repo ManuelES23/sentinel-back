@@ -51,13 +51,7 @@ class TableroAbastecimiento
         $convenios = new EloquentCollection($todos->where('moneda', $moneda)->values()->all());
         // Calibres y precios por calibre en una consulta por relación, solo si hay convenios por calibre
         // (los clásicos no agregan consultas). Con borrados, como `IndicadoresConvenio::calibresDe`.
-        $porCalibre = $convenios->filter(fn (Convenio $c) => $c->usa_calibres);
-        if ($porCalibre->isNotEmpty()) {
-            $porCalibre->loadMissing([
-                'calibres.calibre' => fn ($q) => $q->withTrashed()->select('id', 'nombre', 'orden'),
-                'precios.calibre' => fn ($q) => $q->withTrashed()->select('id', 'nombre', 'orden'),
-            ]);
-        }
+        CalibresConvenio::cargar($convenios);
         $lineas = IndicadoresConvenio::lineas($convenios);
         $sinLiquidar = IndicadoresConvenio::lineas($convenios, soloSinLiquidar: true);
 
@@ -130,7 +124,7 @@ class TableroAbastecimiento
             return null;
         }
 
-        $p =PrecioVigente::principalEnColeccion($c->precios, $c->fecha_inicio->format('Y-m-d'));
+        $p = PrecioVigente::principalEnColeccion($c->precios, $c->fecha_inicio->format('Y-m-d'));
 
         return $p === null ? null : [
             'id' => $p->id,

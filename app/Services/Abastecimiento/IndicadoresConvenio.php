@@ -302,6 +302,8 @@ class IndicadoresConvenio
      */
     private static function calibresDe(Convenio $convenio, Collection $precios, string $inicio, array $recibidos = []): array
     {
+        // Invariante: un renglón de un calibre fuera de la lista del convenio es imposible (lo rechaza
+        // ReglasRenglonesRecepcion), así que Σ calibres = total.
         $filas = $convenio->relationLoaded('calibres')
             ? $convenio->calibres
             : $convenio->calibres()->get();

@@ -7,6 +7,7 @@ use App\Models\Abastecimiento\ConvenioPrecio;
 use App\Models\Abastecimiento\Recepcion;
 use App\Models\Abastecimiento\RecepcionCalibre;
 use App\Models\Enterprise;
+use App\Services\Abastecimiento\CalibresConvenio;
 use App\Services\Abastecimiento\GeneradorFolio;
 use App\Services\Abastecimiento\ImportadorRecepciones;
 use App\Services\Abastecimiento\IndicadoresConvenio;
@@ -125,7 +126,7 @@ class RecepcionController extends AbastecimientoController
             ->orderBy('fecha_inicio')->orderBy('id')
             ->get();
         // Calibres pactados y el de cada precio, solo para los convenios por calibre (con borrados).
-        ConvenioController::cargarCalibres($convenios);
+        CalibresConvenio::cargar($convenios);
 
         $hoy = Semanas::hoy();
         $lineas = IndicadoresConvenio::lineas($convenios);

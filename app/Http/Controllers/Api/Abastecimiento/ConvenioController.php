@@ -3,15 +3,14 @@
 namespace App\Http\Controllers\Api\Abastecimiento;
 
 use App\Models\Abastecimiento\Convenio;
-use App\Models\Abastecimiento\ConvenioCalibre;
 use App\Models\Abastecimiento\ConvenioMeta;
 use App\Models\Abastecimiento\ConvenioPrecio;
 use App\Models\Abastecimiento\Liquidacion;
 use App\Models\Abastecimiento\Recepcion;
 use App\Models\Abastecimiento\Temporada;
 use App\Models\Abastecimiento\Variedad;
-use App\Models\Abastecimiento\VariedadCalibre;
 use App\Models\Enterprise;
+use App\Services\Abastecimiento\CalibresConvenio;
 use App\Services\Abastecimiento\GeneradorFolio;
 use App\Services\Abastecimiento\IndicadoresConvenio;
 use App\Services\Abastecimiento\MetasConvenio;
@@ -83,7 +82,7 @@ class ConvenioController extends AbastecimientoController
             unset($indicadores['semanas']);
 
             return $this->datosBase($c) + [
-                'calibres' => self::presentarCalibres($c),
+                'calibres' => CalibresConvenio::presentar($c),
                 'productor' => $c->productor,
                 'variedad' => $c->variedad,
                 'precio_principal' => $this->precioPrincipal($c),
@@ -168,7 +167,7 @@ class ConvenioController extends AbastecimientoController
             ]);
 
             if ($datos['usa_calibres']) {
-                $this->guardarCalibres($convenio, $datos['calibres']);
+                CalibresConvenio::guardar($convenio, $datos['calibres']);
             }
             $this->guardarPrecios($convenio, $datos['precios']);
             $this->guardarMetas($convenio, $datos['metas'] ?? []);
@@ -207,15 +206,7 @@ class ConvenioController extends AbastecimientoController
         if (! $metasEnviadas) {
             // Solo cuentan las metas del modo final: sin calibre en un clásico; en uno por calibre, las de los
             // calibres que se quedan. Las demás (otro modo o calibre quitado) se borran al guardar.
-            $final['metas'] = $convenio->metas
-                ->filter(fn (ConvenioMeta $m) => $datos['usa_calibres']
-                    ? $m->calibre_id !== null && in_array((int) $m->calibre_id, $idsCalibres, true)
-                    : $m->calibre_id === null)
-                ->map(fn (ConvenioMeta $m) => [
-                    'semana' => $m->semana->format('Y-m-d'),
-                    'cantidad' => $m->cantidad,
-                    'calibre_id' => $m->calibre_id,
-                ])->values()->all();
+            $final['metas'] = CalibresConvenio::metasDelModoFinal($convenio, $datos['usa_calibres'], $idsCalibres);
         }
         ReglasConvenio::validarVolumen($final, ! $metasEnviadas);
 
@@ -224,7 +215,7 @@ class ConvenioController extends AbastecimientoController
 
             // Los calibres y los precios se reemplazan por la lista enviada (sin calibres, se borran). Las metas
             // se reemplazan solo si vienen; en volumen total no existen renglones, así que pasar a total las borra.
-            $this->guardarCalibres($convenio, $datos['calibres']);
+            CalibresConvenio::guardar($convenio, $datos['calibres']);
             $this->guardarPrecios($convenio, $datos['precios']);
             if ($datos['modo_volumen'] === 'total') {
                 $this->guardarMetas($convenio, []);
@@ -232,13 +223,7 @@ class ConvenioController extends AbastecimientoController
                 $this->guardarMetas($convenio, $datos['metas']);
             } else {
                 // Conserva las guardadas del modo final; se van las del otro modo y las de calibres quitados.
-                $convenio->metas()
-                    ->when(
-                        $datos['usa_calibres'],
-                        fn ($q) => $q->where(fn ($q) => $q->whereNull('calibre_id')->orWhereNotIn('calibre_id', $idsCalibres)),
-                        fn ($q) => $q->whereNotNull('calibre_id'),
-                    )
-                    ->delete();
+                CalibresConvenio::borrarMetasFueraDelModo($convenio, $datos['usa_calibres'], $idsCalibres);
             }
         });
 
@@ -268,7 +253,7 @@ class ConvenioController extends AbastecimientoController
                     throw ValidationException::withMessages(['status' => 'Agrega al menos un precio antes de activar el convenio.']);
                 }
                 if ($convenio->usa_calibres) {
-                    $this->validarActivacionPorCalibre($convenio);
+                    CalibresConvenio::validarActivacion($convenio);
                 } elseif (MetasConvenio::pactado($convenio) <= 0) {
                     throw ValidationException::withMessages(['status' => 'Define el volumen pactado antes de activar el convenio.']);
                 }
@@ -412,17 +397,11 @@ class ConvenioController extends AbastecimientoController
 
         if ($usaCalibres) {
             // Permitidos: los activos de la variedad más los que el convenio ya pactaba (aunque se hayan desactivado).
-            $pactados = $convenio?->calibres()->pluck('calibre_id')->all() ?? [];
-            $permitidos = VariedadCalibre::where('variedad_id', $datos['variedad_id'])
-                ->where(fn ($q) => $q->where('is_active', true)->orWhereIn('id', $pactados))
-                ->pluck('id')->all();
+            $permitidos = CalibresConvenio::permitidos((int) $datos['variedad_id'], $convenio);
             ReglasConvenio::validarCalibres($calibres, $permitidos, $datos['precios']);
 
             // El volumen vive en cada calibre; el del convenio no se usa.
-            $datos['calibres'] = array_map(fn (array $c) => [
-                'calibre_id' => (int) $c['calibre_id'],
-                'volumen_total' => $datos['modo_volumen'] === 'total' ? ($c['volumen_total'] ?? null) : null,
-            ], $calibres);
+            $datos['calibres'] = CalibresConvenio::normalizar($calibres, $datos['modo_volumen']);
             $datos['volumen_total'] = null;
         } else {
             $datos['calibres'] = [];
@@ -493,28 +472,6 @@ class ConvenioController extends AbastecimientoController
         return $errores;
     }
 
-    /**
-     * Activar un convenio por calibre: cada calibre necesita precio del tipo de carga principal
-     * y volumen pactado mayor a cero (spec C12).
-     */
-    private function validarActivacionPorCalibre(Convenio $convenio): void
-    {
-        $calibres = $convenio->calibres()->pluck('calibre_id')->map(fn ($id) => (int) $id);
-        $precios = $convenio->precios()->get();
-        $inicio = $convenio->fecha_inicio->format('Y-m-d');
-
-        $sinPrecio = $calibres->contains(fn (int $id) => PrecioVigente::principalEnColeccion($precios, $inicio, $id) === null);
-        if ($sinPrecio) {
-            throw ValidationException::withMessages(['status' => 'Agrega el precio del tipo de carga principal en cada calibre antes de activar el convenio.']);
-        }
-
-        // Sin calibres no hay volumen pactado.
-        $pactado = MetasConvenio::pactadoPorCalibre($convenio);
-        if ($calibres->isEmpty() || $calibres->contains(fn (int $id) => ($pactado[$id] ?? 0.0) <= 0)) {
-            throw ValidationException::withMessages(['status' => 'Define el volumen pactado de cada calibre antes de activar el convenio.']);
-        }
-    }
-
     /** ¿Tiene liquidaciones que no estén canceladas (borrador, en revisión, aprobada o pagada)? */
     private function tieneLiquidacionesVigentes(Convenio $convenio): bool
     {
@@ -527,25 +484,6 @@ class ConvenioController extends AbastecimientoController
             'temporada_id', 'productor_id', 'cultivo_id', 'variedad_id', 'modalidad', 'unidad', 'moneda',
             'porcentaje_rezaga', 'fecha_inicio', 'fecha_fin', 'modo_volumen', 'usa_calibres', 'volumen_total', 'notas',
         ])->all();
-    }
-
-    /**
-     * Deja exactamente los calibres enviados (por `calibre_id`): actualiza los que ya estaban,
-     * crea los nuevos y borra los que no vienen. Sin calibres, borra todos.
-     *
-     * @param  array<int, array{calibre_id: int, volumen_total: mixed}>  $calibres
-     */
-    private function guardarCalibres(Convenio $convenio, array $calibres): void
-    {
-        $ids = array_map(fn (array $c) => (int) $c['calibre_id'], $calibres);
-        $convenio->calibres()->whereNotIn('calibre_id', $ids)->delete();
-
-        foreach ($calibres as $c) {
-            ConvenioCalibre::updateOrCreate(
-                ['convenio_id' => $convenio->id, 'calibre_id' => (int) $c['calibre_id']],
-                ['volumen_total' => $c['volumen_total'] ?? null],
-            );
-        }
     }
 
     /**
@@ -600,29 +538,10 @@ class ConvenioController extends AbastecimientoController
         }
     }
 
-    /**
-     * Calibres de los convenios que los usan (los pactados y el de cada precio), en carga ansiosa y solo
-     * para esos: a un convenio clásico se le deja la relación vacía, sin consultas de más. Los calibres
-     * se cargan aun borrados del catálogo: el convenio los conserva y su nombre debe seguir saliendo.
-     * Requiere `precios` ya cargados.
-     *
-     * @param  EloquentCollection<int, Convenio>  $convenios
-     */
+    /** Calibres de los convenios por calibre en carga ansiosa (ver CalibresConvenio::cargar). Requiere `precios` cargados. */
     public static function cargarCalibres(EloquentCollection $convenios): void
     {
-        $porCalibre = new EloquentCollection();
-        foreach ($convenios as $c) {
-            if ($c->usa_calibres) {
-                $porCalibre->push($c);
-            } else {
-                $c->setRelation('calibres', new EloquentCollection());
-            }
-        }
-
-        if ($porCalibre->isNotEmpty()) {
-            $calibre = fn ($q) => $q->withTrashed()->select('id', 'nombre', 'orden');
-            $porCalibre->loadMissing(['precios.calibre' => $calibre, 'calibres.calibre' => $calibre]);
-        }
+        CalibresConvenio::cargar($convenios);
     }
 
     /** Respuesta de alta, edición y estatus: el convenio con su precio principal e indicadores (sin semanas). */
@@ -639,29 +558,6 @@ class ConvenioController extends AbastecimientoController
             'precio_principal' => $this->precioPrincipal($c),
             'indicadores' => $indicadores,
         ];
-    }
-
-    /**
-     * Calibres pactados con su volumen y lo pactado (en volumen total, el reparto; en semanal, la suma de
-     * sus metas). Salen todos los del convenio, aunque no tengan metas. Requiere `calibres.calibre` cargado.
-     */
-    public static function presentarCalibres(Convenio $c): array
-    {
-        if (! $c->usa_calibres) {
-            return [];
-        }
-
-        $pactado = MetasConvenio::pactadoPorCalibre($c);
-
-        return $c->calibres
-            ->sortBy([fn ($a, $b) => ($a->calibre?->orden ?? 0) <=> ($b->calibre?->orden ?? 0), ['calibre_id', 'asc']])
-            ->map(fn (ConvenioCalibre $fila) => [
-                'calibre_id' => $fila->calibre_id,
-                'nombre' => $fila->calibre?->nombre,
-                'orden' => $fila->calibre?->orden,
-                'volumen_total' => $fila->volumen_total,
-                'pactado' => (float) ($pactado[$fila->calibre_id] ?? 0.0),
-            ])->values()->all();
     }
 
     /** Columnas del convenio, sin relaciones (las de las respuestas de alta, edición y estatus). */
@@ -717,7 +613,7 @@ class ConvenioController extends AbastecimientoController
     private function armar(Convenio $c): array
     {
         return $this->datosBase($c) + [
-            'calibres' => self::presentarCalibres($c),
+            'calibres' => CalibresConvenio::presentar($c),
             'precios' => self::presentarPrecios($c->precios),
             'metas' => $c->metas
                 ->sortBy([
