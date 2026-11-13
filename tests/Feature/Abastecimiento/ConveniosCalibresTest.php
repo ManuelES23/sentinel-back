@@ -288,6 +288,30 @@ class ConveniosCalibresTest extends TestCase
             ->assertOk()->assertJsonPath('data.calibres.0.pactado', 10)->assertJsonPath('data.notas', 'sin metas');
     }
 
+    public function test_quitar_un_calibre_sin_enviar_metas_borra_sus_metas(): void
+    {
+        $jumbo = $this->calibre('Jumbo', 1);
+        $grande = $this->calibre('Grande', 2);
+        $convenio = $this->crear($this->cuerpoCalibres([[$jumbo, null], [$grande, null]], [
+            'modo_volumen' => 'semanal',
+            'metas' => [
+                ['semana' => '2026-06-01', 'cantidad' => 40, 'calibre_id' => $jumbo->id],
+                ['semana' => '2026-06-01', 'cantidad' => 30, 'calibre_id' => $grande->id],
+            ],
+        ]));
+
+        $body = $this->cuerpoCalibres([[$jumbo, null]], ['modo_volumen' => 'semanal']);
+        unset($body['metas']);
+
+        $res = $this->putJson($this->url("convenios/{$convenio->id}"), $body)->assertOk();
+        $res->assertJsonCount(1, 'data.calibres')
+            ->assertJsonPath('data.calibres.0.pactado', 40)
+            ->assertJsonPath('data.indicadores.pactado', 40)
+            ->assertJsonCount(1, 'data.metas')
+            ->assertJsonPath('data.metas.0.calibre_id', $jumbo->id);
+        $this->assertSame([$jumbo->id], ConvenioMeta::where('convenio_id', $convenio->id)->pluck('calibre_id')->all());
+    }
+
     public function test_apagar_calibres_en_borrador_limpia_filas(): void
     {
         $jumbo = $this->calibre('Jumbo', 1);

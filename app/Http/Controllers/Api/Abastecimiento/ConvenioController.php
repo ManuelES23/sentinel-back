@@ -200,11 +200,14 @@ class ConvenioController extends AbastecimientoController
         // Sin `metas` en la petición se conservan las guardadas y se revisan contra las fechas nuevas.
         $metasEnviadas = array_key_exists('metas', $datos);
         $final = $datos + ['volumen_total' => $convenio->volumen_total];
+        $idsCalibres = array_map(fn (array $c) => (int) $c['calibre_id'], $datos['calibres']);
         if (! $metasEnviadas) {
-            // Solo cuentan las metas del modo final (con calibre si el convenio es por calibre; sin él si no):
-            // las del otro modo se borran al guardar.
+            // Solo cuentan las metas del modo final: sin calibre en un clásico; en uno por calibre, las de los
+            // calibres que se quedan. Las demás (otro modo o calibre quitado) se borran al guardar.
             $final['metas'] = $convenio->metas
-                ->filter(fn (ConvenioMeta $m) => ($m->calibre_id !== null) === $datos['usa_calibres'])
+                ->filter(fn (ConvenioMeta $m) => $datos['usa_calibres']
+                    ? $m->calibre_id !== null && in_array((int) $m->calibre_id, $idsCalibres, true)
+                    : $m->calibre_id === null)
                 ->map(fn (ConvenioMeta $m) => [
                     'semana' => $m->semana->format('Y-m-d'),
                     'cantidad' => $m->cantidad,
@@ -213,7 +216,7 @@ class ConvenioController extends AbastecimientoController
         }
         ReglasConvenio::validarVolumen($final, ! $metasEnviadas);
 
-        DB::transaction(function () use ($convenio, $datos, $metasEnviadas) {
+        DB::transaction(function () use ($convenio, $datos, $metasEnviadas, $idsCalibres) {
             $convenio->update($this->columnas($datos));
 
             // Los calibres y los precios se reemplazan por la lista enviada (sin calibres, se borran). Las metas
@@ -225,9 +228,13 @@ class ConvenioController extends AbastecimientoController
             } elseif ($metasEnviadas) {
                 $this->guardarMetas($convenio, $datos['metas']);
             } else {
-                // Conserva las guardadas del modo final; las del otro modo (con o sin calibre) se van.
+                // Conserva las guardadas del modo final; se van las del otro modo y las de calibres quitados.
                 $convenio->metas()
-                    ->when($datos['usa_calibres'], fn ($q) => $q->whereNull('calibre_id'), fn ($q) => $q->whereNotNull('calibre_id'))
+                    ->when(
+                        $datos['usa_calibres'],
+                        fn ($q) => $q->where(fn ($q) => $q->whereNull('calibre_id')->orWhereNotIn('calibre_id', $idsCalibres)),
+                        fn ($q) => $q->whereNotNull('calibre_id'),
+                    )
                     ->delete();
             }
         });
