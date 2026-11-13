@@ -103,7 +103,8 @@ class CotizacionController extends CrmBaseController
         // Para el detalle: commodity, nombres de cliente/prospecto/vendedor y datos de la empresa.
         // `oportunidad` queda en null si está eliminada (soft delete); la carga anidada lo tolera.
         $cotizacion->load([
-            'lineas.producto:id,nombre,commodity',
+            'lineas.producto:id,nombre,commodity,clave,marca_id,activo',
+            'lineas.producto.marca:id,nombre',
             'impuestos',
             'oportunidad:id,nombre,cliente_id,prospecto_id,vendedor_id',
             'oportunidad.cliente:id,nombre',
@@ -410,6 +411,7 @@ class CotizacionController extends CrmBaseController
                 'descripcion' => $producto?->nombre ?? '',
                 'calibre' => $linea['calibre'] ?? null,
                 'presentacion' => $linea['presentacion'] ?? null,
+                'unidad' => $producto?->unidad_medida,
                 'cantidad' => $linea['cantidad'],
                 'precio_unitario' => $linea['precio_unitario'],
             ]);
