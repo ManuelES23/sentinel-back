@@ -15,8 +15,12 @@ class ConvenioPrecio extends Model
 
     protected $table = 'abs_convenio_precios';
 
+    /** Columna virtual de la base (ifnull(calibre_id, 0)) para el índice único: nunca se escribe ni se expone. */
+    protected $hidden = ['calibre_clave'];
+
     protected $fillable = [
         'convenio_id',
+        'calibre_id',
         'tipo_carga_id',
         'precio',
         'porcentaje_productor',
@@ -27,6 +31,7 @@ class ConvenioPrecio extends Model
 
     protected $casts = [
         'convenio_id' => 'integer',
+        'calibre_id' => 'integer',
         'tipo_carga_id' => 'integer',
         'precio' => 'decimal:4',
         'porcentaje_productor' => 'decimal:2',
@@ -37,6 +42,11 @@ class ConvenioPrecio extends Model
     public function convenio(): BelongsTo
     {
         return $this->belongsTo(Convenio::class, 'convenio_id');
+    }
+
+    public function calibre(): BelongsTo
+    {
+        return $this->belongsTo(VariedadCalibre::class, 'calibre_id');
     }
 
     public function tipoCarga(): BelongsTo

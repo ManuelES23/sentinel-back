@@ -30,6 +30,7 @@ class IndicadoresConvenio
      *   cumplimiento: float|null, avance: float|null, proyeccion: float, estado: string,
      *   semana_actual: array{lunes: string, numero: int, meta: float, recibido: float},
      *   comprometido: float, valor_recibido: float,
+     *   calibres: array<int, array{calibre_id: int, nombre: string|null, pactado: float, comprometido: float}>,
      *   semanas: array<int, array{lunes: string, numero: int, meta: float, recibido: float, cerrada: bool}>
      * }
      */
@@ -211,8 +212,22 @@ class IndicadoresConvenio
             ? $recibido
             : $recibidoFecha + ($recibidoFecha / $cerradas) * (count($lunes) - $cerradas);
 
-        $principal = PrecioVigente::principalEnColeccion($precios, $inicio);
-        $peso = $principal !== null ? (float) $principal->precio * self::porcentaje($principal->porcentaje_productor) / 100 : 0.0;
+        $calibres = [];
+        if ($convenio->usa_calibres) {
+            // Comprometido = Σ por calibre de pactado × precio del tipo principal vigente al inicio en ese calibre
+            // × % del productor; el peso es su promedio por unidad pactada (misma ponderación entre convenios).
+            $comprometido = 0.0;
+            foreach (self::calibresDe($convenio, $precios, $inicio) as $fila) {
+                $comprometido += $fila['comprometido'];
+                $fila['comprometido'] = round($fila['comprometido'], 2);
+                $calibres[] = $fila;
+            }
+            $peso = $pactado > 0 ? $comprometido / $pactado : 0.0;
+        } else {
+            $principal = PrecioVigente::principalEnColeccion($precios, $inicio);
+            $peso = $principal !== null ? (float) $principal->precio * self::porcentaje($principal->porcentaje_productor) / 100 : 0.0;
+            $comprometido = $pactado * $peso;
+        }
 
         $actual = Semanas::lunesDe($hoyDia);
 
@@ -233,11 +248,42 @@ class IndicadoresConvenio
                     'meta' => round($metas[$actual] ?? 0.0, 2),
                     'recibido' => round($porSemana[$actual] ?? 0.0, 2),
                 ],
-                'comprometido' => round($pactado * $peso, 2),
+                'comprometido' => round($comprometido, 2),
                 'valor_recibido' => round($valorRecibido, 2),
+                'calibres' => $calibres,
                 'semanas' => $semanas,
             ],
         ];
+    }
+
+    /**
+     * Todos los calibres del convenio (también los que no tengan metas), por orden del catálogo,
+     * con su pactado y su comprometido sin redondear.
+     *
+     * @return array<int, array{calibre_id: int, nombre: string|null, pactado: float, comprometido: float}>
+     */
+    private static function calibresDe(Convenio $convenio, Collection $precios, string $inicio): array
+    {
+        $filas = $convenio->relationLoaded('calibres')
+            ? $convenio->calibres
+            : $convenio->calibres()->get();
+        $filas->loadMissing(['calibre' => fn ($q) => $q->withTrashed()->select('id', 'nombre', 'orden')]);
+        $pactado = MetasConvenio::pactadoPorCalibre($convenio);
+
+        return $filas
+            ->sortBy([fn ($a, $b) => ($a->calibre?->orden ?? 0) <=> ($b->calibre?->orden ?? 0), ['calibre_id', 'asc']])
+            ->map(function ($fila) use ($precios, $inicio, $pactado) {
+                $cantidad = (float) ($pactado[$fila->calibre_id] ?? 0.0);
+                $principal = PrecioVigente::principalEnColeccion($precios, $inicio, (int) $fila->calibre_id);
+                $precio = $principal !== null ? (float) $principal->precio * self::porcentaje($principal->porcentaje_productor) / 100 : 0.0;
+
+                return [
+                    'calibre_id' => (int) $fila->calibre_id,
+                    'nombre' => $fila->calibre?->nombre,
+                    'pactado' => round($cantidad, 2),
+                    'comprometido' => $cantidad * $precio,
+                ];
+            })->values()->all();
     }
 
     /**

@@ -3,9 +3,11 @@
 namespace App\Http\Controllers\Api\Abastecimiento;
 
 use App\Models\Abastecimiento\Convenio;
+use App\Models\Abastecimiento\ConvenioCalibre;
 use App\Models\Abastecimiento\Cultivo;
 use App\Models\Abastecimiento\Temporada;
 use App\Models\Abastecimiento\Variedad;
+use App\Models\Abastecimiento\VariedadCalibre;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -33,7 +35,12 @@ class CultivoController extends AbastecimientoController
         $cultivos = Cultivo::deEmpresa($empresa->id)
             ->when($soloActivos, fn ($q) => $q->where('is_active', true))
             ->with(['variedades' => function ($q) use ($soloActivos) {
-                $q->when($soloActivos, fn ($v) => $v->where('is_active', true))->orderBy('nombre');
+                $q->when($soloActivos, fn ($v) => $v->where('is_active', true))
+                    ->orderBy('nombre')
+                    ->with(['calibres' => function ($c) use ($soloActivos) {
+                        $c->when($soloActivos, fn ($k) => $k->where('is_active', true))
+                            ->orderBy('orden')->orderBy('nombre');
+                    }]);
             }])
             ->orderBy('nombre')
             ->get();
@@ -119,7 +126,10 @@ class CultivoController extends AbastecimientoController
         }
 
         DB::transaction(function () use ($cultivo) {
-            $cultivo->variedades()->get()->each->delete();
+            $cultivo->variedades()->get()->each(function (Variedad $v) {
+                $v->calibres()->get()->each->delete();
+                $v->delete();
+            });
             $cultivo->delete();
         });
 
@@ -177,10 +187,87 @@ class CultivoController extends AbastecimientoController
             throw ValidationException::withMessages(['id' => self::MENSAJE_EN_USO]);
         }
 
-        $variedad->delete();
+        DB::transaction(function () use ($variedad) {
+            $variedad->calibres()->get()->each->delete();
+            $variedad->delete();
+        });
         $this->difundir('cultivo', 'updated', ['id' => $variedad->cultivo_id, 'variedad_eliminada' => $variedad->id], $empresa);
 
         return response()->json(['success' => true, 'message' => 'Variedad eliminada.', 'data' => ['id' => $variedad->id]]);
+    }
+
+    public function storeCalibre(Request $request, int $variedadId): JsonResponse
+    {
+        $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'create');
+        $variedad = Variedad::deEmpresa($empresa->id)->findOrFail($variedadId);
+        $datos = $request->validate(['nombre' => 'required|string|max:60']);
+
+        $calibre = DB::transaction(fn () => $this->crearORestaurar(
+            VariedadCalibre::class,
+            ['variedad_id' => $variedad->id],
+            $datos['nombre'],
+            'Ya existe un calibre con ese nombre en la variedad.',
+            ['orden' => (int) VariedadCalibre::where('variedad_id', $variedad->id)->max('orden') + 1],
+        ));
+
+        $data = $this->presentarCalibre($calibre, false);
+        $this->difundir('cultivo', 'updated', ['id' => $variedad->cultivo_id, 'variedad_id' => $variedad->id, 'calibre' => $data], $empresa);
+
+        return response()->json(['success' => true, 'message' => 'Calibre creado.', 'data' => $data], 201);
+    }
+
+    public function updateCalibre(Request $request, int $id): JsonResponse
+    {
+        $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'edit');
+        $calibre = VariedadCalibre::deEmpresa($empresa->id)->with('variedad')->findOrFail($id);
+        $datos = $request->validate([
+            'nombre' => 'required|string|max:60',
+            'is_active' => 'sometimes|boolean',
+            'orden' => 'sometimes|integer|min:0|max:65535',
+        ]);
+
+        $this->exigirNombreLibre(
+            VariedadCalibre::class, ['variedad_id' => $calibre->variedad_id], $datos['nombre'], $calibre->id,
+            'Ya existe un calibre con ese nombre en la variedad.',
+        );
+        $calibre->update($datos);
+
+        $data = $this->presentarCalibre($calibre, $this->calibreEnUso($calibre));
+        $this->difundir('cultivo', 'updated', ['id' => $calibre->variedad->cultivo_id, 'variedad_id' => $calibre->variedad_id, 'calibre' => $data], $empresa);
+
+        return response()->json(['success' => true, 'message' => 'Calibre actualizado.', 'data' => $data]);
+    }
+
+    public function destroyCalibre(Request $request, int $id): JsonResponse
+    {
+        $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'delete');
+        $calibre = VariedadCalibre::deEmpresa($empresa->id)->with('variedad')->findOrFail($id);
+
+        if ($this->calibreEnUso($calibre)) {
+            throw ValidationException::withMessages(['id' => self::MENSAJE_EN_USO]);
+        }
+
+        $calibre->delete();
+        $this->difundir('cultivo', 'updated', ['id' => $calibre->variedad->cultivo_id, 'variedad_id' => $calibre->variedad_id, 'calibre_eliminado' => $calibre->id], $empresa);
+
+        return response()->json(['success' => true, 'message' => 'Calibre eliminado.', 'data' => ['id' => $calibre->id]]);
+    }
+
+    private function calibreEnUso(VariedadCalibre $calibre): bool
+    {
+        return ConvenioCalibre::where('calibre_id', $calibre->id)->exists();
+    }
+
+    private function presentarCalibre(VariedadCalibre $calibre, bool $enUso): array
+    {
+        return [
+            'id' => $calibre->id,
+            'variedad_id' => $calibre->variedad_id,
+            'nombre' => $calibre->nombre,
+            'orden' => (int) $calibre->orden,
+            'is_active' => (bool) $calibre->is_active,
+            'en_uso' => $enUso,
+        ];
     }
 
     private function cultivoEnUso(Cultivo $cultivo): bool
@@ -211,12 +298,20 @@ class CultivoController extends AbastecimientoController
 
     private function presentarVariedad(Variedad $variedad, bool $enUso): array
     {
+        $variedad->loadMissing(['calibres' => fn ($q) => $q->orderBy('orden')->orderBy('nombre')]);
+        $calibresEnUso = ConvenioCalibre::whereIn('calibre_id', $variedad->calibres->pluck('id'))
+            ->distinct()->pluck('calibre_id')->flip();
+
         return [
             'id' => $variedad->id,
             'cultivo_id' => $variedad->cultivo_id,
             'nombre' => $variedad->nombre,
             'is_active' => (bool) $variedad->is_active,
             'en_uso' => $enUso,
+            'calibres' => $variedad->calibres
+                ->map(fn (VariedadCalibre $c) => $this->presentarCalibre($c, $calibresEnUso->has($c->id)))
+                ->values()
+                ->all(),
         ];
     }
 
@@ -234,11 +329,12 @@ class CultivoController extends AbastecimientoController
     /**
      * Alta con restauración (Ruling 9): una fila viva con ese nombre → 422; una
      * borrada → se restaura, queda activa y toma el nombre nuevo; si no, se inserta.
-     * `$alcance` es la columna que acota la unicidad (empresa o cultivo).
+     * `$alcance` es la columna que acota la unicidad (empresa, cultivo o variedad);
+     * `$extra` son columnas que solo se fijan al insertar (p. ej. `orden`).
      *
      * @param  class-string<\Illuminate\Database\Eloquent\Model>  $modelo
      */
-    private function crearORestaurar(string $modelo, array $alcance, string $nombre, string $mensajeDuplicado)
+    private function crearORestaurar(string $modelo, array $alcance, string $nombre, string $mensajeDuplicado, array $extra = [])
     {
         $existente = $modelo::withTrashed()
             ->where($alcance)
@@ -256,7 +352,7 @@ class CultivoController extends AbastecimientoController
             return $existente;
         }
 
-        return $modelo::create(array_merge($alcance, ['nombre' => $nombre, 'is_active' => true]));
+        return $modelo::create(array_merge($alcance, $extra, ['nombre' => $nombre, 'is_active' => true]));
     }
 
     /** Al renombrar: ni otra fila viva ni una borrada (el índice único la cuenta) pueden tener ya el nombre. */
