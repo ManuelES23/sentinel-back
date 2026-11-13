@@ -414,7 +414,11 @@ class ConveniosCalibresTest extends TestCase
         $this->assertEquals(1300, $res->json('data.indicadores.comprometido'));
         $this->assertEquals(150, $res->json('data.indicadores.pactado'));
         $porCalibre = collect($res->json('data.indicadores.calibres'))->keyBy('calibre_id');
-        $this->assertEquals(['calibre_id' => $jumbo->id, 'nombre' => 'Jumbo', 'pactado' => 100, 'comprometido' => 800], $porCalibre[$jumbo->id]);
+        // Plan 2 (B4): el renglón suma recibido, avance y valor recibido (sin recepciones: 0).
+        $this->assertEquals([
+            'calibre_id' => $jumbo->id, 'nombre' => 'Jumbo', 'pactado' => 100, 'comprometido' => 800,
+            'recibido' => 0, 'avance' => 0, 'valor_recibido' => 0,
+        ], $porCalibre[$jumbo->id]);
         $this->assertEquals(500, $porCalibre[$grande->id]['comprometido']);
     }
 

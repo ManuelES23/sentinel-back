@@ -30,7 +30,7 @@ class IndicadoresConvenio
      *   cumplimiento: float|null, avance: float|null, proyeccion: float, estado: string,
      *   semana_actual: array{lunes: string, numero: int, meta: float, recibido: float},
      *   comprometido: float, valor_recibido: float,
-     *   calibres: array<int, array{calibre_id: int, nombre: string|null, pactado: float, comprometido: float}>,
+     *   calibres: array<int, array{calibre_id: int, nombre: string|null, pactado: float, comprometido: float|null, recibido: float, avance: float|null, valor_recibido: float}>,
      *   semanas: array<int, array{lunes: string, numero: int, meta: float, recibido: float, cerrada: bool}>
      * }
      */
@@ -200,12 +200,19 @@ class IndicadoresConvenio
         $lunesDeFecha = [];
         $recibido = 0.0;
         $valorRecibido = 0.0;
+        $porCalibre = []; // calibre_id => [recibido, valor] (solo convenios por calibre)
         foreach ($lineas as $linea) {
             $lunes = $lunesDeFecha[$linea['fecha']] ??= Semanas::lunesDe($linea['fecha']);
             $porSemana[$lunes] = ($porSemana[$lunes] ?? 0.0) + $linea['cantidad'];
             $recibido += $linea['cantidad'];
 
-            $valorRecibido += self::valorLinea($precios, $linea);
+            $valor = self::valorLinea($precios, $linea);
+            $valorRecibido += $valor;
+
+            if (($linea['calibre_id'] ?? null) !== null) {
+                $porCalibre[$linea['calibre_id']]['recibido'] = ($porCalibre[$linea['calibre_id']]['recibido'] ?? 0.0) + $linea['cantidad'];
+                $porCalibre[$linea['calibre_id']]['valor'] = ($porCalibre[$linea['calibre_id']]['valor'] ?? 0.0) + $valor;
+            }
         }
 
         // Semanas del convenio: las de su rango, las de sus metas y las que tengan recepciones.
@@ -243,10 +250,11 @@ class IndicadoresConvenio
         if ($convenio->usa_calibres) {
             // Comprometido = Σ por calibre de pactado × precio del tipo principal vigente al inicio en ese calibre
             // × % del productor; el peso es su promedio por unidad pactada (misma ponderación entre convenios).
+            // Un calibre sin precio del tipo principal no compromete nada (su comprometido va nulo).
             $comprometido = 0.0;
-            foreach (self::calibresDe($convenio, $precios, $inicio) as $fila) {
-                $comprometido += $fila['comprometido'];
-                $fila['comprometido'] = round($fila['comprometido'], 2);
+            foreach (self::calibresDe($convenio, $precios, $inicio, $porCalibre) as $fila) {
+                $comprometido += $fila['comprometido'] ?? 0.0;
+                $fila['comprometido'] = $fila['comprometido'] === null ? null : round($fila['comprometido'], 2);
                 $calibres[] = $fila;
             }
             $peso = $pactado > 0 ? $comprometido / $pactado : 0.0;
@@ -285,11 +293,14 @@ class IndicadoresConvenio
 
     /**
      * Todos los calibres del convenio (también los que no tengan metas), por orden del catálogo,
-     * con su pactado y su comprometido sin redondear.
+     * con su pactado, su comprometido sin redondear (nulo si el tipo principal no tiene precio en ese
+     * calibre), lo recibido (unidad del convenio), el avance (recibido ÷ pactado; nulo sin pactado)
+     * y el valor de lo recibido.
      *
-     * @return array<int, array{calibre_id: int, nombre: string|null, pactado: float, comprometido: float}>
+     * @param  array<int, array{recibido?: float, valor?: float}>  $recibidos  calibre_id => acumulados de las líneas
+     * @return array<int, array{calibre_id: int, nombre: string|null, pactado: float, comprometido: float|null, recibido: float, avance: float|null, valor_recibido: float}>
      */
-    private static function calibresDe(Convenio $convenio, Collection $precios, string $inicio): array
+    private static function calibresDe(Convenio $convenio, Collection $precios, string $inicio, array $recibidos = []): array
     {
         $filas = $convenio->relationLoaded('calibres')
             ? $convenio->calibres
@@ -299,16 +310,21 @@ class IndicadoresConvenio
 
         return $filas
             ->sortBy([fn ($a, $b) => ($a->calibre?->orden ?? 0) <=> ($b->calibre?->orden ?? 0), ['calibre_id', 'asc']])
-            ->map(function ($fila) use ($precios, $inicio, $pactado) {
+            ->map(function ($fila) use ($precios, $inicio, $pactado, $recibidos) {
                 $cantidad = (float) ($pactado[$fila->calibre_id] ?? 0.0);
                 $principal = PrecioVigente::principalEnColeccion($precios, $inicio, (int) $fila->calibre_id);
-                $precio = $principal !== null ? (float) $principal->precio * self::porcentaje($principal->porcentaje_productor) / 100 : 0.0;
+                $recibido = (float) ($recibidos[(int) $fila->calibre_id]['recibido'] ?? 0.0);
 
                 return [
                     'calibre_id' => (int) $fila->calibre_id,
                     'nombre' => $fila->calibre?->nombre,
                     'pactado' => round($cantidad, 2),
-                    'comprometido' => $cantidad * $precio,
+                    'comprometido' => $principal === null
+                        ? null
+                        : $cantidad * (float) $principal->precio * self::porcentaje($principal->porcentaje_productor) / 100,
+                    'recibido' => round($recibido, 2),
+                    'avance' => $cantidad > 0 ? round($recibido / $cantidad, 4) : null,
+                    'valor_recibido' => round((float) ($recibidos[(int) $fila->calibre_id]['valor'] ?? 0.0), 2),
                 ];
             })->values()->all();
     }
