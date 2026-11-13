@@ -19,6 +19,7 @@ class CrmCliente extends Model
 
     protected $fillable = [
         'empresa_id',
+        'clave',
         'prospecto_id',
         'nombre',
         'rfc',
