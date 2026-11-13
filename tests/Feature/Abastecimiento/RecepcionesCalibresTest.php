@@ -4,6 +4,7 @@ namespace Tests\Feature\Abastecimiento;
 
 use App\Models\Abastecimiento\Convenio;
 use App\Models\Abastecimiento\ConvenioCalibre;
+use App\Models\Abastecimiento\ConvenioPrecio;
 use App\Models\Abastecimiento\Cultivo;
 use App\Models\Abastecimiento\Recepcion;
 use App\Models\Abastecimiento\RecepcionCalibre;
@@ -15,6 +16,7 @@ use App\Services\Abastecimiento\ReglasRenglonesRecepcion;
 use Carbon\Carbon;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Laravel\Sanctum\Sanctum;
 use Tests\Concerns\CreatesAbastecimientoFixtures;
 use Tests\TestCase;
@@ -65,11 +67,14 @@ class RecepcionesCalibresTest extends TestCase
         return TipoCarga::where('enterprise_id', $this->sbp->id)->orderBy('id')->firstOrFail();
     }
 
-    private function calibre(string $nombre, int $orden = 0): VariedadCalibre
+    /** El calibre de la variedad con ese nombre (aun borrado); lo crea si no existe. */
+    private function calibre(string $nombre, ?int $orden = null): VariedadCalibre
     {
-        $calibre = VariedadCalibre::where('variedad_id', $this->variedad->id)->where('nombre', $nombre)->first()
+        $calibre = VariedadCalibre::withTrashed()->where('variedad_id', $this->variedad->id)->where('nombre', $nombre)->first()
             ?? $this->crearCalibre($this->variedad, $nombre);
-        $calibre->update(['orden' => $orden]);
+        if ($orden !== null) {
+            $calibre->update(['orden' => $orden]);
+        }
 
         return $calibre;
     }
@@ -299,6 +304,153 @@ class RecepcionesCalibresTest extends TestCase
         $renglones = RecepcionCalibre::where('recepcion_id', $rec->id)->get();
         $this->assertCount(1, $renglones);
         $this->assertSame($this->calibre('A')->id, $renglones[0]->calibre_id);
+    }
+
+    // ---- Presentación ----
+
+    public function test_importe_estimado_es_la_suma_por_calibre(): void
+    {
+        $c = $this->convenioAB();
+
+        $r = $this->postJson($this->url(), $this->cuerpo($c, [$this->renglon('A', 10), $this->renglon('B', 4)]))
+            ->assertStatus(201)
+            ->assertJsonPath('data.convenio.usa_calibres', true)
+            ->assertJsonPath('data.precio', null)
+            ->assertJsonPath('data.porcentaje_productor', null)
+            ->assertJsonPath('data.renglones.0.calibre_id', $this->calibre('A')->id)
+            ->assertJsonPath('data.renglones.0.calibre', ['id' => $this->calibre('A')->id, 'nombre' => 'A'])
+            ->assertJsonPath('data.renglones.1.calibre.nombre', 'B')
+            ->assertJsonPath('data.renglones.1.kilos', null)
+            ->assertJsonPath('data.renglones.1.rezaga_kg', null)
+            ->assertJsonPath('data.renglones.1.porcentaje_productor', null);
+
+        $this->assertCount(2, $r->json('data.renglones'));
+        $this->assertIsInt($r->json('data.renglones.0.id'));
+        $this->assertEqualsWithDelta(10, $r->json('data.renglones.0.cantidad'), 0.001);
+        $this->assertEqualsWithDelta(20, $r->json('data.renglones.0.precio'), 0.0001);
+        $this->assertEqualsWithDelta(35.5, $r->json('data.renglones.1.precio'), 0.0001);
+        $this->assertEqualsWithDelta(200, $r->json('data.renglones.0.importe_estimado'), 0.001);
+        $this->assertEqualsWithDelta(142, $r->json('data.renglones.1.importe_estimado'), 0.001);
+        $this->assertEqualsWithDelta(342, $r->json('data.importe_estimado'), 0.001);
+        $this->assertEqualsWithDelta(14, $r->json('data.cantidad'), 0.001);
+
+        // La edición responde igual, con los renglones nuevos.
+        $put = $this->putJson($this->url("recepciones/{$r->json('data.id')}"), $this->cuerpo($c, [$this->renglon('B', 2)]))->assertOk();
+        $this->assertCount(1, $put->json('data.renglones'));
+        $this->assertEqualsWithDelta(71, $put->json('data.importe_estimado'), 0.001);
+    }
+
+    public function test_precio_de_renglon_usa_la_vigencia_de_la_fecha(): void
+    {
+        $c = $this->convenioAB(['modalidad' => 'consignacion']);
+        ConvenioPrecio::where('convenio_id', $c->id)->update(['porcentaje_productor' => 50]);
+        ConvenioPrecio::create([
+            'convenio_id' => $c->id, 'tipo_carga_id' => $this->tipo()->id, 'calibre_id' => $this->calibre('A')->id,
+            'precio' => 30, 'porcentaje_productor' => 80, 'vigencia_inicio' => '2026-06-15', 'es_principal' => true,
+        ]);
+
+        $antes = $this->postJson($this->url(), $this->cuerpo($c, [$this->renglon('A', 10)], ['fecha' => '2026-06-10']))->assertStatus(201);
+        $despues = $this->postJson($this->url(), $this->cuerpo($c, [$this->renglon('A', 10)], ['fecha' => '2026-06-20']))->assertStatus(201);
+
+        $this->assertEqualsWithDelta(20, $antes->json('data.renglones.0.precio'), 0.0001);
+        $this->assertEqualsWithDelta(50, $antes->json('data.renglones.0.porcentaje_productor'), 0.001);
+        $this->assertEqualsWithDelta(100, $antes->json('data.importe_estimado'), 0.001);
+        $this->assertEqualsWithDelta(30, $despues->json('data.renglones.0.precio'), 0.0001);
+        $this->assertEqualsWithDelta(80, $despues->json('data.renglones.0.porcentaje_productor'), 0.001);
+        $this->assertEqualsWithDelta(240, $despues->json('data.importe_estimado'), 0.001);
+    }
+
+    public function test_listado_y_semana_traen_renglones_y_calibres_con_consultas_constantes(): void
+    {
+        $z = $this->calibre('Z', 9);
+        $c = $this->crearConvenioPorCalibre($this->sbp, [
+            ['calibre' => $this->calibre('A', 1), 'volumen' => 100, 'precio' => 20.0],
+            ['calibre' => $this->calibre('B', 2), 'volumen' => 100, 'precio' => 35.5],
+            ['calibre' => $z, 'volumen' => 100, 'precio' => 10.0],
+        ]);
+        $this->crearRecepcionConRenglones($c, [$this->renglon('A', 10), $this->renglon('Z', 3)], ['fecha' => '2026-06-09']);
+        $this->calibre('B')->update(['is_active' => false]);
+        $z->delete(); // borrado del catálogo: su nombre sigue saliendo
+        $clasico = $this->crearConvenio($this->sbp);
+        $this->crearRecepcion($clasico, ['fecha' => '2026-06-08']);
+
+        $t = $c->temporada_id;
+        $listado = $this->url("recepciones?temporada_id={$t}");
+        $semana = $this->url("recepciones/semana?temporada_id={$t}&lunes=2026-06-08");
+
+        \DB::enableQueryLog();
+        $l1 = $this->getJson($listado)->assertOk();
+        $qListado = count(\DB::getQueryLog());
+        \DB::flushQueryLog();
+        $s1 = $this->getJson($semana)->assertOk();
+        $qSemana = count(\DB::getQueryLog());
+        \DB::flushQueryLog();
+
+        // Listado: renglones con nombre del calibre (aun borrado); la clásica, lista vacía.
+        $porCalibre = collect($l1->json('data.data'))->firstWhere('convenio_id', $c->id);
+        $deClasico = collect($l1->json('data.data'))->firstWhere('convenio_id', $clasico->id);
+        $this->assertTrue($porCalibre['convenio']['usa_calibres']);
+        $this->assertSame(['A', 'Z'], array_column(array_column($porCalibre['renglones'], 'calibre'), 'nombre'));
+        $this->assertEqualsWithDelta(230, $porCalibre['importe_estimado'], 0.001);
+        $this->assertNull($porCalibre['precio']);
+        $this->assertSame([], $deClasico['renglones']);
+        $this->assertFalse($deClasico['convenio']['usa_calibres']);
+        $this->assertEqualsWithDelta(100, $deClasico['precio'], 0.0001);
+
+        // Semana: fila por calibre con sus calibres (todos, por orden) y precios con calibre.
+        $fila = collect($s1->json('data.convenios'))->firstWhere('id', $c->id);
+        $filaClasica = collect($s1->json('data.convenios'))->firstWhere('id', $clasico->id);
+        $this->assertTrue($fila['usa_calibres']);
+        $this->assertSame([
+            ['calibre_id' => $this->calibre('A')->id, 'nombre' => 'A', 'orden' => 1],
+            ['calibre_id' => $this->calibre('B')->id, 'nombre' => 'B', 'orden' => 2],
+            ['calibre_id' => $z->id, 'nombre' => 'Z', 'orden' => 9],
+        ], $fila['calibres']);
+        $this->assertEqualsCanonicalizing(['A', 'B', 'Z'], array_column(array_column($fila['precios'], 'calibre'), 'nombre'));
+        $this->assertFalse($filaClasica['usa_calibres']);
+        $this->assertSame([], $filaClasica['calibres']);
+        $recepcion = collect($s1->json('data.recepciones'))->firstWhere('convenio_id', $c->id);
+        $this->assertCount(2, $recepcion['renglones']);
+
+        // Con 4 convenios por calibre (cada uno con su recepción) el número de consultas no cambia.
+        for ($i = 0; $i < 3; $i++) {
+            $otro = $this->convenioAB(['temporada_id' => $t]);
+            $this->crearRecepcionConRenglones($otro, [$this->renglon('A', 2), $this->renglon('B', 1)], ['fecha' => '2026-06-10']);
+        }
+        \DB::flushQueryLog();
+        $l4 = $this->getJson($listado)->assertOk();
+        $qListado4 = count(\DB::getQueryLog());
+        \DB::flushQueryLog();
+        $s4 = $this->getJson($semana)->assertOk();
+        $qSemana4 = count(\DB::getQueryLog());
+        \DB::disableQueryLog();
+
+        $this->assertCount(5, $l4->json('data.data'));
+        $this->assertCount(5, $s4->json('data.convenios'));
+        $this->assertSame($qListado, $qListado4, 'El listado no debe consultar por recepción ni por renglón.');
+        $this->assertSame($qSemana, $qSemana4, 'La semana no debe consultar por convenio ni por renglón.');
+    }
+
+    public function test_ficha_del_convenio_trae_renglones_de_las_ultimas_recepciones(): void
+    {
+        $c = $this->convenioAB();
+        $this->crearRecepcionConRenglones($c, [$this->renglon('A', 10, 100), $this->renglon('B', 4, 30)], ['fecha' => '2026-06-10']);
+        $clasico = $this->crearConvenio($this->sbp);
+        $this->crearRecepcion($clasico, ['fecha' => '2026-06-10']);
+
+        $r = $this->getJson($this->url("convenios/{$c->id}"))->assertOk();
+
+        $renglones = $r->json('data.recepciones.0.renglones');
+        $this->assertCount(2, $renglones);
+        $this->assertSame(['A', 'B'], array_column(array_column($renglones, 'calibre'), 'nombre'));
+        $this->assertEqualsWithDelta(100, $renglones[0]['kilos'], 0.001);
+        $this->assertEqualsWithDelta(35.5, $renglones[1]['precio'], 0.0001);
+        $this->assertEqualsWithDelta(142, $renglones[1]['importe_estimado'], 0.001);
+        foreach (['id', 'calibre_id', 'calibre', 'cantidad', 'kilos', 'rezaga_kg', 'precio', 'porcentaje_productor', 'importe_estimado'] as $clave) {
+            $this->assertArrayHasKey($clave, $renglones[0]);
+        }
+
+        $this->getJson($this->url("convenios/{$clasico->id}"))->assertOk()->assertJsonPath('data.recepciones.0.renglones', []);
     }
 
     public function test_borrar_deja_los_renglones_con_la_cabecera_borrada(): void

@@ -113,6 +113,8 @@ class ConvenioController extends AbastecimientoController
             ->orderByDesc('fecha')->orderByDesc('id')
             ->limit(10)
             ->get();
+        // Renglones por calibre de esas recepciones (lista vacía en un convenio clásico, sin consultar).
+        RecepcionController::cargarRenglones($recientes, $convenio);
 
         $data = $this->armar($convenio) + [
             'productor' => $convenio->productor,
@@ -145,6 +147,7 @@ class ConvenioController extends AbastecimientoController
                 'rezaga_kg' => $r->rezaga_kg,
                 'ticket_proveedor' => $r->ticket_proveedor,
                 'liquidada' => $r->estaLiquidada(),
+                'renglones' => RecepcionController::presentarRenglones($convenio, $r),
             ])->values()->all(),
         ];
 
@@ -605,7 +608,7 @@ class ConvenioController extends AbastecimientoController
      *
      * @param  EloquentCollection<int, Convenio>  $convenios
      */
-    private static function cargarCalibres(EloquentCollection $convenios): void
+    public static function cargarCalibres(EloquentCollection $convenios): void
     {
         $porCalibre = new EloquentCollection();
         foreach ($convenios as $c) {
