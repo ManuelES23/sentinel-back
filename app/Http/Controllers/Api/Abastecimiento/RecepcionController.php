@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\Abastecimiento;
 
 use App\Models\Abastecimiento\Convenio;
+use App\Models\Abastecimiento\ConvenioPrecio;
 use App\Models\Abastecimiento\Recepcion;
 use App\Models\Enterprise;
 use App\Services\Abastecimiento\GeneradorFolio;
@@ -11,10 +12,13 @@ use App\Services\Abastecimiento\IndicadoresConvenio;
 use App\Services\Abastecimiento\LectorRecepciones;
 use App\Services\Abastecimiento\PrecioVigente;
 use App\Services\Abastecimiento\ReglasRecepcion;
+use App\Services\Abastecimiento\ReglasRenglonesRecepcion;
 use App\Services\Abastecimiento\Semanas;
 use App\Services\Abastecimiento\ValidadorImportacionRecepciones;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Arr;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
@@ -266,13 +270,16 @@ class RecepcionController extends AbastecimientoController
         $recepcion = DB::transaction(function () use ($request, $empresa, $datos) {
             // Lectura compartida: un cambio de estatus del convenio espera a que termine el alta.
             $convenio = Convenio::deEmpresa($empresa->id)->sharedLock()->findOrFail($datos['convenio_id']);
-            ReglasRecepcion::validar($convenio, $datos);
+            ReglasRecepcion::validar($convenio, $datos, null, $this->preciosPorCalibre($convenio));
 
-            return Recepcion::create($datos + [
+            $recepcion = Recepcion::create($this->cabecera($convenio, $datos) + [
                 'enterprise_id' => $empresa->id,
                 'folio' => app(GeneradorFolio::class)->siguiente($empresa, 'RC'),
                 'created_by' => $request->user()?->id,
             ]);
+            $this->reemplazarRenglones($convenio, $recepcion, $datos);
+
+            return $recepcion;
         }, 3);
 
         $data = $this->presentarConSemana($recepcion);
@@ -291,10 +298,13 @@ class RecepcionController extends AbastecimientoController
             // Se relee con bloqueo: una liquidación concurrente no debe colarse entre la revisión y el cambio.
             $recepcion = Recepcion::deEmpresa($empresa->id)->lockForUpdate()->findOrFail($id);
             $convenio = Convenio::deEmpresa($empresa->id)->sharedLock()->findOrFail($datos['convenio_id']);
+            ReglasRecepcion::exigirEditable($recepcion);
+            $this->exigirMismoTipoDeConvenio($recepcion, $convenio);
             // Se valida el estado final; el convenio debe estar activo solo si la recepción cambia de convenio.
-            ReglasRecepcion::validar($convenio, $datos, $recepcion);
+            ReglasRecepcion::validar($convenio, $datos, $recepcion, $this->preciosPorCalibre($convenio));
 
-            $recepcion->update($datos);
+            $recepcion->update($this->cabecera($convenio, $datos));
+            $this->reemplazarRenglones($convenio, $recepcion, $datos);
 
             return $recepcion;
         });
@@ -323,20 +333,33 @@ class RecepcionController extends AbastecimientoController
         return response()->json(['success' => true, 'message' => 'Recepción eliminada.', 'data' => ['id' => $id]]);
     }
 
-    /** Cuerpo de alta y edición con los tipos y las llaves de la empresa ya validados. */
+    /**
+     * Cuerpo de alta y edición con los tipos y las llaves de la empresa ya validados. El cuerpo
+     * clásico no cambia; el de un convenio por calibre trae `renglones` (lista de objetos) y
+     * entonces la cantidad de primer nivel deja de ser obligatoria: la regla de negocio decide.
+     * Los renglones se validan como lista de objetos ANTES de las reglas de negocio, que no
+     * aceptan otra forma.
+     */
     private function validar(Request $request, Enterprise $empresa): array
     {
         $viva = fn (string $tabla) => Rule::exists($tabla, 'id')->where('enterprise_id', $empresa->id)->whereNull('deleted_at');
+        $porRenglones = $request->exists('renglones');
 
         $datos = $request->validate([
             'convenio_id' => ['required', 'integer', $viva('abs_convenios')],
             'fecha' => ['required', 'date_format:Y-m-d'],
             'tipo_carga_id' => ['required', 'integer', $viva('abs_tipos_carga')],
-            'cantidad' => ['required', 'numeric', 'max:999999999999'],
+            'cantidad' => [$porRenglones ? 'nullable' : 'required', 'numeric', 'max:999999999999'],
             'kilos' => ['nullable', 'numeric', 'max:999999999999.99'],
             'rezaga_kg' => ['nullable', 'numeric', 'max:999999999999.99'],
             'ticket_proveedor' => ['nullable', 'string', 'max:60'],
             'notas' => ['nullable', 'string', 'max:5000'],
+            'renglones' => ['sometimes', 'nullable', 'array', 'max:100'],
+            'renglones.*' => ['array'],
+            'renglones.*.calibre_id' => ['required', 'integer'],
+            'renglones.*.cantidad' => ['nullable', 'numeric', 'max:999999999999'],
+            'renglones.*.kilos' => ['nullable', 'numeric', 'max:999999999999.99'],
+            'renglones.*.rezaga_kg' => ['nullable', 'numeric', 'max:999999999999.99'],
         ], [
             'cantidad.required' => 'Captura la cantidad.',
             'cantidad.numeric' => 'La cantidad debe ser un número.',
@@ -344,9 +367,100 @@ class RecepcionController extends AbastecimientoController
             'rezaga_kg.numeric' => 'La rezaga debe ser un número.',
             'fecha.required' => 'Captura la fecha.',
             'fecha.date_format' => 'La fecha debe tener el formato AAAA-MM-DD.',
+            'renglones.array' => 'Captura la recepción por calibre.',
+            'renglones.max' => 'Una recepción admite hasta 100 calibres.',
+            'renglones.*.array' => 'El renglón no es válido.',
+            'renglones.*.calibre_id.required' => 'Elige el calibre.',
+            'renglones.*.calibre_id.integer' => 'El calibre no es de este convenio.',
+            'renglones.*.cantidad.numeric' => 'La cantidad debe ser un número entero mayor a cero.',
+            'renglones.*.kilos.numeric' => 'Los kilos deben ser un número.',
+            'renglones.*.rezaga_kg.numeric' => 'La rezaga debe ser un número.',
         ]);
 
-        return $datos + ['kilos' => null, 'rezaga_kg' => null, 'ticket_proveedor' => null, 'notas' => null];
+        return $datos + ['cantidad' => null, 'kilos' => null, 'rezaga_kg' => null, 'ticket_proveedor' => null, 'notas' => null];
+    }
+
+    /**
+     * Columnas de la cabecera. En un convenio por calibre cantidad, kilos y rezaga son la suma
+     * de los renglones (lo que traiga el cuerpo en el primer nivel se ignora).
+     */
+    private function cabecera(Convenio $convenio, array $datos): array
+    {
+        $cabecera = Arr::except($datos, ['renglones']);
+
+        if (! $convenio->usa_calibres) {
+            return $cabecera;
+        }
+
+        return ReglasRenglonesRecepcion::totalesCabecera(array_values($datos['renglones'] ?? [])) + $cabecera;
+    }
+
+    /**
+     * Reemplaza los renglones de una recepción por calibre (borra los anteriores y crea los del
+     * cuerpo) dentro de la transacción del alta o la edición: reenviar el mismo cuerpo deja el
+     * mismo estado. En un convenio clásico no hace nada.
+     */
+    private function reemplazarRenglones(Convenio $convenio, Recepcion $recepcion, array $datos): void
+    {
+        if (! $convenio->usa_calibres) {
+            return;
+        }
+
+        $vacio = fn ($v) => $v === null || $v === '' ? null : $v;
+        $recepcion->renglones()->delete();
+        foreach (array_values($datos['renglones'] ?? []) as $r) {
+            $recepcion->renglones()->create([
+                'calibre_id' => (int) $r['calibre_id'],
+                'cantidad' => $r['cantidad'],
+                'kilos' => $vacio($r['kilos'] ?? null),
+                'rezaga_kg' => $vacio($r['rezaga_kg'] ?? null),
+            ]);
+        }
+        $recepcion->unsetRelation('renglones');
+    }
+
+    /** Una recepción no pasa de un convenio clásico a uno por calibre ni al revés. */
+    private function exigirMismoTipoDeConvenio(Recepcion $recepcion, Convenio $destino): void
+    {
+        if ((int) $recepcion->convenio_id === (int) $destino->id) {
+            return;
+        }
+
+        $origenPorCalibre = (bool) Convenio::withTrashed()->whereKey($recepcion->convenio_id)->value('usa_calibres');
+        if ($origenPorCalibre !== (bool) $destino->usa_calibres) {
+            throw ValidationException::withMessages([
+                'convenio_id' => 'No se puede pasar una recepción entre un convenio clásico y uno por calibre.',
+            ]);
+        }
+    }
+
+    /**
+     * En un convenio por calibre, sus precios leídos UNA vez para validar todos los renglones
+     * (sin una consulta por renglón). En un clásico, null: la regla consulta como siempre.
+     */
+    private function preciosPorCalibre(Convenio $convenio): ?PrecioVigente
+    {
+        return $convenio->usa_calibres
+            ? self::preciosCargados(ConvenioPrecio::where('convenio_id', $convenio->id)->get())
+            : null;
+    }
+
+    /**
+     * PrecioVigente que resuelve sobre precios ya cargados (los de un solo convenio), sin consultas.
+     *
+     * @param  Collection<int, ConvenioPrecio>  $precios
+     */
+    private static function preciosCargados(Collection $precios): PrecioVigente
+    {
+        return new class($precios) extends PrecioVigente
+        {
+            public function __construct(private Collection $cargados) {}
+
+            protected function precios(Convenio $convenio): Collection
+            {
+                return $this->cargados;
+            }
+        };
     }
 
     private function temporadaDeEmpresa(Enterprise $empresa)
