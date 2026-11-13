@@ -7,6 +7,7 @@ use App\Models\CRM\CrmVendedor;
 use App\Services\CRM\DashboardResumenService;
 use App\Services\CRM\EmbudoService;
 use App\Services\CRM\PerdidasCategoriaService;
+use App\Services\CRM\VentasPorLineaService;
 use App\Support\CRM\RangoDashboard;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
@@ -32,6 +33,7 @@ class DashboardController extends CrmBaseController
         private readonly DashboardResumenService $resumen,
         private readonly EmbudoService $embudos,
         private readonly PerdidasCategoriaService $perdidas,
+        private readonly VentasPorLineaService $ventasPorLinea,
     ) {}
 
     public function kpis(Request $request): JsonResponse
@@ -132,6 +134,14 @@ class DashboardController extends CrmBaseController
         $categoriaId = $validated['categoria_id'] === 'sin' ? null : (int) $validated['categoria_id'];
 
         return $this->jsonSuccess($this->perdidas->detalle($c['empresaId'], $c['vendedorId'], $c['rango'], $categoriaId));
+    }
+
+    /** GET /crm/dashboard/ventas-por-linea -- ganadas del periodo por línea y sublínea del catálogo (solo con catalogo_por_lineas). */
+    public function ventasPorLinea(Request $request): JsonResponse
+    {
+        $c = $this->contexto($request);
+
+        return $this->jsonSuccess($this->ventasPorLinea->resumen($c['empresaId'], $c['vendedorId'], $c['rango']));
     }
 
     /** GET /crm/dashboard/ranking-vendedores -- exige 'ejecutivo' (no 'ver'); siempre de todo el equipo. */

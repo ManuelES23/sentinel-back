@@ -321,6 +321,8 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     // Pérdidas por categoría de rechazo (spec 2026-10-23 §4.6)
     Route::get('dashboard/perdidas-por-categoria', [App\Http\Controllers\Api\CRM\DashboardController::class, 'perdidasPorCategoria']);
     Route::get('dashboard/perdidas-por-categoria/detalle', [App\Http\Controllers\Api\CRM\DashboardController::class, 'perdidasPorCategoriaDetalle']);
+    // Ventas por línea del catálogo (CanAgro, spec 2026-11-10)
+    Route::get('dashboard/ventas-por-linea', [App\Http\Controllers\Api\CRM\DashboardController::class, 'ventasPorLinea']);
 
     // -------------------------------------------------
     // INTEGRACIONES · DIALPAD
