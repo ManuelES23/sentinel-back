@@ -20,6 +20,7 @@ use App\Services\Abastecimiento\ReglasConvenio;
 use App\Services\Abastecimiento\SaldoProductor;
 use App\Services\Abastecimiento\Semanas;
 use Carbon\Carbon;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -69,9 +70,10 @@ class ConvenioController extends AbastecimientoController
                         ->orWhereHas('variedad', fn ($v) => $v->whereRaw("nombre LIKE ? ESCAPE '!'", [$like]));
                 });
             })
-            ->with(array_merge(['productor:id,nombre,tipo', 'variedad:id,nombre'], self::relaciones()))
+            ->with(['productor:id,nombre,tipo', 'variedad:id,nombre', 'precios.tipoCarga:id,nombre', 'metas'])
             ->orderBy('fecha_inicio')->orderBy('id')
             ->get();
+        self::cargarCalibres($convenios);
 
         $hoy = Semanas::hoy();
         $lineas = IndicadoresConvenio::lineas($convenios);
@@ -100,8 +102,9 @@ class ConvenioController extends AbastecimientoController
     {
         $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'view');
         $convenio = Convenio::deEmpresa($empresa->id)
-            ->with(array_merge(['productor:id,nombre,tipo', 'variedad:id,nombre'], self::relaciones()))
+            ->with(['productor:id,nombre,tipo', 'variedad:id,nombre', 'precios.tipoCarga:id,nombre', 'metas'])
             ->findOrFail($id);
+        self::cargarCalibres(new EloquentCollection([$convenio]));
 
         $verDinero = $this->ctx->puede($request->user(), $empresa, 'liquidaciones', 'view');
 
@@ -254,7 +257,9 @@ class ConvenioController extends AbastecimientoController
                 if (! $convenio->precios()->exists()) {
                     throw ValidationException::withMessages(['status' => 'Agrega al menos un precio antes de activar el convenio.']);
                 }
-                if (MetasConvenio::pactado($convenio) <= 0) {
+                if ($convenio->usa_calibres) {
+                    $this->validarActivacionPorCalibre($convenio);
+                } elseif (MetasConvenio::pactado($convenio) <= 0) {
                     throw ValidationException::withMessages(['status' => 'Define el volumen pactado antes de activar el convenio.']);
                 }
             }
@@ -468,6 +473,28 @@ class ConvenioController extends AbastecimientoController
         return $errores;
     }
 
+    /**
+     * Activar un convenio por calibre: cada calibre necesita precio del tipo de carga principal
+     * y volumen pactado mayor a cero (spec C12).
+     */
+    private function validarActivacionPorCalibre(Convenio $convenio): void
+    {
+        $calibres = $convenio->calibres()->pluck('calibre_id')->map(fn ($id) => (int) $id);
+        $precios = $convenio->precios()->get();
+        $inicio = $convenio->fecha_inicio->format('Y-m-d');
+
+        $sinPrecio = $calibres->contains(fn (int $id) => PrecioVigente::principalEnColeccion($precios, $inicio, $id) === null);
+        if ($sinPrecio) {
+            throw ValidationException::withMessages(['status' => 'Agrega el precio del tipo de carga principal en cada calibre antes de activar el convenio.']);
+        }
+
+        // Sin calibres no hay volumen pactado.
+        $pactado = MetasConvenio::pactadoPorCalibre($convenio);
+        if ($calibres->isEmpty() || $calibres->contains(fn (int $id) => ($pactado[$id] ?? 0.0) <= 0)) {
+            throw ValidationException::withMessages(['status' => 'Define el volumen pactado de cada calibre antes de activar el convenio.']);
+        }
+    }
+
     /** ¿Tiene liquidaciones que no estén canceladas (borrador, en revisión, aprobada o pagada)? */
     private function tieneLiquidacionesVigentes(Convenio $convenio): bool
     {
@@ -554,25 +581,36 @@ class ConvenioController extends AbastecimientoController
     }
 
     /**
-     * Relaciones de las respuestas. Los calibres se cargan aun borrados del catálogo: el convenio
-     * los conserva y su nombre debe seguir saliendo.
+     * Calibres de los convenios que los usan (los pactados y el de cada precio), en carga ansiosa y solo
+     * para esos: a un convenio clásico se le deja la relación vacía, sin consultas de más. Los calibres
+     * se cargan aun borrados del catálogo: el convenio los conserva y su nombre debe seguir saliendo.
+     * Requiere `precios` ya cargados.
+     *
+     * @param  EloquentCollection<int, Convenio>  $convenios
      */
-    private static function relaciones(): array
+    private static function cargarCalibres(EloquentCollection $convenios): void
     {
-        $calibre = fn ($q) => $q->withTrashed()->select('id', 'nombre', 'orden');
+        $porCalibre = new EloquentCollection();
+        foreach ($convenios as $c) {
+            if ($c->usa_calibres) {
+                $porCalibre->push($c);
+            } else {
+                $c->setRelation('calibres', new EloquentCollection());
+            }
+        }
 
-        return [
-            'precios.tipoCarga:id,nombre',
-            'precios.calibre' => $calibre,
-            'metas',
-            'calibres.calibre' => $calibre,
-        ];
+        if ($porCalibre->isNotEmpty()) {
+            $calibre = fn ($q) => $q->withTrashed()->select('id', 'nombre', 'orden');
+            $porCalibre->loadMissing(['precios.calibre' => $calibre, 'calibres.calibre' => $calibre]);
+        }
     }
 
     /** Respuesta de alta, edición y estatus: el convenio con su precio principal e indicadores (sin semanas). */
     private function presentar(Convenio $c): array
     {
-        $c->load(self::relaciones());
+        $c->load(['precios.tipoCarga:id,nombre', 'metas']);
+        $c->unsetRelation('calibres');
+        self::cargarCalibres(new EloquentCollection([$c]));
 
         $indicadores = IndicadoresConvenio::de($c);
         unset($indicadores['semanas']);
