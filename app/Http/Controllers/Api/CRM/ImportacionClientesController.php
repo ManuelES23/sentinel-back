@@ -115,26 +115,39 @@ class ImportacionClientesController extends CrmBaseController
             return $this->jsonError($e->getMessage(), 422);
         }
 
-        $plan = $this->plan->planificar(
-            $empresaId,
-            $filas,
-            $mapeo,
-            $datos['dominios_internos'] ?? null,
-        );
-
-        if ($plan['resumen']['actualizados'] > 0) {
-            $this->exigirPermisoSubmodulo($empresaId, 'clientes', 'clientes', 'editar', 'No tienes permiso para actualizar clientes que ya existen.');
-        }
-        if ($this->plan->asignaVendedores($plan)) {
-            $this->exigirPermisoSubmodulo($empresaId, 'clientes', 'clientes', 'asignar_vendedor', 'No tienes permiso para asignar vendedor a clientes.');
+        // Una importación de clientes a la vez por empresa: dos al mismo tiempo verían
+        // los mismos «nuevos» y los crearían dos veces (la clave no es única en la BD).
+        $candado = Cache::lock('crm_import_clientes_empresa_'.$empresaId, 300);
+        if (! $candado->get()) {
+            return $this->jsonError('Ya hay una importación de clientes en curso en esta empresa; inténtalo en un momento.', 409);
         }
 
-        // Consumir el token de forma atómica: un doble envío no importa dos veces.
-        if (Cache::pull($llave) === null) {
-            return $this->jsonError(self::VENCIDA, 422);
+        try {
+            $plan = $this->plan->planificar(
+                $empresaId,
+                $filas,
+                $mapeo,
+                $datos['dominios_internos'] ?? null,
+            );
+
+            if ($plan['resumen']['actualizados'] > 0) {
+                $this->exigirPermisoSubmodulo($empresaId, 'clientes', 'clientes', 'editar', 'No tienes permiso para actualizar clientes que ya existen.');
+            }
+            if ($this->plan->asignaVendedores($plan)) {
+                $this->exigirPermisoSubmodulo($empresaId, 'clientes', 'clientes', 'asignar_vendedor', 'No tienes permiso para asignar vendedor a clientes.');
+            }
+
+            // El token se gasta solo aquí: un 403 de arriba no lo consume, y con el
+            // candado tomado un doble envío encuentra el token ya usado.
+            if (Cache::pull($llave) === null) {
+                return $this->jsonError(self::VENCIDA, 422);
+            }
+
+            $aplicado = $this->plan->aplicar($plan);
+        } finally {
+            $candado->release();
         }
 
-        $aplicado = $this->plan->aplicar($plan);
         Storage::disk('local')->delete($guardado['ruta']);
 
         return $this->jsonSuccess($aplicado, 'Clientes importados');

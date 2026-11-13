@@ -54,7 +54,10 @@ class ClienteController extends CrmBaseController
             ->when($request->vendedor_id, fn ($q, $v) => $v === 'sin' ? $q->whereNull('vendedor_id') : $q->where('vendedor_id', $v))
             ->when($request->region_id, fn ($q, $r) => $q->where('region_id', $r))
             ->when($request->estatus, fn ($q, $e) => $q->where('estatus', $e))
-            ->orderByDesc('created_at');
+            // Desempate por id: una importación crea cientos con el mismo created_at
+            // y sin él MySQL puede repetir u omitir filas entre páginas.
+            ->orderByDesc('created_at')
+            ->orderByDesc('id');
 
         $perPage = $this->perPage($request, 15);
         $paginated = $query->paginate($perPage);

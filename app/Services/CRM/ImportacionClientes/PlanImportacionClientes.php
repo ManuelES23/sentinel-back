@@ -25,6 +25,9 @@ class PlanImportacionClientes
 {
     public const RFC_GENERICOS = ['XAXX010101000', 'XEXX010101000'];
 
+    /** Misma forma que valida el formulario de clientes (ClienteFormModal). */
+    private const FORMA_RFC = '/^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{0,3}$/u';
+
     /** Proveedores de correo públicos: nunca se sugieren como dominio interno. */
     private const DOMINIOS_PUBLICOS = [
         'gmail.com', 'hotmail.com', 'hotmail.es', 'outlook.com', 'outlook.es', 'live.com', 'live.com.mx',
@@ -54,12 +57,25 @@ class PlanImportacionClientes
             ->orderBy('nombre')->get(['id', 'nombre']);
         $vendedores = $this->vendedoresDelExcel($filas, $vendedoresCrm);
 
-        $existentes = CrmCliente::query()->where('empresa_id', $empresaId)
-            ->get(['id', 'clave', 'nombre', 'rfc', 'email', 'vendedor_id']);
+        // Con los eliminados: un cliente que borraron a propósito no se vuelve a crear.
+        $existentes = CrmCliente::withTrashed()->where('empresa_id', $empresaId)
+            ->get(['id', 'clave', 'nombre', 'rfc', 'email', 'vendedor_id', 'deleted_at']);
         $porClave = [];
         $porRfc = [];
         $porNombre = [];
+        // Correo => id del cliente que lo usa (el CRM no permite repetir correo en la empresa).
+        $correosUsados = [];
         foreach ($existentes as $cliente) {
+            if ($cliente->trashed()) {
+                if ($cliente->clave !== null && $cliente->clave !== '') {
+                    $porClave[Str::upper($cliente->clave)] ??= $cliente;
+                }
+
+                continue;
+            }
+            if ($cliente->email !== null && $cliente->email !== '') {
+                $correosUsados[Str::lower($cliente->email)] ??= $cliente->id;
+            }
             if ($cliente->clave !== null && $cliente->clave !== '') {
                 $porClave[Str::upper($cliente->clave)] ??= $cliente;
 
@@ -102,33 +118,76 @@ class PlanImportacionClientes
             }
             $clavesVistas[Str::upper($clave)] = $fila['fila'];
 
+            $existente = $porClave[Str::upper($clave)] ?? null;
+            if ($existente?->trashed()) {
+                $resumen['con_problema']++;
+                $resumen['problemas'][] = ['fila' => $fila['fila'], 'motivo' => 'El cliente se eliminó en el CRM: no se vuelve a crear'];
+
+                continue;
+            }
+
+            // Un RFC que no tiene forma de RFC (relleno como «XAXAXAXAXAAXAX») no se guarda
+            // en el campo —el formulario lo rechazaría al editar— sino en las notas.
+            $rfcDeRelleno = $rfc !== '' && ! preg_match(self::FORMA_RFC, $rfc);
+            $rfcValido = $rfcDeRelleno ? '' : $rfc;
+            $rfcLigable = $rfcValido !== '' && ! in_array($rfcValido, self::RFC_GENERICOS, true);
+
+            if ($existente === null) {
+                $porSuRfc = $rfcLigable ? ($porRfc[$rfcValido] ?? null) : null;
+                $porSuNombre = $porNombre[$this->nombreClave($nombre)] ?? null;
+                // Mismo nombre pero otro RFC real: son dos empresas distintas, no se ligan.
+                if ($porSuNombre !== null && $rfcLigable) {
+                    $suRfc = Str::upper(trim((string) $porSuNombre->rfc));
+                    if ($suRfc !== '' && ! in_array($suRfc, self::RFC_GENERICOS, true) && $suRfc !== $rfcValido) {
+                        $porSuNombre = null;
+                    }
+                }
+                foreach ([$porSuRfc, $porSuNombre] as $candidato) {
+                    if ($candidato !== null && ! isset($ligados[$candidato->id])) {
+                        $existente = $candidato;
+                        break;
+                    }
+                }
+            }
+
             $externos = array_values(array_filter(
                 $correosPorFila[$i],
                 fn ($correo) => ! in_array(Str::after($correo, '@'), $internos, true),
             ));
-            $email = $externos[0] ?? null;
-            $vendedorId = $this->vendedorDeFila($fila['vendedor'], $vendedores, $mapeo);
-
-            $existente = $porClave[Str::upper($clave)] ?? null;
-            if ($existente === null) {
-                $candidato = ($rfc !== '' && ! in_array($rfc, self::RFC_GENERICOS, true) ? ($porRfc[$rfc] ?? null) : null)
-                    ?? ($porNombre[$this->nombreClave($nombre)] ?? null);
-                if ($candidato !== null && ! isset($ligados[$candidato->id])) {
-                    $existente = $candidato;
+            // El primer correo del cliente que nadie más usa en la empresa; los demás, a notas.
+            $email = null;
+            foreach ($externos as $correo) {
+                $duenio = $correosUsados[$correo] ?? null;
+                if ($duenio === null || ($existente !== null && $duenio === $existente->id)) {
+                    $email = $correo;
+                    break;
                 }
             }
+            $otros = array_values(array_diff($externos, [$email]));
+            $vendedorId = $this->vendedorDeFila($fila['vendedor'], $vendedores, $mapeo);
+            $textoVendedor = trim($fila['vendedor']);
 
             if ($existente === null) {
+                $notas = array_filter([
+                    $otros !== [] ? 'Otros correos: '.implode(', ', $otros) : null,
+                    $rfcDeRelleno ? 'RFC del Excel: '.$rfc : null,
+                ]);
                 $operaciones[] = ['accion' => 'crear', 'datos' => [
                     'empresa_id' => $empresaId,
                     'clave' => $clave,
                     'nombre' => $nombre,
-                    'rfc' => $rfc !== '' ? $rfc : null,
+                    'rfc' => $rfcValido !== '' ? $rfcValido : null,
                     'email' => $email,
-                    'notas' => count($externos) > 1 ? 'Otros correos: '.implode(', ', array_slice($externos, 1)) : null,
+                    'notas' => $notas !== [] ? implode("\n", $notas) : null,
                     'vendedor_id' => $vendedorId,
                     'estatus' => 'activo',
                 ]];
+                if ($email !== null) {
+                    $correosUsados[$email] = 'fila '.$fila['fila'];
+                }
+                if (isset($vendedores[$textoVendedor])) {
+                    $vendedores[$textoVendedor]['afectados']++;
+                }
                 $resumen['nuevos']++;
                 $vendedorFinal = $vendedorId;
                 $emailFinal = $email;
@@ -137,10 +196,16 @@ class PlanImportacionClientes
                 $cambios = array_filter([
                     'clave' => $existente->clave === null || $existente->clave === '' ? $clave : null,
                     'nombre' => $existente->nombre !== $nombre ? $nombre : null,
-                    'rfc' => $rfc !== '' && $existente->rfc !== $rfc ? $rfc : null,
+                    'rfc' => $rfcValido !== '' && $existente->rfc !== $rfcValido ? $rfcValido : null,
                     'email' => $email !== null && $existente->email !== $email ? $email : null,
                     'vendedor_id' => $existente->vendedor_id === null ? $vendedorId : null,
                 ], fn ($valor) => $valor !== null);
+                if (isset($cambios['email'])) {
+                    $correosUsados[$email] = $existente->id;
+                }
+                if ($existente->vendedor_id === null && isset($vendedores[$textoVendedor])) {
+                    $vendedores[$textoVendedor]['afectados']++;
+                }
 
                 if ($cambios === []) {
                     $resumen['sin_cambio']++;
@@ -159,7 +224,9 @@ class PlanImportacionClientes
         }
 
         $resumen['vendedores'] = array_values(array_map(
-            fn ($v) => ['texto' => $v['texto'], 'codigo' => $v['codigo'], 'nombre' => $v['nombre'], 'clientes' => $v['clientes'], 'sugerido_id' => $v['sugerido_id']],
+            // `afectados`: clientes que tomarán el vendedor elegido (nuevos o existentes sin
+            // vendedor); el modal mueve esos entre «con vendedor» y «pendientes».
+            fn ($v) => ['texto' => $v['texto'], 'codigo' => $v['codigo'], 'nombre' => $v['nombre'], 'clientes' => $v['clientes'], 'afectados' => $v['afectados'], 'sugerido_id' => $v['sugerido_id']],
             $vendedores,
         ));
         $resumen['vendedores_crm'] = $vendedoresCrm->map(fn ($v) => ['id' => $v->id, 'nombre' => $v->nombre])->all();
@@ -293,6 +360,7 @@ class PlanImportacionClientes
                     'codigo' => $partes[1] ?? null,
                     'nombre' => $nombre,
                     'clientes' => 0,
+                    'afectados' => 0,
                     'sugerido_id' => $this->sugerir($nombre, $vendedoresCrm),
                 ];
             }

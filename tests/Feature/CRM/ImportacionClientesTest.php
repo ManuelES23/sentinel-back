@@ -334,6 +334,89 @@ class ImportacionClientesTest extends TestCase
         $this->assertNull(CrmCliente::where('clave', '3')->value('notas'));
     }
 
+    public function test_correo_repetido_no_se_duplica(): void
+    {
+        CrmCliente::create(['empresa_id' => $this->enterprise->id, 'clave' => '900', 'nombre' => 'Ya existe', 'email' => 'compartido@x.mx']);
+        $filas = [
+            [1, 'UNO', '', 'mismo@hotmail.com', '0'],
+            [2, 'DOS', '', 'mismo@hotmail.com; propio@b.com', '0'],
+            [3, 'TRES', '', 'compartido@x.mx', '0'],
+            [4, 'CUATRO', '', 'mismo@hotmail.com', '0'],
+        ];
+        $token = $this->revisar($this->archivo($filas))->json('data.token');
+        $this->importar($token)->assertOk();
+
+        $this->assertSame('mismo@hotmail.com', CrmCliente::where('clave', '1')->value('email'));
+        $this->assertSame('propio@b.com', CrmCliente::where('clave', '2')->value('email'));
+        $this->assertSame('Otros correos: mismo@hotmail.com', CrmCliente::where('clave', '2')->value('notas'));
+        $this->assertNull(CrmCliente::where('clave', '3')->value('email'));
+        $this->assertSame('Otros correos: compartido@x.mx', CrmCliente::where('clave', '3')->value('notas'));
+        $this->assertNull(CrmCliente::where('clave', '4')->value('email'));
+
+        // Y el cliente importado se puede editar sin el 422 de correo repetido.
+        $dos = CrmCliente::where('clave', '2')->first();
+        $this->withHeaders($this->crmHeaders())
+            ->putJson("/api/crm/clientes/{$dos->id}", ['nombre' => 'DOS', 'email' => $dos->email, 'telefono' => '6681234567'])
+            ->assertOk();
+    }
+
+    public function test_mismo_nombre_con_otro_rfc_no_se_liga(): void
+    {
+        CrmCliente::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'ZAPAGRO', 'rfc' => 'AAA010101AAA']);
+
+        $rev = $this->revisar($this->archivo([[38, 'ZAPAGRO', 'ZAP0609112AA', '', '0']]));
+        $rev->assertJsonPath('data.resumen.nuevos', 1)->assertJsonPath('data.resumen.actualizados', 0);
+        $this->importar($rev->json('data.token'))->assertOk();
+
+        $this->assertSame('AAA010101AAA', CrmCliente::whereNull('clave')->value('rfc'));
+        $this->assertSame(2, CrmCliente::count());
+    }
+
+    public function test_cliente_eliminado_no_se_vuelve_a_crear(): void
+    {
+        CrmCliente::create(['empresa_id' => $this->enterprise->id, 'clave' => '38', 'nombre' => 'ZAPAGRO'])->delete();
+
+        $res = $this->revisar($this->archivo([[38, 'ZAPAGRO', '', '', '0'], [39, 'OTRO', '', '', '0']]));
+        $res->assertJsonPath('data.resumen.nuevos', 1)->assertJsonPath('data.resumen.con_problema', 1)
+            ->assertJsonPath('data.resumen.problemas.0.motivo', 'El cliente se eliminó en el CRM: no se vuelve a crear');
+        $this->importar($res->json('data.token'))->assertOk();
+
+        $this->assertSame(0, CrmCliente::where('clave', '38')->count());
+        $this->assertSame(1, CrmCliente::where('clave', '39')->count());
+    }
+
+    public function test_rfc_de_relleno_va_a_notas(): void
+    {
+        $token = $this->revisar($this->archivo([[5, 'RELLENO', 'XAXAXAXAXAAXAX', 'a@b.com; c@d.com', '0']]))->json('data.token');
+        $this->importar($token)->assertOk();
+
+        $cliente = CrmCliente::where('clave', '5')->firstOrFail();
+        $this->assertNull($cliente->rfc);
+        $this->assertSame("Otros correos: c@d.com\nRFC del Excel: XAXAXAXAXAAXAX", $cliente->notas);
+    }
+
+    public function test_afectados_por_vendedor_no_cuenta_clientes_que_ya_tienen_vendedor(): void
+    {
+        CrmCliente::create(['empresa_id' => $this->enterprise->id, 'clave' => '38', 'nombre' => 'ZAPAGRO', 'vendedor_id' => $this->vendedor->id]);
+
+        $res = $this->revisar($this->archivo(array_slice($this->filasBase(), 0, 2)));
+
+        $jose = collect($res->json('data.resumen.vendedores'))->firstWhere('texto', '002 Jose Alberto Avalos Lopez');
+        $this->assertSame(2, $jose['clientes']);
+        $this->assertSame(1, $jose['afectados']);
+    }
+
+    public function test_importacion_en_curso_da_409(): void
+    {
+        $token = $this->revisar($this->archivo($this->filasBase()))->json('data.token');
+        $candado = \Illuminate\Support\Facades\Cache::lock('crm_import_clientes_empresa_'.$this->enterprise->id, 60);
+        $candado->get();
+
+        $this->importar($token)->assertStatus(409);
+        $candado->release();
+        $this->importar($token)->assertOk();
+    }
+
     public function test_listado_filtra_pendientes_por_asignar(): void
     {
         CrmCliente::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Con vendedor', 'vendedor_id' => $this->vendedor->id]);
