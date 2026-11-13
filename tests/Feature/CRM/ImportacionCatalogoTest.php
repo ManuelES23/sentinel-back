@@ -6,11 +6,13 @@ use App\Models\CRM\CrmConfiguracionComercial;
 use App\Models\CRM\CrmLinea;
 use App\Models\CRM\CrmMarca;
 use App\Models\CRM\CrmProducto;
+use App\Models\ActivityLog;
 use App\Models\User;
 use App\Models\UserEnterpriseAccess;
 use App\Services\CRM\ImportacionCatalogo\LectorCatalogo;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\Sanctum;
@@ -433,5 +435,107 @@ class ImportacionCatalogoTest extends TestCase
 
         $this->assertDatabaseCount('crm_productos', 1200);
         $this->assertDatabaseCount('crm_marcas', 7);
+    }
+
+    public function test_actualizar_y_desactivar_dejan_rastro_de_auditoria(): void
+    {
+        $edita = $this->producto(['clave' => 'E1', 'nombre' => 'Viejo']);
+        $falta = $this->producto(['clave' => 'F1']);
+        $r = $this->subir($this->xlsx([['E1', 'Nuevo', 'M', 'L', null]]))->assertOk();
+
+        $this->importar($r->json('data.token'), ['desactivar_faltantes' => true])->assertOk();
+
+        $log = fn (int $id) => ActivityLog::where('model', 'CrmProducto')->where('action', 'update')->where('model_id', $id)->latest('id')->first();
+        $this->assertNotNull($log($edita->id));
+        $this->assertSame('Nuevo', $log($edita->id)->new_values['nombre'] ?? null);
+        $this->assertNotNull($log($falta->id));
+    }
+
+    public function test_archivos_con_mas_de_2_horas_se_borran_al_revisar(): void
+    {
+        $disco = Storage::disk('local');
+        $disco->put('crm/importaciones/viejo.xlsx', 'x');
+        $disco->put('crm/importaciones/reciente.xlsx', 'x');
+        touch($disco->path('crm/importaciones/viejo.xlsx'), time() - 3 * 3600);
+
+        $this->subir($this->xlsx([['1', 'A', 'M', 'L', null]]))->assertOk();
+
+        $this->assertFalse($disco->exists('crm/importaciones/viejo.xlsx'));
+        $this->assertTrue($disco->exists('crm/importaciones/reciente.xlsx'));
+    }
+
+    public function test_archivos_con_mas_de_2_horas_se_borran_al_importar(): void
+    {
+        $disco = Storage::disk('local');
+        $disco->put('crm/importaciones/viejo.xlsx', 'x');
+        touch($disco->path('crm/importaciones/viejo.xlsx'), time() - 3 * 3600);
+
+        $this->importar('no-existe')->assertStatus(422);
+
+        $this->assertFalse($disco->exists('crm/importaciones/viejo.xlsx'));
+    }
+
+    public function test_mas_de_10000_filas_se_rechaza_sin_cargar(): void
+    {
+        $filas = [];
+        for ($i = 1; $i <= 10001; $i++) {
+            $filas[] = [(string) $i, 'P', 'M', 'L'];
+        }
+        $ruta = $this->xlsx($filas);
+
+        $this->subir($ruta)->assertStatus(422)->assertJsonPath('message', 'El archivo tiene más de 10,000 filas.');
+        $this->assertSame([], Storage::disk('local')->files('crm/importaciones'));
+    }
+
+    public function test_fila_elegida_invalida_da_422(): void
+    {
+        $token = $this->subir($this->xlsx([
+            ['110104', 'Primera', 'Bayer', 'FUNG', null],
+            ['110104', 'Segunda', 'Basf', 'FUNG', null],
+            ['5', 'Otra', 'Bayer', 'FUNG', null],
+        ]))->json('data.token');
+
+        $msg = 'La fila elegida para la clave 110104 no es válida.';
+        $this->importar($token, ['elegidas' => ['110104' => 4]])->assertStatus(422)->assertJsonPath('message', $msg);
+        $this->importar($token, ['elegidas' => ['110104' => 'abc']])->assertStatus(422)->assertJsonPath('message', $msg);
+        $this->importar($token, ['elegidas' => ['5' => 4]])->assertStatus(422)
+            ->assertJsonPath('message', 'La fila elegida para la clave 5 no es válida.');
+        $this->assertDatabaseCount('crm_productos', 0);
+
+        // El token sigue vigente tras un rechazo.
+        $this->importar($token, ['elegidas' => ['110104' => 3]])->assertOk();
+        $this->assertSame('Segunda', CrmProducto::where('clave', '110104')->value('nombre'));
+    }
+
+    public function test_el_token_se_consume_una_sola_vez(): void
+    {
+        $token = $this->subir($this->xlsx([['1', 'A', 'M', 'L', null]]))->json('data.token');
+
+        $this->importar($token)->assertOk();
+        $this->importar($token)->assertStatus(422)->assertJsonPath('message', 'La revisión venció; vuelve a subir el archivo.');
+        $this->assertDatabaseCount('crm_productos', 1);
+    }
+
+    public function test_token_en_uso_por_otro_envio_da_422(): void
+    {
+        $token = $this->subir($this->xlsx([['1', 'A', 'M', 'L', null]]))->json('data.token');
+        $candado = Cache::lock('crm_import_'.$token.'_candado', 300);
+        $this->assertTrue($candado->get());
+
+        $this->importar($token)->assertStatus(422);
+        $this->assertDatabaseCount('crm_productos', 0);
+
+        $candado->release();
+        $this->importar($token)->assertOk();
+    }
+
+    public function test_si_no_se_puede_guardar_el_archivo_da_422(): void
+    {
+        $disco = \Mockery::mock(Storage::disk('local'))->makePartial();
+        $disco->shouldReceive('putFileAs')->andReturn(false);
+        Storage::set('local', $disco);
+
+        $this->subir($this->xlsx([['1', 'A', 'M', 'L', null]]))->assertStatus(422)
+            ->assertJsonPath('message', 'No se pudo guardar el archivo; inténtalo de nuevo.');
     }
 }

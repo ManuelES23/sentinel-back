@@ -4,6 +4,7 @@ namespace App\Services\CRM\ImportacionCatalogo;
 
 use App\Models\CRM\CrmLinea;
 use App\Models\CRM\CrmMarca;
+use App\Models\CRM\CrmProducto;
 use App\Models\CRM\CrmSublinea;
 use App\Support\CRM\NombreCatalogo;
 use Illuminate\Support\Facades\DB;
@@ -55,6 +56,11 @@ class ImportadorCatalogo
                 }
             }
 
+            // Las actualizaciones van por el modelo (Loggable deja el rastro de auditoría); los nuevos, en bloque.
+            $porActualizar = CrmProducto::where('empresa_id', $empresaId)
+                ->whereIn('id', array_filter(array_column($plan['filas'], 'existente')))
+                ->get()->keyBy('id');
+
             $nuevos = [];
             foreach ($plan['filas'] as $f) {
                 if ($f['estado'] === 'sinCambio') {
@@ -73,8 +79,7 @@ class ImportadorCatalogo
 
                 if ($f['estado'] === 'actualizado') {
                     // La clave no cambia: es por la que se empareja.
-                    DB::table('crm_productos')->where('id', $f['existente'])->where('empresa_id', $empresaId)
-                        ->update($campos + ['updated_at' => $ahora]);
+                    $porActualizar[$f['existente']]->update($campos);
 
                     continue;
                 }
@@ -99,8 +104,10 @@ class ImportadorCatalogo
             $desactivados = 0;
             if ($desactivarFaltantes) {
                 foreach (array_chunk($plan['faltantesIds'], self::LOTE) as $ids) {
-                    $desactivados += DB::table('crm_productos')->where('empresa_id', $empresaId)->whereIn('id', $ids)
-                        ->update(['activo' => false, 'updated_at' => $ahora]);
+                    foreach (CrmProducto::where('empresa_id', $empresaId)->whereIn('id', $ids)->get() as $producto) {
+                        $producto->update(['activo' => false]);
+                        $desactivados++;
+                    }
                 }
             }
 

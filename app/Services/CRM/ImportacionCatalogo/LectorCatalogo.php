@@ -5,6 +5,7 @@ namespace App\Services\CRM\ImportacionCatalogo;
 use App\Support\CRM\NombreCatalogo;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use PhpOffice\PhpSpreadsheet\IOFactory;
+use PhpOffice\PhpSpreadsheet\Reader\IReadFilter;
 use RuntimeException;
 use Throwable;
 
@@ -43,6 +44,44 @@ class LectorCatalogo
         try {
             $lector = IOFactory::createReader('Xlsx');
             $lector->setReadDataOnly(false);
+            $lector->setReadEmptyCells(false);
+            $info = $lector->listWorksheetInfo($ruta)[0] ?? null;
+            $primera = $info['worksheetName'] ?? null;
+            $totalFilas = (int) ($info['totalRows'] ?? 0);
+        } catch (Throwable $e) {
+            throw new RuntimeException('No se pudo leer el archivo; verifica que sea un Excel (.xlsx).', 0, $e);
+        }
+        // Se rechaza antes de cargar la hoja (el encabezado ocupa una fila).
+        if ($totalFilas > self::MAX_FILAS + 1) {
+            throw new RuntimeException('El archivo tiene más de '.number_format(self::MAX_FILAS).' filas.');
+        }
+
+        try {
+            $lector->setLoadSheetsOnly($primera);
+            // Pasada 1: solo la fila de encabezados, para saber qué columnas interesan.
+            $filtro = new class implements IReadFilter
+            {
+                public ?array $columnas = null;
+
+                public function readCell(string $columnAddress, int $row, string $worksheetName = ''): bool
+                {
+                    return $this->columnas === null ? $row === 1 : ($row === 1 || in_array($columnAddress, $this->columnas, true));
+                }
+            };
+            $lector->setReadFilter($filtro);
+            $encabezadosHoja = $lector->load($ruta)->getSheet(0);
+            $reconocidas = [];
+            foreach ($encabezadosHoja->getCoordinates() as $coordenada) {
+                [$col] = Coordinate::coordinateFromString($coordenada);
+                $texto = NombreCatalogo::clave($encabezadosHoja->getCell($coordenada)->getFormattedValue());
+                foreach (self::COLUMNAS as $alias) {
+                    if (in_array($texto, $alias, true)) {
+                        $reconocidas[$col] = true;
+                    }
+                }
+            }
+            // Pasada 2: encabezado y solo las columnas reconocidas.
+            $filtro->columnas = array_keys($reconocidas);
             $hoja = $lector->load($ruta)->getSheet(0);
         } catch (Throwable $e) {
             throw new RuntimeException('No se pudo leer el archivo; verifica que sea un Excel (.xlsx).', 0, $e);
@@ -88,7 +127,7 @@ class LectorCatalogo
                 continue; // fila vacía (o solo con columnas ajenas)
             }
             if (++$vistas > self::MAX_FILAS) {
-                throw new RuntimeException('El archivo tiene más de '.self::MAX_FILAS.' filas.');
+                throw new RuntimeException('El archivo tiene más de '.number_format(self::MAX_FILAS).' filas.');
             }
 
             $unidad = null;

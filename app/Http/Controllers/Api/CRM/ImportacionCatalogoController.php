@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use RuntimeException;
+use Throwable;
 
 /**
  * Importación del catálogo de productos desde Excel, en dos pasos: revisar (no escribe nada, guarda el archivo
@@ -37,6 +38,7 @@ class ImportacionCatalogoController extends CrmBaseController
     {
         $empresaId = $this->preparar($request);
         $request->validate(['archivo' => 'required|file|mimes:xlsx|max:10240']);
+        $this->limpiarVencidos();
 
         $archivo = $request->file('archivo');
         try {
@@ -48,6 +50,9 @@ class ImportacionCatalogoController extends CrmBaseController
 
         $token = (string) Str::uuid();
         $ruta = Storage::disk(self::DISCO)->putFileAs(self::CARPETA, $archivo, $token.'.xlsx');
+        if ($ruta === false) {
+            return $this->rechazar('No se pudo guardar el archivo; inténtalo de nuevo.', 422);
+        }
         $this->guardarToken($token, $request, $empresaId, $ruta, $resumen['huella']);
 
         return $this->jsonSuccess(['token' => $token, 'resumen' => $resumen], 'Revisión lista');
@@ -60,12 +65,27 @@ class ImportacionCatalogoController extends CrmBaseController
         $datos = $request->validate([
             'token' => 'required|string|max:64',
             'elegidas' => 'nullable|array',
-            'elegidas.*' => 'integer|min:2',
             'desactivar_faltantes' => 'nullable|boolean',
         ]);
         $elegidas = $datos['elegidas'] ?? [];
         $desactivar = (bool) ($datos['desactivar_faltantes'] ?? false);
+        $this->limpiarVencidos();
 
+        // Un solo request a la vez por token: un doble envío no puede correr dos importaciones.
+        $candado = Cache::lock($this->llave($datos['token']).'_candado', 300);
+        if (! $candado->get()) {
+            return $this->rechazar(self::VENCIDA, 422);
+        }
+        try {
+            return $this->importarConCandado($request, $empresaId, $datos['token'], $elegidas, $desactivar);
+        } finally {
+            $candado->release();
+        }
+    }
+
+    private function importarConCandado(Request $request, int $empresaId, string $token, array $elegidas, bool $desactivar): JsonResponse
+    {
+        $datos = ['token' => $token];
         $guardado = Cache::get($this->llave($datos['token']));
         if (! is_array($guardado)
             || $guardado['user_id'] !== $request->user()->id
@@ -80,14 +100,23 @@ class ImportacionCatalogoController extends CrmBaseController
             return $this->rechazar($e->getMessage(), 422);
         }
 
-        // Si algo del catálogo cambió desde la revisión, no se aplica: se vuelve a revisar.
         $revision = new RevisionCatalogo();
+        if (($invalida = $revision->claveElegidaInvalida($lectura, $elegidas)) !== null) {
+            return $this->rechazar('La fila elegida para la clave '.$invalida.' no es válida.', 422);
+        }
+
+        // Si algo del catálogo cambió desde la revisión, no se aplica: se vuelve a revisar.
         $actual = $revision->revisar($empresaId, $lectura);
         if (! hash_equals($guardado['huella'], $actual['huella'])) {
+            if (Cache::pull($this->llave($datos['token'])) === null) {
+                return $this->rechazar(self::VENCIDA, 422);
+            }
             $nuevo = (string) Str::uuid();
-            Storage::disk(self::DISCO)->move($guardado['ruta'], self::CARPETA.'/'.$nuevo.'.xlsx');
-            Cache::forget($this->llave($datos['token']));
-            $this->guardarToken($nuevo, $request, $empresaId, self::CARPETA.'/'.$nuevo.'.xlsx', $actual['huella']);
+            $rutaNueva = self::CARPETA.'/'.$nuevo.'.xlsx';
+            Storage::disk(self::DISCO)->move($guardado['ruta'], $rutaNueva);
+            // El archivo vuelve a valer 2 h, igual que el token nuevo (la limpieza mira la fecha del archivo).
+            @touch(Storage::disk(self::DISCO)->path($rutaNueva));
+            $this->guardarToken($nuevo, $request, $empresaId, $rutaNueva, $actual['huella']);
 
             return response()->json([
                 'success' => false,
@@ -105,12 +134,32 @@ class ImportacionCatalogoController extends CrmBaseController
             );
         }
 
-        $aplicado = (new ImportadorCatalogo($revision))->importar($empresaId, $lectura, $elegidas, $desactivar);
+        // Bajo el candado, el token se consume aquí: un segundo envío ya no lo encuentra.
+        if (Cache::pull($this->llave($datos['token'])) === null) {
+            return $this->rechazar(self::VENCIDA, 422);
+        }
+        try {
+            $aplicado = (new ImportadorCatalogo($revision))->importar($empresaId, $lectura, $elegidas, $desactivar);
+        } catch (Throwable $e) {
+            $this->guardarToken($datos['token'], $request, $empresaId, $guardado['ruta'], $guardado['huella']);
+            throw $e;
+        }
 
         Storage::disk(self::DISCO)->delete($guardado['ruta']);
-        Cache::forget($this->llave($datos['token']));
 
         return $this->jsonSuccess($aplicado, 'Catálogo importado correctamente');
+    }
+
+    /** Borra los archivos guardados hace más de 2 h (el token de caché vence solo). */
+    private function limpiarVencidos(): void
+    {
+        $disco = Storage::disk(self::DISCO);
+        $limite = now()->subHours(self::VIGENCIA_HORAS)->getTimestamp();
+        foreach ($disco->files(self::CARPETA) as $ruta) {
+            if ($disco->lastModified($ruta) < $limite) {
+                $disco->delete($ruta);
+            }
+        }
     }
 
     /** Empresa del contexto, con permiso de crear y con el catálogo por líneas encendido. */

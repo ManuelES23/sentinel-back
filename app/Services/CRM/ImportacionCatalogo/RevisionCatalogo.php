@@ -28,6 +28,27 @@ class RevisionCatalogo
         return $resumen;
     }
 
+    /**
+     * Primera clave de `elegidas` cuyo valor no es una fila de su grupo repetido (o null si todo es válido).
+     *
+     * @param  array<string,int|string>  $elegidas
+     */
+    public function claveElegidaInvalida(array $lectura, array $elegidas): ?string
+    {
+        $grupos = [];
+        foreach ($lectura['filas'] as $fila) {
+            $grupos[NombreCatalogo::clave($fila['clave'])][] = $fila['fila'];
+        }
+        foreach ($elegidas as $clave => $fila) {
+            $filas = $grupos[NombreCatalogo::clave((string) $clave)] ?? [];
+            if (count($filas) < 2 || ! in_array((int) $fila, $filas, true)) {
+                return (string) $clave;
+            }
+        }
+
+        return null;
+    }
+
     /** Hash del resumen y del estado de los productos de la empresa (cuántos y el último cambio). */
     public function huella(int $empresaId, array $resumen): string
     {
