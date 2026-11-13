@@ -19,6 +19,8 @@ class ReglasRecepcion
 
     public const MENSAJE_LIQUIDADA = 'Ya está en una liquidación: no se puede cambiar.';
 
+    public const MENSAJE_POR_CALIBRE = 'Este convenio es por calibre: la captura de recepciones por calibre llega en la siguiente entrega.';
+
     /**
      * Valida el estado FINAL de la recepción contra el convenio al que quedará ligada
      * (en una edición, el del registro o el nuevo si cambió `convenio_id`). El convenio
@@ -33,6 +35,13 @@ class ReglasRecepcion
     {
         if ($actual !== null) {
             self::exigirEditable($actual);
+        }
+
+        // Mientras no exista la captura por calibre (plan 2), un convenio por calibre no recibe
+        // recepciones: ni en el alta, ni en la edición, ni en la importación. Se corta aquí para
+        // que el mensaje sea el único y no se mezcle con errores de precio por calibre.
+        if ($convenio->usa_calibres) {
+            throw ValidationException::withMessages(['convenio_id' => self::MENSAJE_POR_CALIBRE]);
         }
 
         $errores = [];

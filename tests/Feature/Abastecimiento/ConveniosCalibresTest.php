@@ -12,7 +12,9 @@ use App\Models\Abastecimiento\Temporada;
 use App\Models\Abastecimiento\TipoCarga;
 use App\Models\Abastecimiento\Variedad;
 use App\Models\Abastecimiento\VariedadCalibre;
+use App\Models\Abastecimiento\Recepcion;
 use App\Models\User;
+use App\Services\Abastecimiento\ValidadorImportacionRecepciones;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
@@ -473,5 +475,71 @@ class ConveniosCalibresTest extends TestCase
         $this->putJson($this->url("convenios/{$convenio->id}"), $this->cuerpo(['precios' => $precios]))->assertOk();
         $this->assertNotSoftDeleted($segundo);
         $this->assertSame(2, ConvenioPrecio::withTrashed()->where('convenio_id', $convenio->id)->count());
+    }
+
+    // ---- Recepciones: bloqueadas hasta el plan 2 ----
+
+    private const MENSAJE_CALIBRE = 'Este convenio es por calibre: la captura de recepciones por calibre llega en la siguiente entrega.';
+
+    private function convenioPorCalibre(): Convenio
+    {
+        return $this->crearConvenio($this->sbp, [
+            'temporada_id' => $this->temporada->id, 'productor_id' => $this->productor->id,
+            'variedad_id' => $this->variedad->id, 'usa_calibres' => true,
+        ]);
+    }
+
+    public function test_no_se_captura_recepcion_en_convenio_por_calibre(): void
+    {
+        $convenio = $this->convenioPorCalibre();
+        $cuerpo = [
+            'convenio_id' => $convenio->id, 'fecha' => '2026-06-10',
+            'tipo_carga_id' => $this->tipo()->id, 'cantidad' => 10,
+        ];
+
+        $this->postJson($this->url('recepciones'), $cuerpo)
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['convenio_id'])
+            ->assertJsonPath('errors.convenio_id.0', self::MENSAJE_CALIBRE);
+        $this->assertSame(0, Recepcion::count());
+
+        // Tampoco se pasa una recepción existente a un convenio por calibre.
+        $clasico = $this->crearConvenio($this->sbp, [
+            'temporada_id' => $this->temporada->id, 'productor_id' => $this->productor->id, 'variedad_id' => $this->variedad->id,
+        ]);
+        $recepcion = $this->crearRecepcion($clasico);
+        $this->putJson($this->url('recepciones/'.$recepcion->id), $cuerpo)
+            ->assertStatus(422)
+            ->assertJsonPath('errors.convenio_id.0', self::MENSAJE_CALIBRE);
+        $this->assertSame($clasico->id, $recepcion->refresh()->convenio_id);
+    }
+
+    public function test_importacion_rechaza_convenio_por_calibre(): void
+    {
+        $convenio = $this->convenioPorCalibre();
+
+        $r = app(ValidadorImportacionRecepciones::class)->validar($this->sbp, [[
+            'fila' => 2, 'convenio_folio' => $convenio->folio, 'fecha' => '2026-06-10',
+            'tipo_carga' => $this->tipo()->nombre, 'cantidad' => '10', 'kilos' => '', 'rezaga_kg' => '', 'ticket' => 'T-1',
+        ]]);
+
+        $this->assertSame('error', $r['filas'][0]['estado']);
+        $this->assertSame([self::MENSAJE_CALIBRE], $r['filas'][0]['errores']);
+        $this->assertSame(1, $r['resumen']['con_error']);
+    }
+
+    public function test_recepciones_clasicas_siguen_igual(): void
+    {
+        $clasico = $this->crearConvenio($this->sbp, [
+            'temporada_id' => $this->temporada->id, 'productor_id' => $this->productor->id, 'variedad_id' => $this->variedad->id,
+        ]);
+        $cuerpo = [
+            'convenio_id' => $clasico->id, 'fecha' => '2026-06-10',
+            'tipo_carga_id' => $this->tipo()->id, 'cantidad' => 10,
+        ];
+
+        $id = $this->postJson($this->url('recepciones'), $cuerpo)->assertCreated()->json('data.id');
+        $this->putJson($this->url('recepciones/'.$id), $cuerpo + ['notas' => 'ok'])->assertOk();
+        $this->assertSame(1, Recepcion::count());
     }
 }
