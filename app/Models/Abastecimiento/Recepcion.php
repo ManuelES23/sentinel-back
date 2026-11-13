@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 /** Recepción de producto contra un convenio. */
@@ -57,6 +58,12 @@ class Recepcion extends Model
     public function tipoCarga(): BelongsTo
     {
         return $this->belongsTo(TipoCarga::class, 'tipo_carga_id');
+    }
+
+    /** Renglones por calibre (solo convenios por calibre; la cabecera es su suma). */
+    public function renglones(): HasMany
+    {
+        return $this->hasMany(RecepcionCalibre::class, 'recepcion_id')->orderBy('id');
     }
 
     /** Liquidación a la que está ligada (sin llave foránea: ver plan 2, ruling 11). */

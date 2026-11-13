@@ -63,10 +63,10 @@ class ConveniosCalibresTest extends TestCase
 
     private function calibre(string $nombre, int $orden = 0, bool $activo = true, ?Variedad $variedad = null): VariedadCalibre
     {
-        return VariedadCalibre::create([
-            'variedad_id' => ($variedad ?? $this->variedad)->id,
-            'nombre' => $nombre, 'orden' => $orden, 'is_active' => $activo,
-        ]);
+        $calibre = $this->crearCalibre($variedad ?? $this->variedad, $nombre, $activo);
+        $calibre->update(['orden' => $orden]);
+
+        return $calibre;
     }
 
     private function cuerpo(array $over = []): array
