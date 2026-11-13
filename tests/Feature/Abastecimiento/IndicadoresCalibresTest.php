@@ -237,6 +237,37 @@ class IndicadoresCalibresTest extends TestCase
         $this->assertSame($con1, $con5, 'El número de consultas no debe crecer con los convenios por calibre.');
     }
 
+    public function test_excel_con_convenios_por_calibre_tiene_consultas_constantes(): void
+    {
+        $primero = $this->porCalibre();
+        $this->crearRecepcionConRenglones($primero, [$this->renglon($this->jumbo, 10), $this->renglon($this->grande, 5)], ['fecha' => '2026-06-01']);
+        $temporada = $primero->temporada_id;
+
+        $contar = function () use ($temporada): int {
+            DB::flushQueryLog();
+            DB::enableQueryLog();
+            $this->get("/api/splendidbyporvenir/administration/abastecimiento/tablero/exportar?temporada_id={$temporada}")->assertOk();
+            $n = count(DB::getQueryLog());
+            DB::disableQueryLog();
+
+            return $n;
+        };
+
+        $con1 = $contar();
+
+        for ($i = 0; $i < 4; $i++) {
+            $productor = Productor::create(['enterprise_id' => $this->sbp->id, 'tipo' => 'productor', 'nombre' => "Productor {$i}", 'is_active' => true]);
+            $extra = $this->porCalibre(['productor_id' => $productor->id]);
+            $this->crearRecepcionConRenglones($extra, [$this->renglon($this->jumbo, 4)], ['fecha' => '2026-06-08']);
+            $this->crearRecepcionConRenglones($extra, [$this->renglon($this->grande, 2)], ['fecha' => '2026-06-09']);
+        }
+        $this->assertSame(5, Convenio::count());
+
+        $con5 = $contar();
+
+        $this->assertSame($con1, $con5, 'El número de consultas del Excel no debe crecer con los convenios por calibre.');
+    }
+
     public function test_tablero_y_excel_responden_200_con_un_convenio_por_calibre_con_recepciones(): void
     {
         $convenio = $this->porCalibre();
