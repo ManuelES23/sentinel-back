@@ -29,6 +29,7 @@ class ConfiguracionComercialController extends CrmBaseController
             'moneda' => $config->moneda,
             'productos_en_oportunidad' => $config->productos_en_oportunidad,
             'cotizacion_por_caja' => $config->cotizacion_por_caja,
+            'catalogo_por_lineas' => CrmConfiguracionComercial::catalogoPorLineas($empresaId),
             'impuestos' => $impuestos,
             'oportunidad_eje' => true,
         ]);

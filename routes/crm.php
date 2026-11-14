@@ -49,11 +49,32 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('productos/buscar', [
         App\Http\Controllers\Api\CRM\ProductoController::class, 'buscar'
     ]);
+    Route::post('productos/importar/revisar', [
+        App\Http\Controllers\Api\CRM\ImportacionCatalogoController::class, 'revisar'
+    ]);
+    Route::post('productos/importar', [
+        App\Http\Controllers\Api\CRM\ImportacionCatalogoController::class, 'importar'
+    ]);
     Route::patch('productos/{producto}/toggle-activo', [
         App\Http\Controllers\Api\CRM\ProductoController::class, 'toggleActivo'
     ]);
     Route::apiResource('productos', App\Http\Controllers\Api\CRM\ProductoController::class)
         ->parameters(['productos' => 'producto']);
+
+    // Catálogo de marcas, líneas y sublíneas (CanAgro): lectura abierta, escrituras con catalogos.productos
+    Route::prefix('catalogo-lineas')->group(function () {
+        $c = App\Http\Controllers\Api\CRM\CatalogoLineasController::class;
+        Route::get('/', [$c, 'index']);
+        Route::post('marcas', [$c, 'storeMarca']);
+        Route::put('marcas/{marca}', [$c, 'updateMarca'])->whereNumber('marca');
+        Route::delete('marcas/{marca}', [$c, 'destroyMarca'])->whereNumber('marca');
+        Route::post('lineas', [$c, 'storeLinea']);
+        Route::put('lineas/{linea}', [$c, 'updateLinea'])->whereNumber('linea');
+        Route::delete('lineas/{linea}', [$c, 'destroyLinea'])->whereNumber('linea');
+        Route::post('lineas/{linea}/sublineas', [$c, 'storeSublinea'])->whereNumber('linea');
+        Route::put('sublineas/{sublinea}', [$c, 'updateSublinea'])->whereNumber('sublinea');
+        Route::delete('sublineas/{sublinea}', [$c, 'destroySublinea'])->whereNumber('sublinea');
+    });
 
     // Calibres propios por producto (los agrícolas solo se leen) y presentaciones por commodity
     Route::get('productos/{producto}/calibres', [App\Http\Controllers\Api\CRM\CalibreProductoController::class, 'index']);
@@ -176,6 +197,9 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     ]);
     Route::patch('oportunidades/{oportunidad}/cobro', [
         App\Http\Controllers\Api\CRM\OportunidadController::class, 'cobro'
+    ]);
+    Route::get('oportunidades/{oportunidad}/compro-antes', [
+        App\Http\Controllers\Api\CRM\OportunidadController::class, 'compraAntes'
     ]);
     Route::apiResource('oportunidades', App\Http\Controllers\Api\CRM\OportunidadController::class)
         ->parameters(['oportunidades' => 'oportunidad']);
@@ -303,6 +327,8 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     // Pérdidas por categoría de rechazo (spec 2026-10-23 §4.6)
     Route::get('dashboard/perdidas-por-categoria', [App\Http\Controllers\Api\CRM\DashboardController::class, 'perdidasPorCategoria']);
     Route::get('dashboard/perdidas-por-categoria/detalle', [App\Http\Controllers\Api\CRM\DashboardController::class, 'perdidasPorCategoriaDetalle']);
+    // Ventas por línea del catálogo (CanAgro, spec 2026-11-10)
+    Route::get('dashboard/ventas-por-linea', [App\Http\Controllers\Api\CRM\DashboardController::class, 'ventasPorLinea']);
 
     // -------------------------------------------------
     // INTEGRACIONES · DIALPAD

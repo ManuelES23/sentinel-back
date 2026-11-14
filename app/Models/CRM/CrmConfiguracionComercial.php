@@ -12,12 +12,13 @@ class CrmConfiguracionComercial extends Model
 
     protected $table = 'crm_configuraciones_comerciales';
 
-    protected $fillable = ['empresa_id', 'descuento_global_habilitado', 'moneda', 'productos_en_oportunidad', 'cotizacion_por_caja'];
+    protected $fillable = ['empresa_id', 'descuento_global_habilitado', 'moneda', 'productos_en_oportunidad', 'cotizacion_por_caja', 'catalogo_por_lineas'];
 
     protected $casts = [
         'descuento_global_habilitado' => 'boolean',
         'productos_en_oportunidad' => 'boolean',
         'cotizacion_por_caja' => 'boolean',
+        'catalogo_por_lineas' => 'boolean',
     ];
 
     public function empresa(): BelongsTo
@@ -30,7 +31,7 @@ class CrmConfiguracionComercial extends Model
     {
         return self::firstOrCreate(
             ['empresa_id' => $empresaId],
-            ['descuento_global_habilitado' => true, 'moneda' => 'MXN', 'productos_en_oportunidad' => false, 'cotizacion_por_caja' => false]
+            ['descuento_global_habilitado' => true, 'moneda' => 'MXN', 'productos_en_oportunidad' => false, 'cotizacion_por_caja' => false, 'catalogo_por_lineas' => false]
         );
     }
 
@@ -50,5 +51,13 @@ class CrmConfiguracionComercial extends Model
     public static function cotizacionPorCaja(int $empresaId): bool
     {
         return (bool) self::paraEmpresa($empresaId)->cotizacion_por_caja;
+    }
+
+    /** ¿La empresa usa el catálogo por líneas (clave/marca/línea/sublínea)? Gana cotizacion_por_caja. */
+    public static function catalogoPorLineas(int $empresaId): bool
+    {
+        $config = self::paraEmpresa($empresaId);
+
+        return (bool) $config->catalogo_por_lineas && ! $config->cotizacion_por_caja;
     }
 }

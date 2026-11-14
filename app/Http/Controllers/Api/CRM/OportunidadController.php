@@ -14,6 +14,7 @@ use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmProducto;
 use App\Models\CRM\CrmProspecto;
 use App\Services\CRM\AperturaOportunidadService;
+use App\Services\CRM\CompraAntesService;
 use App\Services\CRM\DashboardResumenService;
 use App\Services\CRM\EmbudoService;
 use App\Services\CRM\OportunidadProductosService;
@@ -135,6 +136,15 @@ class OportunidadController extends CrmBaseController
         $oportunidad->load(self::RELACIONES)->conMontoOrigen();
 
         return $this->jsonSuccess($oportunidad);
+    }
+
+    /** GET /crm/oportunidades/{oportunidad}/compro-antes — productos que el cliente compró antes. */
+    public function compraAntes(Request $request, CrmOportunidad $oportunidad, CompraAntesService $servicio): JsonResponse
+    {
+        $this->verificarEmpresa($oportunidad);
+        $this->visibilidad->exigirVisible((int) $oportunidad->empresa_id, $oportunidad);
+
+        return $this->jsonSuccess($servicio->para($oportunidad)->values());
     }
 
     /** POST /crm/oportunidades */
