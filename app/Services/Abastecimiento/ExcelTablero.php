@@ -230,6 +230,8 @@ class ExcelTablero
         }
 
         $convenios = Convenio::deEmpresa($empresa->id)->whereIn('id', $ids)->with(['precios', 'metas'])->get();
+        // Calibres de los convenios por calibre en una consulta por relación (sin esto, `calibresDe` consulta por convenio).
+        CalibresConvenio::cargar($convenios);
         $lineas = IndicadoresConvenio::lineas($convenios);
         $hoy = Semanas::hoy();
 

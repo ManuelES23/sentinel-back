@@ -46,3 +46,7 @@ Schedule::command('respaldos:ejecutar')->everyMinute()->withoutOverlapping(180)-
 // Portal de vacaciones: borra las sesiones vencidas o revocadas hace más de 7
 // días (las vigentes duran 2 h como máximo, así que el volumen es pequeño).
 Schedule::command('vacaciones:limpiar-sesiones-portal')->dailyAt('03:30');
+
+// Vacaciones en Outlook: respaldo de la sincronizacion inmediata; agenda las
+// que aprobo cada usuario vinculado y borra las canceladas.
+Schedule::command('vacaciones:sincronizar-outlook')->everyFiveMinutes()->withoutOverlapping(10);

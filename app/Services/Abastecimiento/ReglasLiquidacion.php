@@ -17,6 +17,9 @@ class ReglasLiquidacion
 {
     public const MENSAJE_NO_BORRADOR = 'Solo se puede cambiar o borrar una liquidación en borrador.';
 
+    /** Bloqueo temporal: el plan 3 calcula por (recepción, calibre) y reemplaza esta regla. */
+    public const MENSAJE_POR_CALIBRE = 'Las recepciones de un convenio por calibre se liquidan en la siguiente entrega.';
+
     /**
      * Recepciones del convenio dentro del periodo que se pueden liquidar: las que no están en
      * ninguna liquidación, más las de la liquidación indicada (al editar su borrador).
@@ -48,6 +51,11 @@ class ReglasLiquidacion
      */
     public static function validarSeleccion(Convenio $convenio, array $ids, string $desde, string $hasta, ?int $liquidacionId = null): Collection
     {
+        // Único punto de paso de previa, alta, edición, envío y carga inicial con recepciones: falla cerrado.
+        if ($convenio->usa_calibres) {
+            self::fallar(self::MENSAJE_POR_CALIBRE);
+        }
+
         $ids = array_map('intval', $ids);
         if ($ids === []) {
             self::fallar('Elige al menos una recepción.');

@@ -30,6 +30,7 @@ class IndicadoresConvenio
      *   cumplimiento: float|null, avance: float|null, proyeccion: float, estado: string,
      *   semana_actual: array{lunes: string, numero: int, meta: float, recibido: float},
      *   comprometido: float, valor_recibido: float,
+     *   calibres: array<int, array{calibre_id: int, nombre: string|null, pactado: float, comprometido: float|null, recibido: float, avance: float|null, valor_recibido: float}>,
      *   semanas: array<int, array{lunes: string, numero: int, meta: float, recibido: float, cerrada: bool}>
      * }
      */
@@ -106,8 +107,12 @@ class IndicadoresConvenio
      * Con `$soloSinLiquidar` solo cuenta las recepciones sin liquidación (`liquidacion_id` nulo
      * o ligado a una liquidación cancelada).
      *
+     * Los convenios por calibre (`usa_calibres`) se leen de sus renglones (`abs_recepcion_calibres`) en una
+     * segunda consulta agrupada también por calibre; los clásicos, de la cabecera como siempre (`calibre_id`
+     * nulo). Cada recepción cuenta una sola vez: la cabecera de un convenio por calibre no se lee.
+     *
      * @param  Collection<int, Convenio>  $convenios
-     * @return Collection<int, Collection<int, array{fecha: string, tipo_carga_id: int, cantidad: float}>> convenio_id => líneas
+     * @return Collection<int, Collection<int, array{fecha: string, tipo_carga_id: int, calibre_id: int|null, cantidad: float}>> convenio_id => líneas
      */
     public static function lineas(Collection $convenios, bool $soloSinLiquidar = false): Collection
     {
@@ -116,20 +121,43 @@ class IndicadoresConvenio
             return collect();
         }
 
-        return DB::table('abs_recepciones')
-            ->whereIn('convenio_id', $unidades->keys()->all())
-            ->whereNull('deleted_at')
-            // Libre = sin liquidación; por si acaso, una que apunta a una liquidación cancelada también (Ruling 12 ya la libera).
-            ->when($soloSinLiquidar, fn ($q) => $q->where(fn ($q) => $q
-                ->whereNull('liquidacion_id')
-                ->orWhereIn('liquidacion_id', DB::table('abs_liquidaciones')->select('id')->where('status', 'cancelada'))))
-            ->groupBy('convenio_id', 'fecha', 'tipo_carga_id')
-            ->selectRaw('convenio_id, fecha, tipo_carga_id, SUM(cantidad) as cantidad, SUM(kilos) as kilos')
-            ->get()
-            ->groupBy('convenio_id')
+        $porCalibre = $convenios->filter(fn ($c) => (bool) $c->usa_calibres)->pluck('id')->map(fn ($id) => (int) $id)->values()->all();
+        $clasicos = $unidades->keys()->map(fn ($id) => (int) $id)->diff($porCalibre)->values()->all();
+
+        // Libre = sin liquidación; por si acaso, una que apunta a una liquidación cancelada también (Ruling 12 ya la libera).
+        $libres = fn (string $columna) => fn ($q) => $q->where(fn ($q) => $q
+            ->whereNull($columna)
+            ->orWhereIn($columna, DB::table('abs_liquidaciones')->select('id')->where('status', 'cancelada')));
+
+        $filas = collect();
+
+        if ($clasicos !== []) {
+            $filas = $filas->concat(DB::table('abs_recepciones')
+                ->whereIn('convenio_id', $clasicos)
+                ->whereNull('deleted_at')
+                ->when($soloSinLiquidar, $libres('liquidacion_id'))
+                ->groupBy('convenio_id', 'fecha', 'tipo_carga_id')
+                ->selectRaw('convenio_id, fecha, tipo_carga_id, SUM(cantidad) as cantidad, SUM(kilos) as kilos')
+                ->get());
+        }
+
+        if ($porCalibre !== []) {
+            $filas = $filas->concat(DB::table('abs_recepcion_calibres as rc')
+                ->join('abs_recepciones as r', 'r.id', '=', 'rc.recepcion_id')
+                ->whereIn('r.convenio_id', $porCalibre)
+                ->whereNull('r.deleted_at')
+                ->when($soloSinLiquidar, $libres('r.liquidacion_id'))
+                ->groupBy('r.convenio_id', 'r.fecha', 'r.tipo_carga_id', 'rc.calibre_id')
+                ->selectRaw('r.convenio_id as convenio_id, r.fecha as fecha, r.tipo_carga_id as tipo_carga_id, rc.calibre_id as calibre_id, SUM(rc.cantidad) as cantidad, SUM(rc.kilos) as kilos')
+                ->get());
+        }
+
+        return $filas
+            ->groupBy(fn ($f) => (int) $f->convenio_id)
             ->map(fn (Collection $filas, $convenioId) => $filas->map(fn ($f) => [
                 'fecha' => substr((string) $f->fecha, 0, 10),
                 'tipo_carga_id' => (int) $f->tipo_carga_id,
+                'calibre_id' => isset($f->calibre_id) ? (int) $f->calibre_id : null,
                 'cantidad' => (float) ($unidades->get((int) $convenioId) === 'kg' ? $f->kilos : $f->cantidad),
             ])->values());
     }
@@ -147,10 +175,10 @@ class IndicadoresConvenio
         return round($lineas->sum(fn (array $linea) => self::valorLinea($precios, $linea)), 2);
     }
 
-    /** Valor de una línea; sin precio vigente para su tipo y fecha no vale nada. */
+    /** Valor de una línea; sin precio vigente para su tipo, fecha (y calibre, si lo trae) no vale nada. */
     private static function valorLinea(Collection $precios, array $linea): float
     {
-        $precio = PrecioVigente::enColeccion($precios, $linea['tipo_carga_id'], $linea['fecha']);
+        $precio = PrecioVigente::enColeccion($precios, $linea['tipo_carga_id'], $linea['fecha'], $linea['calibre_id'] ?? null);
 
         return $precio === null
             ? 0.0
@@ -172,12 +200,19 @@ class IndicadoresConvenio
         $lunesDeFecha = [];
         $recibido = 0.0;
         $valorRecibido = 0.0;
+        $porCalibre = []; // calibre_id => [recibido, valor] (solo convenios por calibre)
         foreach ($lineas as $linea) {
             $lunes = $lunesDeFecha[$linea['fecha']] ??= Semanas::lunesDe($linea['fecha']);
             $porSemana[$lunes] = ($porSemana[$lunes] ?? 0.0) + $linea['cantidad'];
             $recibido += $linea['cantidad'];
 
-            $valorRecibido += self::valorLinea($precios, $linea);
+            $valor = self::valorLinea($precios, $linea);
+            $valorRecibido += $valor;
+
+            if (($linea['calibre_id'] ?? null) !== null) {
+                $porCalibre[$linea['calibre_id']]['recibido'] = ($porCalibre[$linea['calibre_id']]['recibido'] ?? 0.0) + $linea['cantidad'];
+                $porCalibre[$linea['calibre_id']]['valor'] = ($porCalibre[$linea['calibre_id']]['valor'] ?? 0.0) + $valor;
+            }
         }
 
         // Semanas del convenio: las de su rango, las de sus metas y las que tengan recepciones.
@@ -211,8 +246,23 @@ class IndicadoresConvenio
             ? $recibido
             : $recibidoFecha + ($recibidoFecha / $cerradas) * (count($lunes) - $cerradas);
 
-        $principal = PrecioVigente::principalEnColeccion($precios, $inicio);
-        $peso = $principal !== null ? (float) $principal->precio * self::porcentaje($principal->porcentaje_productor) / 100 : 0.0;
+        $calibres = [];
+        if ($convenio->usa_calibres) {
+            // Comprometido = Σ por calibre de pactado × precio del tipo principal vigente al inicio en ese calibre
+            // × % del productor; el peso es su promedio por unidad pactada (misma ponderación entre convenios).
+            // Un calibre sin precio del tipo principal no compromete nada (su comprometido va nulo).
+            $comprometido = 0.0;
+            foreach (self::calibresDe($convenio, $precios, $inicio, $porCalibre) as $fila) {
+                $comprometido += $fila['comprometido'] ?? 0.0;
+                $fila['comprometido'] = $fila['comprometido'] === null ? null : round($fila['comprometido'], 2);
+                $calibres[] = $fila;
+            }
+            $peso = $pactado > 0 ? $comprometido / $pactado : 0.0;
+        } else {
+            $principal = PrecioVigente::principalEnColeccion($precios, $inicio);
+            $peso = $principal !== null ? (float) $principal->precio * self::porcentaje($principal->porcentaje_productor) / 100 : 0.0;
+            $comprometido = $pactado * $peso;
+        }
 
         $actual = Semanas::lunesDe($hoyDia);
 
@@ -233,11 +283,52 @@ class IndicadoresConvenio
                     'meta' => round($metas[$actual] ?? 0.0, 2),
                     'recibido' => round($porSemana[$actual] ?? 0.0, 2),
                 ],
-                'comprometido' => round($pactado * $peso, 2),
+                'comprometido' => round($comprometido, 2),
                 'valor_recibido' => round($valorRecibido, 2),
+                'calibres' => $calibres,
                 'semanas' => $semanas,
             ],
         ];
+    }
+
+    /**
+     * Todos los calibres del convenio (también los que no tengan metas), por orden del catálogo,
+     * con su pactado, su comprometido sin redondear (nulo si el tipo principal no tiene precio en ese
+     * calibre), lo recibido (unidad del convenio), el avance (recibido ÷ pactado; nulo sin pactado)
+     * y el valor de lo recibido.
+     *
+     * @param  array<int, array{recibido?: float, valor?: float}>  $recibidos  calibre_id => acumulados de las líneas
+     * @return array<int, array{calibre_id: int, nombre: string|null, pactado: float, comprometido: float|null, recibido: float, avance: float|null, valor_recibido: float}>
+     */
+    private static function calibresDe(Convenio $convenio, Collection $precios, string $inicio, array $recibidos = []): array
+    {
+        // Invariante: un renglón de un calibre fuera de la lista del convenio es imposible (lo rechaza
+        // ReglasRenglonesRecepcion), así que Σ calibres = total.
+        $filas = $convenio->relationLoaded('calibres')
+            ? $convenio->calibres
+            : $convenio->calibres()->get();
+        $filas->loadMissing(['calibre' => fn ($q) => $q->withTrashed()->select('id', 'nombre', 'orden')]);
+        $pactado = MetasConvenio::pactadoPorCalibre($convenio);
+
+        return $filas
+            ->sortBy([fn ($a, $b) => ($a->calibre?->orden ?? 0) <=> ($b->calibre?->orden ?? 0), ['calibre_id', 'asc']])
+            ->map(function ($fila) use ($precios, $inicio, $pactado, $recibidos) {
+                $cantidad = (float) ($pactado[$fila->calibre_id] ?? 0.0);
+                $principal = PrecioVigente::principalEnColeccion($precios, $inicio, (int) $fila->calibre_id);
+                $recibido = (float) ($recibidos[(int) $fila->calibre_id]['recibido'] ?? 0.0);
+
+                return [
+                    'calibre_id' => (int) $fila->calibre_id,
+                    'nombre' => $fila->calibre?->nombre,
+                    'pactado' => round($cantidad, 2),
+                    'comprometido' => $principal === null
+                        ? null
+                        : $cantidad * (float) $principal->precio * self::porcentaje($principal->porcentaje_productor) / 100,
+                    'recibido' => round($recibido, 2),
+                    'avance' => $cantidad > 0 ? round($recibido / $cantidad, 4) : null,
+                    'valor_recibido' => round((float) ($recibidos[(int) $fila->calibre_id]['valor'] ?? 0.0), 2),
+                ];
+            })->values()->all();
     }
 
     /**

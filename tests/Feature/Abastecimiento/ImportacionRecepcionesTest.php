@@ -735,6 +735,26 @@ class ImportacionRecepcionesTest extends TestCase
         $this->assertSame(0, Recepcion::count());
     }
 
+    public function test_un_convenio_que_pasa_a_por_calibre_despues_de_validar_cancela_la_importacion(): void
+    {
+        $usuario = User::factory()->create(['role' => 'admin']);
+        $validado = $this->validar(app(LectorRecepciones::class)->leer($this->crearXlsx([$this->renglon(1), $this->renglon(2)])));
+        $this->assertSame(0, $validado['resumen']['con_error']);
+
+        // Otra sesión cambia el convenio (aún sin recepciones) a por calibre entre la validación y el bloqueo.
+        $this->convenio->update(['usa_calibres' => true]);
+
+        try {
+            app(ImportadorRecepciones::class)->importar($this->sbp, $usuario, $validado['filas']);
+            $this->fail('Debía rechazar el convenio que ahora es por calibre.');
+        } catch (ValidationException $e) {
+            $this->assertSame(422, $e->status);
+            $this->assertStringContainsString('ahora es por calibre', $e->errors()['archivo'][0]);
+            $this->assertStringContainsString($this->convenio->folio, $e->errors()['archivo'][0]);
+        }
+        $this->assertSame(0, Recepcion::count());
+    }
+
     // ---- Ronda 1: re-chequeo de tickets con bloqueo, folios en bloque ----
 
     /** Consultas SQL que ejecuta $accion, en orden. */

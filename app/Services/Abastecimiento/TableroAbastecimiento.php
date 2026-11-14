@@ -49,6 +49,9 @@ class TableroAbastecimiento
         $moneda = ($monedaPedida !== null && in_array($monedaPedida, $monedas, true)) ? $monedaPedida : ($monedas[0] ?? null);
 
         $convenios = new EloquentCollection($todos->where('moneda', $moneda)->values()->all());
+        // Calibres y precios por calibre en una consulta por relación, solo si hay convenios por calibre
+        // (los clásicos no agregan consultas). Con borrados, como `IndicadoresConvenio::calibresDe`.
+        CalibresConvenio::cargar($convenios);
         $lineas = IndicadoresConvenio::lineas($convenios);
         $sinLiquidar = IndicadoresConvenio::lineas($convenios, soloSinLiquidar: true);
 
@@ -114,8 +117,13 @@ class TableroAbastecimiento
         ];
     }
 
+    /** Precio principal del convenio clásico; un convenio por calibre no tiene uno solo (nulo). */
     private static function precioPrincipal(Convenio $c): ?array
     {
+        if ($c->usa_calibres) {
+            return null;
+        }
+
         $p = PrecioVigente::principalEnColeccion($c->precios, $c->fecha_inicio->format('Y-m-d'));
 
         return $p === null ? null : [

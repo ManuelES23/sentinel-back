@@ -21,10 +21,11 @@ use App\Models\User;
 use App\Models\Variedad;
 use App\Models\ZonaCultivo;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * Ayudante de pruebas del Programa semanal: arma el elote con su temporada
- * OI 2026-2027, los catálogos sembrados, usuarios con permisos del submódulo
+ * OI 2026-2027, los catálogos sembrados, usuarios con permisos por submódulo
  * y la semana WK48 tal como viene en el Excel (spec §7).
  */
 trait ConstruyePrograma
@@ -137,12 +138,16 @@ trait ConstruyePrograma
     }
 
     /**
-     * Usuario con los permisos indicados (slugs de submodule_permission_types)
-     * sobre Splendid Farms → Administración → Planeación → Programa semanal.
+     * Usuario con los permisos indicados por submódulo de Splendid Farms →
+     * Administración → Planeación, p. ej. `['plan-corte' => ['view', 'capturar']]`.
      *
-     * @param  string[]  $permisos
+     * La primera vez arma la estructura como en producción: el submódulo viejo
+     * «Programa semanal», su paso a Administración y la división en los seis
+     * submódulos de hoy.
+     *
+     * @param  array<string, string[]>  $permisosPorSubmodulo
      */
-    protected function usuarioCon(array $permisos): User
+    protected function usuarioCon(array $permisosPorSubmodulo): User
     {
         $empresaId = $this->empresaSfId();
         Application::firstOrCreate(
@@ -155,24 +160,37 @@ trait ConstruyePrograma
             $this->correrMigracion('2026_10_28_100200_add_planeacion_programa_semanal_submodule.php');
             $this->correrMigracion('2026_10_30_100000_mover_planeacion_a_administracion.php');
         }
+        // Las tablas ya las crea RefreshDatabase; solo se corre si faltan.
+        if (! Schema::hasTable('programa_embarques')) {
+            $this->correrMigracion('2026_11_11_100000_create_programa_embarques_y_notas.php');
+        }
+        $moduloId = DB::table('modules')->where('slug', 'planeacion')->value('id');
+        if (! DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'tablero-semanal')->exists()) {
+            $this->correrMigracion('2026_11_11_100100_dividir_planeacion_en_submodulos.php');
+        }
 
-        $submoduloId = DB::table('submodules')->where('slug', 'programa-semanal')->value('id');
         $usuario = User::factory()->create();
 
-        foreach ($permisos as $slug) {
-            $tipoId = DB::table('submodule_permission_types')
-                ->where('submodule_id', $submoduloId)
-                ->where('slug', $slug)
-                ->value('id');
+        foreach ($permisosPorSubmodulo as $submodulo => $permisos) {
+            $submoduloId = DB::table('submodules')->where('module_id', $moduloId)->where('slug', $submodulo)->value('id');
+            $this->assertNotNull($submoduloId, "No existe el submódulo {$submodulo}.");
 
-            DB::table('user_submodule_permissions')->insert([
-                'user_id' => $usuario->id,
-                'submodule_id' => $submoduloId,
-                'permission_type_id' => $tipoId,
-                'is_granted' => true,
-                'created_at' => now(),
-                'updated_at' => now(),
-            ]);
+            foreach ($permisos as $slug) {
+                $tipoId = DB::table('submodule_permission_types')
+                    ->where('submodule_id', $submoduloId)
+                    ->where('slug', $slug)
+                    ->value('id');
+                $this->assertNotNull($tipoId, "No existe el permiso {$submodulo}.{$slug}.");
+
+                DB::table('user_submodule_permissions')->insert([
+                    'user_id' => $usuario->id,
+                    'submodule_id' => $submoduloId,
+                    'permission_type_id' => $tipoId,
+                    'is_granted' => true,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
         }
 
         return $usuario;

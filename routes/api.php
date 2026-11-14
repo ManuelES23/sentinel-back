@@ -54,6 +54,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/vacation-request', [App\Http\Controllers\Api\ProfileController::class, 'requestVacation']);
         Route::delete('/vacation-request/{vacationRequest}', [App\Http\Controllers\Api\ProfileController::class, 'cancelVacationRequest']);
         Route::get('/vacation-history', [App\Http\Controllers\Api\ProfileController::class, 'vacationHistory']);
+
+        // Outlook de quien autoriza vacaciones (el callback es el público del CRM, que reparte por `proposito`)
+        Route::get('/outlook-vacaciones', [App\Http\Controllers\Api\ProfileOutlookVacacionesController::class, 'estado']);
+        Route::get('/outlook-vacaciones/conectar', [App\Http\Controllers\Api\ProfileOutlookVacacionesController::class, 'conectar']);
+        Route::post('/outlook-vacaciones/sincronizar', [App\Http\Controllers\Api\ProfileOutlookVacacionesController::class, 'sincronizar']);
+        Route::delete('/outlook-vacaciones', [App\Http\Controllers\Api\ProfileOutlookVacacionesController::class, 'desconectar']);
     });
 
     // Rutas de pendientes por aprobar
@@ -212,11 +218,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::prefix('administration')->group(function () {
             // Activos Fijos y Organización: grupo genérico {empresa}/administration (al final).
 
-            // Módulo Planeación (Programa semanal de corte, empaque, ventas y logística)
+            // Módulo Planeación (submódulos: Tablero semanal, Plan de corte, Necesidades de venta, Embarques, Resumen de temporada y Configuración)
             Route::prefix('planeacion')->group(function () {
                 Route::get('programa', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ProgramaSemanalController::class, 'show']);
-                Route::post('programa/{programa}/registrar-junta', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\JuntaProgramaController::class, 'registrar']);
-                Route::put('programa/{programa}/inventario-inicial', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\JuntaProgramaController::class, 'inventarioInicial']);
+                // Descarga de la semana en Excel (tablero-semanal.view); ninguna ruta GET programa/{programa} la tapa.
+                Route::get('programa/exportar', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ExportarProgramaController::class, 'exportar']);
+                Route::put('programa/{programa}/inventario-inicial', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'inventarioInicial']);
 
                 // Configuración (las rutas fijas van antes que {catalogo})
                 Route::get('configuracion', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'show']);
@@ -231,28 +238,20 @@ Route::middleware('auth:sanctum')->group(function () {
 
                 Route::get('clientes', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ClientesSbpController::class, 'index']);
 
-                // Corte y rendimiento de la semana (repartir va antes que cualquier {corte})
-                Route::post('programa/{programa}/cortes/repartir', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ProgramaCorteController::class, 'repartir']);
-                Route::post('programa/{programa}/cortes', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ProgramaCorteController::class, 'store']);
+                // Resumen de temporada (resumen-temporada.view)
+                Route::get('resumen', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ResumenTemporadaController::class, 'show']);
+
+                // Hoja de corte (guardado en lote) y rendimiento de la semana (plan-corte.capturar)
+                Route::put('programa/{programa}/cortes/hoja', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\HojaCorteController::class, 'guardar']);
                 Route::put('programa/{programa}/rendimientos', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ProgramaCorteController::class, 'rendimientos']);
-                Route::put('cortes/{corte}', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ProgramaCorteController::class, 'update']);
-                Route::delete('cortes/{corte}', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ProgramaCorteController::class, 'destroy']);
 
-                // Necesidades de ventas (copiar-anterior va antes que cualquier {necesidad})
+                // Hoja de necesidades de ventas (guardado en lote) y copia de la semana anterior (necesidades-venta.capturar)
+                Route::put('programa/{programa}/necesidades/hoja', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\HojaNecesidadesController::class, 'guardar']);
                 Route::post('programa/{programa}/necesidades/copiar-anterior', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ProgramaNecesidadController::class, 'copiarAnterior']);
-                Route::post('programa/{programa}/necesidades', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ProgramaNecesidadController::class, 'store']);
-                Route::put('necesidades/{necesidad}', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ProgramaNecesidadController::class, 'update']);
-                Route::delete('necesidades/{necesidad}', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ProgramaNecesidadController::class, 'destroy']);
 
-                // Viajes de logística (Full y Sencillo)
-                Route::post('programa/{programa}/viajes', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ProgramaViajeController::class, 'store']);
-                Route::put('viajes/{viaje}', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ProgramaViajeController::class, 'update']);
-                Route::delete('viajes/{viaje}', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ProgramaViajeController::class, 'destroy']);
-
-                // Acuerdos de la junta (adelantar etapa, mover pedido, conseguir producto)
-                Route::post('programa/{programa}/acuerdos', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ProgramaAcuerdoController::class, 'store']);
-                Route::patch('acuerdos/{acuerdo}/activo', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ProgramaAcuerdoController::class, 'activo']);
-                Route::delete('acuerdos/{acuerdo}', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ProgramaAcuerdoController::class, 'destroy']);
+                // Hoja de embarques por cargas (embarques.capturar) y notas de la semana (tablero-semanal.editar-notas)
+                Route::put('programa/{programa}/embarques/hoja', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\HojaEmbarquesController::class, 'guardar']);
+                Route::put('programa/{programa}/notas', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\NotasProgramaController::class, 'guardar']);
             });
 
             // Módulo Catálogos (catálogos generales de la empresa)

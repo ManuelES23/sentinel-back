@@ -49,6 +49,13 @@ class ImportadorRecepciones
                         'archivo' => "El convenio {$folio} ya no está activo; revisa el convenio y vuelve a subir el archivo.",
                     ]);
                 }
+                // Se revisa de nuevo bajo el bloqueo: el convenio pudo pasar a por calibre después de validar,
+                // y una cabecera sin renglones en un convenio por calibre no cuenta en indicadores ni se valora.
+                if ($convenio->usa_calibres) {
+                    throw ValidationException::withMessages([
+                        'archivo' => "El convenio {$convenio->folio} ahora es por calibre: la importación por calibre llegará con el formato de Excel. Revisa el convenio y vuelve a subir el archivo.",
+                    ]);
+                }
             }
 
             // Orden de bloqueo: convenios (compartido, por id) → contador de folios → lectura de tickets.

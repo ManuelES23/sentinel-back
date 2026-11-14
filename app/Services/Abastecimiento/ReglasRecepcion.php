@@ -53,6 +53,24 @@ class ReglasRecepcion
             $errores['fecha'] = 'La fecha está fuera del convenio ('.self::corta($inicio).' a '.self::corta($fin).').';
         }
 
+        // Convenio por calibre: tipo de carga, cantidad, kilos y rezaga se validan por renglón.
+        if ($convenio->usa_calibres) {
+            if (($datos['renglones'] ?? null) === null && ($datos['cantidad'] ?? null) !== null) {
+                $errores['renglones'] = 'Captura la recepción por calibre.';
+            } else {
+                $errores += ReglasRenglonesRecepcion::errores($convenio, $datos, $precios, ! isset($errores['fecha']));
+            }
+            if ($errores !== []) {
+                throw ValidationException::withMessages($errores);
+            }
+
+            return;
+        }
+
+        if (($datos['renglones'] ?? null) !== null) {
+            $errores['renglones'] = 'Este convenio no es por calibre.';
+        }
+
         if (! isset($errores['fecha'])
             && ($precios ?? app(PrecioVigente::class))->para($convenio, (int) $datos['tipo_carga_id'], $fecha) === null) {
             $errores['tipo_carga_id'] = 'Este tipo de carga no tiene precio en el convenio para esa fecha.';
@@ -123,6 +141,12 @@ class ReglasRecepcion
         $porcentaje = $precio->porcentaje_productor === null ? 100.0 : (float) $precio->porcentaje_productor;
 
         return round($cantidad * (float) $precio->precio * $porcentaje / 100, 2);
+    }
+
+    /** Importe estimado de una recepción por calibre: Σ de sus renglones (nulo si a alguno le falta precio). */
+    public static function importeRenglones(Convenio $convenio, Recepcion $recepcion, ?PrecioVigente $precios = null): ?float
+    {
+        return ReglasRenglonesRecepcion::importe($convenio, $recepcion, $precios);
     }
 
     /** «22 jun». */

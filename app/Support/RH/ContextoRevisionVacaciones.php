@@ -99,6 +99,8 @@ class ContextoRevisionVacaciones
 
         // Las pendientes ya se descuentan del saldo actual: «después» es el saldo de hoy y «antes» le suma esta.
         $despues = $sinIngreso ? 0 : $base['disponibles'];
+        // Solo una solicitud que sigue pendiente está contada en `en_revision`; una ya cerrada no.
+        $estaEnRevision = $solicitud->status === 'pending' ? $dias : 0;
 
         $solicitudes = VacationRequest::where('employee_id', $empleado->id)
             ->where('id', '!=', $solicitud->id)
@@ -135,6 +137,15 @@ class ContextoRevisionVacaciones
                 ],
             ],
             'desglose' => $this->desglose($solicitud, $empleado),
+            // Reparto visual por periodo (lo tomado se descuenta del más antiguo); no cambia el saldo.
+            'periodos' => PeriodosVacaciones::tabla(
+                $ingreso,
+                $hoy,
+                $base['ajustes'],
+                $base['usados'],
+                max(0, $base['en_revision'] - $estaEnRevision),
+                $estaEnRevision,
+            ),
             'historial' => $grupos->sortKeysDesc()->take(self::MAX_PERIODOS)->values()->all(),
             'coinciden' => $this->coinciden($solicitud, $empleado),
             'llego_el' => $this->llegoEl($solicitud),

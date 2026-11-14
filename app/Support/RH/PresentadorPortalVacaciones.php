@@ -231,7 +231,7 @@ class PresentadorPortalVacaciones
             ->values();
     }
 
-    private static function folio(VacationRequest $solicitud): string
+    public static function folio(VacationRequest $solicitud): string
     {
         return 'VAC-'.str_pad((string) $solicitud->id, 6, '0', STR_PAD_LEFT);
     }

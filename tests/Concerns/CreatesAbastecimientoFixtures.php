@@ -4,15 +4,18 @@ namespace Tests\Concerns;
 
 use App\Models\Abastecimiento\Abono;
 use App\Models\Abastecimiento\Convenio;
+use App\Models\Abastecimiento\ConvenioCalibre;
 use App\Models\Abastecimiento\ConvenioMeta;
 use App\Models\Abastecimiento\ConvenioPrecio;
 use App\Models\Abastecimiento\Cultivo;
 use App\Models\Abastecimiento\Liquidacion;
 use App\Models\Abastecimiento\Productor;
 use App\Models\Abastecimiento\Recepcion;
+use App\Models\Abastecimiento\RecepcionCalibre;
 use App\Models\Abastecimiento\Temporada;
 use App\Models\Abastecimiento\TipoCarga;
 use App\Models\Abastecimiento\Variedad;
+use App\Models\Abastecimiento\VariedadCalibre;
 use App\Models\Application;
 use App\Models\Enterprise;
 use App\Models\Module;
@@ -104,7 +107,7 @@ trait CreatesAbastecimientoFixtures
      */
     protected function crearConvenio(Enterprise $empresa, array $over = []): Convenio
     {
-        $precio = $over['precio'] ?? 100;
+        $precio = array_key_exists('precio', $over) ? $over['precio'] : 100; // null = sin precio clásico
         $metas = $over['metas'] ?? ['2026-06-01' => 100, '2026-06-08' => 100, '2026-06-15' => 100, '2026-06-22' => 100];
         unset($over['precio'], $over['metas']);
 
@@ -144,19 +147,103 @@ trait CreatesAbastecimientoFixtures
                 'status' => 'activo',
             ], $over));
 
-            ConvenioPrecio::create([
-                'convenio_id' => $convenio->id,
-                'tipo_carga_id' => $tipoCarga->id,
-                'precio' => $precio,
-                'vigencia_inicio' => $convenio->fecha_inicio->format('Y-m-d'),
-                'es_principal' => true,
-            ]);
+            if ($precio !== null) {
+                ConvenioPrecio::create([
+                    'convenio_id' => $convenio->id,
+                    'tipo_carga_id' => $tipoCarga->id,
+                    'precio' => $precio,
+                    'vigencia_inicio' => $convenio->fecha_inicio->format('Y-m-d'),
+                    'es_principal' => true,
+                ]);
+            }
 
             foreach ($metas as $semana => $cantidad) {
                 ConvenioMeta::create(['convenio_id' => $convenio->id, 'semana' => $semana, 'cantidad' => $cantidad]);
             }
 
             return $convenio->load(['precios', 'metas']);
+        });
+    }
+
+    /** Calibre de la variedad, creado directo (sin pasar por la API del catálogo). */
+    protected function crearCalibre(Variedad $variedad, string $nombre, bool $activo = true): VariedadCalibre
+    {
+        return VariedadCalibre::create([
+            'variedad_id' => $variedad->id,
+            'nombre' => $nombre,
+            'orden' => 0,
+            'is_active' => $activo,
+        ]);
+    }
+
+    /**
+     * Convenio por calibre: `usa_calibres`, volumen total por calibre (modo `total`) y un
+     * precio por calibre del tipo de carga principal vigente desde el inicio del convenio.
+     * `$calibres` = [['calibre' => VariedadCalibre, 'volumen' => 100, 'precio' => 120.0], …].
+     * Claves especiales de `$over` como en `crearConvenio` (salvo `precio` y `metas`, que no aplican).
+     */
+    protected function crearConvenioPorCalibre(Enterprise $empresa, array $calibres, array $over = []): Convenio
+    {
+        unset($over['precio'], $over['metas']);
+        $convenio = $this->crearConvenio($empresa, array_merge($over, [
+            'precio' => null,
+            'metas' => [],
+            'usa_calibres' => true,
+            'modo_volumen' => 'total',
+            'volumen_total' => null,
+        ]));
+        $tipoCarga = TipoCarga::where('enterprise_id', $empresa->id)->orderBy('id')->firstOrFail();
+
+        DB::transaction(function () use ($convenio, $calibres, $tipoCarga) {
+            foreach ($calibres as $c) {
+                ConvenioCalibre::create([
+                    'convenio_id' => $convenio->id,
+                    'calibre_id' => $c['calibre']->id,
+                    'volumen_total' => $c['volumen'] ?? null,
+                ]);
+                ConvenioPrecio::create([
+                    'convenio_id' => $convenio->id,
+                    'tipo_carga_id' => $tipoCarga->id,
+                    'calibre_id' => $c['calibre']->id,
+                    'precio' => $c['precio'] ?? 100,
+                    'vigencia_inicio' => $convenio->fecha_inicio->format('Y-m-d'),
+                    'es_principal' => true,
+                ]);
+            }
+        });
+
+        return $convenio->load(['precios', 'metas', 'calibres']);
+    }
+
+    /**
+     * Recepción de un convenio por calibre con sus renglones; la cabecera queda como la
+     * suma (kilos y rezaga nulos si ningún renglón los trae).
+     * `$renglones` = [['calibre_id' => id, 'cantidad' => 10, 'kilos' => null, 'rezaga_kg' => null], …].
+     */
+    protected function crearRecepcionConRenglones(Convenio $convenio, array $renglones, array $over = []): Recepcion
+    {
+        $suma = fn (string $clave) => collect($renglones)->whereNotNull($clave)->isEmpty()
+            ? null
+            : collect($renglones)->sum(fn ($r) => (float) ($r[$clave] ?? 0));
+
+        return DB::transaction(function () use ($convenio, $renglones, $over, $suma) {
+            $recepcion = $this->crearRecepcion($convenio, array_merge([
+                'cantidad' => $suma('cantidad') ?? 0,
+                'kilos' => $suma('kilos'),
+                'rezaga_kg' => $suma('rezaga_kg'),
+            ], $over));
+
+            foreach ($renglones as $r) {
+                RecepcionCalibre::create([
+                    'recepcion_id' => $recepcion->id,
+                    'calibre_id' => $r['calibre_id'],
+                    'cantidad' => $r['cantidad'],
+                    'kilos' => $r['kilos'] ?? null,
+                    'rezaga_kg' => $r['rezaga_kg'] ?? null,
+                ]);
+            }
+
+            return $recepcion->load('renglones');
         });
     }
 

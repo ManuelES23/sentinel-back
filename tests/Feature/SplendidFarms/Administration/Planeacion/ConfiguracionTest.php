@@ -10,7 +10,7 @@ use App\Models\Planeacion\BodegaDestino;
 use App\Models\Planeacion\ConfiguracionPlaneacion;
 use App\Models\Planeacion\GrupoBalance;
 use App\Models\Planeacion\Presentacion;
-use App\Models\Planeacion\ProgramaCambio;
+use App\Models\Planeacion\ProgramaEmbarque;
 use App\Models\Planeacion\ProgramaNecesidad;
 use App\Models\Planeacion\ProgramaSemanal;
 use App\Models\Planeacion\ProgramaViaje;
@@ -43,7 +43,7 @@ class ConfiguracionTest extends TestCase
         $this->crearElote();
     }
 
-    private function conPermisos(array $permisos = ['view', 'configurar']): void
+    private function conPermisos(array $permisos = ['configuracion' => ['view', 'editar']]): void
     {
         Sanctum::actingAs($this->usuarioCon($permisos));
     }
@@ -62,7 +62,7 @@ class ConfiguracionTest extends TestCase
 
     public function test_lee_toda_la_configuracion(): void
     {
-        $this->conPermisos(['view']);
+        $this->conPermisos(['configuracion' => ['view']]);
         $empaque = $this->receta('R-1', 'Bulk RPC');
         $this->receta('R-2', 'Otra cosa', 'produccion');
         $borrada = $this->receta('R-3', 'Receta borrada');
@@ -101,11 +101,78 @@ class ConfiguracionTest extends TestCase
         $this->assertSame(1100, $datos['cajas_por_carga']);
     }
 
-    public function test_sin_permiso_configurar_es_403(): void
+    public function test_configuracion_trae_temporadas_cultivos_y_variedades(): void
     {
-        $this->conPermisos(['view']);
+        // Solo `configuracion.view`: no hace falta poder ver el Tablero.
+        $this->conPermisos(['configuracion' => ['view']]);
+        $grupo = GrupoBalance::where('cultivo_id', $this->cultivo->id)->where('nombre', 'Amarillo / Bicolor')->firstOrFail();
+        $otro = Cultivo::create(['nombre' => 'Cultivo sin temporada ni catálogo']);
+        $sinGrupo = Variedad::create(['cultivo_id' => $this->cultivo->id, 'nombre' => 'Morado', 'user_id' => $this->autor->id]);
 
-        $this->putJson(self::URL.'/configuracion/cajas-por-carga', ['valor' => 900])->assertForbidden();
+        $datos = $this->getJson(self::URL.'/configuracion')->assertOk()->json('data');
+
+        $this->assertSame([[
+            'id' => $this->temporada->id,
+            'nombre' => 'OI 2026-2027',
+            'cultivo_id' => $this->cultivo->id,
+            'locacion' => 'Los Mochis',
+            'fecha_inicio' => '2026-11-23',
+            'fecha_fin' => '2027-06-05',
+        ]], $datos['temporadas']);
+        $this->assertSame([['id' => $this->cultivo->id, 'nombre' => 'Elote Dulce']], $datos['cultivos']);
+        $this->assertNotContains($otro->id, collect($datos['cultivos'])->pluck('id')->all());
+
+        $this->assertCount(4, $datos['variedades']);
+        $amarillo = collect($datos['variedades'])->firstWhere('nombre', 'Amarillo');
+        $this->assertSame(
+            ['id' => $this->variedades['Amarillo']->id, 'cultivo_id' => $this->cultivo->id, 'nombre' => 'Amarillo', 'grupo_id' => $grupo->id],
+            $amarillo,
+        );
+        // Sin grupo explícito, la clave es la implícita «v{id}», igual que en el programa.
+        $this->assertSame('v'.$sinGrupo->id, collect($datos['variedades'])->firstWhere('nombre', 'Morado')['grupo_id']);
+    }
+
+    public function test_configuracion_incluye_temporadas_abiertas_que_no_tocan_la_semana_y_excluye_cerradas_y_borradas(): void
+    {
+        $this->conPermisos(['configuracion' => ['view']]);
+        $otro = Cultivo::create(['nombre' => 'Fresa']);
+        $campos = ['locacion' => 'Guasave', 'año_inicio' => 2027, 'año_fin' => 2028, 'user_id' => $this->autor->id];
+        $lejana = Temporada::create($campos + [
+            'cultivo_id' => $otro->id, 'nombre' => 'PV 2027', 'folio_temporada' => $otro->id.'-001',
+            'fecha_inicio' => '2027-08-01', 'fecha_fin' => '2028-01-31', 'estado' => 'abierta',
+        ]);
+        Temporada::create($campos + [
+            'cultivo_id' => $otro->id, 'nombre' => 'Cerrada', 'folio_temporada' => $otro->id.'-002',
+            'fecha_inicio' => '2026-01-01', 'fecha_fin' => '2026-05-01', 'estado' => 'cerrada',
+        ]);
+        $borrada = Temporada::create($campos + [
+            'cultivo_id' => $otro->id, 'nombre' => 'Borrada', 'folio_temporada' => $otro->id.'-003',
+            'fecha_inicio' => '2027-02-01', 'fecha_fin' => '2027-03-01', 'estado' => 'abierta',
+        ]);
+        $borrada->delete();
+        $zanahoria = Cultivo::create(['nombre' => 'Zanahoria']);
+        Presentacion::create(['cultivo_id' => $zanahoria->id, 'nombre' => 'Bolsa 1 kg', 'orden' => 1, 'is_active' => true]);
+        Variedad::create(['cultivo_id' => $otro->id, 'nombre' => 'Albion', 'user_id' => $this->autor->id]);
+        Variedad::create(['cultivo_id' => $otro->id, 'nombre' => 'Variedad borrada', 'user_id' => $this->autor->id])->delete();
+
+        $datos = $this->getJson(self::URL.'/configuracion')->assertOk()->json('data');
+
+        // Ordenadas por fecha de inicio: la de elote (nov 2026) y luego la lejana (ago 2027).
+        $this->assertSame([$this->temporada->id, $lejana->id], collect($datos['temporadas'])->pluck('id')->all());
+        // Cultivos con temporada abierta o con presentaciones, por nombre.
+        $this->assertSame(['Elote Dulce', 'Fresa', 'Zanahoria'], collect($datos['cultivos'])->pluck('nombre')->all());
+        $nombres = collect($datos['variedades'])->pluck('nombre')->all();
+        $this->assertContains('Albion', $nombres);
+        $this->assertNotContains('Variedad borrada', $nombres);
+    }
+
+    public function test_sin_permiso_editar_es_403(): void
+    {
+        $this->conPermisos(['configuracion' => ['view'], 'plan-corte' => ['view', 'capturar']]);
+
+        $this->putJson(self::URL.'/configuracion/cajas-por-carga', ['valor' => 900])
+            ->assertForbidden()
+            ->assertJsonPath('message', 'No tienes permiso para esta acción de Planeación.');
         $this->postJson(self::URL.'/configuracion/bodegas', ['nombre' => 'Chicago'])->assertForbidden();
         $this->putJson(self::URL.'/configuracion/grupos', ['cultivo_id' => $this->cultivo->id, 'grupos' => []])->assertForbidden();
         $this->assertDatabaseMissing('plan_bodegas_destino', ['nombre' => 'Chicago']);
@@ -114,7 +181,8 @@ class ConfiguracionTest extends TestCase
 
     public function test_sin_permiso_ver_no_lee_configuracion_ni_clientes(): void
     {
-        $this->conPermisos(['configurar']);
+        // Editar la configuración no da `configuracion.view`; los clientes piden `necesidades-venta.view`.
+        $this->conPermisos(['configuracion' => ['editar'], 'tablero-semanal' => ['view']]);
 
         $this->getJson(self::URL.'/configuracion')->assertForbidden();
         $this->getJson(self::URL.'/clientes?q=wal')->assertForbidden();
@@ -354,16 +422,25 @@ class ConfiguracionTest extends TestCase
         $this->conPermisos();
         $programa = ProgramaSemanal::create(['lunes' => '2026-11-23']);
         $this->necesidad($programa, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [100, 0, 0, 0, 0, 0]);
+        ProgramaEmbarque::create([
+            'programa_id' => $programa->id,
+            'cultivo_id' => $this->cultivo->id,
+            'bodega_id' => $this->bodega('Nogales')->id,
+            'tipo' => 'full',
+            'dia' => 1,
+            'cargas' => 2,
+        ]);
+        // Un viaje viejo (tabla sin uso) también la ocupa: su llave foránea no dejaría borrarla.
         ProgramaViaje::create([
             'programa_id' => $programa->id,
             'dia' => 1,
-            'bodega_id' => $this->bodega('Nogales')->id,
+            'bodega_id' => $this->bodega('Nacional')->id,
             'cultivo_id' => $this->cultivo->id,
             'tipo' => 'full',
             'cajas_caja_1' => 500,
         ]);
 
-        foreach (['Texas', 'Nogales'] as $nombre) {
+        foreach (['Texas', 'Nogales', 'Nacional'] as $nombre) {
             $this->deleteJson(self::URL.'/configuracion/bodegas/'.$this->bodega($nombre)->id)
                 ->assertStatus(422)
                 ->assertJsonPath('message', 'Está en uso; desactívalo');
@@ -398,22 +475,21 @@ class ConfiguracionTest extends TestCase
         $this->assertSame(1, ProgramaNecesidad::count());
     }
 
-    public function test_la_configuracion_no_registra_cambios_ni_emite_evento(): void
+    public function test_la_configuracion_no_emite_evento(): void
     {
         $this->conPermisos();
         Event::fake();
-        $programa = ProgramaSemanal::create(['lunes' => '2026-11-23', 'junta_registrada_at' => now()]);
+        ProgramaSemanal::create(['lunes' => '2026-11-23']);
 
         $this->postJson(self::URL.'/configuracion/bodegas', ['nombre' => 'Chicago'])->assertCreated();
         $this->putJson(self::URL.'/configuracion/cajas-por-carga', ['valor' => 1000])->assertOk();
 
-        $this->assertSame(0, ProgramaCambio::where('programa_id', $programa->id)->count());
         Event::assertNotDispatched(ProgramaSemanalUpdated::class);
     }
 
     public function test_clientes_solo_de_sbp(): void
     {
-        $this->conPermisos(['view']);
+        $this->conPermisos(['necesidades-venta' => ['view']]);
         $sf = Enterprise::firstOrCreate(['slug' => 'splendidfarms'], ['name' => 'Splendid Farms', 'description' => 'SF', 'is_active' => true]);
         $sbp = Enterprise::create(['slug' => 'splendidbyporvenir', 'name' => 'Splendid by Porvenir', 'description' => 'SBP', 'is_active' => true]);
 
@@ -430,7 +506,7 @@ class ConfiguracionTest extends TestCase
 
     public function test_clientes_sin_busqueda_devuelve_los_primeros_20_en_orden(): void
     {
-        $this->conPermisos(['view']);
+        $this->conPermisos(['necesidades-venta' => ['view']]);
         $sbp = Enterprise::create(['slug' => 'splendidbyporvenir', 'name' => 'Splendid by Porvenir', 'description' => 'SBP', 'is_active' => true]);
         for ($i = 25; $i >= 1; $i--) {
             CrmCliente::create(['empresa_id' => $sbp->id, 'nombre' => sprintf('Cliente %02d', $i)]);
@@ -445,7 +521,7 @@ class ConfiguracionTest extends TestCase
 
     public function test_clientes_sin_empresa_sbp_devuelve_lista_vacia(): void
     {
-        $this->conPermisos(['view']);
+        $this->conPermisos(['necesidades-venta' => ['view']]);
 
         $this->getJson(self::URL.'/clientes?q=wal')->assertOk()->assertJsonPath('data', []);
     }

@@ -15,7 +15,7 @@ class ProgramaSemanal extends Model
 {
     protected $table = 'programas_semanales';
 
-    protected $fillable = ['lunes', 'junta_registrada_at', 'junta_registrada_por'];
+    protected $fillable = ['lunes', 'notas', 'junta_registrada_at', 'junta_registrada_por'];
 
     protected $casts = [
         'lunes' => 'date:Y-m-d',
@@ -36,6 +36,11 @@ class ProgramaSemanal extends Model
     public function viajes(): HasMany
     {
         return $this->hasMany(ProgramaViaje::class, 'programa_id');
+    }
+
+    public function embarques(): HasMany
+    {
+        return $this->hasMany(ProgramaEmbarque::class, 'programa_id');
     }
 
     public function acuerdos(): HasMany

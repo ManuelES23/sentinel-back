@@ -481,12 +481,8 @@ class PendingApprovalController extends Controller
      * ¿Puede ver el detalle de esta solicitud? Quien decide su paso actual, quien ya decidió algún paso (su historial)
      * o RH. El solicitante nunca (tampoco por un usuario compartido): el comentario del visto bueno no es para él.
      */
-    private function puedeVerVacacion($user, VacationRequest $detalle): bool
+    private function puedeVerVacacion($user, VacationRequest $solicitud): bool
     {
-        // El detalle carga al solicitante con pocas columnas (sin reports_to ni user_id) y las reglas de
-        // esSolicitante/puedeDecidir necesitan el empleado completo: se revisa sobre una copia completa.
-        $solicitud = VacationRequest::with(['employee.department', 'approvals'])->find($detalle->id);
-
         if ($this->aprobadorVac()->esSolicitante($user, $solicitud)) {
             return false;
         }
@@ -498,10 +494,13 @@ class PendingApprovalController extends Controller
         $empleadoId = $user->employee()->value('id');
         $decidioUnPaso = $solicitud->approvals->contains(fn ($paso) => (int) $paso->decided_by === (int) $user->id
             || ($empleadoId !== null && (int) $paso->decided_by_employee_id === (int) $empleadoId));
-        if ($decidioUnPaso) {
-            return true;
-        }
 
+        return $decidioUnPaso || $this->puedeDecidirVacacion($user, $solicitud);
+    }
+
+    /** ¿Le toca a este usuario decidir (aprobar o rechazar) el paso actual de la solicitud? */
+    private function puedeDecidirVacacion($user, VacationRequest $solicitud): bool
+    {
         $paso = $solicitud->status === 'pending' ? $this->cadenaVac()->pasoActual($solicitud) : null;
 
         return $paso !== null && ($this->aprobadorVac()->puedeDecidir($user, $solicitud, $paso)
@@ -1150,8 +1149,8 @@ class PendingApprovalController extends Controller
     public function show(Request $request, string $type, int $id): JsonResponse
     {
         $item = match ($type) {
+            // El empleado va completo (reports_to, user_id…): las reglas de quién puede ver o decidir lo necesitan.
             'vacation_request' => VacationRequest::with([
-                'employee:id,first_name,last_name,employee_number,department_id,position_id,photo,hire_date',
                 'employee.department:id,name',
                 'employee.position:id,name',
                 'approvals.decider:id,name',
@@ -1189,7 +1188,7 @@ class PendingApprovalController extends Controller
         }
 
         $detail = match ($type) {
-            'vacation_request' => $this->formatVacationDetail($item),
+            'vacation_request' => $this->formatVacationDetail($item, $request->user()),
             'supply_settlement' => $this->formatLiquidacionDetail($item, $request->user()),
             'incident' => $this->formatIncidentDetail($item),
             'purchase_order' => $this->formatPurchaseOrderDetail($item),
@@ -1505,7 +1504,7 @@ class PendingApprovalController extends Controller
 
     // ===== Formateo de detalle =====
 
-    private function formatVacationDetail($item): array
+    private function formatVacationDetail($item, $user): array
     {
         return [
             'id' => $item->id,
@@ -1540,6 +1539,10 @@ class PendingApprovalController extends Controller
             ])->values()->all(),
             'rejection_reason' => $item->rejection_reason,
             'created_at' => $item->created_at?->toISOString(),
+            // El mismo detalle B del portal (saldo, desglose, historial, coincidencias y cadena) para quien autoriza
+            // con su usuario; `can_decide` dice si le toca decidir ahora (si no, la pantalla es de solo lectura).
+            'review' => PresentadorPortalVacaciones::paraRevisar($item, true),
+            'can_decide' => $this->puedeDecidirVacacion($user, $item),
         ];
     }
 

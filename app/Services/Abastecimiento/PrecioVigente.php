@@ -16,10 +16,13 @@ use Illuminate\Support\Collection;
  */
 class PrecioVigente
 {
-    /** El precio del tipo de carga con la mayor `vigencia_inicio` menor o igual a la fecha. */
-    public function para(Convenio $convenio, int $tipoCargaId, string $fecha): ?ConvenioPrecio
+    /**
+     * El precio del tipo de carga con la mayor `vigencia_inicio` menor o igual a la fecha.
+     * Con `$calibreId`, solo cuentan los precios de ese calibre (convenios por calibre).
+     */
+    public function para(Convenio $convenio, int $tipoCargaId, string $fecha, ?int $calibreId = null): ?ConvenioPrecio
     {
-        return self::enColeccion($this->precios($convenio), $tipoCargaId, $fecha);
+        return self::enColeccion($this->precios($convenio), $tipoCargaId, $fecha, $calibreId);
     }
 
     /**
@@ -37,11 +40,14 @@ class PrecioVigente
      * Versión pura de `para`: el precio vigente del tipo a la fecha entre los
      * precios dados (de un solo convenio), sin tocar la base.
      *
+     * Con `$calibreId` nulo solo cuentan los precios sin calibre (convenios
+     * clásicos); con calibre, solo los de ese calibre.
+     *
      * @param  Collection<int, ConvenioPrecio>  $precios
      */
-    public static function enColeccion(Collection $precios, int $tipoCargaId, string $fecha): ?ConvenioPrecio
+    public static function enColeccion(Collection $precios, int $tipoCargaId, string $fecha, ?int $calibreId = null): ?ConvenioPrecio
     {
-        return self::delTipo($precios, $tipoCargaId)
+        return self::delTipo($precios, $tipoCargaId, $calibreId)
             ->filter(fn (ConvenioPrecio $p) => $p->vigencia_inicio->format('Y-m-d') <= $fecha)
             ->last();
     }
@@ -49,10 +55,12 @@ class PrecioVigente
     /**
      * Versión pura de `principal`: el tipo principal es el primer renglón marcado
      * (o el primero por id) y su precio vigente a la fecha, o su primera vigencia.
+     * El tipo principal es uno por convenio, sin importar el calibre; `$calibreId`
+     * solo filtra las vigencias de ese tipo (nulo = las de los convenios clásicos).
      *
      * @param  Collection<int, ConvenioPrecio>  $precios
      */
-    public static function principalEnColeccion(Collection $precios, string $fecha): ?ConvenioPrecio
+    public static function principalEnColeccion(Collection $precios, string $fecha, ?int $calibreId = null): ?ConvenioPrecio
     {
         $porId = $precios->sortBy('id')->values();
         $tipo = ($porId->firstWhere('es_principal', true) ?? $porId->first())?->tipo_carga_id;
@@ -61,7 +69,7 @@ class PrecioVigente
             return null;
         }
 
-        return self::enColeccion($precios, $tipo, $fecha) ?? self::delTipo($precios, $tipo)->first();
+        return self::enColeccion($precios, $tipo, $fecha, $calibreId) ?? self::delTipo($precios, $tipo, $calibreId)->first();
     }
 
     /** @return Collection<int, ConvenioPrecio> */
@@ -71,11 +79,12 @@ class PrecioVigente
         return ConvenioPrecio::where('convenio_id', $convenio->id)->get();
     }
 
-    /** Vigencias vivas del tipo, de la más antigua a la más reciente. */
-    private static function delTipo(Collection $precios, int $tipoCargaId): Collection
+    /** Vigencias vivas del tipo (y calibre; nulo = sin calibre), de la más antigua a la más reciente. */
+    private static function delTipo(Collection $precios, int $tipoCargaId, ?int $calibreId = null): Collection
     {
         return $precios
-            ->filter(fn (ConvenioPrecio $p) => (int) $p->tipo_carga_id === $tipoCargaId)
+            ->filter(fn (ConvenioPrecio $p) => (int) $p->tipo_carga_id === $tipoCargaId
+                && ($p->calibre_id === null ? null : (int) $p->calibre_id) === $calibreId)
             ->sortBy(fn (ConvenioPrecio $p) => $p->vigencia_inicio->format('Y-m-d'))
             ->values();
     }
