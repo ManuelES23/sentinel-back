@@ -516,13 +516,14 @@ class ImportacionCatalogoTest extends TestCase
         $this->assertDatabaseCount('crm_productos', 1);
     }
 
-    public function test_token_en_uso_por_otro_envio_da_422(): void
+    public function test_importacion_en_curso_en_la_empresa_da_409_y_no_gasta_el_token(): void
     {
         $token = $this->subir($this->xlsx([['1', 'A', 'M', 'L', null]]))->json('data.token');
-        $candado = Cache::lock('crm_import_'.$token.'_candado', 300);
+        $candado = Cache::lock('crm_import_catalogo_empresa_'.$this->enterprise->id, 300);
         $this->assertTrue($candado->get());
 
-        $this->importar($token)->assertStatus(422);
+        $this->importar($token)->assertStatus(409)
+            ->assertJsonPath('message', 'Ya hay una importación del catálogo en curso en esta empresa; inténtalo en un momento.');
         $this->assertDatabaseCount('crm_productos', 0);
 
         $candado->release();

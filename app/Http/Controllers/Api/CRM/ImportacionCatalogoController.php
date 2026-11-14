@@ -71,10 +71,11 @@ class ImportacionCatalogoController extends CrmBaseController
         $desactivar = (bool) ($datos['desactivar_faltantes'] ?? false);
         $this->limpiarVencidos();
 
-        // Un solo request a la vez por token: un doble envío no puede correr dos importaciones.
-        $candado = Cache::lock($this->llave($datos['token']).'_candado', 300);
+        // Una sola importación a la vez por empresa (dos revisiones distintas chocarían en el índice único);
+        // el token además se consume una sola vez más abajo. Con el candado ocupado el token no se gasta.
+        $candado = Cache::lock('crm_import_catalogo_empresa_'.$empresaId, 300);
         if (! $candado->get()) {
-            return $this->rechazar(self::VENCIDA, 422);
+            return $this->rechazar('Ya hay una importación del catálogo en curso en esta empresa; inténtalo en un momento.', 409);
         }
         try {
             return $this->importarConCandado($request, $empresaId, $datos['token'], $elegidas, $desactivar);
@@ -177,7 +178,7 @@ class ImportacionCatalogoController extends CrmBaseController
 
     private function llave(string $token): string
     {
-        return 'crm_import_'.$token;
+        return 'crm_import_catalogo_'.$token;
     }
 
     private function guardarToken(string $token, Request $request, int $empresaId, string $ruta, string $huella): void
