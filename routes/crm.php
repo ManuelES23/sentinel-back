@@ -123,8 +123,14 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
 
     // -------------------------------------------------
     // CLIENTES
-    // CRUD + resumen + asignar-vendedor
+    // CRUD + resumen + asignar-vendedor + importar Excel (revisar → importar)
     // -------------------------------------------------
+    Route::post('clientes/importar/revisar', [
+        App\Http\Controllers\Api\CRM\ImportacionClientesController::class, 'revisar'
+    ]);
+    Route::post('clientes/importar', [
+        App\Http\Controllers\Api\CRM\ImportacionClientesController::class, 'importar'
+    ]);
     Route::get('clientes/{cliente}/resumen', [
         App\Http\Controllers\Api\CRM\ClienteController::class, 'resumen'
     ]);
