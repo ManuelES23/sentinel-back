@@ -14,9 +14,13 @@ use App\Models\Abastecimiento\Variedad;
 use App\Models\Abastecimiento\VariedadCalibre;
 use App\Models\Abastecimiento\Recepcion;
 use App\Models\User;
+use App\Services\Abastecimiento\ReglasRecepcion;
 use App\Services\Abastecimiento\ValidadorImportacionRecepciones;
+use Illuminate\Database\Events\TransactionBeginning;
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Validation\ValidationException;
 use Laravel\Sanctum\Sanctum;
 use Tests\Concerns\CreatesAbastecimientoFixtures;
 use Tests\TestCase;
@@ -63,10 +67,10 @@ class ConveniosCalibresTest extends TestCase
 
     private function calibre(string $nombre, int $orden = 0, bool $activo = true, ?Variedad $variedad = null): VariedadCalibre
     {
-        return VariedadCalibre::create([
-            'variedad_id' => ($variedad ?? $this->variedad)->id,
-            'nombre' => $nombre, 'orden' => $orden, 'is_active' => $activo,
-        ]);
+        $calibre = $this->crearCalibre($variedad ?? $this->variedad, $nombre, $activo);
+        $calibre->update(['orden' => $orden]);
+
+        return $calibre;
     }
 
     private function cuerpo(array $over = []): array
@@ -412,7 +416,11 @@ class ConveniosCalibresTest extends TestCase
         $this->assertEquals(1300, $res->json('data.indicadores.comprometido'));
         $this->assertEquals(150, $res->json('data.indicadores.pactado'));
         $porCalibre = collect($res->json('data.indicadores.calibres'))->keyBy('calibre_id');
-        $this->assertEquals(['calibre_id' => $jumbo->id, 'nombre' => 'Jumbo', 'pactado' => 100, 'comprometido' => 800], $porCalibre[$jumbo->id]);
+        // Plan 2 (B4): el renglón suma recibido, avance y valor recibido (sin recepciones: 0).
+        $this->assertEquals([
+            'calibre_id' => $jumbo->id, 'nombre' => 'Jumbo', 'pactado' => 100, 'comprometido' => 800,
+            'recibido' => 0, 'avance' => 0, 'valor_recibido' => 0,
+        ], $porCalibre[$jumbo->id]);
         $this->assertEquals(500, $porCalibre[$grande->id]['comprometido']);
     }
 
@@ -502,9 +510,7 @@ class ConveniosCalibresTest extends TestCase
         $this->assertSame(2, ConvenioPrecio::withTrashed()->where('convenio_id', $convenio->id)->count());
     }
 
-    // ---- Recepciones: bloqueadas hasta el plan 2 ----
-
-    private const MENSAJE_CALIBRE = 'Este convenio es por calibre: la captura de recepciones por calibre llega en la siguiente entrega.';
+    // ---- Recepciones: reglas por tipo de convenio ----
 
     private function convenioPorCalibre(): Convenio
     {
@@ -514,29 +520,57 @@ class ConveniosCalibresTest extends TestCase
         ]);
     }
 
-    public function test_no_se_captura_recepcion_en_convenio_por_calibre(): void
+    public function test_recepcion_clasica_con_renglones_da_422(): void
     {
-        $convenio = $this->convenioPorCalibre();
-        $cuerpo = [
-            'convenio_id' => $convenio->id, 'fecha' => '2026-06-10',
-            'tipo_carga_id' => $this->tipo()->id, 'cantidad' => 10,
-        ];
-
-        $this->postJson($this->url('recepciones'), $cuerpo)
-            ->assertStatus(422)
-            ->assertJsonValidationErrors(['convenio_id'])
-            ->assertJsonPath('errors.convenio_id.0', self::MENSAJE_CALIBRE);
-        $this->assertSame(0, Recepcion::count());
-
-        // Tampoco se pasa una recepción existente a un convenio por calibre.
         $clasico = $this->crearConvenio($this->sbp, [
             'temporada_id' => $this->temporada->id, 'productor_id' => $this->productor->id, 'variedad_id' => $this->variedad->id,
         ]);
-        $recepcion = $this->crearRecepcion($clasico);
-        $this->putJson($this->url('recepciones/'.$recepcion->id), $cuerpo)
-            ->assertStatus(422)
-            ->assertJsonPath('errors.convenio_id.0', self::MENSAJE_CALIBRE);
-        $this->assertSame($clasico->id, $recepcion->refresh()->convenio_id);
+
+        try {
+            ReglasRecepcion::validar($clasico, [
+                'fecha' => '2026-06-10', 'tipo_carga_id' => $this->tipo()->id, 'cantidad' => 10,
+                'renglones' => [['calibre_id' => $this->calibre('A')->id, 'cantidad' => 10]],
+            ]);
+            $this->fail('Se esperaba una ValidationException.');
+        } catch (ValidationException $e) {
+            $this->assertSame('Este convenio no es por calibre.', $e->errors()['renglones'][0]);
+        }
+    }
+
+    public function test_reglas_aceptan_renglones_y_el_importe_suma_cada_calibre(): void
+    {
+        $a = $this->calibre('A');
+        $b = $this->calibre('B');
+        $convenio = $this->crearConvenioPorCalibre($this->sbp, [
+            ['calibre' => $a, 'volumen' => 100, 'precio' => 20.0],
+            ['calibre' => $b, 'volumen' => 100, 'precio' => 35.5],
+        ]);
+        $renglones = [
+            ['calibre_id' => $a->id, 'cantidad' => 10],
+            ['calibre_id' => $b->id, 'cantidad' => 4],
+        ];
+
+        ReglasRecepcion::validar($convenio, [
+            'fecha' => '2026-06-10', 'tipo_carga_id' => $this->tipo()->id, 'renglones' => $renglones,
+        ]);
+
+        $recepcion = $this->crearRecepcionConRenglones($convenio, $renglones);
+        $this->assertSame(342.0, ReglasRecepcion::importeRenglones($convenio, $recepcion));
+
+        // Un renglón sin precio a la fecha de la recepción deja el importe en nulo.
+        $recepcion->update(['fecha' => '2026-05-15']);
+        $this->assertNull(ReglasRecepcion::importeRenglones($convenio, $recepcion->refresh()->load('renglones')));
+    }
+
+    public function test_recepcion_por_calibre_con_cantidad_y_sin_renglones_da_422(): void
+    {
+        $convenio = $this->convenioPorCalibre();
+
+        $this->postJson($this->url('recepciones'), [
+            'convenio_id' => $convenio->id, 'fecha' => '2026-06-10',
+            'tipo_carga_id' => $this->tipo()->id, 'cantidad' => 10,
+        ])->assertStatus(422)->assertJsonPath('errors.renglones.0', 'Captura la recepción por calibre.');
+        $this->assertSame(0, Recepcion::count());
     }
 
     public function test_importacion_rechaza_convenio_por_calibre(): void
@@ -549,7 +583,10 @@ class ConveniosCalibresTest extends TestCase
         ]]);
 
         $this->assertSame('error', $r['filas'][0]['estado']);
-        $this->assertSame([self::MENSAJE_CALIBRE], $r['filas'][0]['errores']);
+        $this->assertSame(
+            ['Este convenio es por calibre: la importación por calibre llegará con el formato de Excel.'],
+            $r['filas'][0]['errores'],
+        );
         $this->assertSame(1, $r['resumen']['con_error']);
     }
 
@@ -566,5 +603,149 @@ class ConveniosCalibresTest extends TestCase
         $id = $this->postJson($this->url('recepciones'), $cuerpo)->assertCreated()->json('data.id');
         $this->putJson($this->url('recepciones/'.$id), $cuerpo + ['notas' => 'ok'])->assertOk();
         $this->assertSame(1, Recepcion::count());
+    }
+
+    // ---- Edición de un convenio por calibre con recepciones (C7, C14) ----
+
+    /**
+     * Convenio activo por calibre (Jumbo y Grande, precio desde el 1 de junio) con una recepción
+     * el 10 de junio que solo trae renglón de Jumbo.
+     *
+     * @return array{0: Convenio, 1: VariedadCalibre, 2: VariedadCalibre}
+     */
+    private function porCalibreConRecepcion(): array
+    {
+        $jumbo = $this->calibre('Jumbo', 1);
+        $grande = $this->calibre('Grande', 2);
+        $convenio = $this->crearConvenioPorCalibre($this->sbp, [
+            ['calibre' => $jumbo, 'volumen' => 100],
+            ['calibre' => $grande, 'volumen' => 100],
+        ], ['temporada_id' => $this->temporada->id, 'productor_id' => $this->productor->id, 'variedad_id' => $this->variedad->id]);
+        $this->crearRecepcionConRenglones($convenio, [['calibre_id' => $jumbo->id, 'cantidad' => 10]], ['fecha' => '2026-06-10']);
+
+        return [$convenio, $jumbo, $grande];
+    }
+
+    public function test_no_se_quita_un_calibre_con_recepciones(): void
+    {
+        [$convenio, $jumbo, $grande] = $this->porCalibreConRecepcion();
+
+        $this->putJson($this->url("convenios/{$convenio->id}"), $this->cuerpoCalibres([[$grande, 100]]))
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['calibres'])
+            ->assertJsonPath('errors.calibres.0', 'No se puede quitar un calibre que ya tiene recepciones.');
+        $this->assertEqualsCanonicalizing(
+            [$jumbo->id, $grande->id],
+            ConvenioCalibre::where('convenio_id', $convenio->id)->pluck('calibre_id')->all(),
+        );
+
+        // Grande no tiene renglones: ese sí se quita.
+        $this->putJson($this->url("convenios/{$convenio->id}"), $this->cuerpoCalibres([[$jumbo, 100]]))
+            ->assertOk()->assertJsonCount(1, 'data.calibres')->assertJsonPath('data.calibres.0.calibre_id', $jumbo->id);
+    }
+
+    public function test_se_agrega_un_calibre_con_recepciones(): void
+    {
+        [$convenio, $jumbo, $grande] = $this->porCalibreConRecepcion();
+        $chico = $this->calibre('Chico', 3);
+
+        // Agregar un calibre y cambiar volúmenes se permite (C14).
+        $this->putJson($this->url("convenios/{$convenio->id}"), $this->cuerpoCalibres([[$jumbo, 150], [$grande, 80], [$chico, 40]]))
+            ->assertOk()
+            ->assertJsonCount(3, 'data.calibres')
+            ->assertJsonPath('data.calibres.0.calibre_id', $jumbo->id)
+            ->assertJsonPath('data.calibres.0.pactado', 150);
+        $this->assertSame(3, ConvenioCalibre::where('convenio_id', $convenio->id)->count());
+    }
+
+    public function test_cobertura_por_calibre_bloquea_un_precio_que_deja_renglones_sin_precio(): void
+    {
+        [$convenio, $jumbo, $grande] = $this->porCalibreConRecepcion();
+        $tipo = $this->tipo()->id;
+        $precios = fn (string $desdeJumbo, string $desdeGrande) => [
+            ['tipo_carga_id' => $tipo, 'calibre_id' => $jumbo->id, 'precio' => 100, 'vigencia_inicio' => $desdeJumbo],
+            ['tipo_carga_id' => $tipo, 'calibre_id' => $grande->id, 'precio' => 100, 'vigencia_inicio' => $desdeGrande],
+        ];
+
+        // El precio de Jumbo empezaría el 15: el renglón de Jumbo del 10 se quedaría sin precio.
+        $this->putJson($this->url("convenios/{$convenio->id}"), $this->cuerpoCalibres([[$jumbo, 100], [$grande, 100]], [
+            'precios' => $precios('2026-06-15', '2026-06-01'),
+        ]))
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['precios'])
+            ->assertJsonPath('errors.precios.0', 'No se puede: el precio dejaría recepciones ya capturadas sin precio vigente.');
+
+        // Grande no tiene renglones: su precio sí puede empezar después.
+        $this->putJson($this->url("convenios/{$convenio->id}"), $this->cuerpoCalibres([[$jumbo, 100], [$grande, 100]], [
+            'precios' => $precios('2026-06-01', '2026-06-15'),
+        ]))->assertOk();
+    }
+
+    public function test_nueva_vigencia_de_precio_por_calibre_con_recepciones_se_acepta(): void
+    {
+        [$convenio, $jumbo, $grande] = $this->porCalibreConRecepcion();
+        $body = $this->cuerpoCalibres([[$jumbo, 100], [$grande, 100]]);
+        $body['precios'][] = ['tipo_carga_id' => $this->tipo()->id, 'calibre_id' => $jumbo->id, 'precio' => 130, 'vigencia_inicio' => '2026-06-20'];
+
+        $this->putJson($this->url("convenios/{$convenio->id}"), $body)->assertOk()->assertJsonCount(3, 'data.precios');
+        $this->assertSame(3, ConvenioPrecio::where('convenio_id', $convenio->id)->count());
+    }
+
+    /**
+     * Carrera: una recepción confirmada entre la primera lectura y la escritura no debe quedar huérfana.
+     *
+     * Técnica: el convenio no tiene recepciones, así que la revisión previa (fuera de la transacción) pasa.
+     * Un listener de `TransactionBeginning` crea la recepción justo cuando `update` abre su transacción, es
+     * decir, después de esa revisión y antes de escribir; así la única forma de dar 422 es repetir la revisión
+     * dentro de la transacción (tras el `lockForUpdate` del convenio). Sin esa recomprobación el PUT da 200.
+     * El listener actúa una sola vez por caso (`$pendiente` se limpia antes de crear, porque la recepción abre su
+     * propia transacción). Al dar 422, la transacción de `update` se deshace y con ella esa recepción. En SQLite `lockForUpdate` no hace nada: aquí se prueba la recomprobación, no el bloqueo;
+     * en MySQL el bloqueo exclusivo serializa la edición con el `sharedLock` de RecepcionController::store.
+     */
+    public function test_la_edicion_revisa_de_nuevo_dentro_de_la_transaccion(): void
+    {
+        $jumbo = $this->calibre('Jumbo', 1);
+        $grande = $this->calibre('Grande', 2);
+        $convenio = $this->crearConvenioPorCalibre($this->sbp, [
+            ['calibre' => $jumbo, 'volumen' => 100],
+            ['calibre' => $grande, 'volumen' => 100],
+        ], ['temporada_id' => $this->temporada->id, 'productor_id' => $this->productor->id, 'variedad_id' => $this->variedad->id]);
+
+        // Calibre de la recepción que se cuela en la próxima transacción (null = ninguna).
+        $pendiente = null;
+        Event::listen(TransactionBeginning::class, function () use (&$pendiente, $convenio) {
+            if ($pendiente === null) {
+                return;
+            }
+            $calibreId = $pendiente;
+            $pendiente = null;
+            $this->crearRecepcionConRenglones($convenio, [['calibre_id' => $calibreId, 'cantidad' => 5]], ['fecha' => '2026-06-10']);
+        });
+
+        // Quitar Grande mientras llega una recepción de Grande.
+        $pendiente = $grande->id;
+        $this->putJson($this->url("convenios/{$convenio->id}"), $this->cuerpoCalibres([[$jumbo, 100]]))
+            ->assertStatus(422)
+            ->assertJsonPath('errors.calibres.0', 'No se puede quitar un calibre que ya tiene recepciones.');
+        $this->assertEqualsCanonicalizing(
+            [$jumbo->id, $grande->id],
+            ConvenioCalibre::where('convenio_id', $convenio->id)->pluck('calibre_id')->all(),
+        );
+
+        // Mover el precio de Jumbo al 15 mientras llega una recepción de Jumbo del 10.
+        $pendiente = $jumbo->id;
+        $tipo = $this->tipo()->id;
+        $this->putJson($this->url("convenios/{$convenio->id}"), $this->cuerpoCalibres([[$jumbo, 100], [$grande, 100]], [
+            'precios' => [
+                ['tipo_carga_id' => $tipo, 'calibre_id' => $jumbo->id, 'precio' => 100, 'vigencia_inicio' => '2026-06-15'],
+                ['tipo_carga_id' => $tipo, 'calibre_id' => $grande->id, 'precio' => 100, 'vigencia_inicio' => '2026-06-01'],
+            ],
+        ]))
+            ->assertStatus(422)
+            ->assertJsonPath('errors.precios.0', 'No se puede: el precio dejaría recepciones ya capturadas sin precio vigente.');
+        $this->assertSame(
+            '2026-06-01',
+            ConvenioPrecio::where('convenio_id', $convenio->id)->where('calibre_id', $jumbo->id)->first()->vigencia_inicio->format('Y-m-d'),
+        );
     }
 }

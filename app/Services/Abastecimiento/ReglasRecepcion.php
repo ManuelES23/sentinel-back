@@ -19,8 +19,6 @@ class ReglasRecepcion
 
     public const MENSAJE_LIQUIDADA = 'Ya está en una liquidación: no se puede cambiar.';
 
-    public const MENSAJE_POR_CALIBRE = 'Este convenio es por calibre: la captura de recepciones por calibre llega en la siguiente entrega.';
-
     /**
      * Valida el estado FINAL de la recepción contra el convenio al que quedará ligada
      * (en una edición, el del registro o el nuevo si cambió `convenio_id`). El convenio
@@ -35,13 +33,6 @@ class ReglasRecepcion
     {
         if ($actual !== null) {
             self::exigirEditable($actual);
-        }
-
-        // Mientras no exista la captura por calibre (plan 2), un convenio por calibre no recibe
-        // recepciones: ni en el alta, ni en la edición, ni en la importación. Se corta aquí para
-        // que el mensaje sea el único y no se mezcle con errores de precio por calibre.
-        if ($convenio->usa_calibres) {
-            throw ValidationException::withMessages(['convenio_id' => self::MENSAJE_POR_CALIBRE]);
         }
 
         $errores = [];
@@ -60,6 +51,24 @@ class ReglasRecepcion
             $errores['fecha'] = 'La fecha no puede ser futura.';
         } elseif ($fecha < $inicio || $fecha > $fin) {
             $errores['fecha'] = 'La fecha está fuera del convenio ('.self::corta($inicio).' a '.self::corta($fin).').';
+        }
+
+        // Convenio por calibre: tipo de carga, cantidad, kilos y rezaga se validan por renglón.
+        if ($convenio->usa_calibres) {
+            if (($datos['renglones'] ?? null) === null && ($datos['cantidad'] ?? null) !== null) {
+                $errores['renglones'] = 'Captura la recepción por calibre.';
+            } else {
+                $errores += ReglasRenglonesRecepcion::errores($convenio, $datos, $precios, ! isset($errores['fecha']));
+            }
+            if ($errores !== []) {
+                throw ValidationException::withMessages($errores);
+            }
+
+            return;
+        }
+
+        if (($datos['renglones'] ?? null) !== null) {
+            $errores['renglones'] = 'Este convenio no es por calibre.';
         }
 
         if (! isset($errores['fecha'])
@@ -132,6 +141,12 @@ class ReglasRecepcion
         $porcentaje = $precio->porcentaje_productor === null ? 100.0 : (float) $precio->porcentaje_productor;
 
         return round($cantidad * (float) $precio->precio * $porcentaje / 100, 2);
+    }
+
+    /** Importe estimado de una recepción por calibre: Σ de sus renglones (nulo si a alguno le falta precio). */
+    public static function importeRenglones(Convenio $convenio, Recepcion $recepcion, ?PrecioVigente $precios = null): ?float
+    {
+        return ReglasRenglonesRecepcion::importe($convenio, $recepcion, $precios);
     }
 
     /** «22 jun». */

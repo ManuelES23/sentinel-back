@@ -3,18 +3,25 @@
 namespace App\Http\Controllers\Api\Abastecimiento;
 
 use App\Models\Abastecimiento\Convenio;
+use App\Models\Abastecimiento\ConvenioPrecio;
 use App\Models\Abastecimiento\Recepcion;
+use App\Models\Abastecimiento\RecepcionCalibre;
 use App\Models\Enterprise;
+use App\Services\Abastecimiento\CalibresConvenio;
 use App\Services\Abastecimiento\GeneradorFolio;
 use App\Services\Abastecimiento\ImportadorRecepciones;
 use App\Services\Abastecimiento\IndicadoresConvenio;
 use App\Services\Abastecimiento\LectorRecepciones;
 use App\Services\Abastecimiento\PrecioVigente;
 use App\Services\Abastecimiento\ReglasRecepcion;
+use App\Services\Abastecimiento\ReglasRenglonesRecepcion;
 use App\Services\Abastecimiento\Semanas;
 use App\Services\Abastecimiento\ValidadorImportacionRecepciones;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Arr;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
@@ -33,7 +40,7 @@ class RecepcionController extends AbastecimientoController
 
     /** Relaciones que necesita `presentar`; el convenio trae solo columnas mínimas. */
     private const CARGA = [
-        'convenio:id,folio,productor_id,variedad_id,unidad,moneda',
+        'convenio:id,folio,productor_id,variedad_id,unidad,moneda,usa_calibres',
         'convenio.productor:id,nombre,tipo',
         'convenio.variedad:id,nombre',
         'convenio.precios',
@@ -82,6 +89,7 @@ class RecepcionController extends AbastecimientoController
             ->orderByDesc('fecha')->orderByDesc('id');
 
         $pagina = $query->paginate(self::POR_PAGINA);
+        self::cargarRenglones($pagina->getCollection());
         $pagina->getCollection()->transform(fn (Recepcion $r) => $this->presentar($r));
 
         return response()->json(['success' => true, 'data' => $pagina]);
@@ -117,6 +125,8 @@ class RecepcionController extends AbastecimientoController
             ->with(['productor:id,nombre,tipo', 'variedad:id,nombre', 'precios.tipoCarga:id,nombre', 'metas'])
             ->orderBy('fecha_inicio')->orderBy('id')
             ->get();
+        // Calibres pactados y el de cada precio, solo para los convenios por calibre (con borrados).
+        CalibresConvenio::cargar($convenios);
 
         $hoy = Semanas::hoy();
         $lineas = IndicadoresConvenio::lineas($convenios);
@@ -147,6 +157,8 @@ class RecepcionController extends AbastecimientoController
                 'meta_semana' => $semana['meta'],
                 'recibido_semana' => $semana['recibido'],
                 'por_dia' => array_map(fn (float $v) => round($v, 2), $porDia),
+                'usa_calibres' => (bool) $c->usa_calibres,
+                'calibres' => $this->calibresDeFila($c),
             ];
         })->values();
 
@@ -155,9 +167,9 @@ class RecepcionController extends AbastecimientoController
             ->whereDate('fecha', '>=', $rango['lunes'])->whereDate('fecha', '<=', $rango['domingo'])
             ->with(self::CARGA)
             ->orderByDesc('fecha')->orderByDesc('id')
-            ->get()
-            ->map(fn (Recepcion $r) => $this->presentar($r))
-            ->values();
+            ->get();
+        self::cargarRenglones($recepciones);
+        $recepciones = $recepciones->map(fn (Recepcion $r) => $this->presentar($r))->values();
 
         return response()->json(['success' => true, 'data' => [
             'lunes' => $rango['lunes'],
@@ -266,13 +278,16 @@ class RecepcionController extends AbastecimientoController
         $recepcion = DB::transaction(function () use ($request, $empresa, $datos) {
             // Lectura compartida: un cambio de estatus del convenio espera a que termine el alta.
             $convenio = Convenio::deEmpresa($empresa->id)->sharedLock()->findOrFail($datos['convenio_id']);
-            ReglasRecepcion::validar($convenio, $datos);
+            ReglasRecepcion::validar($convenio, $datos, null, $this->preciosPorCalibre($convenio));
 
-            return Recepcion::create($datos + [
+            $recepcion = Recepcion::create($this->cabecera($convenio, $datos) + [
                 'enterprise_id' => $empresa->id,
                 'folio' => app(GeneradorFolio::class)->siguiente($empresa, 'RC'),
                 'created_by' => $request->user()?->id,
             ]);
+            $this->reemplazarRenglones($convenio, $recepcion, $datos);
+
+            return $recepcion;
         }, 3);
 
         $data = $this->presentarConSemana($recepcion);
@@ -291,10 +306,13 @@ class RecepcionController extends AbastecimientoController
             // Se relee con bloqueo: una liquidación concurrente no debe colarse entre la revisión y el cambio.
             $recepcion = Recepcion::deEmpresa($empresa->id)->lockForUpdate()->findOrFail($id);
             $convenio = Convenio::deEmpresa($empresa->id)->sharedLock()->findOrFail($datos['convenio_id']);
+            ReglasRecepcion::exigirEditable($recepcion);
+            $this->exigirMismoTipoDeConvenio($recepcion, $convenio);
             // Se valida el estado final; el convenio debe estar activo solo si la recepción cambia de convenio.
-            ReglasRecepcion::validar($convenio, $datos, $recepcion);
+            ReglasRecepcion::validar($convenio, $datos, $recepcion, $this->preciosPorCalibre($convenio));
 
-            $recepcion->update($datos);
+            $recepcion->update($this->cabecera($convenio, $datos));
+            $this->reemplazarRenglones($convenio, $recepcion, $datos);
 
             return $recepcion;
         });
@@ -312,7 +330,9 @@ class RecepcionController extends AbastecimientoController
             $recepcion = Recepcion::deEmpresa($empresa->id)->lockForUpdate()->findOrFail($id);
             ReglasRecepcion::exigirEditable($recepcion);
 
-            $data = $this->presentar($recepcion->load(self::CARGA));
+            $recepcion->load(self::CARGA);
+            self::cargarRenglones(new EloquentCollection([$recepcion]));
+            $data = $this->presentar($recepcion);
             $recepcion->delete();
 
             return $data;
@@ -323,20 +343,33 @@ class RecepcionController extends AbastecimientoController
         return response()->json(['success' => true, 'message' => 'Recepción eliminada.', 'data' => ['id' => $id]]);
     }
 
-    /** Cuerpo de alta y edición con los tipos y las llaves de la empresa ya validados. */
+    /**
+     * Cuerpo de alta y edición con los tipos y las llaves de la empresa ya validados. El cuerpo
+     * clásico no cambia; el de un convenio por calibre trae `renglones` (lista de objetos) y
+     * entonces la cantidad de primer nivel deja de ser obligatoria: la regla de negocio decide.
+     * Los renglones se validan como lista de objetos ANTES de las reglas de negocio, que no
+     * aceptan otra forma.
+     */
     private function validar(Request $request, Enterprise $empresa): array
     {
         $viva = fn (string $tabla) => Rule::exists($tabla, 'id')->where('enterprise_id', $empresa->id)->whereNull('deleted_at');
+        $porRenglones = $request->exists('renglones');
 
         $datos = $request->validate([
             'convenio_id' => ['required', 'integer', $viva('abs_convenios')],
             'fecha' => ['required', 'date_format:Y-m-d'],
             'tipo_carga_id' => ['required', 'integer', $viva('abs_tipos_carga')],
-            'cantidad' => ['required', 'numeric', 'max:999999999999'],
+            'cantidad' => [$porRenglones ? 'nullable' : 'required', 'numeric', 'max:999999999999'],
             'kilos' => ['nullable', 'numeric', 'max:999999999999.99'],
             'rezaga_kg' => ['nullable', 'numeric', 'max:999999999999.99'],
             'ticket_proveedor' => ['nullable', 'string', 'max:60'],
             'notas' => ['nullable', 'string', 'max:5000'],
+            'renglones' => ['sometimes', 'nullable', 'array', 'max:100'],
+            'renglones.*' => ['array'],
+            'renglones.*.calibre_id' => ['required', 'integer'],
+            'renglones.*.cantidad' => ['nullable', 'numeric', 'max:999999999999'],
+            'renglones.*.kilos' => ['nullable', 'numeric', 'max:999999999999.99'],
+            'renglones.*.rezaga_kg' => ['nullable', 'numeric', 'max:999999999999.99'],
         ], [
             'cantidad.required' => 'Captura la cantidad.',
             'cantidad.numeric' => 'La cantidad debe ser un número.',
@@ -344,9 +377,100 @@ class RecepcionController extends AbastecimientoController
             'rezaga_kg.numeric' => 'La rezaga debe ser un número.',
             'fecha.required' => 'Captura la fecha.',
             'fecha.date_format' => 'La fecha debe tener el formato AAAA-MM-DD.',
+            'renglones.array' => 'Captura la recepción por calibre.',
+            'renglones.max' => 'Una recepción admite hasta 100 calibres.',
+            'renglones.*.array' => 'El renglón no es válido.',
+            'renglones.*.calibre_id.required' => 'Elige el calibre.',
+            'renglones.*.calibre_id.integer' => 'El calibre no es de este convenio.',
+            'renglones.*.cantidad.numeric' => 'La cantidad debe ser un número entero mayor a cero.',
+            'renglones.*.kilos.numeric' => 'Los kilos deben ser un número.',
+            'renglones.*.rezaga_kg.numeric' => 'La rezaga debe ser un número.',
         ]);
 
-        return $datos + ['kilos' => null, 'rezaga_kg' => null, 'ticket_proveedor' => null, 'notas' => null];
+        return $datos + ['cantidad' => null, 'kilos' => null, 'rezaga_kg' => null, 'ticket_proveedor' => null, 'notas' => null];
+    }
+
+    /**
+     * Columnas de la cabecera. En un convenio por calibre cantidad, kilos y rezaga son la suma
+     * de los renglones (lo que traiga el cuerpo en el primer nivel se ignora).
+     */
+    private function cabecera(Convenio $convenio, array $datos): array
+    {
+        $cabecera = Arr::except($datos, ['renglones']);
+
+        if (! $convenio->usa_calibres) {
+            return $cabecera;
+        }
+
+        return ReglasRenglonesRecepcion::totalesCabecera(array_values($datos['renglones'] ?? [])) + $cabecera;
+    }
+
+    /**
+     * Reemplaza los renglones de una recepción por calibre (borra los anteriores y crea los del
+     * cuerpo) dentro de la transacción del alta o la edición: reenviar el mismo cuerpo deja el
+     * mismo estado. En un convenio clásico no hace nada.
+     */
+    private function reemplazarRenglones(Convenio $convenio, Recepcion $recepcion, array $datos): void
+    {
+        if (! $convenio->usa_calibres) {
+            return;
+        }
+
+        $vacio = fn ($v) => $v === null || $v === '' ? null : $v;
+        $recepcion->renglones()->delete();
+        foreach (array_values($datos['renglones'] ?? []) as $r) {
+            $recepcion->renglones()->create([
+                'calibre_id' => (int) $r['calibre_id'],
+                'cantidad' => $r['cantidad'],
+                'kilos' => $vacio($r['kilos'] ?? null),
+                'rezaga_kg' => $vacio($r['rezaga_kg'] ?? null),
+            ]);
+        }
+        $recepcion->unsetRelation('renglones');
+    }
+
+    /** Una recepción no pasa de un convenio clásico a uno por calibre ni al revés. */
+    private function exigirMismoTipoDeConvenio(Recepcion $recepcion, Convenio $destino): void
+    {
+        if ((int) $recepcion->convenio_id === (int) $destino->id) {
+            return;
+        }
+
+        $origenPorCalibre = (bool) Convenio::withTrashed()->whereKey($recepcion->convenio_id)->value('usa_calibres');
+        if ($origenPorCalibre !== (bool) $destino->usa_calibres) {
+            throw ValidationException::withMessages([
+                'convenio_id' => 'No se puede pasar una recepción entre un convenio clásico y uno por calibre.',
+            ]);
+        }
+    }
+
+    /**
+     * En un convenio por calibre, sus precios leídos UNA vez para validar todos los renglones
+     * (sin una consulta por renglón). En un clásico, null: la regla consulta como siempre.
+     */
+    private function preciosPorCalibre(Convenio $convenio): ?PrecioVigente
+    {
+        return $convenio->usa_calibres
+            ? self::preciosCargados(ConvenioPrecio::where('convenio_id', $convenio->id)->get())
+            : null;
+    }
+
+    /**
+     * PrecioVigente que resuelve sobre precios ya cargados (los de un solo convenio), sin consultas.
+     *
+     * @param  Collection<int, ConvenioPrecio>  $precios
+     */
+    private static function preciosCargados(Collection $precios): PrecioVigente
+    {
+        return new class($precios) extends PrecioVigente
+        {
+            public function __construct(private Collection $cargados) {}
+
+            protected function precios(Convenio $convenio): Collection
+            {
+                return $this->cargados;
+            }
+        };
     }
 
     private function temporadaDeEmpresa(Enterprise $empresa)
@@ -383,6 +507,7 @@ class RecepcionController extends AbastecimientoController
     private function presentarConSemana(Recepcion $recepcion): array
     {
         $recepcion->load(self::CARGA);
+        self::cargarRenglones(new EloquentCollection([$recepcion]));
         $convenio = Convenio::with(['precios', 'metas'])->findOrFail($recepcion->convenio_id);
 
         return $this->presentar($recepcion) + [
@@ -390,11 +515,16 @@ class RecepcionController extends AbastecimientoController
         ];
     }
 
-    /** Recepción con `convenio` (y sus `precios`), `tipoCarga` y `creador` cargados. */
+    /**
+     * Recepción con `convenio` (y sus `precios`), `tipoCarga`, `creador` y `renglones` (ver
+     * cargarRenglones) cargados; no consulta nada. En una recepción por calibre `precio` y
+     * `porcentaje_productor` de cabecera son null y el importe es la suma de sus renglones.
+     */
     private function presentar(Recepcion $r): array
     {
         $c = $r->convenio;
-        $precio = PrecioVigente::enColeccion($c->precios, $r->tipo_carga_id, $r->fecha->format('Y-m-d'));
+        $porCalibre = (bool) $c->usa_calibres;
+        $precio = $porCalibre ? null : PrecioVigente::enColeccion($c->precios, $r->tipo_carga_id, $r->fecha->format('Y-m-d'));
 
         return [
             'id' => $r->id,
@@ -409,6 +539,7 @@ class RecepcionController extends AbastecimientoController
                 'moneda' => $c->moneda,
                 'productor' => $c->productor,
                 'variedad' => $c->variedad,
+                'usa_calibres' => $porCalibre,
             ],
             'moneda' => $c->moneda,
             'fecha' => $r->fecha->format('Y-m-d'),
@@ -421,11 +552,82 @@ class RecepcionController extends AbastecimientoController
             'notas' => $r->notas,
             'precio' => $precio === null ? null : (float) $precio->precio,
             'porcentaje_productor' => $precio?->porcentaje_productor === null ? null : (float) $precio->porcentaje_productor,
-            'importe_estimado' => ReglasRecepcion::importeEstimado($c, $r, $precio),
+            'importe_estimado' => $porCalibre
+                ? ReglasRecepcion::importeRenglones($c, $r, self::preciosCargados($c->precios))
+                : ReglasRecepcion::importeEstimado($c, $r, $precio),
             'liquidacion_id' => $r->liquidacion_id,
             'liquidada' => $r->estaLiquidada(),
             'created_by' => $r->created_by,
             'autor' => $r->creador ? ['id' => $r->creador->id, 'name' => $r->creador->name] : null,
+            'renglones' => self::presentarRenglones($c, $r),
         ];
+    }
+
+    /**
+     * Carga en bloque los renglones (con el nombre de su calibre, aun borrado) de las recepciones
+     * de convenios por calibre; a las clásicas les deja la relación vacía sin consultar. Con
+     * `$convenio` todas son de ese convenio; si no, cada una debe traer su `convenio` cargado.
+     *
+     * @param  EloquentCollection<int, Recepcion>  $recepciones
+     */
+    public static function cargarRenglones(EloquentCollection $recepciones, ?Convenio $convenio = null): void
+    {
+        $porCalibre = new EloquentCollection();
+        foreach ($recepciones as $r) {
+            if (($convenio ?? $r->convenio)?->usa_calibres) {
+                $porCalibre->push($r);
+            } else {
+                $r->setRelation('renglones', new EloquentCollection());
+            }
+        }
+
+        if ($porCalibre->isNotEmpty()) {
+            $porCalibre->load(['renglones.calibre' => fn ($q) => $q->select('id', 'nombre')]);
+        }
+    }
+
+    /**
+     * Renglones de la recepción con el precio vigente de su calibre (tipo de carga y fecha de la
+     * recepción) y su importe, resueltos sobre los precios ya cargados del convenio. Lista vacía
+     * en una recepción clásica. Requiere `renglones.calibre` cargado (cargarRenglones).
+     */
+    public static function presentarRenglones(Convenio $c, Recepcion $r): array
+    {
+        $fecha = $r->fecha->format('Y-m-d');
+
+        return $r->renglones->map(function (RecepcionCalibre $g) use ($c, $r, $fecha) {
+            $precio = PrecioVigente::enColeccion($c->precios, (int) $r->tipo_carga_id, $fecha, (int) $g->calibre_id);
+
+            return [
+                'id' => $g->id,
+                'calibre_id' => $g->calibre_id,
+                'calibre' => $g->calibre ? ['id' => $g->calibre->id, 'nombre' => $g->calibre->nombre] : null,
+                'cantidad' => (float) $g->cantidad,
+                'kilos' => $g->kilos === null ? null : (float) $g->kilos,
+                'rezaga_kg' => $g->rezaga_kg === null ? null : (float) $g->rezaga_kg,
+                'precio' => $precio === null ? null : (float) $precio->precio,
+                'porcentaje_productor' => $precio?->porcentaje_productor === null ? null : (float) $precio->porcentaje_productor,
+                'importe_estimado' => ReglasRenglonesRecepcion::importeRenglon($c, $g, $precio),
+            ];
+        })->values()->all();
+    }
+
+    /**
+     * Calibres pactados de un convenio por calibre para la rejilla de la semana: todos, por orden y
+     * con nombre aunque el calibre esté inactivo o borrado. Requiere `calibres.calibre` (cargarCalibres).
+     */
+    private function calibresDeFila(Convenio $c): array
+    {
+        if (! $c->usa_calibres) {
+            return [];
+        }
+
+        return $c->calibres
+            ->sortBy([fn ($a, $b) => ($a->calibre?->orden ?? 0) <=> ($b->calibre?->orden ?? 0), ['calibre_id', 'asc']])
+            ->map(fn ($fila) => [
+                'calibre_id' => $fila->calibre_id,
+                'nombre' => $fila->calibre?->nombre,
+                'orden' => $fila->calibre?->orden,
+            ])->values()->all();
     }
 }

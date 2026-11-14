@@ -160,6 +160,11 @@ class ValidadorImportacionRecepciones
     /** Errores de ReglasRecepcion como lista de mensajes (una sola ValidationException por renglón). */
     private function reglas(Convenio $convenio, array $datos, PrecioVigente $precios): array
     {
+        // El formato actual del Excel no trae calibre: los convenios por calibre no se importan todavía.
+        if ($convenio->usa_calibres) {
+            return ['Este convenio es por calibre: la importación por calibre llegará con el formato de Excel.'];
+        }
+
         try {
             ReglasRecepcion::validar($convenio, $datos, null, $precios);
         } catch (ValidationException $e) {
