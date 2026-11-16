@@ -7,6 +7,9 @@ use App\Models\CRM\CrmCliente;
 use App\Models\CRM\CrmContacto;
 use App\Models\CRM\CrmEmpresaExterna;
 use App\Models\CRM\CrmProspecto;
+use App\Services\CRM\ContactoActividadService;
+use App\Services\CRM\SeguimientoService;
+use App\Services\CRM\VisibilidadOportunidades;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
@@ -96,6 +99,63 @@ class ContactoController extends CrmBaseController
                 'current_page' => $paginated->currentPage(),
                 'last_page'    => $paginated->lastPage(),
             ],
+        ]);
+    }
+
+    /**
+     * GET /crm/contactos/de-registro?entidad_tipo=&entidad_id=
+     *
+     * Los contactos que se ofrecen al registrar una actividad sobre una
+     * entidad (prospecto, cliente, oportunidad o empresa externa), en la
+     * «empresa de la actividad». Lo consume quien registra la actividad, por
+     * eso exige cualquiera de los permisos de registrarla, no el de contactos.
+     */
+    public function deRegistro(
+        Request $request,
+        ContactoActividadService $contactos,
+        VisibilidadOportunidades $visibilidad,
+    ): JsonResponse {
+        $empresaId = $this->getEmpresaId($request);
+
+        $this->exigirAlguno($empresaId, [
+            ['actividades', 'actividades', 'crear'],
+            ['agenda', 'agenda', 'crear'],
+            ['agenda', 'agenda', 'editar'],
+            ['mi-dia', 'mi-dia', 'ver'],
+        ]);
+
+        $datos = $request->validate([
+            'entidad_tipo' => ['required', Rule::in(array_keys(SeguimientoService::TIPOS_ENTIDAD))],
+            'entidad_id'   => 'required|integer',
+        ]);
+
+        $clase = SeguimientoService::TIPOS_ENTIDAD[$datos['entidad_tipo']];
+        $entidad = $visibilidad->entidadVisible(
+            $clase::where('empresa_id', $empresaId)->find($datos['entidad_id'])
+        );
+        abort_unless($entidad, 404, 'La entidad relacionada no existe o no pertenece a la empresa.');
+
+        // Los contactos viven en la empresa de la actividad. La empresa externa
+        // no es «empresa» en este sentido (no exige contacto): se responde
+        // `empresa: null`, pero si tiene contactos se listan.
+        $empresa = $contactos->empresaDe($entidad);
+
+        $lista = $empresa
+            ? CrmContacto::where('empresa_id', $empresaId)
+                ->where('entidad_type', $empresa::class)
+                ->where('entidad_id', $empresa->getKey())
+                ->orderByDesc('es_principal')
+                ->orderBy('nombre')
+                ->get(['id', 'nombre', 'cargo', 'email', 'telefono', 'es_principal'])
+            : collect();
+
+        return $this->jsonSuccess([
+            'empresa' => ($empresa && ! $empresa instanceof CrmEmpresaExterna) ? [
+                'tipo'   => array_search($empresa::class, self::TIPOS, true),
+                'id'     => $empresa->getKey(),
+                'nombre' => $empresa->nombre,
+            ] : null,
+            'contactos' => $lista,
         ]);
     }
 
@@ -213,6 +273,18 @@ class ContactoController extends CrmBaseController
         $this->difundir(new ContactoUpdated('deleted', $data));
 
         return $this->jsonSuccess(null, 'Contacto eliminado correctamente');
+    }
+
+    /** Aborta con 403 si el usuario no tiene NINGUNO de los permisos [módulo, submódulo, permiso]. */
+    private function exigirAlguno(int $empresaId, array $permisos): void
+    {
+        foreach ($permisos as [$modulo, $submodulo, $permiso]) {
+            if ($this->tienePermisoSubmodulo($empresaId, $modulo, $submodulo, $permiso)) {
+                return;
+            }
+        }
+
+        abort(403, 'No tienes permiso para ver los contactos de este registro.');
     }
 
     private function exigirPermisoContactos(string $entidadType): void
