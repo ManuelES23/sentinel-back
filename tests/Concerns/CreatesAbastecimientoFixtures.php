@@ -15,8 +15,10 @@ use App\Models\Abastecimiento\RecepcionCalibre;
 use App\Models\Abastecimiento\Temporada;
 use App\Models\Abastecimiento\TipoCarga;
 use App\Models\Abastecimiento\Variedad;
-use App\Models\Abastecimiento\VariedadCalibre;
+
 use App\Models\Application;
+use App\Models\CRM\CrmProducto;
+use App\Models\CRM\CrmProductoCalibre;
 use App\Models\Enterprise;
 use App\Models\Module;
 use App\Models\Submodule;
@@ -165,21 +167,46 @@ trait CreatesAbastecimientoFixtures
         });
     }
 
-    /** Calibre de la variedad, creado directo (sin pasar por la API del catálogo). */
-    protected function crearCalibre(Variedad $variedad, string $nombre, bool $activo = true): VariedadCalibre
+    /**
+     * Liga la variedad de Abastecimiento con un producto del CRM de la empresa de su cultivo (lo crea si
+     * hace falta) y lo devuelve: los calibres de la variedad son los calibres propios de ese producto.
+     */
+    protected function ligarProductoCrm(Variedad $variedad): CrmProducto
     {
-        return VariedadCalibre::create([
-            'variedad_id' => $variedad->id,
+        if ($variedad->producto_id) {
+            return CrmProducto::findOrFail($variedad->producto_id);
+        }
+
+        $variedad->loadMissing('cultivo');
+        $producto = CrmProducto::create([
+            'empresa_id' => $variedad->cultivo->enterprise_id,
+            'nombre' => $variedad->nombre.' (producto '.$variedad->id.')',
+            'commodity' => $variedad->cultivo->nombre,
+            'precio' => 0,
+            'activo' => true,
+        ]);
+        $variedad->update(['producto_id' => $producto->id]);
+
+        return $producto;
+    }
+
+    /** Calibre del producto del CRM ligado a la variedad (la liga si aún no lo está). */
+    protected function crearCalibre(Variedad $variedad, string $nombre, bool $activo = true, int $orden = 0): CrmProductoCalibre
+    {
+        $producto = $this->ligarProductoCrm($variedad);
+
+        return CrmProductoCalibre::create([
+            'producto_id' => $producto->id,
             'nombre' => $nombre,
-            'orden' => 0,
-            'is_active' => $activo,
+            'orden' => $orden,
+            'activo' => $activo,
         ]);
     }
 
     /**
      * Convenio por calibre: `usa_calibres`, volumen total por calibre (modo `total`) y un
      * precio por calibre del tipo de carga principal vigente desde el inicio del convenio.
-     * `$calibres` = [['calibre' => VariedadCalibre, 'volumen' => 100, 'precio' => 120.0], …].
+     * `$calibres` = [['calibre' => CrmProductoCalibre, 'volumen' => 100, 'precio' => 120.0], …].
      * Claves especiales de `$over` como en `crearConvenio` (salvo `precio` y `metas`, que no aplican).
      */
     protected function crearConvenioPorCalibre(Enterprise $empresa, array $calibres, array $over = []): Convenio

@@ -7,7 +7,7 @@ use App\Models\Abastecimiento\ConvenioPrecio;
 use App\Models\Abastecimiento\Cultivo;
 use App\Models\Abastecimiento\Productor;
 use App\Models\Abastecimiento\Variedad;
-use App\Models\Abastecimiento\VariedadCalibre;
+use App\Models\CRM\CrmProductoCalibre;
 use App\Models\User;
 use App\Services\Abastecimiento\IndicadoresConvenio;
 use App\Services\Abastecimiento\SaldoProductor;
@@ -29,9 +29,9 @@ class IndicadoresCalibresTest extends TestCase
     use RefreshDatabase;
     use CreatesAbastecimientoFixtures;
 
-    private VariedadCalibre $jumbo;
+    private CrmProductoCalibre $jumbo;
 
-    private VariedadCalibre $grande;
+    private CrmProductoCalibre $grande;
 
     protected function setUp(): void
     {
@@ -65,7 +65,7 @@ class IndicadoresCalibresTest extends TestCase
         ], $over);
     }
 
-    private function renglon(VariedadCalibre $calibre, float $cantidad, ?float $kilos = null): array
+    private function renglon(CrmProductoCalibre $calibre, float $cantidad, ?float $kilos = null): array
     {
         return ['calibre_id' => $calibre->id, 'cantidad' => $cantidad, 'kilos' => $kilos];
     }

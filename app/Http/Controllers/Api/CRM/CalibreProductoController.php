@@ -2,9 +2,9 @@
 
 namespace App\Http\Controllers\Api\CRM;
 
-use App\Models\Calibre;
 use App\Models\CRM\CrmProducto;
 use App\Models\CRM\CrmProductoCalibre;
+use App\Support\CRM\UsoEnAbastecimiento;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
@@ -13,10 +13,12 @@ use Illuminate\Validation\Rule;
 
 /**
  * Calibres de un producto del catálogo para la cotización por caja (spec
- * 2026-10-31). Los agrícolas vienen de la variedad ligada al producto y solo se
- * leen; aquí se administran únicamente los propios. La lectura es abierta dentro
- * de la empresa; escribir exige catalogos.productos crear|editar|eliminar.
- * Los renglones guardados llevan el calibre como texto: borrar no los toca.
+ * 2026-10-31). Desde 2026-11-16 todos son propios del producto: los que antes se
+ * leían en vivo de Splendid Farms se copiaron una vez (migración
+ * `2026_11_16_120000_calibres_desde_productos_crm`) y `agricolas` siempre va vacío.
+ * La lectura es abierta dentro de la empresa; escribir exige catalogos.productos
+ * crear|editar|eliminar. Los renglones de cotización llevan el calibre como texto:
+ * borrar no los toca; un calibre usado en Abastecimiento no se borra (409).
  */
 class CalibreProductoController extends CrmBaseController
 {
@@ -33,24 +35,17 @@ class CalibreProductoController extends CrmBaseController
         'activo.boolean' => 'El estado debe ser verdadero o falso.',
     ];
 
-    /** GET /crm/productos/{producto}/calibres — agrícolas (solo nombres) y propios. */
+    /** GET /crm/productos/{producto}/calibres — `propios` (y `agricolas` vacío, por compatibilidad). */
     public function index(Request $request, CrmProducto $producto): JsonResponse
     {
         $this->verificarEmpresa($request, $producto);
-
-        $agricolas = $producto->variedad_id
-            ? Calibre::query()
-                ->where('variedad_id', $producto->variedad_id)
-                ->where('is_active', true)
-                ->orderBy('order')->orderBy('nombre')
-                ->pluck('nombre')->values()->all()
-            : [];
 
         $propios = $producto->calibresPropios()
             ->orderBy('orden')->orderBy('nombre')
             ->get(['id', 'nombre', 'orden', 'activo']);
 
-        return $this->jsonSuccess(['agricolas' => $agricolas, 'propios' => $propios]);
+        // gricolas queda vacío: los calibres ya no se leen de Splendid Farms (se copiaron como propios).
+        return $this->jsonSuccess(['agricolas' => [], 'propios' => $propios]);
     }
 
     /** POST /crm/productos/{producto}/calibres */
@@ -84,6 +79,10 @@ class CalibreProductoController extends CrmBaseController
     {
         $this->verificarCalibre($request, $producto, $calibre);
         $this->exigirPermisoSubmodulo((int) $producto->empresa_id, 'catalogos', 'productos', 'eliminar', 'No tienes permiso para eliminar calibres.');
+
+        if (UsoEnAbastecimiento::calibre($calibre->id)) {
+            return $this->jsonError('Este calibre ya se usa en Abastecimiento: desactívalo en lugar de eliminarlo.', 409);
+        }
 
         $calibre->delete();
 

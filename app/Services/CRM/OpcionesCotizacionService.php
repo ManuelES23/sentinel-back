@@ -2,14 +2,14 @@
 
 namespace App\Services\CRM;
 
-use App\Models\Calibre;
 use App\Models\CRM\CrmPresentacion;
 use App\Models\CRM\CrmProducto;
 use App\Models\CRM\CrmProductoCalibre;
 
 /**
  * Opciones que ofrece el formulario de cotización por caja: por commodity,
- * sus presentaciones y las variedades (productos activos) con sus calibres.
+ * sus presentaciones y las variedades (productos activos) con sus calibres propios
+ * (crm_producto_calibres; ya no se leen de Splendid Farms).
  */
 class OpcionesCotizacionService
 {
@@ -22,9 +22,8 @@ class OpcionesCotizacionService
             ->where('empresa_id', $empresaId)
             ->where('activo', true)
             ->orderBy('nombre')
-            ->get(['id', 'nombre', 'commodity', 'variedad_id', 'precio']);
+            ->get(['id', 'nombre', 'commodity', 'precio']);
 
-        $calibresAgricolas = $this->calibresAgricolas($productos->pluck('variedad_id')->filter()->unique());
         $calibresPropios = $this->calibresPropios($productos->pluck('id'));
 
         $presentaciones = CrmPresentacion::query()
@@ -44,10 +43,7 @@ class OpcionesCotizacionService
                 'id'       => $p->id,
                 'nombre'   => $p->nombre,
                 'precio'   => (float) $p->precio,
-                'calibres' => $this->unir(
-                    $p->variedad_id ? ($calibresAgricolas[$p->variedad_id] ?? []) : [],
-                    $calibresPropios[$p->id] ?? [],
-                ),
+                'calibres' => $this->unir($calibresPropios[$p->id] ?? []),
             ])->values()->all(),
         ]);
 
@@ -66,23 +62,6 @@ class OpcionesCotizacionService
     private static function clave(?string $commodity): string
     {
         return mb_strtolower(trim((string) $commodity)) ?: mb_strtolower(self::OTROS);
-    }
-
-    /** @return array<int, array<int, string>> variedad_id => nombres de calibres activos */
-    private function calibresAgricolas($variedadIds): array
-    {
-        if ($variedadIds->isEmpty()) {
-            return [];
-        }
-
-        return Calibre::query()
-            ->whereIn('variedad_id', $variedadIds)
-            ->where('is_active', true)
-            ->orderBy('order')->orderBy('nombre')
-            ->get(['variedad_id', 'nombre'])
-            ->groupBy('variedad_id')
-            ->map(fn ($c) => $c->pluck('nombre')->all())
-            ->all();
     }
 
     /** @return array<int, array<int, string>> producto_id => nombres de calibres propios activos */

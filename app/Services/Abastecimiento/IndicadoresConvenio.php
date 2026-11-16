@@ -307,7 +307,7 @@ class IndicadoresConvenio
         $filas = $convenio->relationLoaded('calibres')
             ? $convenio->calibres
             : $convenio->calibres()->get();
-        $filas->loadMissing(['calibre' => fn ($q) => $q->withTrashed()->select('id', 'nombre', 'orden')]);
+        $filas->loadMissing(['calibre' => fn ($q) => $q->select('id', 'nombre', 'orden')]);
         $pactado = MetasConvenio::pactadoPorCalibre($convenio);
 
         return $filas
