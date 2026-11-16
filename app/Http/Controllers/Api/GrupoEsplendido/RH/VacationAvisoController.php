@@ -17,8 +17,8 @@ use Illuminate\Validation\Rule;
 
 /**
  * Avisos al empleado por WhatsApp (manual, con enlace wa.me) y su historial (spec §7.2, §7.3).
- * Lo usan RH (permisos del submódulo Vacaciones) y quien decidió un paso desde su bandeja:
- * por eso autoriza el propio controlador y no el grupo de rutas.
+ * Solo lo usa RH (permisos del submódulo Vacaciones); quien decide un paso desde su bandeja
+ * ya no avisa por WhatsApp. Autoriza el propio controlador.
  */
 class VacationAvisoController extends Controller
 {
@@ -77,20 +77,16 @@ class VacationAvisoController extends Controller
         ]);
     }
 
-    /** RH con el permiso pedido en Vacaciones, o quien decidió algún paso de esta solicitud. */
+    /** Solo RH, con el permiso pedido en Vacaciones. */
     private function autorizar(VacationRequest $vacation, string $permisoRh): void
     {
         $empresaId = (int) Enterprise::where('slug', AprobadorVacaciones::EMPRESA_CORPORATIVA)->value('id');
 
-        if ($empresaId && $this->tienePermisoSubmodulo($empresaId, 'gestion', 'vacaciones', $permisoRh, 'rh')) {
-            return;
-        }
-
-        if ($vacation->approvals()->where('decided_by', Auth::id())->exists()) {
-            return;
-        }
-
-        abort(403, 'No tienes permiso para avisar sobre esta solicitud.');
+        abort_unless(
+            $empresaId && $this->tienePermisoSubmodulo($empresaId, 'gestion', 'vacaciones', $permisoRh, 'rh'),
+            403,
+            'No tienes permiso para avisar sobre esta solicitud.',
+        );
     }
 
     private function presentar(VacationNotification $aviso): array

@@ -71,15 +71,13 @@ class VacacionesAvisosApiTest extends TestCase
             ->assertJsonPath('data.texto', fn ($t) => str_contains($t, config('vacaciones.portal_url')));
     }
 
-    public function test_sin_permiso_de_rh_ni_haber_decidido_es_403(): void
+    public function test_sin_permiso_de_rh_es_403(): void
     {
         $solicitud = $this->solicitud($this->empleado($this->empresa, ['mobile' => '6671234567']), 'approved', 3);
         $sinPermiso = User::factory()->create();
         Sanctum::actingAs($sinPermiso);
 
         $this->getJson(self::RH."/{$solicitud->id}/whatsapp-mensaje")->assertForbidden();
-        $this->getJson(self::BANDEJA."/{$solicitud->id}/whatsapp-mensaje")->assertForbidden();
-        $this->postJson(self::BANDEJA."/{$solicitud->id}/avisos/whatsapp", ['evento' => 'aprobada'])->assertForbidden();
         $this->getJson(self::RH."/{$solicitud->id}/avisos")->assertForbidden();
     }
 
@@ -96,10 +94,9 @@ class VacacionesAvisosApiTest extends TestCase
         $this->getJson(self::RH."/{$solicitud->id}/avisos")->assertOk();
     }
 
-    public function test_quien_decidio_un_paso_puede_avisar_desde_la_bandeja_y_otro_no(): void
+    public function test_quien_decidio_un_paso_ya_no_puede_avisar_por_whatsapp(): void
     {
         $jefe = $this->empleadoConUsuario($this->empresa);
-        $otro = $this->empleadoConUsuario($this->empresa);
         $this->regla(1, ApprovalFlowStep::TYPE_DIRECT_SUPERVISOR);
         $solicitante = $this->empleado($this->empresa, ['reports_to' => $jefe->id, 'mobile' => '6671234567']);
         $lunes = today()->next(Carbon::MONDAY)->addWeeks(2);
@@ -107,15 +104,13 @@ class VacacionesAvisosApiTest extends TestCase
         app(VacationRequestService::class)->aprobarPaso($solicitud, $jefe->user);
 
         Sanctum::actingAs($jefe->user);
-        $this->getJson(self::BANDEJA."/{$solicitud->id}/whatsapp-mensaje")
-            ->assertOk()
-            ->assertJsonPath('data.telefono', '526671234567')
-            ->assertJsonPath('data.evento', 'aprobada');
-        $this->postJson(self::BANDEJA."/{$solicitud->id}/avisos/whatsapp", ['evento' => 'aprobada'])->assertCreated();
-        $this->getJson(self::RH."/{$solicitud->id}/whatsapp-mensaje")->assertOk(); // la ruta de RH también lo acepta: decidió un paso
-
-        Sanctum::actingAs($otro->user);
-        $this->getJson(self::BANDEJA."/{$solicitud->id}/whatsapp-mensaje")->assertForbidden();
+        // Solo RH avisa: haber decidido un paso ya no basta.
+        $this->getJson(self::RH."/{$solicitud->id}/whatsapp-mensaje")->assertForbidden();
+        $this->postJson(self::RH."/{$solicitud->id}/avisos/whatsapp", ['evento' => 'aprobada'])->assertForbidden();
+        // Las rutas de la bandeja ya no existen.
+        $this->getJson(self::BANDEJA."/{$solicitud->id}/whatsapp-mensaje")->assertNotFound();
+        $this->postJson(self::BANDEJA."/{$solicitud->id}/avisos/whatsapp", ['evento' => 'aprobada'])->assertNotFound();
+        $this->assertDatabaseCount('vacation_notifications', 0);
     }
 
     public function test_registra_el_aviso_de_whatsapp_con_quien_lo_envio(): void
