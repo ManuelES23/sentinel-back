@@ -29,6 +29,10 @@ class CrmProspecto extends Model
         'zona_id',
         'bodega_id',
         'notas',
+        'giro',
+        'sitio_web',
+        'ciudad',
+        'estado',
     ];
 
     public function empresa(): BelongsTo

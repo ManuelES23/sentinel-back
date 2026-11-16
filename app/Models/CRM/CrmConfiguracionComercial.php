@@ -12,13 +12,14 @@ class CrmConfiguracionComercial extends Model
 
     protected $table = 'crm_configuraciones_comerciales';
 
-    protected $fillable = ['empresa_id', 'descuento_global_habilitado', 'moneda', 'productos_en_oportunidad', 'cotizacion_por_caja', 'catalogo_por_lineas'];
+    protected $fillable = ['empresa_id', 'descuento_global_habilitado', 'moneda', 'productos_en_oportunidad', 'cotizacion_por_caja', 'catalogo_por_lineas', 'prospecto_como_empresa'];
 
     protected $casts = [
         'descuento_global_habilitado' => 'boolean',
         'productos_en_oportunidad' => 'boolean',
         'cotizacion_por_caja' => 'boolean',
         'catalogo_por_lineas' => 'boolean',
+        'prospecto_como_empresa' => 'boolean',
     ];
 
     public function empresa(): BelongsTo
@@ -31,8 +32,14 @@ class CrmConfiguracionComercial extends Model
     {
         return self::firstOrCreate(
             ['empresa_id' => $empresaId],
-            ['descuento_global_habilitado' => true, 'moneda' => 'MXN', 'productos_en_oportunidad' => false, 'cotizacion_por_caja' => false, 'catalogo_por_lineas' => false]
+            ['descuento_global_habilitado' => true, 'moneda' => 'MXN', 'productos_en_oportunidad' => false, 'cotizacion_por_caja' => false, 'catalogo_por_lineas' => false, 'prospecto_como_empresa' => false]
         );
+    }
+
+    /** ¿La empresa captura al prospecto como empresa con varios contactos? Apagada por defecto. */
+    public static function prospectoComoEmpresa(int $empresaId): bool
+    {
+        return (bool) self::paraEmpresa($empresaId)->prospecto_como_empresa;
     }
 
     /** Moneda de la empresa ('MXN' | 'USD'). */

@@ -119,6 +119,10 @@ class ProspectoController extends CrmBaseController
             'zona_id'     => 'nullable|exists:crm_zonas,id',
             'bodega_id'   => 'nullable|exists:crm_bodegas,id',
             'notas'       => 'nullable|string',
+            'giro'        => 'nullable|string|max:150',
+            'sitio_web'   => 'nullable|string|max:255',
+            'ciudad'      => 'nullable|string|max:100',
+            'estado'      => 'nullable|string|max:100',
         ]);
 
         $validated['empresa_id'] = $empresaId;
@@ -222,6 +226,10 @@ class ProspectoController extends CrmBaseController
             'zona_id'     => 'nullable|exists:crm_zonas,id',
             'bodega_id'   => 'nullable|exists:crm_bodegas,id',
             'notas'       => 'nullable|string',
+            'giro'        => 'nullable|string|max:150',
+            'sitio_web'   => 'nullable|string|max:255',
+            'ciudad'      => 'nullable|string|max:100',
+            'estado'      => 'nullable|string|max:100',
         ]);
 
         $prospecto->update($validated);

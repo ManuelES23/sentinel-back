@@ -30,6 +30,7 @@ class CrmAgenda extends Model
         'recordatorio_at',
         'recordatorio_enviado_at',
         'etiqueta_id',
+        'contacto_id',
     ];
 
     protected $casts = [
@@ -53,6 +54,11 @@ class CrmAgenda extends Model
     public function etiqueta(): BelongsTo
     {
         return $this->belongsTo(CrmEtiquetaActividad::class, 'etiqueta_id');
+    }
+
+    public function contacto(): BelongsTo
+    {
+        return $this->belongsTo(CrmContacto::class, 'contacto_id');
     }
 
     public function entidad(): MorphTo

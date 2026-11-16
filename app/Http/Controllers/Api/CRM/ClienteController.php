@@ -160,6 +160,10 @@ class ClienteController extends CrmBaseController
             'vendedor_id' => 'nullable|exists:crm_vendedores,id',
             'region_id'   => 'nullable|exists:crm_regiones,id',
             'notas'       => 'nullable|string',
+            'giro'        => 'nullable|string|max:150',
+            'sitio_web'   => 'nullable|string|max:255',
+            'ciudad'      => 'nullable|string|max:100',
+            'estado'      => 'nullable|string|max:100',
         ]);
 
         $validated['empresa_id'] = $empresaId;
@@ -198,6 +202,10 @@ class ClienteController extends CrmBaseController
             'vendedor_id' => 'sometimes|nullable|exists:crm_vendedores,id',
             'region_id'   => 'sometimes|nullable|exists:crm_regiones,id',
             'notas'       => 'sometimes|nullable|string',
+            'giro'        => 'sometimes|nullable|string|max:150',
+            'sitio_web'   => 'sometimes|nullable|string|max:255',
+            'ciudad'      => 'sometimes|nullable|string|max:100',
+            'estado'      => 'sometimes|nullable|string|max:100',
         ]);
 
         $cliente->update($validated);
