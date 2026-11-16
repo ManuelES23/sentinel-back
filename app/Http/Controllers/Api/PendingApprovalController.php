@@ -509,7 +509,8 @@ class PendingApprovalController extends Controller
 
     /**
      * ¿Es persona informada de la solicitud? Del paso actual en espera o de algún paso que ya la aprobó
-     * (sin filtro de fechas: es solo el permiso de lectura del detalle).
+     * (sin filtro de fechas: es solo el permiso de lectura del detalle). Igual que el director, el detalle sigue
+     * legible si la solicitud se rechaza o cancela después de que el paso la aprobó.
      */
     private function informaDeVacacion($user, VacationRequest $solicitud): bool
     {

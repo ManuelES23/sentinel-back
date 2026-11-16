@@ -8,6 +8,7 @@ use App\Models\Employee;
 use App\Models\User;
 use App\Models\VacationRequest;
 use App\Models\VacationRequestApproval;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 
 /**
@@ -78,9 +79,11 @@ class InformadosVacaciones
                 $paso = $solicitud->approvals->first(fn (VacationRequestApproval $p) => (int) $p->step_order === (int) $solicitud->current_step
                     && $p->decision === VacationRequestApproval::WAITING);
 
+                // El SQL ya dejó fuera las del empleado propio del usuario; aquí solo falta el caso de otro empleado ligado a él,
+                // en memoria (esSolicitante haría una consulta por solicitud).
                 return $paso !== null
                     && $this->compartenRegla($paso, $reglas)
-                    && ! $this->aprobador->esSolicitante($usuario, $solicitud);
+                    && (int) $solicitud->employee?->user_id !== (int) $usuario->id;
             })
             ->collect()
             ->sortByDesc('created_at')
@@ -165,7 +168,7 @@ class InformadosVacaciones
     }
 
     /** Reglas activas «Usuario específico» entre los ids dados. */
-    private function reglasActivas(array $ids)
+    private function reglasActivas(array $ids): Builder
     {
         return ApprovalFlowStep::whereIn('id', $ids)
             ->where('is_active', true)

@@ -43,7 +43,10 @@ class OutlookVacaciones
 
     private const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
 
-    /** Sin constructor: el servicio se extiende y se crea a mano (sin contenedor) en las pruebas. */
+    /**
+     * Se resuelve en el momento con `app()` y no por el constructor para no cambiar su firma: una prueba extiende
+     * el servicio y lo crea sin argumentos (sin contenedor).
+     */
     private function informados(): InformadosVacaciones
     {
         return app(InformadosVacaciones::class);
@@ -58,11 +61,11 @@ class OutlookVacaciones
 
         $proceso = ApprovalProcess::where('code', ApprovalProcess::VACATION_REQUESTS)->value('id');
 
-        return $proceso !== null && ApprovalFlowStep::where('approval_process_id', $proceso)
+        return ($proceso !== null && ApprovalFlowStep::where('approval_process_id', $proceso)
             ->where('is_active', true)
             ->where('approver_type', ApprovalFlowStep::TYPE_USER)
             ->where('user_id', $usuario->id)
-            ->exists()
+            ->exists())
             || $this->informados()->esInformado($usuario);
     }
 

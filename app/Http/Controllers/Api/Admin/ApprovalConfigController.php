@@ -9,6 +9,7 @@ use App\Models\Position;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 class ApprovalConfigController extends Controller
@@ -197,7 +198,7 @@ class ApprovalConfigController extends Controller
             'can_approve' => 'sometimes|boolean',
             'can_reject' => 'sometimes|boolean',
             'is_active' => 'sometimes|boolean',
-            'observer_user_ids' => 'nullable|array',
+            'observer_user_ids' => 'nullable|array|max:50',
             'observer_user_ids.*' => 'integer|distinct|exists:users,id',
         ]);
 
@@ -222,8 +223,12 @@ class ApprovalConfigController extends Controller
             $this->validarInformados($informados, isset($validated['user_id']) ? (int) $validated['user_id'] : null);
         }
 
-        $step = ApprovalFlowStep::create($validated);
-        $step->observers()->sync($guardaInformados ? ($informados ?? []) : []);
+        $step = DB::transaction(function () use ($validated, $guardaInformados, $informados) {
+            $nuevo = ApprovalFlowStep::create($validated);
+            $nuevo->observers()->sync($guardaInformados ? ($informados ?? []) : []);
+
+            return $nuevo;
+        });
         $step->load(['enterprise', 'position', 'user:id,name,email', 'observers:id,name,email']);
 
         return response()->json([
@@ -266,13 +271,13 @@ class ApprovalConfigController extends Controller
             'can_approve' => 'sometimes|boolean',
             'can_reject' => 'sometimes|boolean',
             'is_active' => 'sometimes|boolean',
-            'observer_user_ids' => 'nullable|array',
+            'observer_user_ids' => 'nullable|array|max:50',
             'observer_user_ids.*' => 'integer|distinct|exists:users,id',
         ]);
 
         $informados = $this->extraerInformados($validated);
 
-        $usuarioFinal =array_key_exists('user_id', $validated) ? $validated['user_id'] : $step->user_id;
+        $usuarioFinal = array_key_exists('user_id', $validated) ? $validated['user_id'] : $step->user_id;
         if ($tipo === ApprovalFlowStep::TYPE_USER && $usuarioFinal === null) {
             throw ValidationException::withMessages(['user_id' => 'Elige el usuario que aprueba este paso.']);
         }
@@ -300,12 +305,14 @@ class ApprovalConfigController extends Controller
             );
         }
 
-        $step->update($validated);
-        if (! $guardaInformados) {
-            $step->observers()->detach();
-        } elseif ($informados !== null) {
-            $step->observers()->sync($informados);
-        }
+        DB::transaction(function () use ($step, $validated, $guardaInformados, $informados) {
+            $step->update($validated);
+            if (! $guardaInformados) {
+                $step->observers()->detach();
+            } elseif ($informados !== null) {
+                $step->observers()->sync($informados);
+            }
+        });
         $step->load(['enterprise', 'position', 'user:id,name,email', 'observers:id,name,email']);
 
         return response()->json([

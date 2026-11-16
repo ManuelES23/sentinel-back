@@ -169,4 +169,54 @@ class CorreosInformadosVacacionesTest extends TestCase
         $this->assertSame('pending', $solicitud->fresh()->status);
         $this->assertSame(1, SystemNotification::where('user_id', $this->asistente->id)->count());
     }
+
+    public function test_con_la_regla_inactiva_no_se_informa_ni_por_correo_ni_por_aviso(): void
+    {
+        $solicitud = $this->enManosDelDirector($this->nueva());
+        // Precondición: con la regla activa sí se le informó.
+        Mail::assertSent(VacationReviewMail::class, $this->informadaRecibio());
+        $this->assertSame(1, SystemNotification::where('user_id', $this->asistente->id)->count());
+
+        // La cadena de la solicitud ya está congelada con el id de la regla; se apaga la regla y se vuelve a avisar del paso.
+        Mail::fake();
+        SystemNotification::query()->delete();
+        $this->reglaDirector->update(['is_active' => false]);
+
+        app(\App\Services\RH\AvisosVacaciones::class)->pasoAvanzado($solicitud->fresh());
+
+        Mail::assertNotSent(VacationReviewMail::class, fn (VacationReviewMail $m) => $m->hasTo('asistente@ejemplo.com'));
+        $this->assertSame(0, SystemNotification::where('user_id', $this->asistente->id)->count());
+    }
+
+    public function test_la_informada_que_es_la_solicitante_no_recibe_el_aviso_informativo(): void
+    {
+        $empleadaAsistente = $this->empleado($this->empresa, [
+            'department_id' => $this->depto->id,
+            'user_id' => $this->asistente->id,
+            'email' => 'asistente@ejemplo.com',
+            'first_name' => 'Asistente',
+        ]);
+        $lunes = today()->next(Carbon::MONDAY)->addWeeks(2);
+        $solicitud = $this->servicio()->crear($empleadaAsistente, $lunes, $lunes->copy()->addDays(4), null, VacationRequest::SOURCE_PORTAL);
+
+        $this->enManosDelDirector($solicitud);
+
+        Mail::assertNotSent(VacationReviewMail::class, fn (VacationReviewMail $m) => $m->hasTo('asistente@ejemplo.com') && $m->via === VacationReviewMail::VIA_INFORMADO);
+        $this->assertSame(0, SystemNotification::where('user_id', $this->asistente->id)
+            ->where('title', 'Solicitud de vacaciones para tu información')->count());
+        // El director sí recibe el suyo: el aviso no se pierde, solo se excluye a la solicitante.
+        Mail::assertSent(VacationReviewMail::class, fn (VacationReviewMail $m) => $m->hasTo('director@ejemplo.com'));
+    }
+
+    public function test_sin_nombre_del_aprobador_el_texto_usa_quien_autoriza_este_paso(): void
+    {
+        $this->director->forceFill(['name' => ''])->save();
+
+        $this->enManosDelDirector($this->nueva());
+
+        $aviso = SystemNotification::where('user_id', $this->asistente->id)->first();
+        $this->assertNotNull($aviso);
+        $this->assertStringContainsString('está esperando a quien autoriza este paso.', $aviso->message);
+        Mail::assertSent(VacationReviewMail::class, fn (VacationReviewMail $m) => $m->hasTo('asistente@ejemplo.com') && $m->aprobador === 'quien autoriza este paso');
+    }
 }

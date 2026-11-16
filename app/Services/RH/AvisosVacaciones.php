@@ -141,10 +141,13 @@ class AvisosVacaciones
         }
     }
 
-    /** Nombres de los usuarios de las reglas «Usuario específico» activas del paso, unidos con « o ». */
+    /**
+     * Nombres de los usuarios de las reglas «Usuario específico» activas del paso, unidos con « o ».
+     * Si no hay ninguno (regla sin usuario), «quien autoriza este paso»: el texto nunca queda «está esperando a .».
+     */
     private function nombresDeAprobadores(VacationRequestApproval $paso): string
     {
-        return ApprovalFlowStep::with('user:id,name')
+        $nombres = ApprovalFlowStep::with('user:id,name')
             ->whereIn('id', $paso->rules ?? [])
             ->where('is_active', true)
             ->where('approver_type', ApprovalFlowStep::TYPE_USER)
@@ -153,6 +156,8 @@ class AvisosVacaciones
             ->filter()
             ->unique()
             ->implode(' o ');
+
+        return $nombres !== '' ? $nombres : 'quien autoriza este paso';
     }
 
     /**

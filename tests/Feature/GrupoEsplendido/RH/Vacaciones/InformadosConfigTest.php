@@ -133,6 +133,29 @@ class InformadosConfigTest extends TestCase
         $this->assertSame([], $this->idsInformados($id));
     }
 
+    public function test_cambiar_el_aprobador_a_alguien_ya_informado_sin_mandar_la_lista_da_422(): void
+    {
+        $id = $this->crearPasoUsuario([$this->asistente->id]);
+
+        $this->putJson($this->urlPasos()."/{$id}", ['user_id' => $this->asistente->id])
+            ->assertStatus(422)->assertJsonValidationErrors('observer_user_ids');
+
+        // No se guardó nada: sigue el aprobador de antes y la misma lista.
+        $this->assertSame($this->director->id, ApprovalFlowStep::findOrFail($id)->user_id);
+        $this->assertSame([$this->asistente->id], $this->idsInformados($id));
+    }
+
+    public function test_borrar_el_paso_borra_sus_informados(): void
+    {
+        $id = $this->crearPasoUsuario([$this->asistente->id]);
+        $this->assertSame([$this->asistente->id], $this->idsInformados($id));
+
+        $this->deleteJson($this->urlPasos()."/{$id}")->assertOk();
+
+        $this->assertDatabaseMissing('approval_flow_steps', ['id' => $id]);
+        $this->assertSame([], $this->idsInformados($id));
+    }
+
     public function test_la_relacion_observers_devuelve_usuarios(): void
     {
         $id = $this->crearPasoUsuario([$this->asistente->id]);

@@ -180,6 +180,17 @@ class InformadosBandejaTest extends TestCase
         $this->assertFalse(app(InformadosVacaciones::class)->esInformado($this->asistente));
     }
 
+    public function test_el_detalle_da_404_a_la_informada_si_la_regla_esta_inactiva(): void
+    {
+        $this->enManosDelDirector($this->solicitud);
+        Sanctum::actingAs($this->asistente);
+        $this->getJson("/api/pending-approvals/vacation_request/{$this->solicitud->id}")->assertOk();
+
+        $this->reglaDirector->update(['is_active' => false]);
+
+        $this->getJson("/api/pending-approvals/vacation_request/{$this->solicitud->id}")->assertNotFound();
+    }
+
     public function test_no_ve_su_propia_solicitud(): void
     {
         $empleadaAsistente = $this->asistente->employee()->first();

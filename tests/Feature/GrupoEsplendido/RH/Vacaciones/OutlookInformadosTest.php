@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Models\VacationOutlookConnection;
 use App\Models\VacationOutlookEvent;
 use App\Models\VacationRequest;
+use App\Models\VacationRequestApproval;
 use App\Services\RH\InformadosVacaciones;
 use App\Services\RH\OutlookVacaciones;
 use App\Services\RH\VacationRequestService;
@@ -209,6 +210,12 @@ class OutlookInformadosTest extends TestCase
         $this->assertTrue((bool) $solicitud->approvals()->where('step_order', $solicitud->current_step)->value('is_rh_final'));
         $solicitud = $this->servicio()->aprobarPaso($solicitud, $this->rh);
         $this->assertSame('approved', $solicitud->status);
+        // Precondición: ningún paso aprobado de esta solicitud lleva la regla del director (se saltó): por eso no es de la informada.
+        $conLaReglaDelDirector = $solicitud->approvals()
+            ->where('decision', VacationRequestApproval::APPROVED)
+            ->get()
+            ->filter(fn (VacationRequestApproval $paso) => in_array($this->reglaDirector->id, array_map('intval', (array) ($paso->rules ?? [])), true));
+        $this->assertCount(0, $conLaReglaDelDirector);
 
         $conexion = $this->conexion();
         $this->fakeGraph();

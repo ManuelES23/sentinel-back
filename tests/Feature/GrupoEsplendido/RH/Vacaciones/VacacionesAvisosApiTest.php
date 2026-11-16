@@ -98,7 +98,9 @@ class VacacionesAvisosApiTest extends TestCase
     {
         $jefe = $this->empleadoConUsuario($this->empresa);
         $this->regla(1, ApprovalFlowStep::TYPE_DIRECT_SUPERVISOR);
-        $solicitante = $this->empleado($this->empresa, ['reports_to' => $jefe->id, 'mobile' => '6671234567']);
+        // Sin correo válido: no hay aviso por correo que cuente en `vacation_notifications` (no depende de la fábrica).
+        $solicitante = $this->empleado($this->empresa, ['reports_to' => $jefe->id, 'mobile' => '6671234567', 'email' => null]);
+        $this->assertNull($solicitante->fresh()->email);
         $lunes = today()->next(Carbon::MONDAY)->addWeeks(2);
         $solicitud = app(VacationRequestService::class)->crear($solicitante, $lunes, $lunes->copy()->addDays(4), null, VacationRequest::SOURCE_PORTAL);
         app(VacationRequestService::class)->aprobarPaso($solicitud, $jefe->user);
