@@ -4,6 +4,8 @@ namespace App\Services\RH;
 
 use App\Events\VacationRequestUpdated;
 use App\Mail\RH\VacationReviewMail;
+use App\Models\ApprovalFlowStep;
+use App\Models\User;
 use App\Models\VacationNotification;
 use App\Models\VacationRequest;
 use App\Models\VacationRequestApproval;
@@ -24,6 +26,7 @@ class AvisosVacaciones
         private AprobadorVacaciones $aprobador,
         private CadenaAprobacionVacaciones $cadena,
         private CorreoVacaciones $correo,
+        private InformadosVacaciones $informados,
     ) {}
 
     public function solicitudCreada(VacationRequest $solicitud): void
@@ -114,18 +117,53 @@ class AvisosVacaciones
             $aviso->vacation('Solicitud de vacaciones por aprobar', $texto);
         }
 
-        foreach ($this->destinatariosDeCorreo($solicitud, $paso, $elegibles) as $correo => [$nombre, $via]) {
-            $this->aislado('correo al aprobador', fn () => $this->correo->avisarAprobador($solicitud, $correo, $nombre, $via));
+        // Quien está informado del paso (p. ej. la asistente del director) se entera, sin que se le pida nada.
+        // Si además puede aprobarlo, ya recibió el aviso de aprobador.
+        // Sin informados (o si no se pueden consultar) el resto de los avisos sigue igual.
+        $informados = collect();
+        $aprobador = '';
+        $this->aislado('informados del paso', function () use ($solicitud, $paso, $elegibles, &$informados, &$aprobador) {
+            $informados = $this->informados->informadosDelPaso($solicitud, $paso)
+                ->reject(fn (User $usuario) => $elegibles->contains('id', $usuario->id))
+                ->values();
+            $aprobador = $informados->isEmpty() ? '' : $this->nombresDeAprobadores($paso);
+        });
+        foreach ($informados as $usuario) {
+            $this->aislado('aviso interno al informado', fn () => NotificationService::toUser($usuario)
+                ->icon('Info', 'blue')
+                ->withAction('/profile?tab=approvals', 'Ver solicitud')
+                ->vacation('Solicitud de vacaciones para tu información', "{$empleado->full_name} solicitó {$solicitud->days_requested} día(s) de vacaciones del "
+                    ."{$solicitud->start_date->format('d/m/Y')} al {$solicitud->end_date->format('d/m/Y')} y está esperando a {$aprobador}."));
         }
+
+        foreach ($this->destinatariosDeCorreo($solicitud, $paso, $elegibles, $informados, $aprobador) as $correo => [$nombre, $via, $quien]) {
+            $this->aislado('correo al aprobador', fn () => $this->correo->avisarAprobador($solicitud, $correo, $nombre, $via, $quien));
+        }
+    }
+
+    /** Nombres de los usuarios de las reglas «Usuario específico» activas del paso, unidos con « o ». */
+    private function nombresDeAprobadores(VacationRequestApproval $paso): string
+    {
+        return ApprovalFlowStep::with('user:id,name')
+            ->whereIn('id', $paso->rules ?? [])
+            ->where('is_active', true)
+            ->where('approver_type', ApprovalFlowStep::TYPE_USER)
+            ->get()
+            ->map(fn (ApprovalFlowStep $regla) => $regla->user?->name)
+            ->filter()
+            ->unique()
+            ->implode(' o ');
     }
 
     /**
      * A quién se le manda correo en el paso, una vez por dirección: cada revisor del portal (jefe o director; su correo de
-     * empleado o, si no tiene, el de su usuario) y cada usuario elegible que no sea ese mismo jefe.
+     * empleado o, si no tiene, el de su usuario), cada usuario elegible que no sea ese mismo jefe y, al final, cada persona
+     * informada del paso (solo informativo; si ya recibe el de aprobador, ese gana).
      *
-     * @return array<string, array{0: ?string, 1: string}> correo => [nombre, vía]
+     * @param  Collection<int, User>  $informados
+     * @return array<string, array{0: ?string, 1: string, 2: ?string}> correo => [nombre, vía, aprobador (solo los informados)]
      */
-    private function destinatariosDeCorreo(VacationRequest $solicitud, VacationRequestApproval $paso, Collection $elegibles): array
+    private function destinatariosDeCorreo(VacationRequest $solicitud, VacationRequestApproval $paso, Collection $elegibles, Collection $informados, string $aprobador): array
     {
         $destinos = [];
         $usuariosDeRevisores = [];
@@ -136,7 +174,7 @@ class AvisosVacaciones
                 $usuariosDeRevisores[] = (int) $revisor->user_id;
             }
             if ($correo !== null) {
-                $destinos[mb_strtolower($correo)] ??= [$revisor->first_name, $revisor->user_id !== null ? VacationReviewMail::VIA_PORTAL_O_SENTINEL : VacationReviewMail::VIA_PORTAL];
+                $destinos[mb_strtolower($correo)] ??= [$revisor->first_name, $revisor->user_id !== null ? VacationReviewMail::VIA_PORTAL_O_SENTINEL : VacationReviewMail::VIA_PORTAL, null];
             }
         }
 
@@ -145,7 +183,15 @@ class AvisosVacaciones
             if ($correo === null || in_array((int) $usuario->id, $usuariosDeRevisores, true)) {
                 continue;
             }
-            $destinos[mb_strtolower($correo)] ??= [$usuario->name, ($paso->is_rh_final || $paso->is_rh_review) ? VacationReviewMail::VIA_RH : VacationReviewMail::VIA_SENTINEL];
+            $destinos[mb_strtolower($correo)] ??= [$usuario->name, ($paso->is_rh_final || $paso->is_rh_review) ? VacationReviewMail::VIA_RH : VacationReviewMail::VIA_SENTINEL, null];
+        }
+
+        // Los informados van al final: si la misma dirección ya es de un aprobador, gana el correo de aprobador.
+        foreach ($informados as $usuario) {
+            $correo = CorreoVacaciones::correoValido($usuario->email);
+            if ($correo !== null) {
+                $destinos[mb_strtolower($correo)] ??= [$usuario->name, VacationReviewMail::VIA_INFORMADO, $aprobador];
+            }
         }
 
         return $destinos;
