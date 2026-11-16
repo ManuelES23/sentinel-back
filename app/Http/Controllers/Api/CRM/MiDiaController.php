@@ -130,7 +130,7 @@ class MiDiaController extends CrmBaseController
 
         $oportunidad = $resultado['oportunidad']->load(CrmOportunidad::RELACIONES_API)->conMontoOrigen();
         $prospecto = $resultado['prospecto']?->load(ProspectoController::RELACIONES);
-        $evento = $resultado['evento']?->load(['vendedor:id,nombre', 'etiqueta:id,nombre']);
+        $evento = $resultado['evento']?->load(['vendedor:id,nombre', 'etiqueta:id,nombre', 'contacto:id,nombre,cargo']);
         $actividad = $resultado['actividad']?->load(ActividadController::RELACIONES);
 
         if ($prospecto) {

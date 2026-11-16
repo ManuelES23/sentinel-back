@@ -47,7 +47,7 @@ class AgendaController extends CrmBaseController
     protected const TIPOS_AGENDA = ['llamada', 'visita', 'reunion', 'tarea', 'correo', 'whatsapp'];
 
     /** Relaciones que salen con cada evento (también en el payload en tiempo real). */
-    protected const RELACIONES = ['vendedor:id,nombre', 'etiqueta:id,nombre'];
+    protected const RELACIONES = ['vendedor:id,nombre', 'etiqueta:id,nombre', 'contacto:id,nombre,cargo'];
 
     /** Tope de pendientes vencidos devueltos de una vez (los más antiguos primero). */
     protected const LIMITE_VENCIDOS = 100;

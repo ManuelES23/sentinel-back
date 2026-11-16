@@ -9,12 +9,14 @@ use App\Models\CRM\CrmEmpresaExterna;
 use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmProspecto;
 use App\Services\CRM\ActividadesDeFicha;
+use App\Services\CRM\ContactoActividadService;
 use App\Services\CRM\SeguimientoService;
 use App\Services\CRM\VisibilidadOportunidades;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
 /**
@@ -52,12 +54,13 @@ class ActividadController extends CrmBaseController
      */
     protected const TIPOS_ACTIVIDAD = ['llamada', 'whatsapp', 'correo', 'visita', 'reunion', 'nota'];
 
-    public const RELACIONES = ['vendedor:id,nombre,email', 'etiqueta:id,nombre'];
+    public const RELACIONES = ['vendedor:id,nombre,email', 'etiqueta:id,nombre', 'contacto:id,nombre,cargo'];
 
     public function __construct(
         private readonly VisibilidadOportunidades $visibilidad,
         private readonly SeguimientoService $seguimientos,
         private readonly ActividadesDeFicha $fichas,
+        private readonly ContactoActividadService $contactos,
     ) {}
 
     /**
@@ -211,7 +214,7 @@ class ActividadController extends CrmBaseController
                 $request->input('entidad_tipo') === 'oportunidad' ? 'required' : 'nullable',
                 ...$this->seguimientos->reglaEtiqueta($empresaId),
             ],
-        ], $this->seguimientos->mensajesEtiqueta('etiqueta_id'));
+        ] + $this->contactos->reglas(), $this->seguimientos->mensajesEtiqueta('etiqueta_id'));
 
         // Una actividad nueva no se liga directo a un cliente o prospecto: se elige o se abre una oportunidad.
         $this->seguimientos->exigirCapturaConOportunidad($validated['entidad_tipo']);
@@ -225,23 +228,38 @@ class ActividadController extends CrmBaseController
             return $this->jsonError('La entidad relacionada no existe o no pertenece a la empresa.', 404);
         }
 
-        $actividad = CrmActividad::create([
-            'empresa_id'       => $empresaId,
-            'entidad_type'     => $modelClass,
-            'entidad_id'       => $validated['entidad_id'],
-            'tipo'             => $validated['tipo'],
-            'descripcion'      => $validated['descripcion'],
-            'fecha_actividad'  => $validated['fecha_actividad'],
-            'vendedor_id'      => $validated['vendedor_id'] ?? null,
-            'duracion_minutos' => $validated['duracion_minutos'] ?? null,
-            'resultado'        => $validated['resultado'] ?? null,
-            'fuente'           => 'manual',
-            'etiqueta_id'      => $validated['etiqueta_id'] ?? null,
-        ]);
+        // El contacto (elegido o creado en línea) se guarda junto con la actividad; el
+        // permiso es el de la actividad, no el de editar prospectos/clientes.
+        $contactoCreado = null;
+        $actividad = DB::transaction(function () use ($empresaId, $entidad, $modelClass, $validated, &$contactoCreado) {
+            $contactoId = $this->contactos->resolver(
+                $empresaId,
+                $entidad,
+                $validated,
+                $this->contactos->exige($empresaId, $entidad, $validated['tipo']),
+                $contactoCreado,
+            );
+
+            return CrmActividad::create([
+                'empresa_id'       => $empresaId,
+                'entidad_type'     => $modelClass,
+                'entidad_id'       => $validated['entidad_id'],
+                'tipo'             => $validated['tipo'],
+                'descripcion'      => $validated['descripcion'],
+                'fecha_actividad'  => $validated['fecha_actividad'],
+                'vendedor_id'      => $validated['vendedor_id'] ?? null,
+                'duracion_minutos' => $validated['duracion_minutos'] ?? null,
+                'resultado'        => $validated['resultado'] ?? null,
+                'fuente'           => 'manual',
+                'etiqueta_id'      => $validated['etiqueta_id'] ?? null,
+                'contacto_id'      => $contactoId,
+            ]);
+        });
 
         $actividad->load(self::RELACIONES);
         $actividad->entidad_tipo = $validated['entidad_tipo'];
 
+        $this->difundirContactoCreado($contactoCreado);
         $this->difundir(new ActividadUpdated('created', $actividad->toArray()));
 
         return $this->jsonSuccess($actividad, 'Actividad registrada correctamente', 201);

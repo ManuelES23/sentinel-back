@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\CRM;
 
 use App\Events\CRM\ActividadUpdated;
 use App\Events\CRM\AgendaUpdated;
+use App\Services\CRM\ContactoActividadService;
 use App\Services\CRM\SeguimientoService;
 use App\Services\CRM\VendedorActualService;
 use App\Services\CRM\VisibilidadOportunidades;
@@ -12,6 +13,7 @@ use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Closure;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
@@ -25,6 +27,7 @@ class SeguimientoController extends CrmBaseController
         private readonly SeguimientoService $seguimientos,
         private readonly VendedorActualService $vendedores,
         private readonly VisibilidadOportunidades $visibilidad,
+        private readonly ContactoActividadService $contactos,
     ) {}
 
     public function store(Request $request): JsonResponse
@@ -70,7 +73,7 @@ class SeguimientoController extends CrmBaseController
                 $exigeEtiquetaActividad ? 'required_with:actividad' : 'nullable',
                 ...$this->seguimientos->reglaEtiqueta($empresaId),
             ],
-        ], $this->seguimientos->reglasSiguiente('siguiente', $empresaId, $esOportunidad)), array_merge(
+        ], $this->seguimientos->reglasSiguiente('siguiente', $empresaId, $esOportunidad), $this->contactos->reglas()), array_merge(
             $this->seguimientos->mensajesSiguiente('siguiente'),
             $this->seguimientos->mensajesEtiqueta('actividad.etiqueta_id'),
             ['actividad.fuente.in' => 'La fuente de la actividad no es válida.'],
@@ -120,19 +123,35 @@ class SeguimientoController extends CrmBaseController
             isset($validated['vendedor_id']) ? (int) $validated['vendedor_id'] : null,
         );
 
-        $resultado = $this->seguimientos->registrar(
-            $empresaId,
-            $vendedor->id,
-            $entidad,
-            empty($actividad) ? null : $actividad,
-            empty($siguiente) ? null : $siguiente,
-        );
+        // El contacto (elegido o creado en línea) se resuelve en la misma transacción que la
+        // actividad y el siguiente paso, y los dos llevan el mismo. El permiso es el de la
+        // actividad, no el de editar prospectos/clientes.
+        $contactoCreado = null;
+        $resultado = DB::transaction(function () use ($empresaId, $vendedor, $entidad, $actividad, $siguiente, $validated, &$contactoCreado) {
+            $contactoId = $this->contactos->resolver(
+                $empresaId,
+                $entidad,
+                $validated,
+                $this->contactos->exige($empresaId, $entidad, $actividad['tipo'] ?? null, $actividad['fuente'] ?? 'manual'),
+                $contactoCreado,
+            );
+
+            return $this->seguimientos->registrar(
+                $empresaId,
+                $vendedor->id,
+                $entidad,
+                empty($actividad) ? null : $actividad + ['contacto_id' => $contactoId],
+                empty($siguiente) ? null : $siguiente + ['contacto_id' => $contactoId],
+            );
+        });
+
+        $this->difundirContactoCreado($contactoCreado);
 
         if ($resultado['actividad']) {
             $this->difundir(new ActividadUpdated('created', $resultado['actividad']->load(ActividadController::RELACIONES)->toArray()));
         }
         if ($resultado['evento']) {
-            $this->difundir(new AgendaUpdated('created', $resultado['evento']->load(['vendedor:id,nombre', 'etiqueta:id,nombre'])->toArray()));
+            $this->difundir(new AgendaUpdated('created', $resultado['evento']->load(['vendedor:id,nombre', 'etiqueta:id,nombre', 'contacto:id,nombre,cargo'])->toArray()));
         }
 
         return $this->jsonSuccess($resultado, 'Seguimiento registrado correctamente', 201);

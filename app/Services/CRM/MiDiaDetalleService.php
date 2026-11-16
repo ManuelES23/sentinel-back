@@ -85,7 +85,7 @@ class MiDiaDetalleService
 
     private function eventos(CrmVendedor $vendedor, CrmOportunidad $oportunidad): array
     {
-        return CrmAgenda::with('etiqueta:id,nombre')
+        return CrmAgenda::with(['etiqueta:id,nombre', 'contacto:id,nombre,cargo'])
             ->where('empresa_id', $oportunidad->empresa_id)
             ->where('vendedor_id', $vendedor->id)
             ->where('entidad_type', CrmOportunidad::class)
@@ -112,7 +112,7 @@ class MiDiaDetalleService
             CrmProspecto::class => $oportunidad->prospecto_id ?? $oportunidad->cliente?->prospecto_id,
         ]);
 
-        return CrmActividad::with('etiqueta:id,nombre')
+        return CrmActividad::with(['etiqueta:id,nombre', 'contacto:id,nombre,cargo'])
             ->where('empresa_id', $oportunidad->empresa_id)
             ->where(function ($q) use ($fuentes) {
                 foreach ($fuentes as $clase => $id) {
@@ -130,6 +130,7 @@ class MiDiaDetalleService
                 'resultado' => $a->resultado,
                 'fecha' => $a->fecha_actividad?->toIso8601String(),
                 'etiqueta' => $a->etiqueta ? ['id' => $a->etiqueta->id, 'nombre' => $a->etiqueta->nombre] : null,
+                'contacto' => $a->contacto ? ['id' => $a->contacto->id, 'nombre' => $a->contacto->nombre, 'cargo' => $a->contacto->cargo] : null,
                 'origen' => self::ORIGEN_SEGUIMIENTO[$a->entidad_type],
             ])
             ->all();

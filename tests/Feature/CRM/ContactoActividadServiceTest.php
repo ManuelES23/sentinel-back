@@ -304,4 +304,45 @@ class ContactoActividadServiceTest extends TestCase
         );
         $this->assertSame(0, CrmContacto::count());
     }
+
+    public function test_resolver_trata_contacto_nuevo_vacio_como_ausente(): void
+    {
+        $cliente = $this->cliente();
+
+        $this->assertNull($this->servicio->resolver($this->enterprise->id, $cliente, ['contacto_nuevo' => []], false));
+        $this->assertErrorContacto(
+            fn () => $this->servicio->resolver($this->enterprise->id, $cliente, ['contacto_nuevo' => []], true),
+            'Elige con quién hablaste o agrega un contacto.',
+        );
+        $this->assertSame(0, CrmContacto::count());
+    }
+
+    public function test_empresa_de_prospecto_con_varios_clientes_ordena_por_id(): void
+    {
+        $prospecto = $this->prospecto();
+        $primero = $this->cliente(null, $prospecto->id);
+        $this->cliente(null, $prospecto->id);
+
+        \DB::enableQueryLog();
+        $empresa = $this->servicio->empresaDe($prospecto);
+        $sql = collect(\DB::getQueryLog())->pluck('query')->implode(' | ');
+        \DB::disableQueryLog();
+
+        $this->assertSame($primero->id, $empresa->id);
+        $this->assertMatchesRegularExpression('/order by [`"]id[`"] asc/', $sql);
+    }
+
+    public function test_resolver_entrega_el_contacto_creado_para_difundirlo_despues_del_commit(): void
+    {
+        $cliente = $this->cliente();
+        $existente = $this->contacto($cliente, 'Ana', true);
+
+        $creado = null;
+        $this->servicio->resolver($this->enterprise->id, $cliente, ['contacto_id' => $existente->id], true, $creado);
+        $this->assertNull($creado);
+
+        $id = $this->servicio->resolver($this->enterprise->id, $cliente, ['contacto_nuevo' => ['nombre' => 'Beto']], true, $creado);
+        $this->assertInstanceOf(CrmContacto::class, $creado);
+        $this->assertSame($id, $creado->id);
+    }
 }

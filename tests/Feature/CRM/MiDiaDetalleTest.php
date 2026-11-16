@@ -271,6 +271,7 @@ class MiDiaDetalleTest extends TestCase
             'resultado' => 'Quedó en pagar',
             'fecha' => $this->ahora->subDays(1)->toIso8601String(),
             'etiqueta' => ['id' => $etiqueta->id, 'nombre' => 'Cobranza'],
+            'contacto' => null,
             'origen' => 'oportunidad',
         ], $seg[0]);
         $this->assertNull($seg[1]['etiqueta']);

@@ -44,7 +44,7 @@ class ContactoActividadService
     public function empresaDe(?Model $entidad): ?Model
     {
         if ($entidad instanceof CrmProspecto) {
-            return $entidad->clientes()->first() ?? $entidad;
+            return $entidad->clientes()->orderBy('id')->first() ?? $entidad;
         }
 
         if ($entidad instanceof CrmCliente || $entidad instanceof CrmEmpresaExterna) {
@@ -85,12 +85,20 @@ class ContactoActividadService
      * transacción de quien registra la actividad.
      *
      * @param  array  $datos  Cuerpo ya validado: `contacto_id` o `contacto_nuevo`.
+     * @param  CrmContacto|null  $creado  Salida: el contacto creado en línea (o null). Quien
+     *                                    llama lo difunde (ContactoUpdated 'created') DESPUÉS
+     *                                    de que la transacción confirme.
      * @throws ValidationException en la llave `contacto_id`.
+     *
+     * Carrera conocida y aceptada: dos primeros contactos simultáneos de una
+     * misma empresa pueden quedar ambos como principales (no hay candado).
      */
-    public function resolver(int $empresaId, ?Model $entidad, array $datos, bool $obligatorio): ?int
+    public function resolver(int $empresaId, ?Model $entidad, array $datos, bool $obligatorio, ?CrmContacto &$creado = null): ?int
     {
+        $creado = null;
         $contactoId = $datos['contacto_id'] ?? null;
-        $nuevo = $datos['contacto_nuevo'] ?? null;
+        // Un `{}` llega como [] y equivale a no mandar contacto nuevo.
+        $nuevo = ($datos['contacto_nuevo'] ?? null) ?: null;
 
         if ($contactoId !== null && $nuevo !== null) {
             $this->fallar(self::MENSAJE_AMBOS);
@@ -138,6 +146,8 @@ class ContactoActividadService
             'telefono' => $nuevo['telefono'] ?? null,
             'es_principal' => ! $yaTenia,
         ]);
+
+        $creado = $contacto;
 
         return (int) $contacto->id;
     }
