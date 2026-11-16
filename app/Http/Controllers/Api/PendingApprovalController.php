@@ -18,6 +18,7 @@ use App\Models\SfFieldCheck;
 use App\Models\TimeClockCheck;
 use App\Models\UserEnterpriseAccess;
 use App\Models\VacationRequest;
+use App\Models\VacationRequestApproval;
 use App\Services\Abastecimiento\AprobadorLiquidaciones;
 use App\Services\Abastecimiento\AvisosAbastecimiento;
 use App\Services\Abastecimiento\CadenaLiquidacion;
@@ -30,6 +31,7 @@ use App\Services\Compras\AprobadorOrdenCompra;
 use App\Services\NotificationService;
 use App\Services\RH\AprobadorVacaciones;
 use App\Services\RH\CadenaAprobacionVacaciones;
+use App\Services\RH\InformadosVacaciones;
 use App\Services\RH\VacationRequestService;
 use App\Support\RH\PresentadorPortalVacaciones;
 use Illuminate\Http\JsonResponse;
@@ -46,8 +48,13 @@ class PendingApprovalController extends Controller
 
     private ?CadenaAprobacionVacaciones $cadenaVac = null;
 
+    private ?InformadosVacaciones $informadosVac = null;
+
     /** @var array<int, Collection> solicitudes de vacaciones decidibles, por id de usuario (el controlador vive una petición) */
     private array $vacacionesPorUsuario = [];
+
+    /** @var array<int, Collection> bandeja de vacaciones (decidibles + solo consulta), por id de usuario */
+    private array $bandejaVacacionesPorUsuario = [];
 
     /** @var array<int, Collection> liquidaciones de abastecimiento decidibles, por id de usuario (el controlador vive una petición) */
     private array $liquidacionesPorUsuario = [];
@@ -63,6 +70,7 @@ class PendingApprovalController extends Controller
      */
     public function summary(Request $request): JsonResponse
     {
+        $this->olvidarVacacionesCalculadas();
         $user = $request->user();
         $employee = $user->employee;
         $hasTransferPermission = $this->hasTransferApprovalPermission($request, $user);
@@ -246,6 +254,7 @@ class PendingApprovalController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
+        $this->olvidarVacacionesCalculadas();
         $user = $request->user();
         $employee = $user->employee;
         $hasTransferPermission = $this->hasTransferApprovalPermission($request, $user);
@@ -495,7 +504,24 @@ class PendingApprovalController extends Controller
         $decidioUnPaso = $solicitud->approvals->contains(fn ($paso) => (int) $paso->decided_by === (int) $user->id
             || ($empleadoId !== null && (int) $paso->decided_by_employee_id === (int) $empleadoId));
 
-        return $decidioUnPaso || $this->puedeDecidirVacacion($user, $solicitud);
+        return $decidioUnPaso || $this->puedeDecidirVacacion($user, $solicitud) || $this->informaDeVacacion($user, $solicitud);
+    }
+
+    /**
+     * ¿Es persona informada de la solicitud? Del paso actual en espera o de algún paso que ya la aprobó
+     * (sin filtro de fechas: es solo el permiso de lectura del detalle).
+     */
+    private function informaDeVacacion($user, VacationRequest $solicitud): bool
+    {
+        if (! $this->informados()->esInformado($user)) {
+            return false;
+        }
+
+        return $solicitud->approvals->contains(fn ($paso) => ($paso->decision === VacationRequestApproval::APPROVED
+                || ($solicitud->status === 'pending'
+                    && $paso->decision === VacationRequestApproval::WAITING
+                    && (int) $paso->step_order === (int) $solicitud->current_step))
+            && $this->informados()->informaDelPaso($user, $paso));
     }
 
     /** ¿Le toca a este usuario decidir (aprobar o rechazar) el paso actual de la solicitud? */
@@ -526,9 +552,33 @@ class PendingApprovalController extends Controller
             ->values();
     }
 
+    /**
+     * Bandeja de vacaciones del usuario: las que puede decidir (`solo_consulta` falso) más las que espera un paso
+     * del que es persona informada y no puede decidir (`solo_consulta` verdadero), sin repetir, las más nuevas primero.
+     *
+     * @return Collection<int, array{solicitud: VacationRequest, solo_consulta: bool}>
+     */
+    private function bandejaVacaciones($user): Collection
+    {
+        if (isset($this->bandejaVacacionesPorUsuario[$user->id])) {
+            return $this->bandejaVacacionesPorUsuario[$user->id];
+        }
+
+        $decide = $this->vacacionesPara($user);
+        $idsQueDecide = $decide->pluck('id')->flip();
+        $soloConsulta = $this->informados()->pendientesPara($user)
+            ->reject(fn (VacationRequest $solicitud) => $idsQueDecide->has($solicitud->id));
+
+        return $this->bandejaVacacionesPorUsuario[$user->id] = $decide
+            ->map(fn (VacationRequest $solicitud) => ['solicitud' => $solicitud, 'solo_consulta' => false])
+            ->concat($soloConsulta->map(fn (VacationRequest $solicitud) => ['solicitud' => $solicitud, 'solo_consulta' => true]))
+            ->sortByDesc(fn (array $entrada) => $entrada['solicitud']->created_at?->getTimestamp() ?? 0)
+            ->values();
+    }
+
     private function countPendingVacations(Employee $employee, string $scope): int
     {
-        return $employee->user ? $this->vacacionesPara($employee->user)->count() : 0;
+        return $employee->user ? $this->bandejaVacaciones($employee->user)->count() : 0;
     }
 
     private function getPendingVacations(Employee $employee, string $scope): array
@@ -553,7 +603,7 @@ class PendingApprovalController extends Controller
             'name' => $process->name,
             'module' => $process->module,
             'description' => $process->description,
-            'pending_count' => $this->vacacionesPara($user)->count(),
+            'pending_count' => $this->bandejaVacaciones($user)->count(),
             'scope' => 'enterprise',
             'route' => $this->getProcessRoute($process->code),
         ];
@@ -561,39 +611,49 @@ class PendingApprovalController extends Controller
         return $conItems ? $entrada + ['items' => $this->itemsVacaciones($user)] : $entrada;
     }
 
+    /** «Usuario específico» de algún paso activo, o persona informada de uno (ve la pestaña en solo consulta). */
     private function esUsuarioEspecificoDeVacaciones(ApprovalProcess $process, $user): bool
     {
         return $process->activeSteps()
             ->where('approver_type', ApprovalFlowStep::TYPE_USER)
             ->where('user_id', $user->id)
-            ->exists();
+            ->exists()
+            || $this->informados()->esInformado($user);
     }
 
     private function itemsVacaciones($user): array
     {
-        return $this->vacacionesPara($user)
+        return $this->bandejaVacaciones($user)
             ->take(50)
-            ->map(fn (VacationRequest $item) => [
-                'id' => $item->id,
-                'type' => 'vacation_request',
-                'title' => ($item->employee->first_name ?? '').' '.($item->employee->last_name ?? ''),
-                'subtitle' => $item->employee->employee_number ?? '',
-                'description' => "{$item->days_requested} día(s) - ".
-                    optional($item->start_date)->format('d/m/Y').' al '.
-                    optional($item->end_date)->format('d/m/Y'),
-                'department' => $item->employee->department->name ?? null,
-                'enterprise' => $item->employee->enterprise->name ?? null,
-                'photo' => $item->employee->photo_url ?? null,
-                'date' => $item->created_at?->toISOString(),
-                'reason' => $item->reason,
-                'days' => $item->days_requested,
-                'start_date' => $item->start_date?->format('Y-m-d'),
-                'end_date' => $item->end_date?->format('Y-m-d'),
-                'step' => $item->current_step,
-                'steps_total' => $item->approvals->count(),
-                'step_description' => $item->approvals->firstWhere('step_order', $item->current_step)?->description,
+            ->map(fn (array $entrada) => $this->itemVacacion($entrada['solicitud']) + [
+                // Persona informada que no decide este paso: el front oculta Aprobar y Rechazar.
+                'solo_consulta' => $entrada['solo_consulta'],
             ])
             ->toArray();
+    }
+
+    private function itemVacacion(VacationRequest $item): array
+    {
+        return [
+            'id' => $item->id,
+            'type' => 'vacation_request',
+            'title' => ($item->employee->first_name ?? '').' '.($item->employee->last_name ?? ''),
+            'subtitle' => $item->employee->employee_number ?? '',
+            'description' => "{$item->days_requested} día(s) - ".
+                optional($item->start_date)->format('d/m/Y').' al '.
+                optional($item->end_date)->format('d/m/Y'),
+            'department' => $item->employee->department->name ?? null,
+            'enterprise' => $item->employee->enterprise->name ?? null,
+            'photo' => $item->employee->photo_url ?? null,
+            'date' => $item->created_at?->toISOString(),
+            'reason' => $item->reason,
+            'days' => $item->days_requested,
+            'start_date' => $item->start_date?->format('Y-m-d'),
+            'end_date' => $item->end_date?->format('Y-m-d'),
+            'step' => $item->current_step,
+            'steps_total' => $item->approvals->count(),
+            'step_description' => $item->approvals->firstWhere('step_order', $item->current_step)?->description,
+        ];
     }
 
     // ===== Liquidaciones de abastecimiento =====
@@ -1148,6 +1208,8 @@ class PendingApprovalController extends Controller
      */
     public function show(Request $request, string $type, int $id): JsonResponse
     {
+        $this->olvidarVacacionesCalculadas();
+
         $item = match ($type) {
             // El empleado va completo (reports_to, user_id…): las reglas de quién puede ver o decidir lo necesitan.
             'vacation_request' => VacationRequest::with([
@@ -1762,6 +1824,22 @@ class PendingApprovalController extends Controller
     private function aprobadorOc(): AprobadorOrdenCompra
     {
         return $this->aprobadorOc ??= app(AprobadorOrdenCompra::class);
+    }
+
+    /**
+     * La ruta conserva la instancia del controlador entre peticiones del mismo proceso (pruebas, workers de larga
+     * vida): lo memoizado de vacaciones se recalcula en cada resumen o lista.
+     */
+    private function olvidarVacacionesCalculadas(): void
+    {
+        $this->vacacionesPorUsuario = [];
+        $this->bandejaVacacionesPorUsuario = [];
+        $this->informadosVac = null;
+    }
+
+    private function informados(): InformadosVacaciones
+    {
+        return $this->informadosVac ??= app(InformadosVacaciones::class);
     }
 
     private function aprobadorVac(): AprobadorVacaciones
