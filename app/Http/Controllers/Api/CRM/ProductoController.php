@@ -234,6 +234,10 @@ class ProductoController extends CrmBaseController
             return $this->jsonError('No se puede eliminar el producto porque está asociado a oportunidades.', 409);
         }
 
+        if (\App\Support\CRM\UsoEnAbastecimiento::producto($producto->id)) {
+            return $this->jsonError('No se puede eliminar el producto porque se usa en Abastecimiento: desactívalo.', 409);
+        }
+
         $data = $producto->toArray();
         $producto->delete();
 

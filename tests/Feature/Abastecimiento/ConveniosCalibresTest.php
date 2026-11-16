@@ -11,7 +11,7 @@ use App\Models\Abastecimiento\Productor;
 use App\Models\Abastecimiento\Temporada;
 use App\Models\Abastecimiento\TipoCarga;
 use App\Models\Abastecimiento\Variedad;
-use App\Models\Abastecimiento\VariedadCalibre;
+use App\Models\CRM\CrmProductoCalibre;
 use App\Models\Abastecimiento\Recepcion;
 use App\Models\User;
 use App\Services\Abastecimiento\ReglasRecepcion;
@@ -65,7 +65,7 @@ class ConveniosCalibresTest extends TestCase
         return TipoCarga::where('enterprise_id', $this->sbp->id)->orderBy('id')->firstOrFail();
     }
 
-    private function calibre(string $nombre, int $orden = 0, bool $activo = true, ?Variedad $variedad = null): VariedadCalibre
+    private function calibre(string $nombre, int $orden = 0, bool $activo = true, ?Variedad $variedad = null): CrmProductoCalibre
     {
         $calibre = $this->crearCalibre($variedad ?? $this->variedad, $nombre, $activo);
         $calibre->update(['orden' => $orden]);
@@ -611,7 +611,7 @@ class ConveniosCalibresTest extends TestCase
      * Convenio activo por calibre (Jumbo y Grande, precio desde el 1 de junio) con una recepción
      * el 10 de junio que solo trae renglón de Jumbo.
      *
-     * @return array{0: Convenio, 1: VariedadCalibre, 2: VariedadCalibre}
+     * @return array{0: Convenio, 1: Calibre, 2: Calibre}
      */
     private function porCalibreConRecepcion(): array
     {

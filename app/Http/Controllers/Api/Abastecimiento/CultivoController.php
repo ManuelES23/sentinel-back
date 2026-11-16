@@ -7,10 +7,12 @@ use App\Models\Abastecimiento\ConvenioCalibre;
 use App\Models\Abastecimiento\Cultivo;
 use App\Models\Abastecimiento\Temporada;
 use App\Models\Abastecimiento\Variedad;
-use App\Models\Abastecimiento\VariedadCalibre;
+use App\Models\CRM\CrmProductoCalibre;
+use App\Services\Abastecimiento\EnlaceProductosCrm;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -37,8 +39,8 @@ class CultivoController extends AbastecimientoController
             ->with(['variedades' => function ($q) use ($soloActivos) {
                 $q->when($soloActivos, fn ($v) => $v->where('is_active', true))
                     ->orderBy('nombre')
-                    ->with(['calibres' => function ($c) use ($soloActivos) {
-                        $c->when($soloActivos, fn ($k) => $k->where('is_active', true))
+                    ->with(['producto:id,nombre,commodity', 'calibres' => function ($c) use ($soloActivos) {
+                        $c->when($soloActivos, fn ($k) => $k->where('activo', true))
                             ->orderBy('orden')->orderBy('nombre');
                     }]);
             }])
@@ -126,10 +128,8 @@ class CultivoController extends AbastecimientoController
         }
 
         DB::transaction(function () use ($cultivo) {
-            $cultivo->variedades()->get()->each(function (Variedad $v) {
-                $v->calibres()->get()->each->delete();
-                $v->delete();
-            });
+            // Los calibres son del catálogo de Splendid Farms: no se tocan.
+            $cultivo->variedades()->get()->each->delete();
             $cultivo->delete();
         });
 
@@ -144,12 +144,20 @@ class CultivoController extends AbastecimientoController
         $cultivo = Cultivo::deEmpresa($empresa->id)->findOrFail($cultivoId);
         $datos = $request->validate(['nombre' => 'required|string|max:100']);
 
-        $variedad = DB::transaction(fn () => $this->crearORestaurar(
-            Variedad::class,
-            ['cultivo_id' => $cultivo->id],
-            $datos['nombre'],
-            'Ya existe una variedad con ese nombre en el cultivo.',
-        ));
+        $variedad = DB::transaction(function () use ($cultivo, $datos, $empresa) {
+            $variedad = $this->crearORestaurar(
+                Variedad::class,
+                ['cultivo_id' => $cultivo->id],
+                $datos['nombre'],
+                'Ya existe una variedad con ese nombre en el cultivo.',
+            );
+            // Sin liga todavía: se propone el producto del CRM con el nombre de la variedad.
+            if (! $variedad->producto_id && ($producto = EnlaceProductosCrm::proponer($variedad, $empresa->id))) {
+                $variedad->update(['producto_id' => $producto->id]);
+            }
+
+            return $variedad;
+        });
 
         $data = $this->presentarVariedad($variedad, false);
         $this->difundir('cultivo', 'updated', ['id' => $cultivo->id, 'variedad' => $data], $empresa);
@@ -164,12 +172,14 @@ class CultivoController extends AbastecimientoController
         $datos = $request->validate([
             'nombre' => 'required|string|max:100',
             'is_active' => 'sometimes|boolean',
-        ]);
+            'producto_id' => ['sometimes', 'nullable', 'integer', Rule::exists('crm_productos', 'id')->where('empresa_id', $empresa->id)],
+        ], ['producto_id.exists' => 'Ese producto del CRM no existe en esta empresa.']);
 
         $this->exigirNombreLibre(
             Variedad::class, ['cultivo_id' => $variedad->cultivo_id], $datos['nombre'], $variedad->id,
             'Ya existe una variedad con ese nombre en el cultivo.',
         );
+        $this->exigirCambioDeLigaPermitido($variedad, $datos);
         $variedad->update($datos);
 
         $data = $this->presentarVariedad($variedad, $this->variedadEnUso($variedad));
@@ -187,85 +197,46 @@ class CultivoController extends AbastecimientoController
             throw ValidationException::withMessages(['id' => self::MENSAJE_EN_USO]);
         }
 
-        DB::transaction(function () use ($variedad) {
-            $variedad->calibres()->get()->each->delete();
-            $variedad->delete();
-        });
+        $variedad->delete();
         $this->difundir('cultivo', 'updated', ['id' => $variedad->cultivo_id, 'variedad_eliminada' => $variedad->id], $empresa);
 
         return response()->json(['success' => true, 'message' => 'Variedad eliminada.', 'data' => ['id' => $variedad->id]]);
     }
 
-    public function storeCalibre(Request $request, int $variedadId): JsonResponse
+    /** GET productos-crm — productos del CRM de la empresa para elegir la liga (los calibres salen de ahí). */
+    public function productosCrm(Request $request): JsonResponse
     {
-        $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'create');
-        $variedad = Variedad::deEmpresa($empresa->id)->findOrFail($variedadId);
-        $datos = $request->validate(['nombre' => 'required|string|max:60']);
+        $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'view');
 
-        $calibre = DB::transaction(fn () => $this->crearORestaurar(
-            VariedadCalibre::class,
-            ['variedad_id' => $variedad->id],
-            $datos['nombre'],
-            'Ya existe un calibre con ese nombre en la variedad.',
-            ['orden' => (int) VariedadCalibre::where('variedad_id', $variedad->id)->max('orden') + 1],
-        ));
-
-        $data = $this->presentarCalibre($calibre, false);
-        $this->difundir('cultivo', 'updated', ['id' => $variedad->cultivo_id, 'variedad_id' => $variedad->id, 'calibre' => $data], $empresa);
-
-        return response()->json(['success' => true, 'message' => 'Calibre creado.', 'data' => $data], 201);
+        return response()->json(['success' => true, 'message' => 'OK', 'data' => EnlaceProductosCrm::opciones($empresa->id)]);
     }
 
-    public function updateCalibre(Request $request, int $id): JsonResponse
+    /**
+     * Cambiar el producto del CRM cambia los calibres disponibles: no se permite si algún convenio de esta
+     * variedad ya pactó calibres (sus precios, metas y recepciones apuntan a calibres del producto anterior).
+     */
+    private function exigirCambioDeLigaPermitido(Variedad $variedad, array $datos): void
     {
-        $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'edit');
-        $calibre = VariedadCalibre::deEmpresa($empresa->id)->with('variedad')->findOrFail($id);
-        $datos = $request->validate([
-            'nombre' => 'required|string|max:60',
-            'is_active' => 'sometimes|boolean',
-            'orden' => 'sometimes|integer|min:0|max:65535',
-        ]);
-
-        $this->exigirNombreLibre(
-            VariedadCalibre::class, ['variedad_id' => $calibre->variedad_id], $datos['nombre'], $calibre->id,
-            'Ya existe un calibre con ese nombre en la variedad.',
-        );
-        $calibre->update($datos);
-
-        $data = $this->presentarCalibre($calibre, $this->calibreEnUso($calibre));
-        $this->difundir('cultivo', 'updated', ['id' => $calibre->variedad->cultivo_id, 'variedad_id' => $calibre->variedad_id, 'calibre' => $data], $empresa);
-
-        return response()->json(['success' => true, 'message' => 'Calibre actualizado.', 'data' => $data]);
-    }
-
-    public function destroyCalibre(Request $request, int $id): JsonResponse
-    {
-        $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'delete');
-        $calibre = VariedadCalibre::deEmpresa($empresa->id)->with('variedad')->findOrFail($id);
-
-        if ($this->calibreEnUso($calibre)) {
-            throw ValidationException::withMessages(['id' => self::MENSAJE_EN_USO]);
+        if (! array_key_exists('producto_id', $datos) || (int) $datos['producto_id'] === (int) $variedad->producto_id) {
+            return;
         }
 
-        $calibre->delete();
-        $this->difundir('cultivo', 'updated', ['id' => $calibre->variedad->cultivo_id, 'variedad_id' => $calibre->variedad_id, 'calibre_eliminado' => $calibre->id], $empresa);
-
-        return response()->json(['success' => true, 'message' => 'Calibre eliminado.', 'data' => ['id' => $calibre->id]]);
+        $enUso = ConvenioCalibre::whereHas('convenio', fn ($c) => $c->where('variedad_id', $variedad->id))->exists();
+        if ($enUso) {
+            throw ValidationException::withMessages([
+                'producto_id' => 'Esta variedad ya tiene convenios por calibre: no se puede cambiar su producto del CRM.',
+            ]);
+        }
     }
 
-    private function calibreEnUso(VariedadCalibre $calibre): bool
-    {
-        return ConvenioCalibre::where('calibre_id', $calibre->id)->exists();
-    }
-
-    private function presentarCalibre(VariedadCalibre $calibre, bool $enUso): array
+    private function presentarCalibre(CrmProductoCalibre $calibre, bool $enUso): array
     {
         return [
             'id' => $calibre->id,
-            'variedad_id' => $calibre->variedad_id,
+            'producto_id' => $calibre->producto_id,
             'nombre' => $calibre->nombre,
             'orden' => (int) $calibre->orden,
-            'is_active' => (bool) $calibre->is_active,
+            'is_active' => (bool) $calibre->activo,
             'en_uso' => $enUso,
         ];
     }
@@ -298,7 +269,7 @@ class CultivoController extends AbastecimientoController
 
     private function presentarVariedad(Variedad $variedad, bool $enUso): array
     {
-        $variedad->loadMissing(['calibres' => fn ($q) => $q->orderBy('orden')->orderBy('nombre')]);
+        $variedad->loadMissing(['producto:id,nombre,commodity', 'calibres' => fn ($q) => $q->orderBy('orden')->orderBy('nombre')]);
         $calibresEnUso = ConvenioCalibre::whereIn('calibre_id', $variedad->calibres->pluck('id'))
             ->distinct()->pluck('calibre_id')->flip();
 
@@ -308,8 +279,14 @@ class CultivoController extends AbastecimientoController
             'nombre' => $variedad->nombre,
             'is_active' => (bool) $variedad->is_active,
             'en_uso' => $enUso,
+            'producto_id' => $variedad->producto_id,
+            'producto' => $variedad->producto ? [
+                'id' => $variedad->producto->id,
+                'nombre' => $variedad->producto->nombre,
+                'commodity' => $variedad->producto->commodity,
+            ] : null,
             'calibres' => $variedad->calibres
-                ->map(fn (VariedadCalibre $c) => $this->presentarCalibre($c, $calibresEnUso->has($c->id)))
+                ->map(fn (CrmProductoCalibre $c) => $this->presentarCalibre($c, $calibresEnUso->has($c->id)))
                 ->values()
                 ->all(),
         ];

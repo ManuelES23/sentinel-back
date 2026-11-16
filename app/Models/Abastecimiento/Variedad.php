@@ -2,6 +2,8 @@
 
 namespace App\Models\Abastecimiento;
 
+use App\Models\CRM\CrmProducto;
+use App\Models\CRM\CrmProductoCalibre;
 use App\Traits\Loggable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -19,12 +21,14 @@ class Variedad extends Model
 
     protected $fillable = [
         'cultivo_id',
+        'producto_id',
         'nombre',
         'is_active',
     ];
 
     protected $casts = [
         'cultivo_id' => 'integer',
+        'producto_id' => 'integer',
         'is_active' => 'boolean',
     ];
 
@@ -39,9 +43,18 @@ class Variedad extends Model
         return $this->belongsTo(Cultivo::class, 'cultivo_id');
     }
 
-    /** Calibres de la variedad; se consumen ordenados por `orden` y `nombre`. */
+    /**
+     * Producto del CRM de la empresa del que salen los calibres (null = sin calibres). En el CRM cada
+     * producto es una variedad comercial (p. ej. «Kent Mango») con sus propios calibres.
+     */
+    public function producto(): BelongsTo
+    {
+        return $this->belongsTo(CrmProducto::class, 'producto_id');
+    }
+
+    /** Calibres de la variedad: los del producto del CRM ligado (crm_producto_calibres). */
     public function calibres(): HasMany
     {
-        return $this->hasMany(VariedadCalibre::class, 'variedad_id');
+        return $this->hasMany(CrmProductoCalibre::class, 'producto_id', 'producto_id');
     }
 }

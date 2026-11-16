@@ -6,7 +6,8 @@ use App\Models\Abastecimiento\Convenio;
 use App\Models\Abastecimiento\ConvenioCalibre;
 use App\Models\Abastecimiento\ConvenioMeta;
 use App\Models\Abastecimiento\ConvenioPrecio;
-use App\Models\Abastecimiento\VariedadCalibre;
+use App\Models\Abastecimiento\Variedad;
+use App\Models\CRM\CrmProductoCalibre;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Collection;
@@ -30,8 +31,14 @@ class CalibresConvenio
     {
         $pactados = $convenio?->calibres()->pluck('calibre_id')->all() ?? [];
 
-        return VariedadCalibre::where('variedad_id', $variedadId)
-            ->where(fn ($q) => $q->where('is_active', true)->orWhereIn('id', $pactados))
+        // Los calibres son los del producto del CRM ligado a la variedad de Abastecimiento.
+        $productoId = Variedad::whereKey($variedadId)->value('producto_id');
+
+        return CrmProductoCalibre::query()
+            ->where(fn ($q) => $q
+                ->when($productoId, fn ($a) => $a->where('producto_id', $productoId)->where('activo', true))
+                ->when(! $productoId, fn ($a) => $a->whereRaw('1 = 0'))
+                ->orWhereIn('id', $pactados))
             ->pluck('id')->all();
     }
 
@@ -92,7 +99,7 @@ class CalibresConvenio
         }
 
         if ($porCalibre->isNotEmpty()) {
-            $calibre = fn ($q) => $q->withTrashed()->select('id', 'nombre', 'orden');
+            $calibre = fn ($q) => $q->select('id', 'nombre', 'orden');
             $porCalibre->loadMissing(['precios.calibre' => $calibre, 'calibres.calibre' => $calibre]);
         }
     }

@@ -98,8 +98,8 @@ class EsquemaRecepcionCalibresTest extends TestCase
         $this->assertSame('4.00', $renglones[0]->cantidad);
         $this->assertNull($renglones[1]->kilos);
 
-        // Un calibre borrado sigue mostrando su nombre.
-        $grande->delete();
+        // Un calibre usado no se borra (llave foránea): se desactiva y sigue mostrando su nombre.
+        $grande->update(['activo' => false]);
         $this->assertSame('Grande', $recepcion->renglones()->first()->calibre->nombre);
     }
 }

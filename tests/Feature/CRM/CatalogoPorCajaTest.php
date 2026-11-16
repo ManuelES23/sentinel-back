@@ -117,7 +117,7 @@ class CatalogoPorCajaTest extends TestCase
         $this->assertSame('Calibre 40', $delOtro->fresh()->nombre);
     }
 
-    public function test_lista_los_agricolas_aparte_y_no_se_pueden_editar(): void
+    public function test_ya_no_lista_agricolas_de_splendid_farms_y_los_propios_se_editan(): void
     {
         $cultivo = Cultivo::firstOrCreate(['nombre' => 'Mango']);
         $variedad = Variedad::create(['cultivo_id' => $cultivo->id, 'nombre' => 'Kent Mango', 'user_id' => $this->actingUser->id]);
@@ -133,7 +133,7 @@ class CatalogoPorCajaTest extends TestCase
         $this->api('GET', "productos/{$producto->id}/calibres")
             ->assertOk()
             ->assertExactJson(['success' => true, 'message' => 'Operación exitosa', 'data' => [
-                'agricolas' => ['Calibre 8'],
+                'agricolas' => [],
                 'propios' => [['id' => $producto->calibresPropios()->first()->id, 'nombre' => 'Calibre 40', 'orden' => 0, 'activo' => true]],
             ]]);
 
@@ -279,5 +279,19 @@ class CatalogoPorCajaTest extends TestCase
         $linea->refresh();
         $this->assertSame('Calibre 40', $linea->calibre);
         $this->assertSame('Caja 4 kg', $linea->presentacion);
+    }
+
+    public function test_no_borra_un_producto_ligado_a_abastecimiento_ni_sus_calibres_usados(): void
+    {
+        $producto = $this->producto();
+        $calibre = $producto->calibresPropios()->create(['nombre' => 'Calibre 8']);
+        $cultivo = \App\Models\Abastecimiento\Cultivo::create(['enterprise_id' => $this->enterprise->id, 'nombre' => 'Mango', 'is_active' => true]);
+        \App\Models\Abastecimiento\Variedad::create(['cultivo_id' => $cultivo->id, 'nombre' => 'Kent', 'is_active' => true, 'producto_id' => $producto->id]);
+
+        $this->api('DELETE', "productos/{$producto->id}")->assertStatus(409);
+        $this->assertNotNull($producto->fresh());
+
+        // Un calibre que Abastecimiento aún no usa sí se puede borrar.
+        $this->api('DELETE', "productos/{$producto->id}/calibres/{$calibre->id}")->assertOk();
     }
 }
