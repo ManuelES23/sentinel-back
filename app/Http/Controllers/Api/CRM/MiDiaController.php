@@ -11,6 +11,7 @@ use App\Models\CRM\CrmConfiguracionComercial;
 use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmVendedor;
 use App\Services\CRM\AperturaOportunidadService;
+use App\Services\CRM\ContactoActividadService;
 use App\Services\CRM\MiDiaDetalleService;
 use App\Services\CRM\MiDiaService;
 use App\Services\CRM\MiMesService;
@@ -39,6 +40,7 @@ class MiDiaController extends CrmBaseController
         private readonly NuevaActividadService $nuevaActividad,
         private readonly SeguimientoService $seguimientos,
         private readonly AperturaOportunidadService $apertura,
+        private readonly ContactoActividadService $contactos,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -136,6 +138,7 @@ class MiDiaController extends CrmBaseController
         if ($prospecto) {
             $this->difundir(new ProspectoUpdated('created', $prospecto->toArray()));
         }
+        $this->difundirContactoCreado($resultado['contacto_creado']);
         if ($resultado['oportunidad_nueva']) {
             $this->difundir(new OportunidadUpdated('created', $oportunidad->toArray()));
         }
@@ -203,7 +206,7 @@ class MiDiaController extends CrmBaseController
             // Opcional: sin ella el servidor guarda la hora actual. Con ella, no puede ser futura.
             'actividad.fecha_actividad' => ['nullable', 'date', 'before_or_equal:'.now()->addMinutes(5)->toDateTimeString()],
             'actividad.etiqueta_id' => ['required_with:actividad', ...$this->seguimientos->reglaEtiqueta($empresaId)],
-        ] + $this->seguimientos->reglasSiguiente('evento', $empresaId, true);
+        ] + $this->seguimientos->reglasSiguiente('evento', $empresaId, true) + $this->contactos->reglas();
 
         $mensajes = array_merge(
             $this->seguimientos->mensajesSiguiente('evento'),
