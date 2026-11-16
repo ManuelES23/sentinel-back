@@ -43,7 +43,13 @@ class OutlookVacaciones
 
     private const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
 
-    /** Quien es «usuario específico» en la cadena de vacaciones, o ya tiene una cuenta vinculada. */
+    /** Sin constructor: el servicio se extiende y se crea a mano (sin contenedor) en las pruebas. */
+    private function informados(): InformadosVacaciones
+    {
+        return app(InformadosVacaciones::class);
+    }
+
+    /** Quien es «usuario específico» o persona informada de ese paso en la cadena de vacaciones, o ya tiene una cuenta vinculada. */
     public function disponible(User $usuario): bool
     {
         if (VacationOutlookConnection::where('user_id', $usuario->id)->exists()) {
@@ -56,7 +62,8 @@ class OutlookVacaciones
             ->where('is_active', true)
             ->where('approver_type', ApprovalFlowStep::TYPE_USER)
             ->where('user_id', $usuario->id)
-            ->exists();
+            ->exists()
+            || $this->informados()->esInformado($usuario);
     }
 
     /**
@@ -134,6 +141,9 @@ class OutlookVacaciones
                 ->where('decision', VacationRequestApproval::APPROVED)
                 ->whereNotNull('decided_by')
                 ->pluck('decided_by');
+
+            // Quienes aprobaron un paso y las personas informadas de las reglas de los pasos aprobados.
+            $usuarios = $usuarios->merge($this->informados()->informadosDeAprobadas($s))->unique()->values();
 
             $conexiones = VacationOutlookConnection::whereIn('user_id', $usuarios)
                 ->orWhereIn('id', VacationOutlookEvent::where('vacation_request_id', $s->id)->pluck('vacation_outlook_connection_id'))
@@ -236,10 +246,18 @@ class OutlookVacaciones
     {
         $agendadas = VacationOutlookEvent::where('vacation_outlook_connection_id', $c->id)->pluck('vacation_request_id');
 
+        // Una sola lectura acotada (aprobadas vigentes) por conexión: las que aprobó el usuario o las que aprobó el paso que informa.
+        $queInforma = $this->informados()->idsAprobadasQueInforma($c->user_id)->all();
+
         $pendientes = VacationRequest::query()
             ->where('status', 'approved')
             ->whereDate('end_date', '>=', today())
-            ->whereHas('approvals', fn ($q) => $q->where('decision', VacationRequestApproval::APPROVED)->where('decided_by', $c->user_id))
+            ->where(function ($q) use ($c, $queInforma) {
+                $q->whereHas('approvals', fn ($a) => $a->where('decision', VacationRequestApproval::APPROVED)->where('decided_by', $c->user_id));
+                if ($queInforma !== []) {
+                    $q->orWhereIn('id', $queInforma);
+                }
+            })
             ->whereNotIn('id', $agendadas)
             ->with(['employee.position', 'employee.department', 'employee.enterprise'])
             ->orderBy('id')

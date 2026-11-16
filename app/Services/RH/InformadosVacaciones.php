@@ -4,6 +4,7 @@ namespace App\Services\RH;
 
 use App\Models\ApprovalFlowStep;
 use App\Models\ApprovalProcess;
+use App\Models\Employee;
 use App\Models\User;
 use App\Models\VacationRequest;
 use App\Models\VacationRequestApproval;
@@ -88,7 +89,7 @@ class InformadosVacaciones
 
     /**
      * @return Collection<int, int> ids de solicitudes aprobadas, vigentes (end_date >= hoy), con algún paso aprobado
-     *                              que tiene una regla de la que el usuario es informado
+     *                              que tiene una regla de la que el usuario es informado, sin las suyas propias
      */
     public function idsAprobadasQueInforma(int $userId): Collection
     {
@@ -97,10 +98,15 @@ class InformadosVacaciones
             return collect();
         }
 
+        // Las suyas (empleado ligado al usuario) nunca cuentan: misma regla que `esSolicitante`.
+        $propios = Employee::where('user_id', $userId)->pluck('id')->all();
+
         return VacationRequestApproval::query()
             ->select(['id', 'vacation_request_id', 'rules', 'is_rh_final', 'is_rh_review'])
             ->where('decision', VacationRequestApproval::APPROVED)
-            ->whereHas('vacationRequest', fn ($q) => $q->where('status', 'approved')->whereDate('end_date', '>=', today()))
+            ->whereHas('vacationRequest', fn ($q) => $q->where('status', 'approved')
+                ->whereDate('end_date', '>=', today())
+                ->when($propios !== [], fn ($q) => $q->whereNotIn('employee_id', $propios)))
             ->lazyById(500)
             ->filter(fn (VacationRequestApproval $paso) => $this->compartenRegla($paso, $reglas))
             ->map(fn (VacationRequestApproval $paso) => (int) $paso->vacation_request_id)
@@ -110,7 +116,7 @@ class InformadosVacaciones
             ->values();
     }
 
-    /** @return Collection<int, int> ids de usuarios informados de las reglas activas de los pasos aprobados de la solicitud */
+    /** @return Collection<int, int> ids de usuarios informados de las reglas activas de los pasos aprobados de la solicitud, sin el solicitante */
     public function informadosDeAprobadas(VacationRequest $solicitud): Collection
     {
         $reglas = $solicitud->approvals()
@@ -126,12 +132,16 @@ class InformadosVacaciones
             return collect();
         }
 
+        // El solicitante no se informa de su propia solicitud (misma regla que `esSolicitante`).
+        $duenoId = (int) $solicitud->employee()->value('user_id');
+
         return $this->reglasActivas($reglas)
             ->with('observers:id')
             ->get()
             ->flatMap(fn (ApprovalFlowStep $regla) => $regla->observers->pluck('id'))
             ->map(fn ($id) => (int) $id)
             ->unique()
+            ->reject(fn (int $id) => $id === $duenoId)
             ->values();
     }
 
