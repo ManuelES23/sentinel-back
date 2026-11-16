@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\Abastecimiento\AbonoController;
+use App\Http\Controllers\Api\Abastecimiento\CalibresSplendidFarmsController;
 use App\Http\Controllers\Api\Abastecimiento\ConvenioController;
 use App\Http\Controllers\Api\Abastecimiento\CultivoController;
 use App\Http\Controllers\Api\Abastecimiento\LiquidacionController;
@@ -34,6 +35,8 @@ Route::prefix('abastecimiento')->name('abastecimiento.')->group(function () {
     Route::put('variedades/{id}', [CultivoController::class, 'updateVariedad'])->whereNumber('id')->name('variedades.update');
     Route::delete('variedades/{id}', [CultivoController::class, 'destroyVariedad'])->whereNumber('id')->name('variedades.destroy');
     Route::post('variedades/{variedadId}/calibres', [CultivoController::class, 'storeCalibre'])->whereNumber('variedadId')->name('cultivos.variedades.calibres.store');
+    Route::get('variedades/{variedadId}/calibres/splendid-farms', [CalibresSplendidFarmsController::class, 'disponibles'])->whereNumber('variedadId')->name('variedades.calibres.splendid-farms');
+    Route::post('variedades/{variedadId}/calibres/importar', [CalibresSplendidFarmsController::class, 'importar'])->whereNumber('variedadId')->name('variedades.calibres.importar');
     Route::put('calibres/{id}', [CultivoController::class, 'updateCalibre'])->whereNumber('id')->name('calibres.update');
     Route::delete('calibres/{id}', [CultivoController::class, 'destroyCalibre'])->whereNumber('id')->name('calibres.destroy');
 
