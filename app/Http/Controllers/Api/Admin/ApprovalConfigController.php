@@ -9,6 +9,7 @@ use App\Models\Position;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 class ApprovalConfigController extends Controller
@@ -37,7 +38,7 @@ class ApprovalConfigController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $query = ApprovalProcess::with(['steps.enterprise', 'steps.position', 'steps.user:id,name,email']);
+        $query = ApprovalProcess::with(['steps.enterprise', 'steps.position', 'steps.user:id,name,email', 'steps.observers:id,name,email']);
 
         if ($request->has('module')) {
             $query->byModule($request->module);
@@ -60,7 +61,7 @@ class ApprovalConfigController extends Controller
      */
     public function show(ApprovalProcess $process): JsonResponse
     {
-        $process->load(['steps.enterprise', 'steps.position', 'steps.user:id,name,email']);
+        $process->load(['steps.enterprise', 'steps.position', 'steps.user:id,name,email', 'steps.observers:id,name,email']);
 
         return response()->json([
             'success' => true,
@@ -108,7 +109,7 @@ class ApprovalConfigController extends Controller
         ]);
 
         $process->update($validated);
-        $process->load(['steps.enterprise', 'steps.position', 'steps.user:id,name,email']);
+        $process->load(['steps.enterprise', 'steps.position', 'steps.user:id,name,email', 'steps.observers:id,name,email']);
 
         return response()->json([
             'success' => true,
@@ -163,7 +164,7 @@ class ApprovalConfigController extends Controller
     public function getSteps(ApprovalProcess $process): JsonResponse
     {
         $steps = $process->steps()
-            ->with(['enterprise', 'position', 'user:id,name,email'])
+            ->with(['enterprise', 'position', 'user:id,name,email', 'observers:id,name,email'])
             ->orderBy('step_order')
             ->get();
 
@@ -197,8 +198,11 @@ class ApprovalConfigController extends Controller
             'can_approve' => 'sometimes|boolean',
             'can_reject' => 'sometimes|boolean',
             'is_active' => 'sometimes|boolean',
+            'observer_user_ids' => 'nullable|array|max:50',
+            'observer_user_ids.*' => 'integer|distinct|exists:users,id',
         ]);
 
+        $informados = $this->extraerInformados($validated);
         $validated['approval_process_id'] = $process->id;
 
         // Auto-asignar step_order si no se proporciona
@@ -214,8 +218,18 @@ class ApprovalConfigController extends Controller
             (bool) ($validated['is_active'] ?? true),
         );
 
-        $step = ApprovalFlowStep::create($validated);
-        $step->load(['enterprise', 'position', 'user:id,name,email']);
+        $guardaInformados = $this->admiteInformados($process, $validated['approver_type']);
+        if ($guardaInformados && $informados !== null) {
+            $this->validarInformados($informados, isset($validated['user_id']) ? (int) $validated['user_id'] : null);
+        }
+
+        $step = DB::transaction(function () use ($validated, $guardaInformados, $informados) {
+            $nuevo = ApprovalFlowStep::create($validated);
+            $nuevo->observers()->sync($guardaInformados ? ($informados ?? []) : []);
+
+            return $nuevo;
+        });
+        $step->load(['enterprise', 'position', 'user:id,name,email', 'observers:id,name,email']);
 
         return response()->json([
             'success' => true,
@@ -257,7 +271,11 @@ class ApprovalConfigController extends Controller
             'can_approve' => 'sometimes|boolean',
             'can_reject' => 'sometimes|boolean',
             'is_active' => 'sometimes|boolean',
+            'observer_user_ids' => 'nullable|array|max:50',
+            'observer_user_ids.*' => 'integer|distinct|exists:users,id',
         ]);
+
+        $informados = $this->extraerInformados($validated);
 
         $usuarioFinal = array_key_exists('user_id', $validated) ? $validated['user_id'] : $step->user_id;
         if ($tipo === ApprovalFlowStep::TYPE_USER && $usuarioFinal === null) {
@@ -279,8 +297,23 @@ class ApprovalConfigController extends Controller
             $step->id,
         );
 
-        $step->update($validated);
-        $step->load(['enterprise', 'position', 'user:id,name,email']);
+        $guardaInformados = $this->admiteInformados($process, $tipo);
+        if ($guardaInformados) {
+            $this->validarInformados(
+                $informados ?? $step->observers()->pluck('users.id')->all(),
+                $usuarioFinal !== null ? (int) $usuarioFinal : null,
+            );
+        }
+
+        DB::transaction(function () use ($step, $validated, $guardaInformados, $informados) {
+            $step->update($validated);
+            if (! $guardaInformados) {
+                $step->observers()->detach();
+            } elseif ($informados !== null) {
+                $step->observers()->sync($informados);
+            }
+        });
+        $step->load(['enterprise', 'position', 'user:id,name,email', 'observers:id,name,email']);
 
         return response()->json([
             'success' => true,
@@ -335,6 +368,35 @@ class ApprovalConfigController extends Controller
         }
 
         return null;
+    }
+
+    /** Saca de lo validado la lista de informados (null si no vino la clave: no se toca). */
+    private function extraerInformados(array &$validated): ?array
+    {
+        if (! array_key_exists('observer_user_ids', $validated)) {
+            return null;
+        }
+
+        $ids = array_map('intval', $validated['observer_user_ids'] ?? []);
+        unset($validated['observer_user_ids']);
+
+        return $ids;
+    }
+
+    /** Solo los pasos «Usuario específico» del proceso de vacaciones tienen personas informadas. */
+    private function admiteInformados(ApprovalProcess $process, ?string $tipo): bool
+    {
+        return $tipo === ApprovalFlowStep::TYPE_USER && $process->code === ApprovalProcess::VACATION_REQUESTS;
+    }
+
+    /** Quien aprueba el paso ya recibe todo: no puede estar además entre los informados. */
+    private function validarInformados(array $informados, ?int $aprobadorId): void
+    {
+        if ($aprobadorId !== null && in_array($aprobadorId, $informados, true)) {
+            throw ValidationException::withMessages([
+                'observer_user_ids' => 'Quien aprueba este paso ya está informado.',
+            ]);
+        }
     }
 
     /** Los procesos con lista propia de tipos aprueban siempre con alcance de toda la empresa. */

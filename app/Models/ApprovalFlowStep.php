@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class ApprovalFlowStep extends Model
 {
@@ -62,6 +63,13 @@ class ApprovalFlowStep extends Model
     public function user()
     {
         return $this->belongsTo(User::class);
+    }
+
+    /** Personas informadas (solo reciben aviso) de un paso «Usuario específico» de vacaciones. */
+    public function observers(): BelongsToMany
+    {
+        return $this->belongsToMany(User::class, 'approval_flow_step_observers', 'approval_flow_step_id', 'user_id')
+            ->withTimestamps();
     }
 
     // ===== Scopes =====

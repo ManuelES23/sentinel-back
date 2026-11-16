@@ -149,7 +149,7 @@ class OutlookVacacionesApiTest extends TestCase
 
         $this->getJson(self::BASE.'/conectar')
             ->assertStatus(403)
-            ->assertJsonPath('message', 'Solo quien autoriza vacaciones como usuario específico puede vincular Outlook aquí.');
+            ->assertJsonPath('message', 'Solo quien autoriza vacaciones como usuario específico o está informado de ese paso puede vincular Outlook aquí.');
     }
 
     public function test_conectar_devuelve_la_url_y_guarda_el_nonce_de_vacaciones(): void

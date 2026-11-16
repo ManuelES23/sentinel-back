@@ -14,6 +14,7 @@ use App\Services\RH\AprobadorVacaciones;
 use App\Services\RH\AvisosVacaciones;
 use App\Services\RH\CadenaAprobacionVacaciones;
 use App\Services\RH\CorreoVacaciones;
+use App\Services\RH\InformadosVacaciones;
 use App\Services\RH\VacationRequestService;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -137,7 +138,7 @@ class CorreoVacacionesTest extends TestCase
         Mail::fake();
         // Subclase registrada en el contenedor cuyo tiempo real y aviso interno lanzan. (Con
         // BROADCAST_CONNECTION=null un listener de eventos no se invoca al emitir, por eso no se usa Event::listen.)
-        $this->app->bind(AvisosVacaciones::class, fn ($app) => new class($app->make(AprobadorVacaciones::class), $app->make(CadenaAprobacionVacaciones::class), $app->make(CorreoVacaciones::class)) extends AvisosVacaciones {
+        $this->app->bind(AvisosVacaciones::class, fn ($app) => new class($app->make(AprobadorVacaciones::class), $app->make(CadenaAprobacionVacaciones::class), $app->make(CorreoVacaciones::class), $app->make(InformadosVacaciones::class)) extends AvisosVacaciones {
             protected function emitir(string $accion, VacationRequest $solicitud): void
             {
                 throw new \RuntimeException('Reverb caído');

@@ -43,10 +43,11 @@ class CorreoVacaciones
 
     /**
      * Aviso a quien le toca revisar el paso (jefe del portal, usuario de la regla o RH): `via` dice
-     * dónde la decide (ver VacationReviewMail). No va a vacation_notifications (esa bitácora es la del
+     * dónde la decide (ver VacationReviewMail); con `informado` es solo un aviso y `aprobador` dice a quién
+     * espera la solicitud. No va a vacation_notifications (esa bitácora es la del
      * empleado). Nunca lanza; un correo inválido o un fallo solo quedan en el log.
      */
-    public function avisarAprobador(VacationRequest $solicitud, string $correo, ?string $nombre, string $via): void
+    public function avisarAprobador(VacationRequest $solicitud, string $correo, ?string $nombre, string $via, ?string $aprobador = null): void
     {
         try {
             $correo = self::correoValido($correo);
@@ -56,7 +57,7 @@ class CorreoVacaciones
 
             $solicitud->loadMissing('employee');
             $envio = Mail::to($correo);
-            $mensaje = new VacationReviewMail($solicitud, $nombre, $via);
+            $mensaje = new VacationReviewMail($solicitud, $nombre, $via, $aprobador);
             config('vacaciones.correo_en_cola') ? $envio->queue($mensaje) : $envio->send($mensaje);
         } catch (Throwable $e) {
             Log::warning('No se pudo avisar al aprobador de vacaciones', ['solicitud' => $solicitud->id, 'via' => $via, 'error' => $e->getMessage()]);

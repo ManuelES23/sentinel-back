@@ -1,18 +1,26 @@
 <!doctype html>
 <html lang="es">
 <body style="font-family: Arial, sans-serif; color: #111827;">
-    <h2>Solicitud de vacaciones por revisar</h2>
+    <h2>{{ $via === 'informado' ? 'Solicitud de vacaciones para tu información' : 'Solicitud de vacaciones por revisar' }}</h2>
     @if ($nombre)
         <p>Hola {{ $nombre }},</p>
     @endif
-    <p>
-        {{ $solicitante }} solicitó {{ $dias }} de vacaciones {{ $periodo }} y te toca revisarla{{ $comoJefe ? ' como jefe de su departamento' : '' }}.
-    </p>
-    @if ($motivo)
-        <p>Motivo: {{ $motivo }}</p>
+    @if ($via === 'informado')
+        <p>
+            {{ $solicitante }} solicitó {{ $dias }} de vacaciones {{ $periodo }} y está esperando a {{ $aprobador }}. Te lo enviamos para tu información; no tienes que hacer nada.
+        </p>
+    @else
+        <p>
+            {{ $solicitante }} solicitó {{ $dias }} de vacaciones {{ $periodo }} y te toca revisarla{{ $comoJefe ? ' como jefe de su departamento' : '' }}.
+        </p>
+        @if ($motivo)
+            <p>Motivo: {{ $motivo }}</p>
+        @endif
     @endif
 
-    @if ($via === 'portal')
+    @if ($via === 'informado')
+        <p>Puedes consultarla en Sentinel: <a href="{{ $bandejaUrl }}">{{ $bandejaUrl }}</a>.</p>
+    @elseif ($via === 'portal')
         <p>Entra a <a href="{{ $portalUrl }}">{{ $portalUrl }}</a> con tu número de empleado y el PIN de tu checador, y abre la pestaña «Por revisar».</p>
     @elseif ($via === 'portal_o_sentinel')
         <p>Puedes aprobarla o rechazarla en Sentinel, en tus aprobaciones pendientes: <a href="{{ $bandejaUrl }}">{{ $bandejaUrl }}</a>.</p>
