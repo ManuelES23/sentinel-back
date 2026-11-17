@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\CRM;
 
+use App\Events\CRM\AgendaUpdated;
 use App\Events\CRM\ContactoUpdated;
 use App\Models\CRM\CrmActividad;
 use App\Models\CRM\CrmAgenda;
@@ -108,6 +109,28 @@ class ProspectoEmpresaAltaYConversionTest extends TestCase
         $contacto = CrmContacto::where('nombre', 'Ana Ruiz')->firstOrFail();
         $this->assertSame($contacto->id, $respuesta->json('data.evento.contacto_id'));
         $this->assertDatabaseHas('crm_agenda', ['titulo' => 'Primer contacto', 'contacto_id' => $contacto->id]);
+    }
+
+    public function test_alta_rapida_difunde_y_responde_el_evento_con_el_contacto(): void
+    {
+        Event::fake([AgendaUpdated::class, ContactoUpdated::class]);
+
+        $respuesta = $this->rapido([
+            'nombre' => 'Berries del Valle',
+            'contacto' => ['nombre' => 'Ana Ruiz', 'cargo' => 'Compras'],
+            'primer_contacto' => [
+                'tipo' => 'llamada', 'titulo' => 'Primer contacto', 'fecha_inicio' => '2026-09-15 09:00:00',
+            ],
+        ])->assertCreated()
+            ->assertJsonPath('data.evento.contacto.nombre', 'Ana Ruiz')
+            ->assertJsonPath('data.evento.contacto.cargo', 'Compras')
+            ->assertJsonPath('data.evento.vendedor.nombre', 'Vendedor propio');
+
+        // El broadcast trae el contacto: Agenda y Mi día pintan «con Ana Ruiz» sin recargar.
+        Event::assertDispatched(AgendaUpdated::class, fn (AgendaUpdated $e) => $e->action === 'created'
+            && ($e->data['contacto']['nombre'] ?? null) === 'Ana Ruiz'
+            && ($e->data['contacto']['cargo'] ?? null) === 'Compras'
+            && $e->data['id'] === $respuesta->json('data.evento.id'));
     }
 
     public function test_convertir_mueve_contactos_y_copia_datos_de_empresa(): void

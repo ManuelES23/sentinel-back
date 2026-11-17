@@ -28,7 +28,10 @@ class WhatsAppMensajeService
 
     public const PREFIJO_CONTACTO = 'contacto:';
 
-    public function __construct(private readonly SeguimientoService $seguimientos) {}
+    public function __construct(
+        private readonly SeguimientoService $seguimientos,
+        private readonly ContactoActividadService $contactosActividad,
+    ) {}
 
     public function buscarEntidad(int $empresaId, string $tipo, int $id): ?Model
     {
@@ -89,10 +92,18 @@ class WhatsAppMensajeService
             ];
         }
 
+        // Los contactos viven en la «empresa de la actividad» (un prospecto ya
+        // convertido los tiene en su cliente): la misma que valida
+        // ContactoActividadService::resolver, para que lo que se ofrece sea lo que se acepta.
+        $empresa = $this->contactosActividad->empresaDe($titular);
+        if (! $empresa) {
+            return $lista;
+        }
+
         $contactos = CrmContacto::query()
             ->where('empresa_id', $titular->empresa_id)
-            ->where('entidad_type', $titular::class)
-            ->where('entidad_id', $titular->id)
+            ->where('entidad_type', $empresa::class)
+            ->where('entidad_id', $empresa->getKey())
             ->orderByDesc('es_principal')
             ->orderBy('nombre')
             ->get(['id', 'nombre', 'cargo', 'telefono', 'es_principal']);
