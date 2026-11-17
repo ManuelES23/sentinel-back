@@ -44,7 +44,7 @@ class ActividadesDeFicha
     }
 
     /**
-     * Pone `oportunidad` {id, nombre} (o null) en cada actividad con UNA sola
+     * Pone `oportunidad` {id, folio, nombre} (o null) en cada actividad con UNA sola
      * consulta, sea cual sea el número de filas. Las oportunidades eliminadas
      * no llegan aquí: `limitar` solo deja las visibles.
      *
@@ -60,15 +60,19 @@ class ActividadesDeFicha
             ->unique()
             ->values();
 
-        $nombres = $ids->isEmpty()
+        $oportunidades = $ids->isEmpty()
             ? collect()
-            : CrmOportunidad::query()->whereIn('id', $ids)->pluck('nombre', 'id');
+            : CrmOportunidad::query()->whereIn('id', $ids)->get(['id', 'folio', 'nombre'])->keyBy('id');
 
         foreach ($actividades as $actividad) {
-            $esDeOportunidad = $actividad->entidad_type === CrmOportunidad::class && $nombres->has($actividad->entidad_id);
+            $esDeOportunidad = $actividad->entidad_type === CrmOportunidad::class && $oportunidades->has($actividad->entidad_id);
 
             $actividad->oportunidad = $esDeOportunidad
-                ? ['id' => (int) $actividad->entidad_id, 'nombre' => $nombres[$actividad->entidad_id]]
+                ? [
+                    'id' => (int) $actividad->entidad_id,
+                    'folio' => $oportunidades[$actividad->entidad_id]->folio,
+                    'nombre' => $oportunidades[$actividad->entidad_id]->nombre,
+                ]
                 : null;
         }
     }

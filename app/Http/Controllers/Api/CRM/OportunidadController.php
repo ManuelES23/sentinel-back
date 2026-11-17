@@ -73,6 +73,7 @@ class OportunidadController extends CrmBaseController
                 // Agrupado: el OR no debe romper los demás filtros ni la visibilidad.
                 $q->where(function ($sub) use ($like) {
                     $sub->whereRaw("crm_oportunidades.nombre LIKE ? ESCAPE '!'", [$like])
+                        ->orWhereRaw("crm_oportunidades.folio LIKE ? ESCAPE '!'", [$like])
                         ->orWhereHas('cliente', fn ($c) => $c->whereRaw("nombre LIKE ? ESCAPE '!'", [$like]))
                         ->orWhereHas('prospecto', fn ($p) => $p->whereRaw("nombre LIKE ? ESCAPE '!'", [$like]));
                 });

@@ -159,6 +159,7 @@ class MiDiaService
     {
         return [
             'id' => $op->id,
+            'folio' => $op->folio,
             'nombre' => $op->nombre,
             'etapa' => $op->etapa,
             'tipo_producto' => $op->tipo_producto,
@@ -331,6 +332,7 @@ class MiDiaService
 
                 return [
                     'id' => $op->id,
+                    'folio' => $op->folio,
                     'nombre' => $op->nombre,
                     'etapa' => $op->etapa,
                     'monto_esperado' => (float) $op->monto_esperado,
@@ -350,7 +352,7 @@ class MiDiaService
         $hoy = $ahora->startOfDay();
 
         return CrmCotizacion::query()
-            ->with(['oportunidad:id,nombre,cliente_id,prospecto_id', 'oportunidad.cliente:id,nombre', 'oportunidad.prospecto:id,nombre'])
+            ->with(['oportunidad:id,folio,nombre,cliente_id,prospecto_id', 'oportunidad.cliente:id,nombre', 'oportunidad.prospecto:id,nombre'])
             ->where('empresa_id', $empresaId)
             ->where('estado', 'enviado')
             ->whereNotNull('vigencia_dias')
@@ -363,7 +365,7 @@ class MiDiaService
                     'id' => $c->id,
                     'folio' => $c->folio,
                     'total' => (float) $c->total,
-                    'oportunidad' => ['id' => $c->oportunidad->id, 'nombre' => $c->oportunidad->nombre],
+                    'oportunidad' => ['id' => $c->oportunidad->id, 'folio' => $c->oportunidad->folio, 'nombre' => $c->oportunidad->nombre],
                     'entidad' => $this->entidad($c->oportunidad->cliente ?? $c->oportunidad->prospecto),
                     'vence_el' => $venceEl->toDateString(),
                     'dias_restantes' => (int) round($hoy->diffInDays($venceEl, false)),

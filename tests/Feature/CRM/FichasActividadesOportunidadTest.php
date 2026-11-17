@@ -289,7 +289,7 @@ class FichasActividadesOportunidadTest extends TestCase
         $this->assertSame(1, $r->json('data.metricas.oportunidades'));
         $filas = collect($r->json('data.actividades'))->keyBy('descripcion');
         $this->assertCount(2, $filas);
-        $this->assertSame(['id' => $this->opPropia->id, 'nombre' => 'Propia'], $filas['propia']['oportunidad']);
+        $this->assertSame(['id' => $this->opPropia->id, 'folio' => $this->opPropia->folio, 'nombre' => 'Propia'], $filas['propia']['oportunidad']);
         $this->assertNull($filas['del cliente']['oportunidad']);
         $this->assertArrayNotHasKey('ajena', $filas->all());
     }

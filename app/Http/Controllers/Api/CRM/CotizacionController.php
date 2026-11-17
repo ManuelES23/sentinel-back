@@ -76,7 +76,7 @@ class CotizacionController extends CrmBaseController
         $query = CrmCotizacion::query()
             ->where('empresa_id', $empresaId)
             ->with([
-                'oportunidad:id,nombre,prospecto_id,cliente_id,vendedor_id',
+                'oportunidad:id,folio,nombre,prospecto_id,cliente_id,vendedor_id',
                 'oportunidad.prospecto:id,nombre',
                 'oportunidad.cliente:id,nombre',
                 'oportunidad.vendedor:id,nombre',
@@ -85,7 +85,10 @@ class CotizacionController extends CrmBaseController
             ->when($vendedorId, fn ($q, $id) => $q->whereHas(
                 'oportunidad', fn ($oq) => $oq->where('vendedor_id', $id)
             ))
-            ->when($request->folio, fn ($q, $folio) => $q->where('folio', 'like', "%{$folio}%"))
+            // El folio de la cotización (COT-…) o el de su oportunidad (OPP-…).
+            ->when($request->folio, fn ($q, $folio) => $q->where(fn ($w) => $w
+                ->where('folio', 'like', "%{$folio}%")
+                ->orWhereHas('oportunidad', fn ($oq) => $oq->where('folio', 'like', "%{$folio}%"))))
             ->orderByDesc('created_at');
 
         $perPage = $this->perPage($request, 100);
@@ -106,7 +109,7 @@ class CotizacionController extends CrmBaseController
             'lineas.producto:id,nombre,commodity,clave,marca_id,activo',
             'lineas.producto.marca:id,nombre',
             'impuestos',
-            'oportunidad:id,nombre,cliente_id,prospecto_id,vendedor_id',
+            'oportunidad:id,folio,nombre,cliente_id,prospecto_id,vendedor_id',
             'oportunidad.cliente:id,nombre',
             'oportunidad.prospecto:id,nombre',
             'oportunidad.vendedor:id,nombre',
