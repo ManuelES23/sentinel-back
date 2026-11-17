@@ -12,6 +12,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Facades\DB;
 
 #[ObservedBy([CrmOportunidadObserver::class])]
 class CrmOportunidad extends Model
@@ -106,6 +107,47 @@ class CrmOportunidad extends Model
         'fecha_cierre_esperada' => 'date',
         'fecha_cierre_real'     => 'datetime',
     ];
+
+    /**
+     * El folio (OPP-0001) lo asigna el modelo al crear —nunca viene del
+     * request, no es fillable— y no cambia después.
+     */
+    protected static function booted(): void
+    {
+        static::creating(function (self $oportunidad) {
+            if (blank($oportunidad->folio)) {
+                $oportunidad->folio = self::siguienteFolio((int) $oportunidad->empresa_id);
+            }
+        });
+
+        static::updating(function (self $oportunidad) {
+            if ($oportunidad->isDirty('folio')) {
+                $oportunidad->folio = $oportunidad->getOriginal('folio');
+            }
+        });
+    }
+
+    /**
+     * Folio consecutivo POR EMPRESA (como las cotizaciones). Cuenta también
+     * las borradas para no reutilizar un número. Dentro de una transacción
+     * bloquea la fila de la empresa para que dos altas simultáneas no tomen el
+     * mismo; la unicidad en BD es el índice (empresa_id, folio).
+     */
+    public static function siguienteFolio(int $empresaId): string
+    {
+        if (DB::transactionLevel() > 0) {
+            DB::table('enterprises')->where('id', $empresaId)->lockForUpdate()->value('id');
+        }
+
+        $ultimo = self::withTrashed()
+            ->where('empresa_id', $empresaId)
+            ->where('folio', 'like', 'OPP-%')
+            ->pluck('folio')
+            ->map(fn ($folio) => (int) substr($folio, 4))
+            ->max() ?? 0;
+
+        return 'OPP-'.str_pad((string) ($ultimo + 1), 4, '0', STR_PAD_LEFT);
+    }
 
     public function empresa(): BelongsTo
     {

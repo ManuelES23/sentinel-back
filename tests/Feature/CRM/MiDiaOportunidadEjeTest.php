@@ -218,6 +218,7 @@ class MiDiaOportunidadEjeTest extends TestCase
         $this->assertFalse($item['liga_pendiente']);
         $this->assertSame([
             'id' => $op->id,
+            'folio' => 'OPP-0001',
             'nombre' => 'Berries Don Memo',
             'etapa' => 'propuesta',
             'tipo_producto' => 'berries',
