@@ -2,7 +2,12 @@
 
 namespace App\Http\Controllers\Api\CRM;
 
+use App\Events\CRM\ContactoUpdated;
 use App\Http\Controllers\Controller;
+use App\Models\CRM\CrmCliente;
+use App\Models\CRM\CrmContacto;
+use App\Models\CRM\CrmEmpresaExterna;
+use App\Models\CRM\CrmProspecto;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -85,5 +90,25 @@ abstract class CrmBaseController extends Controller
                 'error' => $e->getMessage(),
             ]);
         }
+    }
+
+    /**
+     * Difunde el contacto que ContactoActividadService::resolver() creó en
+     * línea (su `$creado`), igual que ContactoController::store. Llamar
+     * DESPUÉS de que la transacción de la actividad confirme.
+     */
+    protected function difundirContactoCreado(?CrmContacto $contacto): void
+    {
+        if (! $contacto) {
+            return;
+        }
+
+        $contacto->entidad_tipo = [
+            CrmProspecto::class => 'prospecto',
+            CrmCliente::class => 'cliente',
+            CrmEmpresaExterna::class => 'empresa_externa',
+        ][$contacto->entidad_type] ?? null;
+
+        $this->difundir(new ContactoUpdated('created', $contacto->toArray()));
     }
 }

@@ -167,6 +167,8 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     // -------------------------------------------------
     Route::apiResource('empresas-externas', App\Http\Controllers\Api\CRM\EmpresaExternaController::class)
         ->parameters(['empresas-externas' => 'empresaExterna']);
+    // Antes del apiResource: si no, "de-registro" se toma como {contacto}.
+    Route::get('contactos/de-registro', [App\Http\Controllers\Api\CRM\ContactoController::class, 'deRegistro']);
     Route::apiResource('contactos', App\Http\Controllers\Api\CRM\ContactoController::class)
         ->parameters(['contactos' => 'contacto']);
 

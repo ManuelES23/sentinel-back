@@ -30,6 +30,7 @@ class ConfiguracionComercialController extends CrmBaseController
             'productos_en_oportunidad' => $config->productos_en_oportunidad,
             'cotizacion_por_caja' => $config->cotizacion_por_caja,
             'catalogo_por_lineas' => CrmConfiguracionComercial::catalogoPorLineas($empresaId),
+            'prospecto_como_empresa' => CrmConfiguracionComercial::prospectoComoEmpresa($empresaId),
             'impuestos' => $impuestos,
             'oportunidad_eje' => true,
         ]);
@@ -43,9 +44,10 @@ class ConfiguracionComercialController extends CrmBaseController
         $this->exigirPermisoSubmodulo($empresaId, 'catalogos', 'configuracion-comercial', 'editar', 'No tienes permiso para editar la configuración comercial.');
 
         $validated = $request->validate([
-            'descuento_global_habilitado' => 'boolean|required_without_all:moneda,productos_en_oportunidad',
+            'descuento_global_habilitado' => 'boolean|required_without_all:moneda,productos_en_oportunidad,prospecto_como_empresa',
             'moneda' => ['sometimes', 'string', Rule::in(CrmConfiguracionComercial::MONEDAS)],
             'productos_en_oportunidad' => 'sometimes|boolean',
+            'prospecto_como_empresa' => 'sometimes|boolean',
         ]);
 
         $config = CrmConfiguracionComercial::paraEmpresa($empresaId);

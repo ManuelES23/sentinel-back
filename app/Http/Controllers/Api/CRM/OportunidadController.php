@@ -668,7 +668,7 @@ class OportunidadController extends CrmBaseController
     /** Emite AgendaUpdated por evento, con el vendedor cargado como los demás emisores de agenda. */
     private function difundirEventos(string $accion, Collection $eventos): void
     {
-        $eventos->load(['vendedor:id,nombre', 'etiqueta:id,nombre']);
+        $eventos->load(['vendedor:id,nombre', 'etiqueta:id,nombre', 'contacto:id,nombre,cargo']);
         foreach ($eventos as $evento) {
             $this->difundir(new AgendaUpdated($accion, $evento->toArray()));
         }

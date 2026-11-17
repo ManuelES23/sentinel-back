@@ -3,11 +3,13 @@
 namespace App\Http\Controllers\Api\CRM;
 
 use App\Events\CRM\AgendaUpdated;
+use App\Events\CRM\ContactoUpdated;
 use App\Events\CRM\OportunidadUpdated;
 use App\Events\CRM\ProspectoUpdated;
 use App\Events\CRM\VendedorAsignado;
 use App\Models\CRM\CrmActividad;
 use App\Models\CRM\CrmCliente;
+use App\Models\CRM\CrmContacto;
 use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmProspecto;
 use App\Services\CRM\SeguimientoService;
@@ -119,6 +121,10 @@ class ProspectoController extends CrmBaseController
             'zona_id'     => 'nullable|exists:crm_zonas,id',
             'bodega_id'   => 'nullable|exists:crm_bodegas,id',
             'notas'       => 'nullable|string',
+            'giro'        => 'nullable|string|max:150',
+            'sitio_web'   => 'nullable|string|max:255',
+            'ciudad'      => 'nullable|string|max:100',
+            'estado'      => 'nullable|string|max:100',
         ]);
 
         $validated['empresa_id'] = $empresaId;
@@ -154,6 +160,14 @@ class ProspectoController extends CrmBaseController
             ],
             'notas' => 'nullable|string|max:2000',
             'vendedor_id' => 'nullable|integer',
+            'giro' => 'nullable|string|max:150',
+            'ciudad' => 'nullable|string|max:100',
+            'estado' => 'nullable|string|max:100',
+            'contacto' => 'nullable|array',
+            'contacto.nombre' => 'required_with:contacto|string|max:255',
+            'contacto.cargo' => 'nullable|string|max:255',
+            'contacto.email' => 'nullable|email|max:255',
+            'contacto.telefono' => 'nullable|string|max:50',
         ], $this->seguimientos->reglasSiguiente('primer_contacto', $empresaId)), array_merge(
             ['email.unique' => 'Ya existe un prospecto con este correo.'],
             $this->seguimientos->mensajesSiguiente('primer_contacto'),
@@ -170,28 +184,52 @@ class ProspectoController extends CrmBaseController
             isset($validated['vendedor_id']) ? (int) $validated['vendedor_id'] : null,
         );
 
-        [$prospecto, $evento] = DB::transaction(function () use ($empresaId, $validated, $vendedor, $primerContacto) {
+        // Un `{}` llega como [] y equivale a no mandar contacto.
+        $datosContacto = ($validated['contacto'] ?? null) ?: null;
+
+        [$prospecto, $evento, $contacto] = DB::transaction(function () use ($empresaId, $validated, $vendedor, $primerContacto, $datosContacto) {
             $prospecto = CrmProspecto::create([
                 'empresa_id' => $empresaId,
                 'nombre' => $validated['nombre'],
                 'telefono' => $validated['telefono'] ?? null,
                 'email' => $validated['email'] ?? null,
                 'notas' => $validated['notas'] ?? null,
+                'giro' => $validated['giro'] ?? null,
+                'ciudad' => $validated['ciudad'] ?? null,
+                'estado' => $validated['estado'] ?? null,
                 'estatus' => 'nuevo',
                 'vendedor_id' => $vendedor->id,
             ]);
 
+            // El contacto es opcional; al ser el primero de la empresa, es el principal.
+            $contacto = $datosContacto === null ? null : CrmContacto::create([
+                'empresa_id' => $empresaId,
+                'entidad_type' => CrmProspecto::class,
+                'entidad_id' => $prospecto->id,
+                'nombre' => $datosContacto['nombre'],
+                'cargo' => $datosContacto['cargo'] ?? null,
+                'email' => $datosContacto['email'] ?? null,
+                'telefono' => $datosContacto['telefono'] ?? null,
+                'es_principal' => true,
+            ]);
+
             $evento = empty($primerContacto)
                 ? null
-                : $this->seguimientos->programar($empresaId, $vendedor->id, $prospecto, $primerContacto);
+                : $this->seguimientos->programar(
+                    $empresaId,
+                    $vendedor->id,
+                    $prospecto,
+                    $primerContacto + ['contacto_id' => $contacto?->id],
+                );
 
-            return [$prospecto, $evento];
+            return [$prospecto, $evento, $contacto];
         });
 
-        $prospecto->load(self::RELACIONES);
+        $prospecto->load([...self::RELACIONES, 'contactos']);
         $this->difundir(new ProspectoUpdated('created', $prospecto->toArray()));
+        $this->difundirContactoCreado($contacto);
         if ($evento) {
-            $this->difundir(new AgendaUpdated('created', $evento->load('vendedor:id,nombre')->toArray()));
+            $this->difundir(new AgendaUpdated('created', $evento->load(['vendedor:id,nombre', 'etiqueta:id,nombre', 'contacto:id,nombre,cargo'])->toArray()));
         }
 
         return $this->jsonSuccess(['prospecto' => $prospecto, 'evento' => $evento], 'Prospecto creado exitosamente', 201);
@@ -222,6 +260,10 @@ class ProspectoController extends CrmBaseController
             'zona_id'     => 'nullable|exists:crm_zonas,id',
             'bodega_id'   => 'nullable|exists:crm_bodegas,id',
             'notas'       => 'nullable|string',
+            'giro'        => 'nullable|string|max:150',
+            'sitio_web'   => 'nullable|string|max:255',
+            'ciudad'      => 'nullable|string|max:100',
+            'estado'      => 'nullable|string|max:100',
         ]);
 
         $prospecto->update($validated);
@@ -261,8 +303,9 @@ class ProspectoController extends CrmBaseController
         $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'clientes', 'clientes', 'crear', 'No tienes permiso para convertir prospectos en clientes.');
 
         $movidas = new Collection;
+        $contactosMovidos = new Collection;
 
-        $cliente = DB::transaction(function () use ($prospecto, &$movidas) {
+        $cliente = DB::transaction(function () use ($prospecto, &$movidas, &$contactosMovidos) {
             $cliente = CrmCliente::create([
                 'empresa_id'   => $prospecto->empresa_id,
                 'prospecto_id' => $prospecto->id,
@@ -274,7 +317,20 @@ class ProspectoController extends CrmBaseController
                 'vendedor_id'  => $prospecto->vendedor_id,
                 'region_id'    => $prospecto->region_id,
                 'notas'        => $prospecto->notas,
+                'giro'         => $prospecto->giro,
+                'sitio_web'    => $prospecto->sitio_web,
+                'ciudad'       => $prospecto->ciudad,
+                'estado'       => $prospecto->estado,
             ]);
+
+            // Los contactos de la empresa pasan al cliente. Las actividades y
+            // eventos viejos conservan su contacto_id: el contacto es el mismo.
+            $contactosMovidos = CrmContacto::query()
+                ->where('empresa_id', $prospecto->empresa_id)
+                ->where('entidad_type', CrmProspecto::class)
+                ->where('entidad_id', $prospecto->id)
+                ->get();
+            $contactosMovidos->each->update(['entidad_type' => CrmCliente::class, 'entidad_id' => $cliente->id]);
 
             // Marca el prospecto como calificado (no descartar por trazabilidad)
             $prospecto->update(['estatus' => 'calificado']);
@@ -307,6 +363,11 @@ class ProspectoController extends CrmBaseController
         });
 
         $this->difundir(new ProspectoUpdated('updated', $prospecto->fresh()->toArray()));
+
+        foreach ($contactosMovidos as $contactoMovido) {
+            $contactoMovido->entidad_tipo = 'cliente';
+            $this->difundir(new ContactoUpdated('updated', $contactoMovido->toArray()));
+        }
 
         $movidas->load(CrmOportunidad::RELACIONES_API)->each->conMontoOrigen();
         foreach ($movidas as $oportunidad) {

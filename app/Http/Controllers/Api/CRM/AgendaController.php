@@ -9,6 +9,7 @@ use App\Models\CRM\CrmCliente;
 use App\Models\CRM\CrmEmpresaExterna;
 use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmProspecto;
+use App\Services\CRM\ContactoActividadService;
 use App\Services\CRM\SeguimientoService;
 use App\Services\CRM\VisibilidadAgenda;
 use App\Services\CRM\VisibilidadOportunidades;
@@ -47,7 +48,7 @@ class AgendaController extends CrmBaseController
     protected const TIPOS_AGENDA = ['llamada', 'visita', 'reunion', 'tarea', 'correo', 'whatsapp'];
 
     /** Relaciones que salen con cada evento (también en el payload en tiempo real). */
-    protected const RELACIONES = ['vendedor:id,nombre', 'etiqueta:id,nombre'];
+    protected const RELACIONES = ['vendedor:id,nombre', 'etiqueta:id,nombre', 'contacto:id,nombre,cargo'];
 
     /** Tope de pendientes vencidos devueltos de una vez (los más antiguos primero). */
     protected const LIMITE_VENCIDOS = 100;
@@ -66,6 +67,7 @@ class AgendaController extends CrmBaseController
         private readonly SeguimientoService $seguimientos,
         private readonly VisibilidadAgenda $visibilidad,
         private readonly VisibilidadOportunidades $oportunidades,
+        private readonly ContactoActividadService $contactos,
     ) {}
 
     /** GET /crm/agenda?desde=&hasta=&vendedor_id=&tipo=&completado=&vencidos= */
@@ -147,7 +149,7 @@ class AgendaController extends CrmBaseController
                 $request->input('entidad_tipo') === 'oportunidad' ? 'required' : 'nullable',
                 ...$this->seguimientos->reglaEtiqueta($empresaId),
             ],
-        ], [
+        ] + $this->contactos->reglas(), [
             'fecha_fin.after_or_equal' => 'La fecha de fin debe ser posterior o igual a la fecha de inicio.',
             'recordatorio_at.before_or_equal' => 'El recordatorio debe ser antes del inicio del evento.',
         ] + $this->seguimientos->mensajesEtiqueta('etiqueta_id'));
@@ -157,37 +159,47 @@ class AgendaController extends CrmBaseController
         $this->seguimientos->exigirCapturaConOportunidad($validated['entidad_tipo'] ?? null);
 
         $entidadType = null;
+        $entidad = null;
         if (! empty($validated['entidad_tipo'])) {
             $modelClass = self::TIPOS[$validated['entidad_tipo']];
             // Una oportunidad que el usuario no puede ver responde igual que una inexistente.
-            $existe = $this->oportunidades->entidadVisible(
+            $entidad = $this->oportunidades->entidadVisible(
                 $modelClass::where('empresa_id', $empresaId)->find($validated['entidad_id'])
             );
-            if (! $existe) {
+            if (! $entidad) {
                 return $this->jsonError('La entidad relacionada no existe o no pertenece a la empresa.', 404);
             }
             $entidadType = $modelClass;
         }
 
-        $evento = CrmAgenda::create([
-            'empresa_id' => $empresaId,
-            'vendedor_id' => $vendedorId,
-            'entidad_type' => $entidadType,
-            'entidad_id' => $entidadType ? $validated['entidad_id'] : null,
-            'tipo' => $validated['tipo'],
-            'titulo' => $validated['titulo'],
-            'descripcion' => $validated['descripcion'] ?? null,
-            'fecha_inicio' => $validated['fecha_inicio'],
-            'fecha_fin' => $validated['fecha_fin'],
-            'recordatorio_at' => $validated['recordatorio_at'] ?? null,
-            'etiqueta_id' => $validated['etiqueta_id'] ?? null,
-        ]);
+        // El contacto es opcional en la agenda (nunca obligatorio); si viene se valida o se crea
+        // contra la empresa del evento, en la misma transacción.
+        $contactoCreado = null;
+        $evento = DB::transaction(function () use ($empresaId, $vendedorId, $entidad, $entidadType, $validated, &$contactoCreado) {
+            $contactoId = $this->contactos->resolver($empresaId, $entidad, $validated, false, $contactoCreado);
+
+            return CrmAgenda::create([
+                'empresa_id' => $empresaId,
+                'vendedor_id' => $vendedorId,
+                'entidad_type' => $entidadType,
+                'entidad_id' => $entidadType ? $validated['entidad_id'] : null,
+                'tipo' => $validated['tipo'],
+                'titulo' => $validated['titulo'],
+                'descripcion' => $validated['descripcion'] ?? null,
+                'fecha_inicio' => $validated['fecha_inicio'],
+                'fecha_fin' => $validated['fecha_fin'],
+                'recordatorio_at' => $validated['recordatorio_at'] ?? null,
+                'etiqueta_id' => $validated['etiqueta_id'] ?? null,
+                'contacto_id' => $contactoId,
+            ]);
+        });
 
         // Se carga la relación antes de emitir el broadcast (mismo patrón
         // que ActividadController::store()): si no, el evento en tiempo
         // real que reciben las demás pestañas llegaría sin
         // vendedor.nombre hasta el siguiente refetch completo.
         $evento->load(self::RELACIONES);
+        $this->difundirContactoCreado($contactoCreado);
         $this->difundir(new AgendaUpdated('created', $evento->toArray()));
 
         return $this->jsonSuccess($evento, 'Evento de agenda creado correctamente', 201);
@@ -267,7 +279,7 @@ class AgendaController extends CrmBaseController
                     }
                 },
             ],
-        ], $this->seguimientos->mensajesEtiqueta('etiqueta_id'));
+        ] + $this->contactos->reglas(), $this->seguimientos->mensajesEtiqueta('etiqueta_id'));
         // El evento no cambia de entidad aquí (para eso está `ligar`), pero si el cuerpo
         // intenta ponerlo en un cliente o prospecto se rechaza igual que en la alta.
         $this->seguimientos->exigirCapturaConOportunidad($request->input('entidad_tipo'));
@@ -295,9 +307,20 @@ class AgendaController extends CrmBaseController
             }
         }
 
-        $agenda->update($validated);
+        // El contacto solo cambia si el cuerpo lo trae (`contacto_id: null` lo quita): se valida
+        // o se crea contra la empresa del evento. Nunca es obligatorio en la agenda.
+        $contactoCreado = null;
+        DB::transaction(function () use ($agenda, $empresaId, $validated, &$contactoCreado) {
+            if (array_key_exists('contacto_id', $validated) || ! empty($validated['contacto_nuevo'])) {
+                $validated['contacto_id'] = $this->contactos->resolver($empresaId, $agenda->entidad, $validated, false, $contactoCreado);
+            }
+            unset($validated['contacto_nuevo']);
+
+            $agenda->update($validated);
+        });
 
         $agenda->load(self::RELACIONES);
+        $this->difundirContactoCreado($contactoCreado);
         $this->difundir(new AgendaUpdated('updated', $agenda->toArray()));
 
         return $this->jsonSuccess($agenda, 'Evento de agenda actualizado correctamente');
@@ -325,7 +348,7 @@ class AgendaController extends CrmBaseController
             'siguiente',
             (int) $empresaId,
             $agenda->entidad_type === CrmOportunidad::class,
-        )), $this->seguimientos->mensajesSiguiente('siguiente'));
+        ), $this->contactos->reglas()), $this->seguimientos->mensajesSiguiente('siguiente'));
 
         $siguiente = $validated['siguiente'] ?? null;
 
@@ -351,15 +374,34 @@ class AgendaController extends CrmBaseController
             ]);
         }
 
-        $siguienteEvento = DB::transaction(function () use ($agenda, $validated, $siguiente) {
-            $agenda->update(['completado' => true]);
+        $tipoActividad = $validated['actividad_tipo'] ?? self::TIPO_ACTIVIDAD_PARA[$agenda->tipo];
+        $contactoCreado = null;
+
+        $siguienteEvento = DB::transaction(function () use ($agenda, $validated, $siguiente, $tipoActividad, &$contactoCreado) {
+            // Contacto efectivo: el del cuerpo (elegido o nuevo) y, si no, el que ya tenía el
+            // evento (se hereda sin revalidar). Es obligatorio si la actividad que se genera lo
+            // exige (se evalúa como manual) y el evento no trae ninguno.
+            $traeContacto = ($validated['contacto_id'] ?? null) !== null || ! empty($validated['contacto_nuevo']);
+            $entidad = $agenda->entidad;
+            $contactoId = $traeContacto || $agenda->contacto_id === null
+                ? $this->contactos->resolver(
+                    (int) $agenda->empresa_id,
+                    $entidad,
+                    $validated,
+                    $this->contactos->exige((int) $agenda->empresa_id, $entidad, $tipoActividad),
+                    $contactoCreado,
+                )
+                : $agenda->contacto_id;
+
+            $agenda->update(['completado' => true, 'contacto_id' => $contactoId]);
 
             if ($agenda->entidad_type && $agenda->entidad_id) {
                 CrmActividad::create([
                     'empresa_id' => $agenda->empresa_id,
                     'entidad_type' => $agenda->entidad_type,
                     'entidad_id' => $agenda->entidad_id,
-                    'tipo' => $validated['actividad_tipo'] ?? self::TIPO_ACTIVIDAD_PARA[$agenda->tipo],
+                    'contacto_id' => $contactoId,
+                    'tipo' => $tipoActividad,
                     'descripcion' => $agenda->titulo.($agenda->descripcion ? " — {$agenda->descripcion}" : ''),
                     'resultado' => $validated['resultado'] ?? null,
                     'fecha_actividad' => now(),
@@ -372,10 +414,11 @@ class AgendaController extends CrmBaseController
 
             return empty($siguiente)
                 ? null
-                : $this->seguimientos->programar($agenda->empresa_id, $agenda->vendedor_id, $agenda->entidad, $siguiente);
+                : $this->seguimientos->programar($agenda->empresa_id, $agenda->vendedor_id, $agenda->entidad, $siguiente + ['contacto_id' => $contactoId]);
         });
 
         $agenda->load(self::RELACIONES);
+        $this->difundirContactoCreado($contactoCreado);
         // Canal explícito de Agenda: la petición puede venir desde Mi día
         // (X-Module-Slug: mi-dia) y la vista de Agenda debe enterarse igual.
         $this->difundir(new AgendaUpdated('completed', $agenda->toArray()));

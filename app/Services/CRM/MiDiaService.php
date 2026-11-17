@@ -46,7 +46,7 @@ class MiDiaService
         'motivoRechazo.categoria:id,nombre',
     ];
 
-    private const CARGA_EVENTO = ['etiqueta:id,nombre', 'entidad'];
+    private const CARGA_EVENTO = ['etiqueta:id,nombre', 'contacto:id,nombre,cargo', 'entidad'];
 
     private const ALIAS_ENTIDAD = [
         CrmProspecto::class => 'prospecto',
@@ -125,7 +125,7 @@ class MiDiaService
     /**
      * Evento base de Mi día: lo clásico + `etiqueta` + `liga_pendiente`. Con
      * `$conOportunidad` agrega la oportunidad del evento (null si no cuelga de una).
-     * Espera `etiqueta` y `entidad` cargadas.
+     * Espera `etiqueta`, `contacto` y `entidad` cargadas.
      */
     public function evento(CrmAgenda $e, bool $conOportunidad = false): array
     {
@@ -139,6 +139,7 @@ class MiDiaService
             'completado' => (bool) $e->completado,
             'entidad' => $this->entidad($e->entidad),
             'etiqueta' => $e->etiqueta ? ['id' => $e->etiqueta->id, 'nombre' => $e->etiqueta->nombre] : null,
+            'contacto' => $e->contacto ? ['id' => $e->contacto->id, 'nombre' => $e->contacto->nombre, 'cargo' => $e->contacto->cargo] : null,
             // Se puede ligar a una oportunidad: cuelga de un cliente o prospecto, o de nada.
             'liga_pendiente' => in_array($e->entidad_type, [null, CrmCliente::class, CrmProspecto::class], true),
         ];
@@ -187,6 +188,7 @@ class MiDiaService
     {
         $pendientes = fn () => CrmAgenda::with([
             'etiqueta:id,nombre',
+            'contacto:id,nombre,cargo',
             'entidad' => fn (MorphTo $morph) => $morph->morphWith([CrmOportunidad::class => self::CARGA_OPORTUNIDAD]),
         ])
             ->where('empresa_id', $empresaId)
@@ -237,7 +239,7 @@ class MiDiaService
             ->get();
 
         // Siguiente actividad: la pendiente más próxima del propio vendedor, de cualquier fecha.
-        $siguientes = CrmAgenda::with('etiqueta:id,nombre')
+        $siguientes = CrmAgenda::with(['etiqueta:id,nombre', 'contacto:id,nombre,cargo'])
             ->where('empresa_id', $empresaId)
             ->where('vendedor_id', $vendedorId)
             ->where('completado', false)

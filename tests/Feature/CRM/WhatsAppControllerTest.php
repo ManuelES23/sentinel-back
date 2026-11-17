@@ -13,6 +13,7 @@ use App\Models\CRM\CrmProspecto;
 use App\Models\CRM\CrmVendedor;
 use App\Models\UserSubmodulePermission;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Laravel\Sanctum\Sanctum;
 use Tests\Concerns\CreatesCrmFixtures;
 use Tests\TestCase;
@@ -183,6 +184,69 @@ class WhatsAppControllerTest extends TestCase
         $prospecto->delete();
 
         $this->destinatarios('oportunidad', $oportunidad->id)->assertOk()->assertJsonCount(0, 'data.destinatarios');
+    }
+
+    /** Prospecto ya convertido (con cliente) cuyos contactos viven en el cliente. */
+    private function prospectoConvertido(): array
+    {
+        $prospecto = CrmProspecto::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Rancho Convertido', 'telefono' => '6621112233']);
+        $cliente = CrmCliente::create([
+            'empresa_id' => $this->enterprise->id, 'prospecto_id' => $prospecto->id, 'nombre' => 'Rancho Convertido',
+        ]);
+        $contacto = $this->contacto($cliente, 'Lucía Mendoza', '6625554433', principal: true);
+
+        return [$prospecto, $cliente, $contacto];
+    }
+
+    #[DataProvider('banderaProspectoComoEmpresa')]
+    public function test_oportunidad_perdida_de_un_prospecto_convertido_lista_los_contactos_del_cliente(bool $bandera): void
+    {
+        CrmConfiguracionComercial::paraEmpresa($this->enterprise->id)->update(['prospecto_como_empresa' => $bandera]);
+        $this->otorgarPermisosCrm('oportunidades', 'oportunidades', ['ver']);
+        [$prospecto, , $contacto] = $this->prospectoConvertido();
+        $perdida = $this->oportunidad(datos: ['cliente_id' => null, 'prospecto_id' => $prospecto->id, 'etapa' => 'cerrado_perdido']);
+
+        $this->destinatarios('oportunidad', $perdida->id)
+            ->assertOk()
+            ->assertJsonCount(2, 'data.destinatarios')
+            ->assertJsonPath('data.destinatarios.0.clave', 'entidad')
+            ->assertJsonPath('data.destinatarios.1.clave', 'contacto:'.$contacto->id)
+            ->assertJsonPath('data.destinatarios.1.nombre', 'Lucía Mendoza');
+
+        // Lo que se ofrece es lo que el servidor acepta como destinatario.
+        $this->renderizar([
+            'plantilla_id' => $this->plantilla('Hola {{nombre}}')->id, 'entidad_tipo' => 'oportunidad',
+            'entidad_id' => $perdida->id, 'destinatario_clave' => 'contacto:'.$contacto->id,
+        ])->assertOk()->assertJsonPath('data.mensaje', 'Hola Lucía');
+    }
+
+    #[DataProvider('banderaProspectoComoEmpresa')]
+    public function test_el_prospecto_convertido_lista_los_contactos_de_su_cliente(bool $bandera): void
+    {
+        CrmConfiguracionComercial::paraEmpresa($this->enterprise->id)->update(['prospecto_como_empresa' => $bandera]);
+        [$prospecto, , $contacto] = $this->prospectoConvertido();
+
+        $this->destinatarios('prospecto', $prospecto->id)
+            ->assertOk()
+            ->assertJsonCount(2, 'data.destinatarios')
+            ->assertJsonPath('data.destinatarios.1.clave', 'contacto:'.$contacto->id);
+    }
+
+    public static function banderaProspectoComoEmpresa(): array
+    {
+        return ['bandera apagada (Canes Agro)' => [false], 'bandera encendida (SBP)' => [true]];
+    }
+
+    public function test_los_contactos_que_se_quedaron_en_el_prospecto_convertido_no_se_ofrecen(): void
+    {
+        // Tras la conversión la empresa de la actividad es el cliente: un contacto
+        // rezagado en el prospecto no lo acepta `resolver`, así que tampoco se ofrece.
+        [$prospecto] = $this->prospectoConvertido();
+        $rezagado = $this->contacto($prospecto, 'Rezagado', '6620001122');
+
+        $this->destinatarios('prospecto', $prospecto->id)
+            ->assertOk()
+            ->assertJsonMissing(['clave' => 'contacto:'.$rezagado->id]);
     }
 
     public function test_oportunidad_que_apunta_a_un_cliente_de_otra_empresa_no_filtra_sus_telefonos(): void

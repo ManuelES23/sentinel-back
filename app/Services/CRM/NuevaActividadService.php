@@ -5,6 +5,7 @@ namespace App\Services\CRM;
 use App\Models\CRM\CrmActividad;
 use App\Models\CRM\CrmAgenda;
 use App\Models\CRM\CrmCliente;
+use App\Models\CRM\CrmContacto;
 use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmProspecto;
 use App\Models\User;
@@ -25,6 +26,7 @@ class NuevaActividadService
 {
     public function __construct(
         private readonly AperturaOportunidadService $apertura,
+        private readonly ContactoActividadService $contactos,
         private readonly SeguimientoService $seguimientos,
         private readonly VendedorActualService $vendedores,
         private readonly VisibilidadOportunidades $visibilidad,
@@ -33,7 +35,10 @@ class NuevaActividadService
     /**
      * @param  array<string, mixed>  $datos  `prospecto_nuevo`, `cliente_id`, `prospecto_id` u `oportunidad_id` (uno solo),
      *                                       `tipo_producto`, `monto_esperado`, `vendedor_id`, y `evento` o `actividad` (uno solo).
-     * @return array{oportunidad: CrmOportunidad, evento: ?CrmAgenda, actividad: ?CrmActividad, prospecto: ?CrmProspecto, oportunidad_nueva: bool}
+     *                                       Más `contacto_id` o `contacto_nuevo`, a nivel raíz: lo exige la actividad
+     *                                       ya hecha cuando lo pide ContactoActividadService::exige; el evento lo
+     *                                       acepta opcional.
+     * @return array{oportunidad: CrmOportunidad, evento: ?CrmAgenda, actividad: ?CrmActividad, prospecto: ?CrmProspecto, oportunidad_nueva: bool, contacto_creado: ?CrmContacto}
      */
     public function crear(int $empresaId, User $usuario, array $datos): array
     {
@@ -45,6 +50,7 @@ class NuevaActividadService
 
         return DB::transaction(function () use ($empresaId, $datos, $vendedor) {
             $prospecto = null;
+            $contactoCreado = null;
             $nueva = ! isset($datos['oportunidad_id']);
 
             if ($nueva) {
@@ -59,11 +65,22 @@ class NuevaActividadService
                 $oportunidad = $this->oportunidadAbierta($empresaId, (int) $datos['oportunidad_id']);
             }
 
+            // Con la oportunidad ya abierta (y el prospecto nuevo ya creado) se resuelve el
+            // contacto, en esta misma transacción: si algo falla, no queda ni el contacto.
+            $contactoId = $this->contactos->resolver(
+                $empresaId,
+                $oportunidad,
+                $datos,
+                ! empty($datos['actividad'])
+                    && $this->contactos->exige($empresaId, $oportunidad, $datos['actividad']['tipo'] ?? null),
+                $contactoCreado,
+            );
+
             $evento = ! empty($datos['evento'])
-                ? $this->seguimientos->programar($empresaId, $vendedor->id, $oportunidad, $datos['evento'])
+                ? $this->seguimientos->programar($empresaId, $vendedor->id, $oportunidad, $datos['evento'] + ['contacto_id' => $contactoId])
                 : null;
             $actividad = ! empty($datos['actividad'])
-                ? $this->seguimientos->crearActividad($empresaId, $vendedor->id, $oportunidad, $datos['actividad'])
+                ? $this->seguimientos->crearActividad($empresaId, $vendedor->id, $oportunidad, $datos['actividad'] + ['contacto_id' => $contactoId])
                 : null;
 
             return [
@@ -72,6 +89,7 @@ class NuevaActividadService
                 'actividad' => $actividad,
                 'prospecto' => $prospecto,
                 'oportunidad_nueva' => $nueva,
+                'contacto_creado' => $contactoCreado,
             ];
         });
     }

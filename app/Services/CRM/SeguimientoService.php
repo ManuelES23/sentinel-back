@@ -145,6 +145,7 @@ class SeguimientoService
             'fecha_actividad' => $datos['fecha_actividad'] ?? now(),
             'fuente' => $datos['fuente'] ?? 'manual',
             'etiqueta_id' => $datos['etiqueta_id'] ?? null,
+            'contacto_id' => $datos['contacto_id'] ?? null,
         ]);
     }
 
@@ -165,6 +166,7 @@ class SeguimientoService
             'fecha_fin' => $inicio->addMinutes($duracion),
             'completado' => false,
             'etiqueta_id' => $datos['etiqueta_id'] ?? null,
+            'contacto_id' => $datos['contacto_id'] ?? null,
         ]);
     }
 
