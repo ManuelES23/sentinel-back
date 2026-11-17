@@ -13,7 +13,8 @@ use Illuminate\Queue\SerializesModels;
 /**
  * Aviso a quien le toca revisar una solicitud de vacaciones. `via` dice dónde la decide:
  * en el portal (jefe sin usuario), en el portal o en Sentinel (jefe con usuario), en la
- * bandeja de Sentinel (otro aprobador con usuario) o en RH → Vacaciones (paso final de RH).
+ * bandeja de Sentinel (otro aprobador con usuario) o en RH → Vacaciones (paso final de RH). Con `informado`
+ * es solo un aviso para quien acompaña a quien decide: no pide ninguna acción.
  * Nunca lleva el PIN.
  */
 class VacationReviewMail extends Mailable
@@ -28,11 +29,22 @@ class VacationReviewMail extends Mailable
 
     public const VIA_RH = 'rh';
 
-    public function __construct(public VacationRequest $solicitud, public ?string $nombre, public string $via = self::VIA_PORTAL) {}
+    /** Solo informativo (p. ej. la asistente del director): no decide ni tiene que hacer nada. */
+    public const VIA_INFORMADO = 'informado';
+
+    /** `aprobador`: a quién espera la solicitud; solo lo usa el aviso informativo. */
+    public function __construct(
+        public VacationRequest $solicitud,
+        public ?string $nombre,
+        public string $via = self::VIA_PORTAL,
+        public ?string $aprobador = null,
+    ) {}
 
     public function envelope(): Envelope
     {
-        return new Envelope(subject: 'Tienes una solicitud de vacaciones por revisar');
+        return new Envelope(subject: $this->via === self::VIA_INFORMADO
+            ? 'Solicitud de vacaciones para tu información'
+            : 'Tienes una solicitud de vacaciones por revisar');
     }
 
     public function content(): Content
@@ -40,6 +52,7 @@ class VacationReviewMail extends Mailable
         return new Content(view: 'emails.vacaciones-por-revisar', with: [
             'nombre' => $this->nombre,
             'via' => $this->via,
+            'aprobador' => $this->aprobador,
             'comoJefe' => in_array($this->via, [self::VIA_PORTAL, self::VIA_PORTAL_O_SENTINEL], true),
             'solicitante' => $this->solicitud->employee?->full_name,
             'periodo' => TextosVacaciones::periodo($this->solicitud),

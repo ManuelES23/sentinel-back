@@ -43,7 +43,7 @@ class ProfileOutlookVacacionesController extends Controller
         if (! $this->outlook->disponible($usuario)) {
             return response()->json([
                 'success' => false,
-                'message' => 'Solo quien autoriza vacaciones como usuario específico puede vincular Outlook aquí.',
+                'message' => 'Solo quien autoriza vacaciones como usuario específico o está informado de ese paso puede vincular Outlook aquí.',
                 'data' => null,
             ], 403);
         }

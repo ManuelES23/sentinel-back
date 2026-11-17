@@ -7,7 +7,7 @@ use App\Models\Abastecimiento\ConvenioCalibre;
 use App\Models\Abastecimiento\ConvenioMeta;
 use App\Models\Abastecimiento\ConvenioPrecio;
 use App\Models\Abastecimiento\Variedad;
-use App\Models\Abastecimiento\VariedadCalibre;
+use App\Models\CRM\CrmProductoCalibre;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Schema;
@@ -25,15 +25,15 @@ class EsquemaCalibresTest extends TestCase
         $this->setUpAbastecimiento();
     }
 
-    private function calibre(Variedad $variedad, string $nombre, int $orden = 0): VariedadCalibre
+    private function calibre(Variedad $variedad, string $nombre, int $orden = 0): CrmProductoCalibre
     {
-        return VariedadCalibre::create(['variedad_id' => $variedad->id, 'nombre' => $nombre, 'orden' => $orden]);
+        return $this->crearCalibre($variedad, $nombre, true, $orden);
     }
 
     public function test_tablas_y_columnas_de_calibres(): void
     {
         $esperado = [
-            'abs_variedad_calibres' => ['id', 'variedad_id', 'nombre', 'orden', 'is_active', 'created_at', 'updated_at', 'deleted_at'],
+            'abs_variedades' => ['producto_id'],
             'abs_convenios' => ['usa_calibres'],
             'abs_convenio_calibres' => ['id', 'convenio_id', 'calibre_id', 'volumen_total', 'created_at', 'updated_at'],
             'abs_convenio_precios' => ['calibre_id'],
@@ -56,9 +56,8 @@ class EsquemaCalibresTest extends TestCase
 
         $this->assertFalse($convenio->fresh()->usa_calibres);
         $this->assertSame([$chico->id, $grande->id], $variedad->calibres()->orderBy('orden')->pluck('id')->all());
-        $this->assertSame($variedad->id, $grande->variedad->id);
-        $this->assertTrue(VariedadCalibre::deEmpresa($this->sbp->id)->whereKey($grande->id)->exists());
-        $this->assertFalse(VariedadCalibre::deEmpresa($this->otra->id)->whereKey($grande->id)->exists());
+        $this->assertSame($variedad->producto_id, $grande->producto_id);
+        $this->assertFalse(Schema::hasTable('abs_variedad_calibres'), 'Los calibres ya no tienen catálogo propio.');
 
         $cc = ConvenioCalibre::create(['convenio_id' => $convenio->id, 'calibre_id' => $grande->id, 'volumen_total' => 500]);
         $this->assertSame($convenio->id, $cc->convenio->id);
@@ -141,12 +140,11 @@ class EsquemaCalibresTest extends TestCase
         $this->assertSame(3, ConvenioMeta::where('convenio_id', $convenio->id)->where('semana', '2026-06-01')->count());
     }
 
-    public function test_calibre_unico_por_variedad_incluso_borrado(): void
+    public function test_calibre_unico_por_producto(): void
     {
         $convenio = $this->crearConvenio($this->sbp);
         $variedad = $convenio->variedad;
-        $calibre = $this->calibre($variedad, 'Jumbo');
-        $calibre->delete();
+        $this->calibre($variedad, 'Jumbo');
 
         $this->expectException(QueryException::class);
         $this->calibre($variedad, 'Jumbo');

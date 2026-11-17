@@ -35,6 +35,6 @@ class ConvenioCalibre extends Model
 
     public function calibre(): BelongsTo
     {
-        return $this->belongsTo(VariedadCalibre::class, 'calibre_id');
+        return $this->belongsTo(\App\Models\CRM\CrmProductoCalibre::class, 'calibre_id');
     }
 }

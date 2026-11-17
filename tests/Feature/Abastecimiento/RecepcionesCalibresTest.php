@@ -10,7 +10,7 @@ use App\Models\Abastecimiento\Recepcion;
 use App\Models\Abastecimiento\RecepcionCalibre;
 use App\Models\Abastecimiento\TipoCarga;
 use App\Models\Abastecimiento\Variedad;
-use App\Models\Abastecimiento\VariedadCalibre;
+use App\Models\CRM\CrmProductoCalibre;
 use App\Models\User;
 use App\Services\Abastecimiento\ReglasRenglonesRecepcion;
 use Carbon\Carbon;
@@ -67,10 +67,10 @@ class RecepcionesCalibresTest extends TestCase
         return TipoCarga::where('enterprise_id', $this->sbp->id)->orderBy('id')->firstOrFail();
     }
 
-    /** El calibre de la variedad con ese nombre (aun borrado); lo crea si no existe. */
-    private function calibre(string $nombre, ?int $orden = null): VariedadCalibre
+    /** El calibre de la variedad con ese nombre; lo crea si no existe. */
+    private function calibre(string $nombre, ?int $orden = null): CrmProductoCalibre
     {
-        $calibre = VariedadCalibre::withTrashed()->where('variedad_id', $this->variedad->id)->where('nombre', $nombre)->first()
+        $calibre = CrmProductoCalibre::query()->where('producto_id', $this->variedad->producto_id)->where('nombre', $nombre)->first()
             ?? $this->crearCalibre($this->variedad, $nombre);
         if ($orden !== null) {
             $calibre->update(['orden' => $orden]);
@@ -370,7 +370,7 @@ class RecepcionesCalibresTest extends TestCase
         ]);
         $this->crearRecepcionConRenglones($c, [$this->renglon('A', 10), $this->renglon('Z', 3)], ['fecha' => '2026-06-09']);
         $this->calibre('B')->update(['is_active' => false]);
-        $z->delete(); // borrado del catálogo: su nombre sigue saliendo
+        $z->update(['activo' => false]); // desactivado en el catálogo: su nombre sigue saliendo
         $clasico = $this->crearConvenio($this->sbp);
         $this->crearRecepcion($clasico, ['fecha' => '2026-06-08']);
 
@@ -386,7 +386,7 @@ class RecepcionesCalibresTest extends TestCase
         $qSemana = count(\DB::getQueryLog());
         \DB::flushQueryLog();
 
-        // Listado: renglones con nombre del calibre (aun borrado); la clásica, lista vacía.
+        // Listado: renglones con nombre del calibre (aun desactivado); la clásica, lista vacía.
         $porCalibre = collect($l1->json('data.data'))->firstWhere('convenio_id', $c->id);
         $deClasico = collect($l1->json('data.data'))->firstWhere('convenio_id', $clasico->id);
         $this->assertTrue($porCalibre['convenio']['usa_calibres']);

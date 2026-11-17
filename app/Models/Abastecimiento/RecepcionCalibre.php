@@ -41,6 +41,6 @@ class RecepcionCalibre extends Model
     /** Con borrados: un calibre dado de baja sigue mostrando su nombre en recepciones viejas. */
     public function calibre(): BelongsTo
     {
-        return $this->belongsTo(VariedadCalibre::class, 'calibre_id')->withTrashed();
+        return $this->belongsTo(\App\Models\CRM\CrmProductoCalibre::class, 'calibre_id');
     }
 }

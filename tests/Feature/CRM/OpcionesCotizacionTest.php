@@ -47,7 +47,7 @@ class OpcionesCotizacionTest extends TestCase
         return $this->withHeaders($this->crmHeaders())->getJson(self::RUTA)->assertOk()->json('data.productos');
     }
 
-    public function test_junta_calibres_agricolas_activos_y_propios_sin_repetir(): void
+    public function test_solo_ofrece_calibres_propios_activos_y_no_lee_los_de_splendid_farms(): void
     {
         $variedad = $this->variedad('Mango', 'Kent Mango');
         $base = ['cultivo_id' => $variedad->cultivo_id, 'variedad_id' => $variedad->id];
@@ -62,7 +62,8 @@ class OpcionesCotizacionTest extends TestCase
 
         $productos = $this->opciones();
 
-        $this->assertSame(['Calibre 8', 'Calibre 40'], $productos[0]['variedades'][0]['calibres']);
+        // Los de Splendid Farms (Calibre 8 agrícola) ya no se leen: solo los propios activos.
+        $this->assertSame(['calibre 8', 'Calibre 40'], $productos[0]['variedades'][0]['calibres']);
     }
 
     public function test_solo_ofrece_variedades_activas_de_la_empresa(): void
