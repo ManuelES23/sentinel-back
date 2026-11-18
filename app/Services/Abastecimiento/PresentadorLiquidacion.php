@@ -74,6 +74,7 @@ class PresentadorLiquidacion
             'detalles' => fn ($q) => $q->orderBy('id'),
             'detalles.recepcion:id,folio,fecha,tipo_carga_id',
             'detalles.recepcion.tipoCarga:id,nombre',
+            'detalles.calibre:id,nombre',
             'aprobaciones' => fn ($q) => $q->orderBy('ronda')->orderBy('step_order')->orderBy('id'),
             'aprobaciones.decisor:id,name',
         ]);
@@ -94,6 +95,9 @@ class PresentadorLiquidacion
                 'folio' => $d->recepcion?->folio,
                 'fecha' => $d->recepcion?->fecha->format('Y-m-d'),
                 'tipo_carga' => $d->recepcion?->tipoCarga ? ['id' => $d->recepcion->tipoCarga->id, 'nombre' => $d->recepcion->tipoCarga->nombre] : null,
+                // Solo en convenios por calibre (un renglón por recepción y calibre); en los clásicos es nulo.
+                'calibre_id' => $d->calibre_id,
+                'calibre' => $d->calibre ? ['id' => $d->calibre->id, 'nombre' => $d->calibre->nombre] : null,
                 'cantidad' => $this->f($d->cantidad),
                 'kilos' => $this->f($d->kilos),
                 'rezaga_kg' => $this->f($d->rezaga_kg),

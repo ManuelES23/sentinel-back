@@ -57,13 +57,14 @@ class LiquidacionController extends AbastecimientoController
         $convenio = Convenio::deEmpresa($empresa->id)->with('precios')->findOrFail($datos['convenio_id']);
         $recepciones = ReglasLiquidacion::recepcionesDisponibles(
             $convenio, $datos['periodo_inicio'], $datos['periodo_fin'], $datos['liquidacion_id'] ?? null,
-        )->load('tipoCarga:id,nombre');
+        )->load($convenio->usa_calibres ? ['tipoCarga:id,nombre', 'renglones.calibre:id,nombre'] : ['tipoCarga:id,nombre']);
 
         $data = $recepciones->map(function (Recepcion $r) use ($convenio) {
-            // Convenio por calibre: sin precio por recepción y no liquidable hasta el plan 3 (ver `ReglasLiquidacion`).
+            $fecha = $r->fecha->format('Y-m-d');
+            // Convenio por calibre: el precio es de cada renglón (`renglones[].precio`), no de la recepción.
             $precio = $convenio->usa_calibres
                 ? null
-                : PrecioVigente::enColeccion($convenio->precios, (int) $r->tipo_carga_id, $r->fecha->format('Y-m-d'));
+                : PrecioVigente::enColeccion($convenio->precios, (int) $r->tipo_carga_id, $fecha);
 
             return [
                 'id' => $r->id,
@@ -77,7 +78,15 @@ class LiquidacionController extends AbastecimientoController
                 'ticket_proveedor' => $r->ticket_proveedor,
                 'precio' => $precio === null ? null : (float) $precio->precio,
                 'liquidacion_id' => $r->liquidacion_id,
-            ] + ($convenio->usa_calibres ? ['liquidable' => false] : []);
+            ] + ($convenio->usa_calibres ? ['renglones' => $r->renglones->map(fn ($c) => [
+                'calibre_id' => (int) $c->calibre_id,
+                'calibre' => $c->calibre ? ['id' => $c->calibre->id, 'nombre' => $c->calibre->nombre] : null,
+                'cantidad' => (float) $c->cantidad,
+                'kilos' => $c->kilos === null ? null : (float) $c->kilos,
+                'rezaga_kg' => $c->rezaga_kg === null ? null : (float) $c->rezaga_kg,
+                'precio' => ($p = PrecioVigente::enColeccion($convenio->precios, (int) $r->tipo_carga_id, $fecha, (int) $c->calibre_id)) === null
+                    ? null : (float) $p->precio,
+            ])->values()->all()] : []);
         })->values();
 
         return response()->json(['success' => true, 'data' => $data]);
@@ -525,10 +534,15 @@ class LiquidacionController extends AbastecimientoController
     /** Renglón de la vista previa: el cálculo más lo que la tabla muestra de la recepción. */
     private function detallePrevio(array $d, Recepcion $r): array
     {
+        // Renglón por calibre: su nombre sale de los renglones que ya cargó `ReglasLiquidacion::validarSeleccion`.
+        $calibre = isset($d['calibre_id'])
+            ? $r->renglones->firstWhere('calibre_id', $d['calibre_id'])?->calibre
+            : null;
+
         return $d + [
             'folio' => $r->folio,
             'fecha' => $r->fecha->format('Y-m-d'),
             'tipo_carga' => $r->tipoCarga ? ['id' => $r->tipoCarga->id, 'nombre' => $r->tipoCarga->nombre] : null,
-        ];
+        ] + (isset($d['calibre_id']) ? ['calibre' => $calibre ? ['id' => $calibre->id, 'nombre' => $calibre->nombre] : null] : []);
     }
 }
