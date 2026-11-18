@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Services\Inventory\CapasCosto;
 use App\Support\Inventario\Cubeta;
+use App\Support\Inventario\ResultadoMovimiento;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -151,6 +152,21 @@ class InventoryStock extends Model
         $r = app(CapasCosto::class)->devolver($c, $cantidad, null, $referencia, null, $costoRespaldo);
 
         return self::ajustarCantidad($c, $r->cantidad, null, null, true);
+    }
+
+    /**
+     * Devuelve solo lo que la referencia realmente tomó (sus porciones vigentes): lo que se pida
+     * de más no entra a ningún costo, así no se inventa existencia. Ajusta la fila por lo devuelto.
+     */
+    public static function devolverPorReferenciaExacta(int $productId, int $entityId, float $cantidad, string $referencia): ResultadoMovimiento
+    {
+        $c = new Cubeta($productId, $entityId);
+        $r = app(CapasCosto::class)->devolver($c, $cantidad, null, $referencia, crearSiFalta: false);
+        if ($r->cantidad > 0) {
+            self::ajustarCantidad($c, $r->cantidad, null, null, true);
+        }
+
+        return $r;
     }
 
     /**
