@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque;
 
+use App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\Concerns\AlternativasDeConsumo;
 use App\Http\Controllers\Controller;
 use App\Models\ActivityLog;
 use App\Models\Entity;
@@ -25,6 +26,8 @@ use Illuminate\Validation\ValidationException;
 
 class ProduccionEmpaqueController extends Controller
 {
+    use AlternativasDeConsumo;
+
     private array $eagerLoad = [
         'temporada:id,nombre,cultivo_id',
         'temporada.cultivo:id,nombre',
@@ -1973,29 +1976,6 @@ class ProduccionEmpaqueController extends Controller
     }
 
     /**
-     * Alternativas registradas vigentes: grupo (minúsculas) => product_id elegidos. Por producto y no
-     * por renglón: el editor de recetas borra y recrea los renglones, el producto se conserva.
-     * Por entrada, del pallet sin entrada ($d = null) o de todo el pallet ($todoElPallet).
-     *
-     * @return array<string, int[]>
-     */
-    private function alternativasRegistradas(ProduccionEmpaque $p, ?ProduccionEmpaqueDetalle $d, bool $todoElPallet = false): array
-    {
-        $registradas = [];
-        ProduccionEmpaqueConsumo::where('produccion_id', $p->id)
-            ->when(! $todoElPallet, fn ($q) => $d ? $q->where('detalle_id', $d->id) : $q->whereNull('detalle_id'))
-            ->whereNotNull('group_key')
-            ->vigentes()
-            ->orderBy('id')
-            ->get(['group_key', 'product_id'])
-            ->each(function (ProduccionEmpaqueConsumo $c) use (&$registradas) {
-                $registradas[$this->claveGrupo($c->group_key)][] = (int) $c->product_id;
-            });
-
-        return array_map(fn (array $ids) => array_values(array_unique($ids)), $registradas);
-    }
-
-    /**
      * Cambian si el producto de alguna elegida no es el registrado en un grupo que ya tiene consumo.
      * Un renglón pedido que ya no existe cuenta como cambio (la validación lo rechaza después).
      */
@@ -2019,34 +1999,6 @@ class ProduccionEmpaqueController extends Controller
         }
 
         return false;
-    }
-
-    /**
-     * [grupo => recipe_item_id] para el servicio: lo registrado traducido al renglón ACTUAL de la
-     * receta con ese grupo y ese producto (si ya no está, queda la predeterminada), con lo pedido encima.
-     */
-    private function alternativasParaConsumir(array $registradas, ?array $pedidas, ?Recipe $receta): array
-    {
-        $alternativas = [];
-        if ($receta) {
-            foreach ($registradas as $grupo => $productos) {
-                $item = $receta->items->first(fn (RecipeItem $i) => $this->claveGrupo($i->group_key) === $grupo
-                    && (int) $i->product_id === $productos[0]);
-                if ($item) {
-                    $alternativas[$grupo] = (int) $item->id;
-                }
-            }
-        }
-        foreach ($pedidas ?? [] as $grupo => $itemId) {
-            $alternativas[$this->claveGrupo($grupo)] = $itemId;
-        }
-
-        return $alternativas;
-    }
-
-    private function claveGrupo(?string $grupo): string
-    {
-        return mb_strtolower(trim((string) $grupo));
     }
 
     /** Pallet sin entradas: por caja + al armar; si está cerrado, también al cerrar. */
