@@ -28,6 +28,8 @@ use Illuminate\Support\Facades\Log;
  * PEPS, así la devolución regresa exactamente lo registrado (nunca se recalcula con la receta).
  *
  * Debe llamarse dentro de la transacción del llamador (bloquea filas de stock y porciones).
+ * Orden de bloqueo global: consumir y devolver tocan los insumos por `product_id` ascendente (y
+ * luego por renglón), así dos transacciones que se cruzan no se bloquean en orden inverso (1213).
  * Una instancia por petición (`Scoped`): junta los insumos que quedaron en negativo para el aviso
  * al capturista (`faltantes()`) y, tras confirmar la transacción, notifica al encargado del
  * almacén los que cruzaron de ≥ 0 a < 0 con esta petición (una vez por almacén+producto).
@@ -65,7 +67,7 @@ class ConsumoProduccion
         $descripcion = "Producción empaque · pallet {$this->documento($p)}" . ($d ? " · entrada {$d->numero_entrada}" : '');
         $fecha = $this->fecha($d?->fecha_produccion ?? $p->fecha_produccion);
 
-        foreach ($this->calculo->porCaja($r, $cajas, $alternativas) as $renglon) {
+        foreach ($this->enOrden($this->calculo->porCaja($r, $cajas, $alternativas)) as $renglon) {
             $this->salida($p, $d?->id, $r, $renglon, RecipeItem::CONSUMO_POR_CAJA, $cajas, $fecha, $descripcion);
         }
     }
@@ -89,7 +91,7 @@ class ConsumoProduccion
         $descripcion = "Producción empaque · pallet {$this->documento($p)}";
         $fecha = $this->fecha($p->fecha_produccion);
 
-        foreach ($this->calculo->porPallet($r, $momento, $alternativas) as $renglon) {
+        foreach ($this->enOrden($this->calculo->porPallet($r, $momento, $alternativas)) as $renglon) {
             $this->salida($p, null, $r, $renglon, $momento, null, $fecha, $descripcion);
         }
     }
@@ -277,7 +279,8 @@ class ConsumoProduccion
 
     private function devolver(ProduccionEmpaque $p, Builder $consulta): void
     {
-        $renglones = $consulta->orderByDesc('id')->get();
+        // Mismo orden global que al consumir: por producto y luego por renglón.
+        $renglones = $consulta->orderBy('product_id')->orderBy('id')->get();
 
         foreach ($renglones as $c) {
             $pendiente = $c->vigente();
@@ -303,6 +306,19 @@ class ConsumoProduccion
                 $r->costoUnitario(), now()->toDateString(), $this->documento($p),
                 "Devolución por corrección · pallet {$this->documento($p)}");
         }
+    }
+
+    /**
+     * Renglones calculados en el orden global de bloqueo (product_id ascendente, luego renglón de la
+     * receta), sin importar el orden de la receta.
+     *
+     * @param array<int, array{product_id:int, recipe_item_id:int, group_key:?string, cantidad:float}> $renglones
+     */
+    private function enOrden(array $renglones): array
+    {
+        usort($renglones, fn (array $a, array $b) => [$a['product_id'], $a['recipe_item_id']] <=> [$b['product_id'], $b['recipe_item_id']]);
+
+        return $renglones;
     }
 
     private function renglones(ProduccionEmpaque $p): Builder
@@ -353,24 +369,25 @@ class ConsumoProduccion
                 continue;
             }
 
-            $existencia = $this->existencia($s['entity_id'], $s['product_id']);
-            if ($existencia >= 0) {
-                continue;
-            }
-            $this->notificados[$llave] = true;
-
-            $almacen = Entity::with('encargado')->find($s['entity_id']);
-            $producto = Product::whereKey($s['product_id'])->value('name') ?? "ID:{$s['product_id']}";
-
-            if (! $almacen?->encargado) {
-                Log::warning('Faltante de insumo sin encargado del almacén: no se notifica.', [
-                    'almacen' => $s['entity_id'], 'producto' => $s['product_id'], 'existencia' => $existencia, 'pallet' => $s['pallet'],
-                ]);
-
-                continue;
-            }
-
+            // Todo tras confirmar: ninguna consulta ni aviso fallido convierte la producción en error.
             try {
+                $existencia = $this->existencia($s['entity_id'], $s['product_id']);
+                if ($existencia >= 0) {
+                    continue;
+                }
+                $this->notificados[$llave] = true;
+
+                $almacen = Entity::with('encargado')->find($s['entity_id']);
+                $producto = Product::whereKey($s['product_id'])->value('name') ?? "ID:{$s['product_id']}";
+
+                if (! $almacen?->encargado) {
+                    Log::warning('Faltante de insumo sin encargado del almacén: no se notifica.', [
+                        'almacen' => $s['entity_id'], 'producto' => $s['product_id'], 'existencia' => $existencia, 'pallet' => $s['pallet'],
+                    ]);
+
+                    continue;
+                }
+
                 NotificationService::toUser($almacen->encargado)
                     ->withAction("/splendidfarms/inventario/reportes/stock?entidad={$almacen->id}&faltantes=1", 'Ver faltantes')
                     ->withData(['tipo' => 'faltante_insumo', 'almacen_id' => $almacen->id, 'producto_id' => $s['product_id'], 'existencia' => $existencia])
@@ -379,7 +396,7 @@ class ConsumoProduccion
                         "{$producto}: quedan {$this->num($existencia)}. Se descontó por el pallet {$s['pallet']}.",
                     );
             } catch (\Throwable $e) {
-                // La producción ya está guardada: un aviso fallido no la convierte en error.
+                // La producción ya está guardada: un aviso (o su consulta) fallido no la convierte en error.
                 Log::warning('No se pudo notificar el faltante de insumo.', [
                     'almacen' => $s['entity_id'], 'producto' => $s['product_id'], 'error' => $e->getMessage(),
                 ]);

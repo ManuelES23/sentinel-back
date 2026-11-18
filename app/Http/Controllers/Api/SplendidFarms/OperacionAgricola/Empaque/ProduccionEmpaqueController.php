@@ -314,10 +314,7 @@ class ProduccionEmpaqueController extends Controller
     public function update(Request $request, ProduccionEmpaque $produccion): JsonResponse
     {
         if (($produccion->status ?? null) === 'embarcado') {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'No se puede editar un pallet que ya está embarcado',
-            ], 422);
+            return $this->rechazoEmbarcado('editar');
         }
 
         $validated = $request->validate([
@@ -370,30 +367,36 @@ class ProduccionEmpaqueController extends Controller
         $pedidas = $this->alternativasPedidas($validated);
         unset($validated['alternativas']);
 
-        $congelado = $produccion->congelado();
-        $tieneEntradas = $produccion->detalles()->exists();
-        $cambiaReceta = array_key_exists('recipe_id', $validated)
-            && (int) ($validated['recipe_id'] ?? 0) !== (int) ($produccion->recipe_id ?? 0);
-        $registradas = $this->alternativasRegistradas($produccion, null, $tieneEntradas);
-        $cambianAlternativas = $this->cambianAlternativas($pedidas, $registradas);
-
-        // Con entradas, receta y alternativas viven en cada entrada (updateDetalle).
-        if ($tieneEntradas && ($cambiaReceta || $cambianAlternativas)) {
-            throw ValidationException::withMessages(['recipe_id' => 'Cambia la receta en la entrada']);
-        }
-
-        $recetaNueva = null;
-        if ($cambiaReceta) {
-            $recetaNueva = $this->recetaValida((int) ($validated['recipe_id'] ?? 0));
-        }
-        if (! $tieneEntradas && ! empty($pedidas)) {
-            $recetaPallet = $recetaNueva ?? ($produccion->recipe_id ? Recipe::with('items')->find($produccion->recipe_id) : null);
-            if ($recetaPallet) {
-                $this->validarAlternativas($recetaPallet, $pedidas);
+        return DB::transaction(function () use ($produccion, $validated, $pedidas) {
+            // Se decide sobre el estado releído bajo el bloqueo del pallet.
+            $this->bloquearPallet($produccion);
+            if ($produccion->status === 'embarcado') {
+                return $this->rechazoEmbarcado('editar');
             }
-        }
 
-        return DB::transaction(function () use ($produccion, $validated, $congelado, $tieneEntradas, $cambiaReceta, $recetaNueva, $pedidas, $registradas, $cambianAlternativas) {
+            $congelado = $produccion->congelado();
+            $tieneEntradas = $produccion->detalles()->exists();
+            $cambiaReceta = array_key_exists('recipe_id', $validated)
+                && (int) ($validated['recipe_id'] ?? 0) !== (int) ($produccion->recipe_id ?? 0);
+            $registradas = $this->alternativasRegistradas($produccion, null, $tieneEntradas);
+            $cambianAlternativas = $this->cambianAlternativas($pedidas, $registradas);
+
+            // Con entradas, receta y alternativas viven en cada entrada (updateDetalle).
+            if ($tieneEntradas && ($cambiaReceta || $cambianAlternativas)) {
+                throw ValidationException::withMessages(['recipe_id' => 'Cambia la receta en la entrada']);
+            }
+
+            $recetaNueva = null;
+            if ($cambiaReceta) {
+                $recetaNueva = $this->recetaValida((int) ($validated['recipe_id'] ?? 0));
+            }
+            if (! $tieneEntradas && ! empty($pedidas)) {
+                $recetaPallet = $recetaNueva ?? ($produccion->recipe_id ? Recipe::with('items')->find($produccion->recipe_id) : null);
+                if ($recetaPallet) {
+                    $this->validarAlternativas($recetaPallet, $pedidas);
+                }
+            }
+
             $previousEntityId = (int) $produccion->entity_id;
             $previousTotalCajas = (int) ($produccion->total_cajas ?? 0);
             $previousIsCola = (bool) ($produccion->is_cola ?? false);
@@ -444,9 +447,14 @@ class ProduccionEmpaqueController extends Controller
         }
 
         return DB::transaction(function () use ($produccion) {
+            $this->bloquearPallet($produccion);
+            if ($produccion->status === 'embarcado') {
+                return $this->rechazoEmbarcado();
+            }
+
             $produccion->loadMissing('detalles');
 
-            $esPalletMixto = (bool) $produccion->is_mixto && $produccion->detalles->isNotEmpty();
+            $esPalletMixto =(bool) $produccion->is_mixto && $produccion->detalles->isNotEmpty();
 
             if (! $esPalletMixto) {
                 // Devuelve exactamente lo registrado; un pallet congelado no tiene registro.
@@ -565,7 +573,17 @@ class ProduccionEmpaqueController extends Controller
      */
     public function revertirMixteo(ProduccionEmpaque $produccion): JsonResponse
     {
+        // Un mixto embarcado ya salió: devolver su tarima y su cierre descuadraría el almacén.
+        if (($produccion->status ?? null) === 'embarcado') {
+            return $this->rechazoEmbarcado('deshacer el mixteo de');
+        }
+
         return DB::transaction(function () use ($produccion) {
+            $this->bloquearPallet($produccion);
+            if ($produccion->status === 'embarcado') {
+                return $this->rechazoEmbarcado('deshacer el mixteo de');
+            }
+
             $produccion->loadMissing('detalles');
 
             if (! $produccion->is_mixto) {
@@ -600,6 +618,10 @@ class ProduccionEmpaqueController extends Controller
      */
     public function revertirMixteoCola(Request $request, ProduccionEmpaque $produccion): JsonResponse
     {
+        if (($produccion->status ?? null) === 'embarcado') {
+            return $this->rechazoEmbarcado('deshacer el mixteo de');
+        }
+
         $request->merge([
             'source_cola_id' => $request->input('source_cola_id', $request->input('sourceColaId')),
             'source_cola_numero_pallet' => $request->input('source_cola_numero_pallet', $request->input('sourceColaNumeroPallet')),
@@ -613,6 +635,11 @@ class ProduccionEmpaqueController extends Controller
         ]);
 
         return DB::transaction(function () use ($produccion, $validated) {
+            $this->bloquearPallet($produccion);
+            if ($produccion->status === 'embarcado') {
+                return $this->rechazoEmbarcado('deshacer el mixteo de');
+            }
+
             $produccion->loadMissing('detalles');
 
             if (! $produccion->is_mixto) {
@@ -1127,6 +1154,10 @@ class ProduccionEmpaqueController extends Controller
      */
     public function completarCola(Request $request, ProduccionEmpaque $produccion): JsonResponse
     {
+        if (($produccion->status ?? null) === 'embarcado') {
+            return $this->rechazoEmbarcado('completar');
+        }
+
         if (!$produccion->is_cola) {
             return response()->json([
                 'status' => 'error',
@@ -1164,37 +1195,49 @@ class ProduccionEmpaqueController extends Controller
         if ($receta) {
             $this->validarAlternativas($receta, $alternativas);
         }
-        $congelado = $produccion->congelado();
 
-        // Calcular objetivo real de cajas (prioriza grupo 'caja' de receta)
-        $produccion->loadMissing([
-            'recipe.items:id,recipe_id,group_key,quantity',
-            'detalles.recipe.items:id,recipe_id,group_key,quantity',
-        ]);
-        $cajasObjetivo = $this->resolveCajasObjetivo($produccion);
-
-        if ($cajasObjetivo > 0 && (!$produccion->cajas_objetivo || $produccion->cajas_objetivo <= 1)) {
-            $produccion->update(['cajas_objetivo' => $cajasObjetivo]);
-            $produccion->refresh();
-        }
-
-        // Validar que no exceda el máximo restante del pallet cola
-        if ($cajasObjetivo > 0) {
-            $cajasActuales = $produccion->total_cajas;
-            $nuevasCajas = $validated['total_cajas'];
-            $total = $cajasActuales + $nuevasCajas;
-
-            if ($total > $cajasObjetivo) {
-                $restantes = max($cajasObjetivo - $cajasActuales, 0);
+        return DB::transaction(function () use ($produccion, $validated, $request, $receta, $alternativas) {
+            // Doble envío o embarque simultáneo: se decide sobre el estado releído bajo el bloqueo.
+            $this->bloquearPallet($produccion);
+            if ($produccion->status === 'embarcado') {
+                return $this->rechazoEmbarcado('completar');
+            }
+            if (! $produccion->is_cola) {
                 return response()->json([
                     'status' => 'error',
-                    'message' => "Excede el objetivo de la receta. Cajas actuales: {$cajasActuales}, objetivo: {$cajasObjetivo}, máximo a agregar: {$restantes}",
+                    'message' => 'Este pallet no es una cola, no se puede completar',
                 ], 422);
             }
-        }
+            $congelado = $produccion->congelado();
 
-        return DB::transaction(function () use ($produccion, $validated, $request, $receta, $alternativas, $congelado) {
-            $base = $this->ensureBaseDetalleForColaCompletion($produccion, (int) $request->user()->id);
+            // Calcular objetivo real de cajas (prioriza grupo 'caja' de receta)
+            $produccion->loadMissing([
+                'recipe.items:id,recipe_id,group_key,quantity',
+                'detalles.recipe.items:id,recipe_id,group_key,quantity',
+            ]);
+            $cajasObjetivo = $this->resolveCajasObjetivo($produccion);
+
+            if ($cajasObjetivo > 0 && (!$produccion->cajas_objetivo || $produccion->cajas_objetivo <= 1)) {
+                $produccion->update(['cajas_objetivo' => $cajasObjetivo]);
+                $produccion->refresh();
+            }
+
+            // Validar que no exceda el máximo restante del pallet cola
+            if ($cajasObjetivo > 0) {
+                $cajasActuales = $produccion->total_cajas;
+                $nuevasCajas = $validated['total_cajas'];
+                $total = $cajasActuales + $nuevasCajas;
+
+                if ($total > $cajasObjetivo) {
+                    $restantes = max($cajasObjetivo - $cajasActuales, 0);
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => "Excede el objetivo de la receta. Cajas actuales: {$cajasActuales}, objetivo: {$cajasObjetivo}, máximo a agregar: {$restantes}",
+                    ], 422);
+                }
+            }
+
+            $base =$this->ensureBaseDetalleForColaCompletion($produccion, (int) $request->user()->id);
             if ($base) {
                 // Lo consumido por caja de la cola sin desglose pasa a su entrada base.
                 $this->consumo()->ligarBase($produccion, $base);
@@ -1329,8 +1372,10 @@ class ProduccionEmpaqueController extends Controller
             $mixItems = collect($validated['mix_items'])->keyBy('cola_id');
             $colaIds = $mixItems->keys()->values()->all();
 
+            // Bloqueo en id ascendente (mismo orden que el resto de los puntos de serialización por pallet).
             $colas = ProduccionEmpaque::with(['detalles'])
                 ->whereIn('id', $colaIds)
+                ->orderBy('id')
                 ->lockForUpdate()
                 ->get();
 
@@ -1339,6 +1384,11 @@ class ProduccionEmpaqueController extends Controller
                     'status' => 'error',
                     'message' => 'Debes seleccionar al menos 2 colas para mixtear',
                 ], 422);
+            }
+
+            // Una cola embarcada (aunque la lista del capturista sea vieja) ya salió con su tarima y su cierre.
+            if ($colas->contains(fn (ProduccionEmpaque $cola) => $cola->status === 'embarcado')) {
+                return $this->rechazoEmbarcado('mixtear');
             }
 
             if ($colas->contains(fn (ProduccionEmpaque $cola) => ! $cola->is_cola)) {
@@ -1783,8 +1833,9 @@ class ProduccionEmpaqueController extends Controller
         $entityId = str_pad($data['entity_id'], 2, '0', STR_PAD_LEFT);
         $prefix = "PROD-{$entityId}-";
 
+        // Solo por prefijo (ya codifica la planta): un pallet movido de planta conserva su folio y,
+        // si era el más alto, filtrar por entity_id regeneraría un folio repetido (UNIQUE).
         $lastFolio = ProduccionEmpaque::withTrashed()
-            ->where('entity_id', $data['entity_id'])
             ->where('folio_produccion', 'like', $prefix . '%')
             ->orderByDesc('folio_produccion')
             ->value('folio_produccion');
@@ -2123,10 +2174,15 @@ class ProduccionEmpaqueController extends Controller
         // Lo elegido se lee antes de devolver (después ya no está vigente).
         $porEntrada = $detalles->mapWithKeys(fn (ProduccionEmpaqueDetalle $d) => [$d->id => $this->alternativasRegistradas($p, $d)]);
         $delPallet = $this->alternativasRegistradas($p, null);
+        $conRegistro = $this->entradasConRegistro($p);
 
         $consumo->devolverTodo($p);
 
         foreach ($detalles as $d) {
+            // Entrada congelada (llegó de una cola sin registro): nunca descontó, no se reconsume.
+            if (! isset($conRegistro[$d->id])) {
+                continue;
+            }
             $receta = Recipe::with('items')->find($d->recipe_id ?? $p->recipe_id);
             if ($receta) {
                 $consumo->consumirPorCaja($p, $d, $receta, (int) $d->total_cajas,
@@ -2194,12 +2250,39 @@ class ProduccionEmpaqueController extends Controller
         }
     }
 
-    private function rechazoEmbarcado(): JsonResponse
+    /** 422 «No se puede {acción} un pallet que ya está embarcado» (por omisión, eliminar). */
+    private function rechazoEmbarcado(string $accion = 'eliminar'): JsonResponse
     {
         return response()->json([
             'status' => 'error',
-            'message' => 'No se puede eliminar un pallet que ya está embarcado',
+            'message' => "No se puede {$accion} un pallet que ya está embarcado",
         ], 422);
+    }
+
+    /**
+     * Punto de serialización por pallet: bloquea su fila (`lockForUpdate`) y relee su estado, para
+     * que dos peticiones sobre el mismo pallet (doble envío, completar y embarcar a la vez) decidan
+     * una tras otra. Descarta las relaciones cargadas antes del bloqueo. Con varios pallets, en id
+     * ascendente. Solo dentro de la transacción del llamador.
+     */
+    private function bloquearPallet(ProduccionEmpaque $p): void
+    {
+        $fila = ProduccionEmpaque::withTrashed()->whereKey($p->id)->lockForUpdate()->first();
+        if ($fila) {
+            $p->setRawAttributes($fila->getAttributes(), true);
+        }
+        $p->setRelations([]);
+    }
+
+    /** Ids de las entradas con renglones de consumo (las demás son congeladas: nunca descontaron). */
+    private function entradasConRegistro(ProduccionEmpaque $p): array
+    {
+        return ProduccionEmpaqueConsumo::where('produccion_id', $p->id)
+            ->whereNotNull('detalle_id')
+            ->distinct()
+            ->pluck('detalle_id')
+            ->mapWithKeys(fn ($id) => [(int) $id => true])
+            ->all();
     }
 
     private function hydrateResolvedLoteProductoTerminado(ProduccionEmpaque $produccion): void
@@ -2459,10 +2542,7 @@ class ProduccionEmpaqueController extends Controller
         }
 
         if (($produccion->status ?? null) === 'embarcado') {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'No se puede editar un pallet que ya está embarcado',
-            ], 422);
+            return $this->rechazoEmbarcado('editar');
         }
 
         $validated = $request->validate([
@@ -2487,30 +2567,40 @@ class ProduccionEmpaqueController extends Controller
         $pedidas = $this->alternativasPedidas($validated);
         unset($validated['alternativas']);
 
-        $congelado = $produccion->congelado();
-        // Receta efectiva: la de la entrada o, si no tiene, la del pallet.
-        $recetaAntes = (int) ($detalle->recipe_id ?? $produccion->recipe_id ?? 0);
-        $recetaDespues = array_key_exists('recipe_id', $validated)
-            ? (int) ($validated['recipe_id'] ?? $produccion->recipe_id ?? 0)
-            : $recetaAntes;
-        $cambiaReceta = $recetaDespues !== $recetaAntes;
-        $cambianCajas = array_key_exists('total_cajas', $validated)
-            && (int) $validated['total_cajas'] !== (int) $detalle->total_cajas;
-        $registradas = $this->alternativasRegistradas($produccion, $detalle);
-        $cambianAlternativas = $this->cambianAlternativas($pedidas, $registradas);
-        $mueveInventario = ! $congelado && ($cambiaReceta || $cambianCajas || $cambianAlternativas);
+        return DB::transaction(function () use ($produccion, $detalle, $validated, $pedidas) {
+            // Se decide sobre el estado releído bajo el bloqueo del pallet.
+            $this->bloquearPallet($produccion);
+            if ($produccion->status === 'embarcado') {
+                return $this->rechazoEmbarcado('editar');
+            }
+            $detalle->refresh();
 
-        $receta = null;
-        if ($cambiaReceta) {
-            $receta = $this->recetaValida($recetaDespues);
-        } elseif ($mueveInventario && $recetaDespues) {
-            $receta = Recipe::with('items')->find($recetaDespues);
-        }
-        if ($mueveInventario && $receta && ! empty($pedidas)) {
-            $this->validarAlternativas($receta, $pedidas);
-        }
+            // Congelado se decide por entrada: una entrada sin renglones (llegó de una cola congelada a
+            // un mixto nuevo) nunca descontó, así que no devuelve ni vuelve a consumir.
+            $congelado = $produccion->congelado()
+                || ! ProduccionEmpaqueConsumo::where('produccion_id', $produccion->id)->where('detalle_id', $detalle->id)->exists();
+            // Receta efectiva: la de la entrada o, si no tiene, la del pallet.
+            $recetaAntes = (int) ($detalle->recipe_id ?? $produccion->recipe_id ?? 0);
+            $recetaDespues = array_key_exists('recipe_id', $validated)
+                ? (int) ($validated['recipe_id'] ?? $produccion->recipe_id ?? 0)
+                : $recetaAntes;
+            $cambiaReceta = $recetaDespues !== $recetaAntes;
+            $cambianCajas = array_key_exists('total_cajas', $validated)
+                && (int) $validated['total_cajas'] !== (int) $detalle->total_cajas;
+            $registradas = $this->alternativasRegistradas($produccion, $detalle);
+            $cambianAlternativas = $this->cambianAlternativas($pedidas, $registradas);
+            $mueveInventario = ! $congelado && ($cambiaReceta || $cambianCajas || $cambianAlternativas);
 
-        return DB::transaction(function () use ($produccion, $detalle, $validated, $mueveInventario, $receta, $cambiaReceta, $registradas, $pedidas) {
+            $receta = null;
+            if ($cambiaReceta) {
+                $receta = $this->recetaValida($recetaDespues);
+            } elseif ($mueveInventario && $recetaDespues) {
+                $receta = Recipe::with('items')->find($recetaDespues);
+            }
+            if ($mueveInventario && $receta && ! empty($pedidas)) {
+                $this->validarAlternativas($receta, $pedidas);
+            }
+
             $detalle->update($validated);
 
             // Recalcular totales y marca del pallet padre si es necesario
@@ -2568,6 +2658,11 @@ class ProduccionEmpaqueController extends Controller
         }
 
         return DB::transaction(function () use ($produccion, $detalle) {
+            $this->bloquearPallet($produccion);
+            if ($produccion->status === 'embarcado') {
+                return $this->rechazoEmbarcado();
+            }
+
             $produccion->loadMissing('detalles');
 
             // La entrada devuelve exactamente lo suyo (un pallet congelado no tiene registro).

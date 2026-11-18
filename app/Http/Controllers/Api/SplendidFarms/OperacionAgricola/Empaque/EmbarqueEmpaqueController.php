@@ -213,6 +213,10 @@ class EmbarqueEmpaqueController extends Controller
         $validated['peso_bascula_total_kg'] = $pallets->sum('peso_bascula_kg');
 
         $embarque = DB::transaction(function () use ($validated, $pallets, $palletMetrics, $posiciones) {
+            // Punto de serialización por pallet (id ascendente): se relee su estado bajo el bloqueo
+            // para no consumir el cierre de una cola que otra petición cerró entre tanto.
+            $this->bloquearPallets($pallets);
+
             // Generar folio dentro de la transacción con lock para evitar duplicados por concurrencia
             $validated['folio_embarque'] = $this->generarFolio($validated);
 
@@ -346,6 +350,12 @@ class EmbarqueEmpaqueController extends Controller
         $preEmbarque = DB::transaction(function () use ($embarque, $request) {
             $detalles = $embarque->detalles()->orderBy('id')->get();
 
+            // Punto de serialización por pallet (id ascendente) antes de devolver cierres.
+            ProduccionEmpaque::whereIn('id', $detalles->pluck('produccion_id')->filter()->unique()->values())
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get(['id']);
+
             $espaciosCaja = (int) ($embarque->espacios_caja ?: 0);
             $totalPallets = $detalles->count();
             if ($espaciosCaja < $totalPallets) {
@@ -433,6 +443,27 @@ class EmbarqueEmpaqueController extends Controller
         if ($receta) {
             $consumo->consumirPorPallet($pallet, $receta, RecipeItem::CONSUMO_AL_CERRAR,
                 $this->alternativasParaConsumir($this->alternativasRegistradas($pallet, null, true), null, $receta));
+        }
+    }
+
+    /**
+     * Bloquea los pallets del embarque en id ascendente y refresca sus atributos con lo leído bajo el
+     * bloqueo (las relaciones ya cargadas para el snapshot se conservan).
+     *
+     * @param \Illuminate\Database\Eloquent\Collection<int, ProduccionEmpaque> $pallets
+     */
+    private function bloquearPallets($pallets): void
+    {
+        $filas = ProduccionEmpaque::whereIn('id', $pallets->pluck('id')->all())
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->get()
+            ->keyBy('id');
+
+        foreach ($pallets as $pallet) {
+            if ($fila = $filas->get($pallet->id)) {
+                $pallet->setRawAttributes($fila->getAttributes(), true);
+            }
         }
     }
 

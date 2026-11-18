@@ -8,6 +8,8 @@ use App\Models\EmbarqueEmpaqueDetalle;
 use App\Models\Entity;
 use App\Models\PreEmbarqueEmpaqueDetalle;
 use App\Models\ProcesoEmpaque;
+use App\Models\ProduccionEmpaque;
+use App\Models\ProduccionEmpaqueConsumo;
 use App\Models\RecepcionEmpaque;
 use App\Models\RezagaEmpaque;
 use App\Models\SalidaRezagaEmpaqueDetalle;
@@ -17,6 +19,7 @@ use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class ProcesoEmpaqueController extends Controller
 {
@@ -650,12 +653,25 @@ class ProcesoEmpaqueController extends Controller
                         ->delete();
                 }
 
-                // Purgar producciones soft-deleted para liberar FK antes de eliminar el proceso
+                // Purgar producciones soft-deleted para liberar FK antes de eliminar el proceso.
+                // Su registro de consumos (FK sin cascade) se borra primero, solo si ya se devolvió
+                // completo: un pallet borrado con consumo vigente no se purga (se revierte todo).
                 $proceso->producciones()
                     ->onlyTrashed()
                     ->get()
-                    ->each
-                    ->forceDelete();
+                    ->each(function (ProduccionEmpaque $produccion) {
+                        $vigentes = ProduccionEmpaqueConsumo::where('produccion_id', $produccion->id)->vigentes()->count();
+                        if ($vigentes > 0) {
+                            Log::warning('Folio consumido: un pallet borrado conserva consumo de insumos sin devolver; no se purga.', [
+                                'produccion_id' => $produccion->id, 'folio' => $produccion->folio_produccion, 'renglones_vigentes' => $vigentes,
+                            ]);
+
+                            throw new \RuntimeException("El pallet borrado {$produccion->folio_produccion} conserva consumo de insumos sin devolver.");
+                        }
+
+                        ProduccionEmpaqueConsumo::where('produccion_id', $produccion->id)->delete();
+                        $produccion->forceDelete();
+                    });
 
                 $proceso->forceDelete();
             });
