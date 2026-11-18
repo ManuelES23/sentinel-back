@@ -391,6 +391,70 @@ class ProduccionConsumoApiTest extends TestCase
         $this->artisan('inventario:verificar-capas')->assertExitCode(0);
     }
 
+    /** El editor de recetas borra y recrea los renglones: mismos productos, ids nuevos. Devuelve la caja alterna nueva. */
+    private function recrearRenglones(): RecipeItem
+    {
+        $this->receta->items()->delete();
+        $this->renglonReceta($this->tarima, 1, RecipeItem::CONSUMO_AL_ARMAR);
+        $this->renglonReceta($this->esquineros, 4, RecipeItem::CONSUMO_AL_CERRAR);
+        $this->renglonReceta($this->fleje, 40, RecipeItem::CONSUMO_AL_CERRAR);
+        $this->renglonReceta($this->grapa, 8, RecipeItem::CONSUMO_AL_CERRAR);
+        $this->renglonReceta($this->etiqueta, 242, RecipeItem::CONSUMO_POR_CAJA);
+        $this->renglonReceta($this->cajaB15, 240, RecipeItem::CONSUMO_POR_CAJA, ['group_key' => 'Caja', 'is_default' => true]);
+        $alterna = $this->renglonReceta($this->cajaAlterna, 240, RecipeItem::CONSUMO_POR_CAJA, ['group_key' => 'Caja', 'is_default' => false]);
+        $this->assertNotSame($this->itemCajaAlterna->id, $alterna->id);
+
+        return $alterna;
+    }
+
+    public function test_alternativa_equivalente_tras_recrear_receta_no_es_cambio(): void
+    {
+        $this->surtirTodo();
+        $elegida = [['grupo' => 'Caja', 'recipe_item_id' => $this->itemCajaAlterna->id]];
+        $sinEntradas = $this->crearOk(['total_cajas' => 60, 'is_cola' => true, 'alternativas' => $elegida]);
+        $conEntradas = $this->crearOk(['total_cajas' => 60, 'is_cola' => true, 'alternativas' => $elegida]);
+        $this->completar($conEntradas, 100, ['alternativas' => $elegida])->assertOk();
+        $alterna = $this->recrearRenglones();
+        $equivalente = [['grupo' => 'Caja', 'recipe_item_id' => $alterna->id]];
+
+        // Con entradas: la misma elección con el id nuevo no es cambio de alternativa (no 422).
+        $this->putJson(self::URL."/{$conEntradas->id}", ['alternativas' => $equivalente, 'is_cola' => false])->assertOk();
+        // Sin entradas: tampoco devuelve ni reconsume las cajas; solo se mueve el cierre.
+        $this->putJson(self::URL."/{$sinEntradas->id}", ['alternativas' => $equivalente, 'is_cola' => false])->assertOk();
+
+        $this->assertNeto(-220, $this->cajaAlterna);
+        $this->assertNeto(0, $this->cajaB15);
+        $this->assertNeto(-2, $this->tarima);
+        $this->assertNeto(-8, $this->esquineros);
+        $this->assertNeto(-80, $this->fleje);
+        $this->assertSame(0, ProduccionEmpaqueConsumo::where('cantidad_devuelta', '>', 0)->count());
+    }
+
+    public function test_cambiar_planta_tras_recrear_receta_conserva_alternativa(): void
+    {
+        $this->surtirTodo();
+        $otra = $this->entity->replicate();
+        $otra->fill(['code' => 'EMP-002', 'name' => 'Empaque Norte', 'slug' => 'empaque-norte'])->save();
+        $enOtra = fn (Product $insumo) => (float) (InventoryStock::where('product_id', $insumo->id)->where('entity_id', $otra->id)->value('quantity') ?? 0);
+        $elegida = [['grupo' => 'Caja', 'recipe_item_id' => $this->itemCajaAlterna->id]];
+
+        $pallet = $this->crearOk(['alternativas' => $elegida]);
+        $cola = $this->crearOk(['total_cajas' => 60, 'is_cola' => true, 'alternativas' => $elegida]);
+        $this->completar($cola, 100, ['alternativas' => $elegida])->assertOk();
+        $this->recrearRenglones();
+
+        // El front viejo no manda alternativas: lo registrado se traduce al renglón actual.
+        $this->putJson(self::URL."/{$pallet->id}", ['entity_id' => $otra->id])->assertOk();
+        $this->putJson(self::URL."/{$cola->id}", ['entity_id' => $otra->id])->assertOk();
+
+        foreach ($this->insumos() as $insumo) {
+            $this->assertNeto(0, $insumo);
+        }
+        $this->assertEqualsWithDelta(-400, $enOtra($this->cajaAlterna), 0.0001);
+        $this->assertEqualsWithDelta(0, $enOtra($this->cajaB15), 0.0001);
+        $this->assertEqualsWithDelta(-2, $enOtra($this->tarima), 0.0001);
+    }
+
     // ---- entradas ----
 
     public function test_update_detalle_cambia_cajas_y_receta(): void

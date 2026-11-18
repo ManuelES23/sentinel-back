@@ -415,14 +415,14 @@ class ProduccionEmpaqueController extends Controller
                     $receta = $recetaNueva ?? Recipe::with('items')->find($produccion->recipe_id);
                     $alternativas = $cambiaReceta
                         ? ($pedidas ?? [])
-                        : $this->alternativasParaConsumir($registradas, $pedidas);
+                        : $this->alternativasParaConsumir($registradas, $pedidas, $receta);
 
                     $consumo->devolverTodo($produccion);
                     if ($receta) {
                         $this->consumirPalletSinEntradas($produccion, $receta, $alternativas);
                     }
                 } elseif ($cambiaCola) {
-                    $this->ajustarCierre($produccion, $this->alternativasParaConsumir($registradas, $pedidas));
+                    $this->ajustarCierre($produccion, $registradas, $pedidas);
                 }
             }
 
@@ -1358,7 +1358,7 @@ class ProduccionEmpaqueController extends Controller
 
             // Con esta entrada el pallet quedó cerrado: insumos de cierre una sola vez.
             if (! $congelado && ! $produccion->is_cola) {
-                $this->ajustarCierre($produccion, $alternativas);
+                $this->ajustarCierre($produccion, [], $alternativas);
             }
 
             $produccion->load($this->eagerLoad);
@@ -2034,8 +2034,9 @@ class ProduccionEmpaqueController extends Controller
     }
 
     /**
-     * Alternativas registradas vigentes: grupo (minúsculas) => recipe_item_id elegidos. Por entrada,
-     * del pallet sin entrada ($d = null) o de todo el pallet ($todoElPallet).
+     * Alternativas registradas vigentes: grupo (minúsculas) => product_id elegidos. Por producto y no
+     * por renglón: el editor de recetas borra y recrea los renglones, el producto se conserva.
+     * Por entrada, del pallet sin entrada ($d = null) o de todo el pallet ($todoElPallet).
      *
      * @return array<string, int[]>
      */
@@ -2045,23 +2046,35 @@ class ProduccionEmpaqueController extends Controller
         ProduccionEmpaqueConsumo::where('produccion_id', $p->id)
             ->when(! $todoElPallet, fn ($q) => $d ? $q->where('detalle_id', $d->id) : $q->whereNull('detalle_id'))
             ->whereNotNull('group_key')
-            ->whereNotNull('recipe_item_id')
             ->vigentes()
             ->orderBy('id')
-            ->get(['group_key', 'recipe_item_id'])
+            ->get(['group_key', 'product_id'])
             ->each(function (ProduccionEmpaqueConsumo $c) use (&$registradas) {
-                $registradas[mb_strtolower(trim((string) $c->group_key))][] = (int) $c->recipe_item_id;
+                $registradas[$this->claveGrupo($c->group_key)][] = (int) $c->product_id;
             });
 
         return array_map(fn (array $ids) => array_values(array_unique($ids)), $registradas);
     }
 
-    /** Cambian si alguna elegida difiere de lo registrado en un grupo que ya tiene consumo. */
+    /**
+     * Cambian si el producto de alguna elegida no es el registrado en un grupo que ya tiene consumo.
+     * Un renglón pedido que ya no existe cuenta como cambio (la validación lo rechaza después).
+     */
     private function cambianAlternativas(?array $pedidas, array $registradas): bool
     {
-        foreach ($pedidas ?? [] as $grupo => $itemId) {
-            $ids = $registradas[mb_strtolower(trim((string) $grupo))] ?? null;
-            if ($ids !== null && ! in_array($itemId, $ids, true)) {
+        if (empty($pedidas)) {
+            return false;
+        }
+
+        $productos = RecipeItem::whereIn('id', array_values($pedidas))->pluck('product_id', 'id');
+
+        foreach ($pedidas as $grupo => $itemId) {
+            $registrados = $registradas[$this->claveGrupo($grupo)] ?? null;
+            if ($registrados === null) {
+                continue;
+            }
+            $producto = $productos->get($itemId);
+            if ($producto === null || ! in_array((int) $producto, $registrados, true)) {
                 return true;
             }
         }
@@ -2069,15 +2082,32 @@ class ProduccionEmpaqueController extends Controller
         return false;
     }
 
-    /** Lo registrado, con lo pedido encima: [grupo => recipe_item_id] para el servicio. */
-    private function alternativasParaConsumir(array $registradas, ?array $pedidas): array
+    /**
+     * [grupo => recipe_item_id] para el servicio: lo registrado traducido al renglón ACTUAL de la
+     * receta con ese grupo y ese producto (si ya no está, queda la predeterminada), con lo pedido encima.
+     */
+    private function alternativasParaConsumir(array $registradas, ?array $pedidas, ?Recipe $receta): array
     {
-        $alternativas = array_map(fn (array $ids) => $ids[0], $registradas);
+        $alternativas = [];
+        if ($receta) {
+            foreach ($registradas as $grupo => $productos) {
+                $item = $receta->items->first(fn (RecipeItem $i) => $this->claveGrupo($i->group_key) === $grupo
+                    && (int) $i->product_id === $productos[0]);
+                if ($item) {
+                    $alternativas[$grupo] = (int) $item->id;
+                }
+            }
+        }
         foreach ($pedidas ?? [] as $grupo => $itemId) {
-            $alternativas[mb_strtolower(trim((string) $grupo))] = $itemId;
+            $alternativas[$this->claveGrupo($grupo)] = $itemId;
         }
 
         return $alternativas;
+    }
+
+    private function claveGrupo(?string $grupo): string
+    {
+        return mb_strtolower(trim((string) $grupo));
     }
 
     /** Pallet sin entradas: por caja + al armar; si está cerrado, también al cerrar. */
@@ -2091,8 +2121,11 @@ class ProduccionEmpaqueController extends Controller
         }
     }
 
-    /** Pallet cerrado: consume sus insumos de cierre (una vez); cola abierta: los devuelve. */
-    private function ajustarCierre(ProduccionEmpaque $p, array $alternativas): void
+    /**
+     * Pallet cerrado: consume sus insumos de cierre (una vez) con la receta del pallet; cola abierta:
+     * los devuelve. $registradas (por producto) y $pedidas se traducen a esa receta.
+     */
+    private function ajustarCierre(ProduccionEmpaque $p, array $registradas, ?array $pedidas): void
     {
         $consumo = $this->consumo();
 
@@ -2104,7 +2137,8 @@ class ProduccionEmpaqueController extends Controller
 
         $receta = $consumo->recetaDePallet($p);
         if ($receta) {
-            $consumo->consumirPorPallet($p, $receta, RecipeItem::CONSUMO_AL_CERRAR, $alternativas);
+            $consumo->consumirPorPallet($p, $receta, RecipeItem::CONSUMO_AL_CERRAR,
+                $this->alternativasParaConsumir($registradas, $pedidas, $receta));
         }
     }
 
@@ -2114,25 +2148,26 @@ class ProduccionEmpaqueController extends Controller
         $consumo = $this->consumo();
         $detalles = $p->detalles()->get();
 
-        $porEntrada = $detalles->mapWithKeys(fn (ProduccionEmpaqueDetalle $d) => [
-            $d->id => $this->alternativasParaConsumir($this->alternativasRegistradas($p, $d), null),
-        ]);
-        $delPallet = $this->alternativasParaConsumir($this->alternativasRegistradas($p, null), null);
+        // Lo elegido se lee antes de devolver (después ya no está vigente).
+        $porEntrada = $detalles->mapWithKeys(fn (ProduccionEmpaqueDetalle $d) => [$d->id => $this->alternativasRegistradas($p, $d)]);
+        $delPallet = $this->alternativasRegistradas($p, null);
 
         $consumo->devolverTodo($p);
 
         foreach ($detalles as $d) {
             $receta = Recipe::with('items')->find($d->recipe_id ?? $p->recipe_id);
             if ($receta) {
-                $consumo->consumirPorCaja($p, $d, $receta, (int) $d->total_cajas, $porEntrada[$d->id]);
+                $consumo->consumirPorCaja($p, $d, $receta, (int) $d->total_cajas,
+                    $this->alternativasParaConsumir($porEntrada[$d->id], null, $receta));
             }
         }
 
         $recetaPallet = $consumo->recetaDePallet($p);
         if ($recetaPallet) {
-            $consumo->consumirPorPallet($p, $recetaPallet, RecipeItem::CONSUMO_AL_ARMAR, $delPallet);
+            $alternativas = $this->alternativasParaConsumir($delPallet, null, $recetaPallet);
+            $consumo->consumirPorPallet($p, $recetaPallet, RecipeItem::CONSUMO_AL_ARMAR, $alternativas);
             if (! $p->is_cola) {
-                $consumo->consumirPorPallet($p, $recetaPallet, RecipeItem::CONSUMO_AL_CERRAR, $delPallet);
+                $consumo->consumirPorPallet($p, $recetaPallet, RecipeItem::CONSUMO_AL_CERRAR, $alternativas);
             }
         }
     }
@@ -2515,7 +2550,7 @@ class ProduccionEmpaqueController extends Controller
 
             // La entrada devuelve exactamente lo suyo y consume con sus datos nuevos.
             if ($mueveInventario) {
-                $alternativas = $cambiaReceta ? ($pedidas ?? []) : $this->alternativasParaConsumir($registradas, $pedidas);
+                $alternativas = $cambiaReceta ? ($pedidas ?? []) : $this->alternativasParaConsumir($registradas, $pedidas, $receta);
                 $this->consumo()->devolverEntrada($produccion, $detalle);
                 if ($receta) {
                     $this->consumo()->consumirPorCaja($produccion, $detalle, $receta, (int) $detalle->total_cajas, $alternativas);
