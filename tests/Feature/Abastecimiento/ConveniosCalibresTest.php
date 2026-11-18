@@ -200,14 +200,53 @@ class ConveniosCalibresTest extends TestCase
         $this->assertSame(0, Convenio::count());
     }
 
-    public function test_precio_sin_calibre_en_convenio_por_calibre_da_422(): void
+    public function test_precio_general_con_un_especial_por_calibre(): void
     {
         $jumbo = $this->calibre('Jumbo', 1);
-        $body = $this->cuerpoCalibres([[$jumbo, 100]]);
-        $body['precios'][] = ['tipo_carga_id' => $this->tipo()->id, 'precio' => 90, 'vigencia_inicio' => '2026-06-15'];
+        $grande = $this->calibre('Grande', 2);
+        $chico = $this->calibre('Chico', 3);
+        $tipo = $this->tipo()->id;
+        // Todas las cajas a 150 y el Jumbo a 180 (especial).
+        $body = $this->cuerpoCalibres([[$jumbo, 100], [$grande, 50], [$chico, 10]], [
+            'precios' => [
+                // El front manda el general con `calibre_id` nulo.
+                ['tipo_carga_id' => $tipo, 'calibre_id' => null, 'precio' => 150, 'vigencia_inicio' => '2026-06-01', 'es_principal' => true],
+                ['tipo_carga_id' => $tipo, 'calibre_id' => $jumbo->id, 'precio' => 180, 'vigencia_inicio' => '2026-06-01', 'es_principal' => true],
+            ],
+        ]);
+
+        $res = $this->postJson($this->url('convenios'), $body)->assertCreated();
+        $convenio = Convenio::findOrFail($res->json('data.id'));
+
+        // 100 × 180 + 50 × 150 + 10 × 150
+        $this->assertEquals(27000, $res->json('data.indicadores.comprometido'));
+        $porCalibre = collect($res->json('data.indicadores.calibres'))->keyBy('calibre_id');
+        $this->assertEquals(18000, $porCalibre[$jumbo->id]['comprometido']);
+        $this->assertEquals(7500, $porCalibre[$grande->id]['comprometido']);
+        $precios = collect($res->json('data.precios'));
+        $this->assertNull($precios->firstWhere('precio', 150)['calibre_id']);
+        $this->assertNull($precios->firstWhere('precio', 150)['calibre']);
+
+        $this->patchJson($this->url("convenios/{$convenio->id}/estado"), ['status' => 'activo'])->assertOk();
+
+        // El importe de la recepción toma el especial del Jumbo y el general de los demás.
+        $recepcion = $this->crearRecepcionConRenglones($convenio->refresh(), [
+            ['calibre_id' => $jumbo->id, 'cantidad' => 10],
+            ['calibre_id' => $chico->id, 'cantidad' => 4],
+        ]);
+        $this->assertSame(2400.0, ReglasRecepcion::importeRenglones($convenio, $recepcion));
+    }
+
+    public function test_sin_general_un_calibre_sin_especial_no_tiene_precio_principal(): void
+    {
+        $jumbo = $this->calibre('Jumbo', 1);
+        $grande = $this->calibre('Grande', 2);
+        $body = $this->cuerpoCalibres([[$jumbo, 100], [$grande, 50]]);
+        array_pop($body['precios']);
 
         $this->postJson($this->url('convenios'), $body)
-            ->assertStatus(422)->assertJsonValidationErrors(['precios.1.calibre_id']);
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['calibres.1.calibre_id' => 'Falta el precio del tipo de carga principal: captura el precio general o uno especial para este calibre.']);
     }
 
     public function test_convenio_clasico_con_calibre_en_el_cuerpo_da_422(): void

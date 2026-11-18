@@ -129,7 +129,7 @@ class CalibresConvenio
 
     /**
      * Activar un convenio por calibre: cada calibre necesita precio del tipo de carga principal
-     * y volumen pactado mayor a cero (spec C12).
+     * (el general o uno especial) y volumen pactado mayor a cero (spec C12).
      */
     public static function validarActivacion(Convenio $convenio): void
     {
@@ -139,7 +139,7 @@ class CalibresConvenio
 
         $sinPrecio = $calibres->contains(fn (int $id) => PrecioVigente::principalEnColeccion($precios, $inicio, $id) === null);
         if ($sinPrecio) {
-            throw ValidationException::withMessages(['status' => 'Agrega el precio del tipo de carga principal en cada calibre antes de activar el convenio.']);
+            throw ValidationException::withMessages(['status' => 'Agrega el precio general del tipo de carga principal (o uno especial en cada calibre) antes de activar el convenio.']);
         }
 
         // Sin calibres no hay volumen pactado.

@@ -62,13 +62,19 @@ class ReglasConvenioCalibresTest extends TestCase
         $this->assertArrayHasKey('precios.1.vigencia_inicio', $e);
     }
 
-    public function test_con_calibres_cada_precio_exige_calibre(): void
+    public function test_con_calibres_un_precio_sin_calibre_es_el_general(): void
     {
+        ReglasConvenio::validarPrecios([
+            $this->precio(),
+            $this->precio(['calibre_id' => 10, 'precio' => 14]),
+        ], 'compra', true);
+
+        // Dos generales del mismo tipo con la misma vigencia sí chocan.
         $e = $this->errores(fn () => ReglasConvenio::validarPrecios([
-            $this->precio(['calibre_id' => 10]),
-            $this->precio(['vigencia_inicio' => '2026-07-01']),
+            $this->precio(),
+            $this->precio(['precio' => 11]),
         ], 'compra', true));
-        $this->assertSame(['precios.1.calibre_id' => 'Elige el calibre.'], $e);
+        $this->assertArrayHasKey('precios.1.vigencia_inicio', $e);
     }
 
     public function test_sin_calibres_un_calibre_se_rechaza(): void
@@ -152,7 +158,38 @@ class ReglasConvenioCalibresTest extends TestCase
             [10, 11],
             $this->preciosNormalizados([1 => [10], 2 => [10, 11]]),
         ));
-        $this->assertSame(['calibres.1.calibre_id' => 'Falta el precio del tipo de carga principal para este calibre.'], $e);
+        $this->assertSame(['calibres.1.calibre_id' => 'Falta el precio del tipo de carga principal: captura el precio general o uno especial para este calibre.'], $e);
+    }
+
+    public function test_el_general_del_principal_cubre_todos_los_calibres(): void
+    {
+        // General del tipo principal y un especial solo para el calibre 11.
+        $precios = ReglasConvenio::normalizarPrecios([
+            $this->precio(),
+            $this->precio(['calibre_id' => 11, 'precio' => 14]),
+        ], 'compra');
+
+        ReglasConvenio::validarCalibres(
+            [['calibre_id' => 10, 'volumen_total' => null], ['calibre_id' => 11, 'volumen_total' => null], ['calibre_id' => 12, 'volumen_total' => null]],
+            [10, 11, 12],
+            $precios,
+        );
+        $this->assertTrue(true);
+    }
+
+    public function test_un_general_de_otro_tipo_no_cubre_el_principal(): void
+    {
+        $precios = ReglasConvenio::normalizarPrecios([
+            $this->precio(['calibre_id' => 10]),
+            $this->precio(['tipo_carga_id' => 2, 'es_principal' => false]),
+        ], 'compra');
+
+        $e = $this->errores(fn () => ReglasConvenio::validarCalibres(
+            [['calibre_id' => 10, 'volumen_total' => null], ['calibre_id' => 11, 'volumen_total' => null]],
+            [10, 11],
+            $precios,
+        ));
+        $this->assertArrayHasKey('calibres.1.calibre_id', $e);
     }
 
     public function test_calibre_repetido(): void
