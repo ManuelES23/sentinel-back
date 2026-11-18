@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Recipe;
+use App\Models\RecipeItem;
 use App\Models\RecipeVersion;
 use Illuminate\Support\Facades\DB;
 
@@ -97,6 +98,7 @@ class RecipeVersioningService
                     'is_default' => $item['is_default'] ?? false,
                     'solo_interno' => $item['solo_interno'] ?? false,
                     'calibre_id' => $item['calibre_id'] ?? null,
+                    'consumo' => $item['consumo'] ?? RecipeItem::CONSUMO_POR_CAJA,
                     'enterprise_id' => $recipe->enterprise_id,
                 ]);
             }
