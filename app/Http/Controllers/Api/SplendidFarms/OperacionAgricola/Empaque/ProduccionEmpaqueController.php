@@ -15,6 +15,7 @@ use App\Services\Empaque\CalculoConsumoReceta;
 use App\Services\Empaque\ConsumoProduccion;
 use Carbon\Carbon;
 use Illuminate\Database\QueryException;
+use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -497,37 +498,15 @@ class ProduccionEmpaqueController extends Controller
                 $cola = ProduccionEmpaque::withTrashed()->find($sourceColaId);
 
                 if (! $cola) {
-                    return response()->json([
-                        'status' => 'error',
-                        'message' => "No se encontró la cola origen #{$sourceColaId} para revertir el mixteo",
-                    ], 422);
+                    $this->rechazarMixteo("No se encontró la cola origen #{$sourceColaId} para revertir el mixteo");
                 }
 
-                if ($cola->trashed()) {
-                    $cola->restore();
-                    $cola->refresh();
-                }
+                $this->restaurarColaOrigen($cola);
 
                 $nextEntrada = (int) ($cola->detalles()->max('numero_entrada') ?? 0) + 1;
 
                 foreach ($detalles as $detalle) {
-                    $cola->detalles()->create([
-                        'numero_entrada' => $nextEntrada++,
-                        'proceso_id' => $detalle->proceso_id,
-                        'recipe_id' => $detalle->recipe_id,
-                        'tipo_empaque' => $detalle->tipo_empaque,
-                        'marca' => $detalle->marca,
-                        'presentacion' => $detalle->presentacion,
-                        'etiqueta' => $detalle->etiqueta,
-                        'calibre' => $detalle->calibre,
-                        'categoria' => $detalle->categoria,
-                        'fecha_produccion' => $detalle->fecha_produccion,
-                        'total_cajas' => (int) ($detalle->total_cajas ?? 0),
-                        'peso_neto_kg' => (float) ($detalle->peso_neto_kg ?? 0),
-                        'turno' => $detalle->turno,
-                        'observaciones' => $this->stripMixSourceTag($detalle->observaciones),
-                        'created_by' => $createdBy,
-                    ]);
+                    $this->regresarEntradaDelMixto($produccion, $detalle, $cola, $nextEntrada++, $createdBy);
                 }
 
                 $cola->update([
@@ -536,13 +515,17 @@ class ProduccionEmpaqueController extends Controller
                     'is_cola' => true,
                     'is_mixto' => false,
                 ]);
+                $this->tarimaDeColaRestaurada($cola);
             }
 
+            // El mixto deja de existir: devuelve su tarima y su cierre (lo por caja ya regresó a las colas).
+            $this->consumo()->devolverTodo($produccion);
             $produccion->delete();
 
             return response()->json([
                 'success' => true,
                 'message' => 'Pallet mixto eliminado y colas origen restauradas',
+                'faltantes' => $this->consumo()->faltantes(),
             ]);
         });
     }
@@ -712,32 +695,13 @@ class ProduccionEmpaqueController extends Controller
                 ], 422);
             }
 
-            if ($cola->trashed()) {
-                $cola->restore();
-                $cola->refresh();
-            }
+            $this->restaurarColaOrigen($cola);
 
             $createdBy = (int) (auth()->id() ?: $produccion->created_by);
             $nextEntrada = (int) ($cola->detalles()->max('numero_entrada') ?? 0) + 1;
 
             foreach ($detallesParaEstaCola as $detalle) {
-                $cola->detalles()->create([
-                    'numero_entrada' => $nextEntrada++,
-                    'proceso_id' => $detalle->proceso_id,
-                    'recipe_id' => $detalle->recipe_id,
-                    'tipo_empaque' => $detalle->tipo_empaque,
-                    'marca' => $detalle->marca,
-                    'presentacion' => $detalle->presentacion,
-                    'etiqueta' => $detalle->etiqueta,
-                    'calibre' => $detalle->calibre,
-                    'categoria' => $detalle->categoria,
-                    'fecha_produccion' => $detalle->fecha_produccion,
-                    'total_cajas' => (int) ($detalle->total_cajas ?? 0),
-                    'peso_neto_kg' => (float) ($detalle->peso_neto_kg ?? 0),
-                    'turno' => $detalle->turno,
-                    'observaciones' => $this->stripMixSourceTag($detalle->observaciones),
-                    'created_by' => $createdBy,
-                ]);
+                $this->regresarEntradaDelMixto($produccion, $detalle, $cola, $nextEntrada++, $createdBy);
             }
 
             $cola->update([
@@ -746,6 +710,7 @@ class ProduccionEmpaqueController extends Controller
                 'is_cola' => true,
                 'is_mixto' => false,
             ]);
+            $this->tarimaDeColaRestaurada($cola);
 
             ProduccionEmpaqueDetalle::whereIn('id', $detallesParaEstaCola->pluck('id')->all())->delete();
 
@@ -753,6 +718,8 @@ class ProduccionEmpaqueController extends Controller
 
             if ($produccion->detalles->isEmpty()) {
                 $mixtoEliminado = $produccion->numero_pallet;
+                // El mixto vacío deja de existir: devuelve su tarima y su cierre.
+                $this->consumo()->devolverTodo($produccion);
                 $produccion->delete();
 
                 return response()->json([
@@ -767,6 +734,7 @@ class ProduccionEmpaqueController extends Controller
                             'peso_neto_kg' => $cola->peso_neto_kg,
                         ],
                     ],
+                    'faltantes' => $this->consumo()->faltantes(),
                 ]);
             }
 
@@ -816,6 +784,7 @@ class ProduccionEmpaqueController extends Controller
                         'peso_neto_kg' => $cola->peso_neto_kg,
                     ],
                 ],
+                'faltantes' => $this->consumo()->faltantes(),
             ]);
         });
     }
@@ -840,15 +809,7 @@ class ProduccionEmpaqueController extends Controller
             // Buscar o restaurar cola origen
             $cola = ProduccionEmpaque::withTrashed()->find($sourceColaId);
             if (! $cola) {
-                return response()->json([
-                    'status' => 'error',
-                    'message' => "No se encontró la cola origen #{$sourceColaId}",
-                ], 422);
-            }
-
-            if ($cola->trashed()) {
-                $cola->restore();
-                $cola->refresh();
+                $this->rechazarMixteo("No se encontró la cola origen #{$sourceColaId}");
             }
 
             // Recolectar detalles de este pallet mixto que pertenecen a esta cola
@@ -856,26 +817,12 @@ class ProduccionEmpaqueController extends Controller
                 ->filter(fn ($d) => $this->extractMixSourceColaId($d->observaciones) == $sourceColaId)
                 ->values();
 
+            $this->restaurarColaOrigen($cola);
+
             $nextEntrada = (int) ($cola->detalles()->max('numero_entrada') ?? 0) + 1;
 
             foreach ($detallesParaEstaCola as $detalle) {
-                $cola->detalles()->create([
-                    'numero_entrada' => $nextEntrada++,
-                    'proceso_id' => $detalle->proceso_id,
-                    'recipe_id' => $detalle->recipe_id,
-                    'tipo_empaque' => $detalle->tipo_empaque,
-                    'marca' => $detalle->marca,
-                    'presentacion' => $detalle->presentacion,
-                    'etiqueta' => $detalle->etiqueta,
-                    'calibre' => $detalle->calibre,
-                    'categoria' => $detalle->categoria,
-                    'fecha_produccion' => $detalle->fecha_produccion,
-                    'total_cajas' => (int) ($detalle->total_cajas ?? 0),
-                    'peso_neto_kg' => (float) ($detalle->peso_neto_kg ?? 0),
-                    'turno' => $detalle->turno,
-                    'observaciones' => $this->stripMixSourceTag($detalle->observaciones),
-                    'created_by' => $createdBy,
-                ]);
+                $this->regresarEntradaDelMixto($produccion, $detalle, $cola, $nextEntrada++, $createdBy);
             }
 
             $cola->update([
@@ -884,6 +831,7 @@ class ProduccionEmpaqueController extends Controller
                 'is_cola' => true,
                 'is_mixto' => false,
             ]);
+            $this->tarimaDeColaRestaurada($cola);
 
             // Borrar los detalles originales del mixto ya copiados a la cola restaurada,
             // para no dejarlos huérfanos (produccion_empaque_detalles no usa SoftDeletes).
@@ -898,6 +846,8 @@ class ProduccionEmpaqueController extends Controller
         }
 
         $mixtoEliminado = $produccion->numero_pallet;
+        // El mixto deja de existir: devuelve su tarima y su cierre (lo por caja ya regresó a las colas).
+        $this->consumo()->devolverTodo($produccion);
         $produccion->delete();
 
         return response()->json([
@@ -907,6 +857,7 @@ class ProduccionEmpaqueController extends Controller
                 'pallet_mixto_eliminado' => $mixtoEliminado,
                 'colas_restauradas' => $colasRestauradas,
             ],
+            'faltantes' => $this->consumo()->faltantes(),
         ]);
     }
 
@@ -956,37 +907,15 @@ class ProduccionEmpaqueController extends Controller
             $cola = ProduccionEmpaque::withTrashed()->find($sourceColaId);
 
             if (! $cola) {
-                return response()->json([
-                    'status' => 'error',
-                    'message' => "No se encontró la cola origen #{$sourceColaId} para revertir el mixteo",
-                ], 422);
+                $this->rechazarMixteo("No se encontró la cola origen #{$sourceColaId} para revertir el mixteo");
             }
 
-            if ($cola->trashed()) {
-                $cola->restore();
-                $cola->refresh();
-            }
+            $this->restaurarColaOrigen($cola);
 
             $nextEntrada = (int) ($cola->detalles()->max('numero_entrada') ?? 0) + 1;
 
             foreach ($detalles as $detalle) {
-                $cola->detalles()->create([
-                    'numero_entrada' => $nextEntrada++,
-                    'proceso_id' => $detalle->proceso_id,
-                    'recipe_id' => $detalle->recipe_id,
-                    'tipo_empaque' => $detalle->tipo_empaque,
-                    'marca' => $detalle->marca,
-                    'presentacion' => $detalle->presentacion,
-                    'etiqueta' => $detalle->etiqueta,
-                    'calibre' => $detalle->calibre,
-                    'categoria' => $detalle->categoria,
-                    'fecha_produccion' => $detalle->fecha_produccion,
-                    'total_cajas' => (int) ($detalle->total_cajas ?? 0),
-                    'peso_neto_kg' => (float) ($detalle->peso_neto_kg ?? 0),
-                    'turno' => $detalle->turno,
-                    'observaciones' => $this->stripMixSourceTag($detalle->observaciones),
-                    'created_by' => $createdBy,
-                ]);
+                $this->regresarEntradaDelMixto($produccion, $detalle, $cola, $nextEntrada++, $createdBy);
             }
 
             $cola->update([
@@ -995,6 +924,7 @@ class ProduccionEmpaqueController extends Controller
                 'is_cola' => true,
                 'is_mixto' => false,
             ]);
+            $this->tarimaDeColaRestaurada($cola);
 
             // Borrar los detalles originales del mixto ya copiados a la cola restaurada,
             // para no dejarlos huérfanos (produccion_empaque_detalles no usa SoftDeletes).
@@ -1009,6 +939,8 @@ class ProduccionEmpaqueController extends Controller
         }
 
         $mixtoEliminado = $produccion->numero_pallet;
+        // El mixto deja de existir: devuelve su tarima y su cierre (lo por caja ya regresó a las colas).
+        $this->consumo()->devolverTodo($produccion);
         $produccion->delete();
 
         return response()->json([
@@ -1018,6 +950,7 @@ class ProduccionEmpaqueController extends Controller
                 'pallet_mixto_eliminado' => $mixtoEliminado,
                 'colas_restauradas' => $colasRestauradas,
             ],
+            'faltantes' => $this->consumo()->faltantes(),
         ]);
     }
 
@@ -1431,6 +1364,8 @@ class ProduccionEmpaqueController extends Controller
 
             $detallesParaNuevoPallet = collect();
             $colasMixteadas = []; // Array para guardar info de cada cola mixteada
+            $porCajaQueSeMueve = []; // por renglón de $detallesParaNuevoPallet: entrada origen y cajas tomadas
+            $entradasVaciadas = [];
 
             foreach ($colas as $cola) {
                 $mixItem = $mixItems->get($cola->id);
@@ -1516,7 +1451,7 @@ class ProduccionEmpaqueController extends Controller
                 }
 
                 if ($cola->detalles->isEmpty()) {
-                    $cola->detalles()->create([
+                    $baseCola = $cola->detalles()->create([
                         'numero_entrada' => 1,
                         'proceso_id' => $cola->proceso_id,
                         'recipe_id' => $cola->recipe_id,
@@ -1533,16 +1468,15 @@ class ProduccionEmpaqueController extends Controller
                         'observaciones' => $cola->observaciones,
                         'created_by' => $request->user()->id,
                     ]);
+                    // Lo consumido por caja de la cola sin desglose pasa a su entrada base antes de moverse.
+                    $this->consumo()->ligarBase($cola, $baseCola);
 
                     $cola->load('detalles');
                 }
 
                 $cajasDisponibles = (int) $cola->detalles()->sum('total_cajas');
                 if ($cajasDisponibles <= 0) {
-                    return response()->json([
-                        'status' => 'error',
-                        'message' => "La cola {$cola->numero_pallet} no tiene cajas disponibles para mixtear",
-                    ], 422);
+                    $this->rechazarMixteo("La cola {$cola->numero_pallet} no tiene cajas disponibles para mixtear");
                 }
 
                 $cola->loadMissing([
@@ -1555,10 +1489,7 @@ class ProduccionEmpaqueController extends Controller
                     : $cajasDisponibles;
 
                 if ($cajasSolicitadas > $maxPermitidoCola) {
-                    return response()->json([
-                        'status' => 'error',
-                        'message' => "La cola {$cola->numero_pallet} permite máximo {$maxPermitidoCola} cajas por receta/disponible",
-                    ], 422);
+                    $this->rechazarMixteo("La cola {$cola->numero_pallet} permite máximo {$maxPermitidoCola} cajas por receta/disponible");
                 }
 
                 $cajasRestantesPorTomar = $cajasSolicitadas;
@@ -1596,15 +1527,17 @@ class ProduccionEmpaqueController extends Controller
                         'turno' => $detalle->turno,
                         'observaciones' => $this->appendMixSourceTag($detalle->observaciones, (int) $cola->id),
                     ]);
+                    // Las cajas tomadas se llevan su consumo por caja (sin mover inventario).
+                    $porCajaQueSeMueve[] = ['origen' => $detalle, 'cola' => $cola, 'cajas' => $cajasTomadas, 'cajas_origen' => $detalleCajas];
 
+                    // Una entrada que se vacía se borra hasta que su consumo pasó al mixto.
                     $nuevoTotalDetalle = $detalleCajas - $cajasTomadas;
+                    $detalle->update([
+                        'total_cajas' => max($nuevoTotalDetalle, 0),
+                        'peso_neto_kg' => $nuevoTotalDetalle <= 0 ? 0 : max(round($pesoDetalle - $pesoTomado, 2), 0),
+                    ]);
                     if ($nuevoTotalDetalle <= 0) {
-                        $detalle->delete();
-                    } else {
-                        $detalle->update([
-                            'total_cajas' => $nuevoTotalDetalle,
-                            'peso_neto_kg' => max(round($pesoDetalle - $pesoTomado, 2), 0),
-                        ]);
+                        $entradasVaciadas[] = $detalle;
                     }
 
                     $cajasRestantesPorTomar -= $cajasTomadas;
@@ -1613,10 +1546,7 @@ class ProduccionEmpaqueController extends Controller
                 }
 
                 if ($cajasRestantesPorTomar > 0) {
-                    return response()->json([
-                        'status' => 'error',
-                        'message' => "No fue posible completar la extracción solicitada de la cola {$cola->numero_pallet}",
-                    ], 422);
+                    $this->rechazarMixteo("No fue posible completar la extracción solicitada de la cola {$cola->numero_pallet}");
                 }
 
                 $pesoBasculaCola = (float) ($cola->peso_bascula_kg ?? 0);
@@ -1645,6 +1575,10 @@ class ProduccionEmpaqueController extends Controller
                 ];
 
                 if ($cajasRestantesCola <= 0) {
+                    // La cola vacía libera su tarima (y su cierre, si lo llevaba); lo por caja
+                    // NO se devuelve: viaja con las cajas al mixto más abajo.
+                    $this->consumo()->devolverMomento($cola, RecipeItem::CONSUMO_AL_ARMAR);
+                    $this->consumo()->devolverMomento($cola, RecipeItem::CONSUMO_AL_CERRAR);
                     $cola->delete();
                     continue;
                 }
@@ -1663,10 +1597,7 @@ class ProduccionEmpaqueController extends Controller
             }
 
             if ($totalCajas <= 0) {
-                return response()->json([
-                    'status' => 'error',
-                    'message' => 'No hay cajas válidas para crear el pallet mixto',
-                ], 422);
+                $this->rechazarMixteo('No hay cajas válidas para crear el pallet mixto');
             }
 
             $detallesCollection = collect($detallesParaNuevoPallet->all());
@@ -1699,10 +1630,7 @@ class ProduccionEmpaqueController extends Controller
                 ->contains(fn (ProduccionEmpaque $pallet) => $this->normalizePalletName($pallet->numero_pallet) === $numeroPalletFinal);
 
             if ($palletExiste) {
-                return response()->json([
-                    'status' => 'error',
-                    'message' => "El número de pallet {$numeroPalletFinal} ya existe. Captura uno diferente.",
-                ], 422);
+                $this->rechazarMixteo("El número de pallet {$numeroPalletFinal} ya existe. Captura uno diferente.");
             }
 
             $nuevoPallet = ProduccionEmpaque::create([
@@ -1742,8 +1670,8 @@ class ProduccionEmpaqueController extends Controller
 
             $numeroEntrada = 1;
 
-            foreach ($detallesParaNuevoPallet as $detalleNuevo) {
-                $nuevoPallet->detalles()->create([
+            foreach ($detallesParaNuevoPallet as $i => $detalleNuevo) {
+                $entradaMixto = $nuevoPallet->detalles()->create([
                     'numero_entrada' => $numeroEntrada++,
                     'proceso_id' => $detalleNuevo['proceso_id'],
                     'recipe_id' => $detalleNuevo['recipe_id'],
@@ -1761,7 +1689,14 @@ class ProduccionEmpaqueController extends Controller
                     'observaciones' => $detalleNuevo['observaciones'],
                     'created_by' => $request->user()->id,
                 ]);
+
+                // Lo consumido por caja ya salió con la cola: se reasigna (o parte) a esta entrada, sin inventario.
+                $mov = $porCajaQueSeMueve[$i];
+                $this->consumo()->moverPorCaja($mov['origen'], $mov['cola'], $entradaMixto, $mov['cajas'], $mov['cajas_origen']);
             }
+
+            // Ya sin consumo que las referencie, las entradas vaciadas se borran.
+            ProduccionEmpaqueDetalle::whereIn('id', collect($entradasVaciadas)->pluck('id')->all())->delete();
 
             $nuevoPallet->loadMissing('detalles');
 
@@ -1769,13 +1704,12 @@ class ProduccionEmpaqueController extends Controller
                 $nuevoPallet->update($this->buildAggregateFieldsFromDetalles($nuevoPallet));
             }
 
+            // El mixto es un pallet nuevo y cerrado: carga con su tarima y su cierre.
+            $this->consumirPorPalletMixto($nuevoPallet);
+
             $nuevoPallet->load($this->eagerLoad);
 
-            return response()->json([
-                'success' => true,
-                'message' => "Se mixtearon {$colas->count()} colas en el pallet {$nuevoPallet->numero_pallet}",
-                'data' => $nuevoPallet,
-            ]);
+            return $this->respuestaEscritura($nuevoPallet, "Se mixtearon {$colas->count()} colas en el pallet {$nuevoPallet->numero_pallet}");
         });
     }
 
@@ -2140,6 +2074,86 @@ class ProduccionEmpaqueController extends Controller
             $consumo->consumirPorPallet($p, $receta, RecipeItem::CONSUMO_AL_CERRAR,
                 $this->alternativasParaConsumir($registradas, $pedidas, $receta));
         }
+    }
+
+    /** Pallet mixto (nuevo y cerrado): su tarima y su cierre, con la receta de la entrada con más cajas. */
+    private function consumirPorPalletMixto(ProduccionEmpaque $mixto): void
+    {
+        $consumo = $this->consumo();
+        $receta = $consumo->recetaDePallet($mixto);
+        if (! $receta) {
+            return;
+        }
+
+        $alternativas = $this->alternativasParaConsumir($this->alternativasRegistradas($mixto, null, true), null, $receta);
+        $consumo->consumirPorPallet($mixto, $receta, RecipeItem::CONSUMO_AL_ARMAR, $alternativas);
+        $consumo->consumirPorPallet($mixto, $receta, RecipeItem::CONSUMO_AL_CERRAR, $alternativas);
+    }
+
+    /**
+     * Cola origen que vuelve de un mixto. Si estaba borrada, vuelve solo con lo que regresa del
+     * mixto: las entradas que conservaba al borrarse ya devolvieron su consumo y no reviven.
+     */
+    private function restaurarColaOrigen(ProduccionEmpaque $cola): void
+    {
+        if (! $cola->trashed()) {
+            return;
+        }
+
+        ProduccionEmpaqueDetalle::where('produccion_id', $cola->id)->delete();
+        $cola->restore();
+        $cola->refresh();
+    }
+
+    /** Recrea en la cola una entrada del mixto; su consumo por caja regresa con ella (sin inventario). */
+    private function regresarEntradaDelMixto(ProduccionEmpaque $mixto, ProduccionEmpaqueDetalle $detalle, ProduccionEmpaque $cola, int $numeroEntrada, int $createdBy): ProduccionEmpaqueDetalle
+    {
+        $entrada = $cola->detalles()->create([
+            'numero_entrada' => $numeroEntrada,
+            'proceso_id' => $detalle->proceso_id,
+            'recipe_id' => $detalle->recipe_id,
+            'tipo_empaque' => $detalle->tipo_empaque,
+            'marca' => $detalle->marca,
+            'presentacion' => $detalle->presentacion,
+            'etiqueta' => $detalle->etiqueta,
+            'calibre' => $detalle->calibre,
+            'categoria' => $detalle->categoria,
+            'fecha_produccion' => $detalle->fecha_produccion,
+            'total_cajas' => (int) ($detalle->total_cajas ?? 0),
+            'peso_neto_kg' => (float) ($detalle->peso_neto_kg ?? 0),
+            'turno' => $detalle->turno,
+            'observaciones' => $this->stripMixSourceTag($detalle->observaciones),
+            'created_by' => $createdBy,
+        ]);
+
+        $cajas = (int) ($detalle->total_cajas ?? 0);
+        $this->consumo()->moverPorCaja($detalle, $mixto, $entrada, $cajas, $cajas);
+
+        return $entrada;
+    }
+
+    /**
+     * La cola restaurada vuelve a cargar con su tarima (si la conservó, no se repite). Una cola
+     * congelada (sin registro de consumos, tampoco en lo que le regresó el mixto) no mueve inventario.
+     */
+    private function tarimaDeColaRestaurada(ProduccionEmpaque $cola): void
+    {
+        if ($cola->congelado()) {
+            return;
+        }
+
+        $consumo = $this->consumo();
+        $receta = $consumo->recetaDePallet($cola);
+        if ($receta) {
+            $consumo->consumirPorPallet($cola, $receta, RecipeItem::CONSUMO_AL_ARMAR,
+                $this->alternativasParaConsumir($this->alternativasRegistradas($cola, null, true), null, $receta));
+        }
+    }
+
+    /** 422 que revierte la transacción (lo ya movido del mixteo no se queda a medias). */
+    private function rechazarMixteo(string $message): never
+    {
+        throw new HttpResponseException(response()->json(['status' => 'error', 'message' => $message], 422));
     }
 
     /** Cambio de planta de un pallet con entradas: devuelve todo y lo consume de nuevo en la planta nueva. */
