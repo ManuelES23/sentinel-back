@@ -5,17 +5,22 @@ namespace App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque;
 use App\Http\Controllers\Controller;
 use App\Models\ActivityLog;
 use App\Models\Entity;
-use App\Models\InventoryStock;
 use App\Models\ProcesoEmpaque;
 use App\Models\ProduccionEmpaque;
+use App\Models\ProduccionEmpaqueConsumo;
 use App\Models\ProduccionEmpaqueDetalle;
 use App\Models\Recipe;
+use App\Models\RecipeItem;
+use App\Services\Empaque\CalculoConsumoReceta;
+use App\Services\Empaque\ConsumoProduccion;
 use Carbon\Carbon;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 
 class ProduccionEmpaqueController extends Controller
 {
@@ -168,6 +173,8 @@ class ProduccionEmpaqueController extends Controller
             $produccion->cajas_objetivo = $this->resolveCajasObjetivo($produccion);
         });
 
+        $this->exponerAlternativasListado($producciones);
+
         return response()->json(['success' => true, 'data' => $producciones]);
     }
 
@@ -177,7 +184,10 @@ class ProduccionEmpaqueController extends Controller
             'temporada_id' => 'required|exists:temporadas,id',
             'entity_id' => 'required|exists:entities,id',
             'proceso_id' => 'nullable|exists:proceso_empaque,id',
-            'recipe_id' => 'nullable|exists:recipes,id',
+            'recipe_id' => 'required|exists:recipes,id',
+            'alternativas' => 'nullable|array',
+            'alternativas.*.grupo' => 'required|string|max:50',
+            'alternativas.*.recipe_item_id' => 'required|integer',
             'fecha_produccion' => 'nullable|date',
             'turno' => 'nullable|string|max:50',
             'variedad_id' => 'nullable|exists:variedades,id',
@@ -199,6 +209,10 @@ class ProduccionEmpaqueController extends Controller
             'is_cola' => 'nullable|boolean',
             'observaciones' => 'nullable|string',
         ]);
+
+        $receta = $this->recetaValida((int) $validated['recipe_id']);
+        $alternativas = $this->alternativasPedidas($validated) ?? [];
+        $this->validarAlternativas($receta, $alternativas);
 
         if (array_key_exists('proceso_id', $validated) && filled($validated['proceso_id']) && empty($validated['variedad_id'])) {
             $proceso = ProcesoEmpaque::with([
@@ -229,7 +243,7 @@ class ProduccionEmpaqueController extends Controller
             }
         }
 
-        return DB::transaction(function () use ($validated, $request) {
+        return DB::transaction(function () use ($validated, $request, $receta, $alternativas) {
             $entity = Entity::findOrFail($validated['entity_id']);
 
             $numeroPalletManual = $this->normalizePalletName($validated['numero_pallet'] ?? null);
@@ -282,24 +296,14 @@ class ProduccionEmpaqueController extends Controller
                 'created_by' => $request->user()->id,
             ]);
 
+            // Pallet nuevo: por caja + tarima; si nace cerrado, también los insumos de cierre.
+            $this->consumirPalletSinEntradas($produccion, $receta, $alternativas);
+
             $produccion->load($this->eagerLoad);
             $this->hydrateDetalleLoteProductoTerminado($produccion);
             $this->hydrateResolvedLoteProductoTerminado($produccion);
 
-            $this->applyRecipeInventoryConsumption(
-                (int) $produccion->entity_id,
-                $produccion->recipe_id ? (int) $produccion->recipe_id : null,
-                (int) $produccion->total_cajas,
-                (bool) $produccion->is_cola,
-                false,
-                (int) $produccion->id,
-            );
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Producción creada correctamente',
-                'data' => $produccion,
-            ], 201);
+            return $this->respuestaEscritura($produccion, 'Producción creada correctamente', 201);
         });
     }
 
@@ -316,6 +320,9 @@ class ProduccionEmpaqueController extends Controller
             'entity_id' => 'sometimes|exists:entities,id',
             'proceso_id' => 'nullable|exists:proceso_empaque,id',
             'recipe_id' => 'nullable|exists:recipes,id',
+            'alternativas' => 'nullable|array',
+            'alternativas.*.grupo' => 'required|string|max:50',
+            'alternativas.*.recipe_item_id' => 'required|integer',
             'fecha_produccion' => 'sometimes|date',
             'turno' => 'nullable|string|max:50',
             'variedad_id' => 'nullable|exists:variedades,id',
@@ -356,9 +363,34 @@ class ProduccionEmpaqueController extends Controller
             }
         }
 
-        return DB::transaction(function () use ($produccion, $validated) {
+        $pedidas = $this->alternativasPedidas($validated);
+        unset($validated['alternativas']);
+
+        $congelado = $produccion->congelado();
+        $tieneEntradas = $produccion->detalles()->exists();
+        $cambiaReceta = array_key_exists('recipe_id', $validated)
+            && (int) ($validated['recipe_id'] ?? 0) !== (int) ($produccion->recipe_id ?? 0);
+        $registradas = $this->alternativasRegistradas($produccion, null, $tieneEntradas);
+        $cambianAlternativas = $this->cambianAlternativas($pedidas, $registradas);
+
+        // Con entradas, receta y alternativas viven en cada entrada (updateDetalle).
+        if ($tieneEntradas && ($cambiaReceta || $cambianAlternativas)) {
+            throw ValidationException::withMessages(['recipe_id' => 'Cambia la receta en la entrada']);
+        }
+
+        $recetaNueva = null;
+        if ($cambiaReceta) {
+            $recetaNueva = $this->recetaValida((int) ($validated['recipe_id'] ?? 0));
+        }
+        if (! $tieneEntradas && ! empty($pedidas)) {
+            $recetaPallet = $recetaNueva ?? ($produccion->recipe_id ? Recipe::with('items')->find($produccion->recipe_id) : null);
+            if ($recetaPallet) {
+                $this->validarAlternativas($recetaPallet, $pedidas);
+            }
+        }
+
+        return DB::transaction(function () use ($produccion, $validated, $congelado, $tieneEntradas, $cambiaReceta, $recetaNueva, $pedidas, $registradas, $cambianAlternativas) {
             $previousEntityId = (int) $produccion->entity_id;
-            $previousRecipeId = $produccion->recipe_id ? (int) $produccion->recipe_id : null;
             $previousTotalCajas = (int) ($produccion->total_cajas ?? 0);
             $previousIsCola = (bool) ($produccion->is_cola ?? false);
 
@@ -369,68 +401,60 @@ class ProduccionEmpaqueController extends Controller
                 $produccion->update($this->buildAggregateFieldsFromDetalles($produccion));
             }
 
-            $currentEntityId = (int) $produccion->entity_id;
-            $currentRecipeId = $produccion->recipe_id ? (int) $produccion->recipe_id : null;
-            $currentTotalCajas = (int) ($produccion->total_cajas ?? 0);
-            $currentIsCola = (bool) ($produccion->is_cola ?? false);
+            $cambiaPlanta = $previousEntityId !== (int) $produccion->entity_id;
+            $cambianCajas = $previousTotalCajas !== (int) ($produccion->total_cajas ?? 0);
+            $cambiaCola = $previousIsCola !== (bool) ($produccion->is_cola ?? false);
 
-            $inventoryChanged =
-                $previousEntityId !== $currentEntityId
-                || $previousRecipeId !== $currentRecipeId
-                || $previousTotalCajas !== $currentTotalCajas
-                || $previousIsCola !== $currentIsCola;
+            // Pallets anteriores al registro de consumos: se guardan sin mover inventario.
+            if (! $congelado) {
+                $consumo = $this->consumo();
 
-            if ($inventoryChanged) {
-                $this->applyRecipeInventoryConsumption(
-                    $previousEntityId,
-                    $previousRecipeId,
-                    $previousTotalCajas,
-                    $previousIsCola,
-                    true,
-                    (int) $produccion->id,
-                );
+                if ($tieneEntradas && $cambiaPlanta) {
+                    $this->reconsumirPalletConEntradas($produccion);
+                } elseif (! $tieneEntradas && ($cambiaPlanta || $cambiaReceta || $cambianCajas || $cambianAlternativas)) {
+                    $receta = $recetaNueva ?? Recipe::with('items')->find($produccion->recipe_id);
+                    $alternativas = $cambiaReceta
+                        ? ($pedidas ?? [])
+                        : $this->alternativasParaConsumir($registradas, $pedidas);
 
-                $this->applyRecipeInventoryConsumption(
-                    $currentEntityId,
-                    $currentRecipeId,
-                    $currentTotalCajas,
-                    $currentIsCola,
-                    false,
-                    (int) $produccion->id,
-                );
+                    $consumo->devolverTodo($produccion);
+                    if ($receta) {
+                        $this->consumirPalletSinEntradas($produccion, $receta, $alternativas);
+                    }
+                } elseif ($cambiaCola) {
+                    $this->ajustarCierre($produccion, $this->alternativasParaConsumir($registradas, $pedidas));
+                }
             }
 
             $produccion->load($this->eagerLoad);
             $this->hydrateResolvedLoteProductoTerminado($produccion);
 
-            return response()->json([
-                'success' => true,
-                'message' => 'Producción actualizada',
-                'data' => $produccion,
-            ]);
+            return $this->respuestaEscritura($produccion, 'Producción actualizada');
         });
     }
 
     public function destroy(ProduccionEmpaque $produccion): JsonResponse
     {
+        if (($produccion->status ?? null) === 'embarcado') {
+            return $this->rechazoEmbarcado();
+        }
+
         return DB::transaction(function () use ($produccion) {
             $produccion->loadMissing('detalles');
 
             $esPalletMixto = (bool) $produccion->is_mixto && $produccion->detalles->isNotEmpty();
 
             if (! $esPalletMixto) {
-                $this->applyRecipeInventoryConsumption(
-                    (int) $produccion->entity_id,
-                    $produccion->recipe_id ? (int) $produccion->recipe_id : null,
-                    (int) ($produccion->total_cajas ?? 0),
-                    (bool) ($produccion->is_cola ?? false),
-                    true,
-                    (int) $produccion->id,
-                );
+                // Devuelve exactamente lo registrado; un pallet congelado no tiene registro.
+                $this->consumo()->devolverTodo($produccion);
 
                 $produccion->delete();
 
-                return response()->json(['success' => true, 'message' => 'Producción eliminada']);
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Producción eliminada',
+                    'faltantes' => $this->consumo()->faltantes(),
+                ]);
             }
 
             $colasFallback = collect();
@@ -1171,7 +1195,11 @@ class ProduccionEmpaqueController extends Controller
 
         $validated = $request->validate([
             'proceso_id' => 'required|exists:proceso_empaque,id',
-            'recipe_id' => 'nullable|exists:recipes,id',
+            // Sin receta propia del pallet, la entrada debe traerla.
+            'recipe_id' => ($produccion->recipe_id ? 'nullable' : 'required').'|exists:recipes,id',
+            'alternativas' => 'nullable|array',
+            'alternativas.*.grupo' => 'required|string|max:50',
+            'alternativas.*.recipe_item_id' => 'required|integer',
             'fecha_produccion' => 'required|date',
             'total_cajas' => 'required|integer|min:1',
             'peso_neto_kg' => 'nullable|numeric|min:0',
@@ -1187,6 +1215,15 @@ class ProduccionEmpaqueController extends Controller
             'marcar_completo' => 'nullable|boolean',
             'observaciones' => 'nullable|string',
         ]);
+
+        $receta = filled($validated['recipe_id'] ?? null)
+            ? $this->recetaValida((int) $validated['recipe_id'])
+            : Recipe::with('items')->find($produccion->recipe_id);
+        $alternativas = $this->alternativasPedidas($validated) ?? [];
+        if ($receta) {
+            $this->validarAlternativas($receta, $alternativas);
+        }
+        $congelado = $produccion->congelado();
 
         // Calcular objetivo real de cajas (prioriza grupo 'caja' de receta)
         $produccion->loadMissing([
@@ -1215,8 +1252,12 @@ class ProduccionEmpaqueController extends Controller
             }
         }
 
-        return DB::transaction(function () use ($produccion, $validated, $request) {
-            $this->ensureBaseDetalleForColaCompletion($produccion, (int) $request->user()->id);
+        return DB::transaction(function () use ($produccion, $validated, $request, $receta, $alternativas, $congelado) {
+            $base = $this->ensureBaseDetalleForColaCompletion($produccion, (int) $request->user()->id);
+            if ($base) {
+                // Lo consumido por caja de la cola sin desglose pasa a su entrada base.
+                $this->consumo()->ligarBase($produccion, $base);
+            }
 
             // Determinar número de entrada
             $maxEntrada = $produccion->detalles()->max('numero_entrada') ?? 0;
@@ -1232,7 +1273,7 @@ class ProduccionEmpaqueController extends Controller
             }
 
             // Crear detalle con info completa de producto
-            $produccion->detalles()->create([
+            $detalle = $produccion->detalles()->create([
                 'numero_entrada' => $numeroEntrada,
                 'proceso_id' => $validated['proceso_id'],
                 'recipe_id' => $validated['recipe_id'] ?? null,
@@ -1251,14 +1292,10 @@ class ProduccionEmpaqueController extends Controller
                 'created_by' => $request->user()->id,
             ]);
 
-            $this->applyRecipeInventoryConsumption(
-                (int) $produccion->entity_id,
-                $recipeId ? (int) $recipeId : null,
-                (int) $validated['total_cajas'],
-                true,
-                false,
-                (int) $produccion->id,
-            );
+            // La entrada carga con sus insumos por caja (un pallet congelado no mueve inventario).
+            if (! $congelado && $receta) {
+                $this->consumo()->consumirPorCaja($produccion, $detalle, $receta, (int) $validated['total_cajas'], $alternativas);
+            }
 
             // Detectar si es pallet mixto comparando con entradas anteriores
             $isMixto = $produccion->is_mixto; // mantener si ya era mixto
@@ -1319,6 +1356,11 @@ class ProduccionEmpaqueController extends Controller
                 $produccion->update($this->buildAggregateFieldsFromDetalles($produccion));
             }
 
+            // Con esta entrada el pallet quedó cerrado: insumos de cierre una sola vez.
+            if (! $congelado && ! $produccion->is_cola) {
+                $this->ajustarCierre($produccion, $alternativas);
+            }
+
             $produccion->load($this->eagerLoad);
 
             $mixtoMsg = $isMixto ? ' (Pallet mixto)' : '';
@@ -1326,11 +1368,7 @@ class ProduccionEmpaqueController extends Controller
                 ? "Entrada #{$numeroEntrada} agregada{$mixtoMsg}. Cajas: {$totalCajas}" . ($produccion->cajas_objetivo ? "/{$produccion->cajas_objetivo}" : "")
                 : "Cola completada{$mixtoMsg}. Pallet listo con {$totalCajas} cajas";
 
-            return response()->json([
-                'success' => true,
-                'message' => $message,
-                'data' => $produccion,
-            ]);
+            return $this->respuestaEscritura($produccion, $message);
         });
     }
 
@@ -1847,15 +1885,17 @@ class ProduccionEmpaqueController extends Controller
     private function resolveCajasObjetivo(ProduccionEmpaque $produccion): int
     {
         // Buscar la cantidad del grupo 'caja' en los items de la receta del pallet
-        $cajaItem = $produccion->recipe?->items
-            ?->firstWhere('group_key', 'caja');
+        // Grupo «caja» sin distinguir mayúsculas, igual que el cálculo del consumo por caja.
+        $esCaja = fn ($item) => mb_strtolower(trim((string) $item->group_key)) === 'caja';
+
+        $cajaItem = $produccion->recipe?->items?->first($esCaja);
         if ($cajaItem && (int) $cajaItem->quantity > 0) {
             return (int) $cajaItem->quantity;
         }
 
         // Buscar en las recetas de los detalles (entradas)
         $cajaItemDetalle = $produccion->detalles
-            ->map(fn($d) => $d->recipe?->items?->firstWhere('group_key', 'caja'))
+            ->map(fn($d) => $d->recipe?->items?->first($esCaja))
             ->filter()
             ->first();
         if ($cajaItemDetalle && (int) $cajaItemDetalle->quantity > 0) {
@@ -1906,13 +1946,14 @@ class ProduccionEmpaqueController extends Controller
         ];
     }
 
-    private function ensureBaseDetalleForColaCompletion(ProduccionEmpaque $produccion, int $fallbackUserId): void
+    /** Crea la entrada base (entrada 1) de una cola sin desglose; devuelve la creada o null si ya había entradas. */
+    private function ensureBaseDetalleForColaCompletion(ProduccionEmpaque $produccion, int $fallbackUserId): ?ProduccionEmpaqueDetalle
     {
         if ($produccion->detalles()->exists()) {
-            return;
+            return null;
         }
 
-        $produccion->detalles()->create([
+        return $produccion->detalles()->create([
             'numero_entrada' => 1,
             'proceso_id' => $produccion->proceso_id,
             'recipe_id' => $produccion->recipe_id,
@@ -1946,130 +1987,212 @@ class ProduccionEmpaqueController extends Controller
         ]);
     }
 
+    // ---- consumo de insumos (registro de consumos) ----
+
+    /** Una instancia por petición: junta los faltantes y notifica tras confirmar la transacción. */
+    private function consumo(): ConsumoProduccion
+    {
+        return app(ConsumoProduccion::class);
+    }
+
+    /** Receta con la que se puede descontar: existente, de empaque y activa. */
+    private function recetaValida(int $recipeId): Recipe
+    {
+        $receta = Recipe::with('items')->find($recipeId);
+
+        if (! $receta || $receta->recipe_type !== 'empaque' || ! $receta->is_active || $receta->status !== 'active') {
+            throw ValidationException::withMessages(['recipe_id' => 'La receta no está activa o no es de empaque.']);
+        }
+
+        return $receta;
+    }
+
     /**
-     * Descuenta (o revierte) inventario de insumos según receta y cajas producidas.
-     * Permite negativos para reflejar faltantes reales en arranque operativo.
+     * `alternativas: [{grupo, recipe_item_id}]` → [grupo => recipe_item_id]; null si no se mandó
+     * (front viejo: se usa la predeterminada o lo ya registrado).
      */
-    private function applyRecipeInventoryConsumption(
-        int $entityId,
-        ?int $recipeId,
-        int $totalCajas,
-        bool $isCola = false,
-        bool $revert = false,
-        ?int $produccionId = null,
-    ): void {
-        if ($entityId <= 0 || empty($recipeId) || $totalCajas <= 0) {
+    private function alternativasPedidas(array $validated): ?array
+    {
+        if (! isset($validated['alternativas'])) {
+            return null;
+        }
+
+        $mapa = [];
+        foreach ($validated['alternativas'] as $alternativa) {
+            $mapa[(string) $alternativa['grupo']] = (int) $alternativa['recipe_item_id'];
+        }
+
+        return $mapa;
+    }
+
+    private function validarAlternativas(Recipe $receta, array $alternativas): void
+    {
+        $errores = app(CalculoConsumoReceta::class)->validarAlternativas($receta, $alternativas);
+        if ($errores) {
+            throw ValidationException::withMessages($errores);
+        }
+    }
+
+    /**
+     * Alternativas registradas vigentes: grupo (minúsculas) => recipe_item_id elegidos. Por entrada,
+     * del pallet sin entrada ($d = null) o de todo el pallet ($todoElPallet).
+     *
+     * @return array<string, int[]>
+     */
+    private function alternativasRegistradas(ProduccionEmpaque $p, ?ProduccionEmpaqueDetalle $d, bool $todoElPallet = false): array
+    {
+        $registradas = [];
+        ProduccionEmpaqueConsumo::where('produccion_id', $p->id)
+            ->when(! $todoElPallet, fn ($q) => $d ? $q->where('detalle_id', $d->id) : $q->whereNull('detalle_id'))
+            ->whereNotNull('group_key')
+            ->whereNotNull('recipe_item_id')
+            ->vigentes()
+            ->orderBy('id')
+            ->get(['group_key', 'recipe_item_id'])
+            ->each(function (ProduccionEmpaqueConsumo $c) use (&$registradas) {
+                $registradas[mb_strtolower(trim((string) $c->group_key))][] = (int) $c->recipe_item_id;
+            });
+
+        return array_map(fn (array $ids) => array_values(array_unique($ids)), $registradas);
+    }
+
+    /** Cambian si alguna elegida difiere de lo registrado en un grupo que ya tiene consumo. */
+    private function cambianAlternativas(?array $pedidas, array $registradas): bool
+    {
+        foreach ($pedidas ?? [] as $grupo => $itemId) {
+            $ids = $registradas[mb_strtolower(trim((string) $grupo))] ?? null;
+            if ($ids !== null && ! in_array($itemId, $ids, true)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** Lo registrado, con lo pedido encima: [grupo => recipe_item_id] para el servicio. */
+    private function alternativasParaConsumir(array $registradas, ?array $pedidas): array
+    {
+        $alternativas = array_map(fn (array $ids) => $ids[0], $registradas);
+        foreach ($pedidas ?? [] as $grupo => $itemId) {
+            $alternativas[mb_strtolower(trim((string) $grupo))] = $itemId;
+        }
+
+        return $alternativas;
+    }
+
+    /** Pallet sin entradas: por caja + al armar; si está cerrado, también al cerrar. */
+    private function consumirPalletSinEntradas(ProduccionEmpaque $p, Recipe $receta, array $alternativas): void
+    {
+        $consumo = $this->consumo();
+        $consumo->consumirPorCaja($p, null, $receta, (int) $p->total_cajas, $alternativas);
+        $consumo->consumirPorPallet($p, $receta, RecipeItem::CONSUMO_AL_ARMAR, $alternativas);
+        if (! $p->is_cola) {
+            $consumo->consumirPorPallet($p, $receta, RecipeItem::CONSUMO_AL_CERRAR, $alternativas);
+        }
+    }
+
+    /** Pallet cerrado: consume sus insumos de cierre (una vez); cola abierta: los devuelve. */
+    private function ajustarCierre(ProduccionEmpaque $p, array $alternativas): void
+    {
+        $consumo = $this->consumo();
+
+        if ($p->is_cola) {
+            $consumo->devolverMomento($p, RecipeItem::CONSUMO_AL_CERRAR);
+
             return;
         }
 
-        $recipe = Recipe::with(['items' => function ($query) {
-            $query->select([
-                'id',
-                'recipe_id',
-                'product_id',
-                'quantity',
-                'waste_percentage',
-                'cost_per_unit',
-                'is_optional',
-                'group_key',
-                'is_default',
-            ])
-            ->whereNotNull('product_id')
-            ->where('quantity', '>', 0);
-        }])->find($recipeId);
+        $receta = $consumo->recetaDePallet($p);
+        if ($receta) {
+            $consumo->consumirPorPallet($p, $receta, RecipeItem::CONSUMO_AL_CERRAR, $alternativas);
+        }
+    }
 
-        if (! $recipe) {
+    /** Cambio de planta de un pallet con entradas: devuelve todo y lo consume de nuevo en la planta nueva. */
+    private function reconsumirPalletConEntradas(ProduccionEmpaque $p): void
+    {
+        $consumo = $this->consumo();
+        $detalles = $p->detalles()->get();
+
+        $porEntrada = $detalles->mapWithKeys(fn (ProduccionEmpaqueDetalle $d) => [
+            $d->id => $this->alternativasParaConsumir($this->alternativasRegistradas($p, $d), null),
+        ]);
+        $delPallet = $this->alternativasParaConsumir($this->alternativasRegistradas($p, null), null);
+
+        $consumo->devolverTodo($p);
+
+        foreach ($detalles as $d) {
+            $receta = Recipe::with('items')->find($d->recipe_id ?? $p->recipe_id);
+            if ($receta) {
+                $consumo->consumirPorCaja($p, $d, $receta, (int) $d->total_cajas, $porEntrada[$d->id]);
+            }
+        }
+
+        $recetaPallet = $consumo->recetaDePallet($p);
+        if ($recetaPallet) {
+            $consumo->consumirPorPallet($p, $recetaPallet, RecipeItem::CONSUMO_AL_ARMAR, $delPallet);
+            if (! $p->is_cola) {
+                $consumo->consumirPorPallet($p, $recetaPallet, RecipeItem::CONSUMO_AL_CERRAR, $delPallet);
+            }
+        }
+    }
+
+    /** Respuesta de escritura: el pallet con sus alternativas registradas y los faltantes de esta operación. */
+    private function respuestaEscritura(ProduccionEmpaque $p, string $message, int $status = 200): JsonResponse
+    {
+        $consumo = $this->consumo();
+        $p->setAttribute('alternativas', $consumo->alternativasDe($p, null));
+        foreach ($p->detalles as $d) {
+            $d->setAttribute('alternativas', $consumo->alternativasDe($p, $d));
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => $message,
+            'data' => $p,
+            'faltantes' => $consumo->faltantes(),
+        ], $status);
+    }
+
+    /** Igual que alternativasDe() del servicio, con una consulta por bloque de pallets (listado). */
+    private function exponerAlternativasListado(Collection $producciones): void
+    {
+        if ($producciones->isEmpty()) {
             return;
         }
 
-        $cajaItem = $recipe->items->first(function ($item) {
-            $groupKey = strtolower(trim((string) ($item->group_key ?? '')));
-            return $groupKey === 'caja' && (float) ($item->quantity ?? 0) > 0;
-        });
-
-        // Priorizar grupo caja porque output_quantity puede representar pallets/unidades distintas.
-        $scaleBase = (float) ($cajaItem->quantity ?? 0);
-        if ($scaleBase <= 0) {
-            $scaleBase = (float) ($recipe->output_quantity ?? 0);
-        }
-
-        if ($scaleBase <= 0) {
-            $scaleBase = 1;
-        }
-
-        $scale = (float) $totalCajas / $scaleBase;
-
-        if ($scale <= 0) {
-            return;
-        }
-
-        $consumableItems = $recipe->items->filter(function ($item) use ($isCola) {
-            if (! $item->product_id) {
-                return false;
-            }
-
-            if ((bool) $item->is_optional) {
-                return false;
-            }
-
-            if (filled($item->group_key) && $item->is_default === false) {
-                return false;
-            }
-
-            // En colas, insumos de cierre (ej. esquineros) se consumen hasta completar pallet.
-            if ($isCola) {
-                $groupKey = strtolower(trim((string) ($item->group_key ?? '')));
-                if (in_array($groupKey, ['esquinero', 'esquineros'], true)) {
-                    return false;
-                }
-            }
-
-            return true;
-        });
-
-        foreach ($consumableItems as $item) {
-            $baseQty = (float) ($item->quantity ?? 0);
-            if ($baseQty <= 0) {
-                continue;
-            }
-
-            $wasteFactor = 1 + (((float) ($item->waste_percentage ?? 0)) / 100);
-            $consumedQty = round($baseQty * $wasteFactor * $scale, 4);
-            if ($consumedQty <= 0) {
-                continue;
-            }
-
-            // Con id de producción el consumo mueve capas PEPS etiquetadas con la referencia y el
-            // reverso devuelve esas mismas porciones. Sin id (no debería pasar) se conserva el
-            // movimiento anterior al costo de receta.
-            $referencia = $produccionId ? "empaque_produccion:{$produccionId}" : null;
-
-            if ($revert && $referencia) {
-                InventoryStock::devolverPorReferencia(
-                    (int) $item->product_id,
-                    $entityId,
-                    $consumedQty,
-                    $referencia,
-                    (float) ($item->cost_per_unit ?? 0),
-                );
-                continue;
-            }
-
-            $delta = $revert ? $consumedQty : (-1 * $consumedQty);
-
-            InventoryStock::updateStock(
-                (int) $item->product_id,
-                $entityId,
-                null,
-                $delta,
-                (float) ($item->cost_per_unit ?? 0),
-                null,
-                null,
-                null,
-                true,
-                $referencia,
+        $renglones = collect();
+        foreach ($producciones->pluck('id')->chunk(500) as $ids) {
+            $renglones = $renglones->concat(
+                ProduccionEmpaqueConsumo::whereIn('produccion_id', $ids->all())
+                    ->whereNotNull('group_key')
+                    ->vigentes()
+                    ->orderBy('id')
+                    ->get(['id', 'produccion_id', 'detalle_id', 'group_key', 'product_id'])
             );
         }
+        $porDueno = $renglones->groupBy(fn (ProduccionEmpaqueConsumo $c) => $c->produccion_id.':'.($c->detalle_id ?? ''));
+
+        $alternativas = fn (string $llave) => ($porDueno->get($llave) ?? collect())
+            ->unique('group_key')
+            ->map(fn (ProduccionEmpaqueConsumo $c) => ['grupo' => $c->group_key, 'product_id' => (int) $c->product_id])
+            ->values()
+            ->all();
+
+        foreach ($producciones as $p) {
+            $p->setAttribute('alternativas', $alternativas("{$p->id}:"));
+            foreach ($p->detalles as $d) {
+                $d->setAttribute('alternativas', $alternativas("{$p->id}:{$d->id}"));
+            }
+        }
+    }
+
+    private function rechazoEmbarcado(): JsonResponse
+    {
+        return response()->json([
+            'status' => 'error',
+            'message' => 'No se puede eliminar un pallet que ya está embarcado',
+        ], 422);
     }
 
     private function hydrateResolvedLoteProductoTerminado(ProduccionEmpaque $produccion): void
@@ -2349,24 +2472,60 @@ class ProduccionEmpaqueController extends Controller
             'calibre' => 'nullable|string|max:50',
             'categoria' => 'nullable|string|max:50',
             'observaciones' => 'nullable|string',
+            'alternativas' => 'nullable|array',
+            'alternativas.*.grupo' => 'required|string|max:50',
+            'alternativas.*.recipe_item_id' => 'required|integer',
         ]);
 
-        $detalle->update($validated);
+        $pedidas = $this->alternativasPedidas($validated);
+        unset($validated['alternativas']);
 
-        // Recalcular totales y marca del pallet padre si es necesario
-        $produccion->loadMissing('detalles');
+        $congelado = $produccion->congelado();
+        // Receta efectiva: la de la entrada o, si no tiene, la del pallet.
+        $recetaAntes = (int) ($detalle->recipe_id ?? $produccion->recipe_id ?? 0);
+        $recetaDespues = array_key_exists('recipe_id', $validated)
+            ? (int) ($validated['recipe_id'] ?? $produccion->recipe_id ?? 0)
+            : $recetaAntes;
+        $cambiaReceta = $recetaDespues !== $recetaAntes;
+        $cambianCajas = array_key_exists('total_cajas', $validated)
+            && (int) $validated['total_cajas'] !== (int) $detalle->total_cajas;
+        $registradas = $this->alternativasRegistradas($produccion, $detalle);
+        $cambianAlternativas = $this->cambianAlternativas($pedidas, $registradas);
+        $mueveInventario = ! $congelado && ($cambiaReceta || $cambianCajas || $cambianAlternativas);
 
-        if ($produccion->detalles->isNotEmpty()) {
-            $produccion->update($this->buildAggregateFieldsFromDetalles($produccion));
+        $receta = null;
+        if ($cambiaReceta) {
+            $receta = $this->recetaValida($recetaDespues);
+        } elseif ($mueveInventario && $recetaDespues) {
+            $receta = Recipe::with('items')->find($recetaDespues);
+        }
+        if ($mueveInventario && $receta && ! empty($pedidas)) {
+            $this->validarAlternativas($receta, $pedidas);
         }
 
-        $produccion->load($this->eagerLoad);
+        return DB::transaction(function () use ($produccion, $detalle, $validated, $mueveInventario, $receta, $cambiaReceta, $registradas, $pedidas) {
+            $detalle->update($validated);
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Detalle actualizado',
-            'data' => $produccion,
-        ]);
+            // Recalcular totales y marca del pallet padre si es necesario
+            $produccion->loadMissing('detalles');
+
+            if ($produccion->detalles->isNotEmpty()) {
+                $produccion->update($this->buildAggregateFieldsFromDetalles($produccion));
+            }
+
+            // La entrada devuelve exactamente lo suyo y consume con sus datos nuevos.
+            if ($mueveInventario) {
+                $alternativas = $cambiaReceta ? ($pedidas ?? []) : $this->alternativasParaConsumir($registradas, $pedidas);
+                $this->consumo()->devolverEntrada($produccion, $detalle);
+                if ($receta) {
+                    $this->consumo()->consumirPorCaja($produccion, $detalle, $receta, (int) $detalle->total_cajas, $alternativas);
+                }
+            }
+
+            $produccion->load($this->eagerLoad);
+
+            return $this->respuestaEscritura($produccion, 'Detalle actualizado');
+        });
     }
 
     /**
@@ -2397,8 +2556,15 @@ class ProduccionEmpaqueController extends Controller
             ], 404);
         }
 
+        if (($produccion->status ?? null) === 'embarcado') {
+            return $this->rechazoEmbarcado();
+        }
+
         return DB::transaction(function () use ($produccion, $detalle) {
             $produccion->loadMissing('detalles');
+
+            // La entrada devuelve exactamente lo suyo (un pallet congelado no tiene registro).
+            $this->consumo()->devolverEntrada($produccion, $detalle);
 
             $sumDetallesCajas = (int) $produccion->detalles->sum('total_cajas');
             $sumDetallesPeso = (float) $produccion->detalles->sum('peso_neto_kg');
@@ -2423,11 +2589,7 @@ class ProduccionEmpaqueController extends Controller
 
             $produccion->load($this->eagerLoad);
 
-            return response()->json([
-                'success' => true,
-                'message' => 'Registro de cola eliminado',
-                'data' => $produccion,
-            ]);
+            return $this->respuestaEscritura($produccion, 'Registro de cola eliminado');
         });
     }
 }
