@@ -76,17 +76,22 @@ class ReglasLiquidacion
             self::fallar('Las recepciones '.self::folios($liquidadas).' ya están en otra liquidación.');
         }
 
+        // Convenio por calibre: la calculadora liquida cada renglón; se cargan aquí, ya con las cabeceras
+        // bloqueadas (editar una recepción bloquea la misma fila, y una ya ligada a una liquidación no se edita).
+        // Una cabecera sin renglones no se puede valorar: se dice eso antes que «sin kilos».
+        if ($convenio->usa_calibres) {
+            $encontradas->load(['renglones.calibre:id,nombre,orden']);
+            $sinRenglones = $encontradas->filter(fn (Recepcion $r) => $r->renglones->isEmpty());
+            if ($sinRenglones->isNotEmpty()) {
+                self::fallar('Las recepciones '.self::folios($sinRenglones).' no tienen renglones por calibre.');
+            }
+        }
+
         if ($convenio->unidad === 'kg') {
             $sinKilos = $encontradas->filter(fn (Recepcion $r) => (float) $r->kilos <= 0);
             if ($sinKilos->isNotEmpty()) {
                 self::fallar('Las recepciones '.self::folios($sinKilos).' no tienen kilos y el convenio se paga por kilo.');
             }
-        }
-
-        // Convenio por calibre: la calculadora liquida cada renglón; se cargan aquí, ya con las cabeceras
-        // bloqueadas (editar una recepción bloquea la misma fila, y una ya ligada a una liquidación no se edita).
-        if ($convenio->usa_calibres) {
-            $encontradas->load(['renglones.calibre:id,nombre,orden']);
         }
 
         return $encontradas->sortBy([['fecha', 'asc'], ['id', 'asc']])->values();

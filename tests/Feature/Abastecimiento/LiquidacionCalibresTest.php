@@ -128,7 +128,7 @@ class LiquidacionCalibresTest extends TestCase
         $this->assertSame($id, $r1->fresh()->liquidacion_id);
 
         // Enviar arma la selección con los renglones guardados: R1 tiene dos y no debe verse «repetida».
-        User::factory()->create(['role' => 'admin']); // quien decide (el que envía no puede)
+        $decide = User::factory()->create(['role' => 'admin']); // quien decide (el que envía no puede)
         $liq = DB::transaction(fn () => FlujoLiquidacion::enviar(Liquidacion::findOrFail($id), $this->admin));
         $this->assertSame('en_revision', $liq->status);
         $this->assertEquals(3234, $liq->monto_final);
@@ -144,6 +144,33 @@ class LiquidacionCalibresTest extends TestCase
             ['R2', 'Grande', 900.0, 18.0, 882.0],
         ], $this->renglones($ficha['detalles'], [$r1->id => 'R1', $r2->id => 'R2']));
         $this->assertSame($this->jumbo->id, $ficha['detalles'][0]['calibre_id']);
+
+        // Bandeja de aprobaciones: cuenta 2 recepciones (no 3 renglones) y cada renglón trae su calibre.
+        Sanctum::actingAs($decide);
+        $bandeja = $this->getJson("/api/pending-approvals/supply_settlement/{$id}")->assertOk()->json('data');
+        $this->assertSame(2, collect($bandeja['details'])->firstWhere('label', 'Recepciones')['value']);
+        $this->assertSame(['Jumbo', 'Grande', 'Grande'], array_column(array_column($bandeja['detalles'], 'calibre'), 'nombre'));
+    }
+
+    public function test_una_recepcion_por_calibre_sin_renglones_da_422_claro(): void
+    {
+        $this->sinRenglonesDa422('caja');
+    }
+
+    public function test_por_kilo_sin_renglones_dice_eso_y_no_sin_kilos(): void
+    {
+        $this->sinRenglonesDa422('kg', null);
+    }
+
+    private function sinRenglonesDa422(string $unidad, ?float $kilos = 50): void
+    {
+        [$c] = $this->escenario(['unidad' => $unidad]);
+        // Cabecera sin renglones (no se puede capturar así; solo por datos viejos o a mano).
+        $vacia = $this->crearRecepcion($c, ['fecha' => '2026-06-04', 'cantidad' => 5, 'kilos' => $kilos]);
+
+        $this->postJson($this->url('liquidaciones/previa'), $this->cuerpo($c, [$vacia->id]))
+            ->assertStatus(422)
+            ->assertJsonPath('errors.recepcion_ids.0', "Las recepciones {$vacia->folio} no tienen renglones por calibre.");
     }
 
     public function test_el_especial_no_se_mueve_si_cambia_el_general(): void

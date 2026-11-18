@@ -1621,7 +1621,8 @@ class PendingApprovalController extends Controller
             ['label' => 'Productor', 'value' => $ficha['productor']['nombre'] ?? null],
             ['label' => 'Convenio', 'value' => $ficha['convenio']['folio'].($ficha['convenio']['variedad'] ? ' · '.$ficha['convenio']['variedad']['nombre'] : '')],
             ['label' => 'Periodo', 'value' => $item->periodo_inicio?->format('d/m/Y').' al '.$item->periodo_fin?->format('d/m/Y')],
-            ['label' => 'Recepciones', 'value' => count($ficha['detalles'])],
+            // Por calibre hay un renglón por (recepción, calibre): se cuentan las recepciones, sin repetir.
+            ['label' => 'Recepciones', 'value' => collect($ficha['detalles'])->pluck('recepcion_id')->unique()->count()],
             ['label' => 'Monto bruto', 'value' => $dinero($item->bruto)],
             ['label' => 'Descuento por rezaga', 'value' => $dinero($item->descuento)],
             ['label' => 'Monto calculado', 'value' => $dinero($item->monto_calculado)],
