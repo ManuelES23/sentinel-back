@@ -503,4 +503,47 @@ class ExcelTableroTest extends TestCase
 
         $this->assertSame($con2, $contar(), 'El número de consultas no debe crecer con los convenios.');
     }
+
+    /** Plan 3 de calibres: hoja «Calibres» (solo si hay convenios por calibre) con el desglose del tablero. */
+    public function test_hoja_calibres_con_el_desglose_del_tablero(): void
+    {
+        [$semanal] = $this->dosConvenios();
+        $variedad = \App\Models\Abastecimiento\Variedad::findOrFail($semanal->variedad_id);
+        $jumbo = $this->crearCalibre($variedad, 'Jumbo', true, 1);
+        $grande = $this->crearCalibre($variedad, 'Grande', true, 2);
+        $c = $this->crearConvenioPorCalibre($this->sbp, [
+            ['calibre' => $jumbo, 'volumen' => 100, 'precio' => 180.0],
+            ['calibre' => $grande, 'volumen' => 50, 'precio' => 150.0],
+        ], ['variedad_id' => $variedad->id, 'productor_id' => $this->productor('Rancho Calibres'),
+            'fecha_inicio' => $this->lunes(26), 'fecha_fin' => '2026-08-23']);
+        $this->crearRecepcionConRenglones($c, [
+            ['calibre_id' => $jumbo->id, 'cantidad' => 10],
+            ['calibre_id' => $grande->id, 'cantidad' => 4],
+        ], ['fecha' => '2026-07-07']);
+
+        $tablero = $this->getJson($this->urlJson($semanal->temporada_id))->assertOk()->json('data');
+        $esperado = collect($tablero['convenios'])->firstWhere('id', $c->id)['indicadores']['calibres'];
+        $libro = $this->descargar($semanal->temporada_id);
+
+        $this->assertSame(['Resumen', 'Convenios', 'Semanas', 'Calibres', 'Avisos'], $libro->getSheetNames());
+        $filas = $this->filas($libro->getSheetByName('Calibres'));
+        $this->assertSame(['Jumbo', 'Grande'], array_column($filas, 'Calibre'));
+        $this->assertSame([$c->folio, $c->folio], array_column($filas, 'Folio'));
+        foreach ($esperado as $i => $k) {
+            $this->assertSame('Rancho Calibres', $filas[$i]['Productor']);
+            $this->assertEqualsWithDelta($k['pactado'], $filas[$i]['Pactado'], 0.001);
+            $this->assertEqualsWithDelta($k['recibido'], $filas[$i]['Recibido'], 0.001);
+            $this->assertEqualsWithDelta($k['avance'], $filas[$i]['Avance'], 0.0001);
+            $this->assertEqualsWithDelta($k['comprometido'], $filas[$i]['Comprometido (MXN)'], 0.01);
+            $this->assertEqualsWithDelta($k['valor_recibido'], $filas[$i]['Valor recibido (MXN)'], 0.01);
+        }
+        $this->assertEqualsWithDelta(1800, $filas[0]['Valor recibido (MXN)'], 0.01);
+
+        // Sin permiso de dinero no hay columnas de importes.
+        Sanctum::actingAs($this->captor);
+        $this->otorgarAbs($this->captor, $this->sbp, 'tablero', ['view']);
+        $fila = $this->filas($this->descargar($semanal->temporada_id)->getSheetByName('Calibres'))[0];
+        $this->assertArrayNotHasKey('Comprometido (MXN)', $fila);
+        $this->assertArrayNotHasKey('Valor recibido (MXN)', $fila);
+    }
 }

@@ -16,13 +16,19 @@ use Illuminate\Validation\ValidationException;
  * `bruto`, `descuento` y `monto_calculado` son la suma de esos renglones, así
  * que los totales siempre cuadran con el detalle. Primero se descuenta la rezaga
  * excedente sobre el bruto y después se aplica el % del productor.
+ *
+ * Convenio por calibre (spec de calibres, C10): un renglón por (recepción, calibre)
+ * con `calibre_id` y el precio de ese calibre; la rezaga sigue siendo UNA sola por
+ * liquidación (Σ rezaga ÷ Σ kilos de las cabeceras, que son la suma de sus renglones)
+ * y el descuento se reparte en proporción al subtotal de cada renglón. Carga antes
+ * `renglones.calibre` de las recepciones (lo hace `ReglasLiquidacion::validarSeleccion`).
  */
 class CalculadoraLiquidacion
 {
     /**
      * @param  Collection<int, Recepcion>  $recepciones  recepciones del convenio a liquidar
      * @return array{
-     *   detalles: array<int, array{recepcion_id: int, cantidad: float, kilos: float, rezaga_kg: float, precio: float, porcentaje_productor: float, subtotal: float, descuento: float, a_pagar: float}>,
+     *   detalles: array<int, array{recepcion_id: int, calibre_id?: int, cantidad: float, kilos: float, rezaga_kg: float, precio: float, porcentaje_productor: float, subtotal: float, descuento: float, a_pagar: float}>,
      *   cantidad: float, kilos: float, bruto: float, rezaga_real_pct: float, rezaga_aceptada_pct: float,
      *   descuento: float, monto_calculado: float, monto_ajustado: float|null, motivo_ajuste: string|null, monto_final: float
      * }
@@ -55,34 +61,58 @@ class CalculadoraLiquidacion
         $aceptada = (float) $convenio->porcentaje_rezaga;
         $excedente = max(0.0, $rezagaReal - $aceptada) / 100;
 
+        $porCalibre = (bool) $convenio->usa_calibres;
         $detalles = [];
         $sinPrecio = [];
+        $sinRenglones = [];
         foreach ($recepciones as $r) {
-            $precio = PrecioVigente::enColeccion($precios, (int) $r->tipo_carga_id, $r->fecha->format('Y-m-d'));
-            if ($precio === null) {
-                $sinPrecio[] = $r->folio ?? '#'.$r->id;
+            $folio = $r->folio ?? '#'.$r->id;
+            $fecha = $r->fecha->format('Y-m-d');
+
+            // Convenio por calibre: un renglón de liquidación por (recepción, calibre), cada uno con su
+            // precio (el especial del calibre o, si no hay, el general). La cabecera es la suma de sus renglones.
+            $partes = $porCalibre
+                ? $r->renglones->map(fn ($c) => [(int) $c->calibre_id, $c->cantidad, $c->kilos, $c->rezaga_kg, $c->calibre?->nombre])->all()
+                : [[null, $r->cantidad, $r->kilos, $r->rezaga_kg, null]];
+            if ($partes === []) {
+                $sinRenglones[] = $folio;
 
                 continue;
             }
 
-            $pct = $precio->porcentaje_productor !== null ? (float) $precio->porcentaje_productor : 100.0;
-            $base = $porKilo ? (float) $r->kilos : (float) $r->cantidad;
-            $subtotal = round($base * (float) $precio->precio, 2);
-            $descuento = round($subtotal * $excedente, 2);
+            foreach ($partes as [$calibreId, $cantidad, $kilos, $rezaga, $nombreCalibre]) {
+                $precio = PrecioVigente::enColeccion($precios, (int) $r->tipo_carga_id, $fecha, $calibreId);
+                if ($precio === null) {
+                    $sinPrecio[] = $calibreId === null ? $folio : $folio.' ('.($nombreCalibre ?? 'calibre #'.$calibreId).')';
 
-            $detalles[] = [
-                'recepcion_id' => (int) $r->id,
-                'cantidad' => round((float) $r->cantidad, 2),
-                'kilos' => round((float) $r->kilos, 2),
-                'rezaga_kg' => round((float) $r->rezaga_kg, 2),
-                'precio' => round((float) $precio->precio, 4),
-                'porcentaje_productor' => round($pct, 2),
-                'subtotal' => $subtotal,
-                'descuento' => $descuento,
-                'a_pagar' => round(($subtotal - $descuento) * $pct / 100, 2),
-            ];
+                    continue;
+                }
+
+                $pct = $precio->porcentaje_productor !== null ? (float) $precio->porcentaje_productor : 100.0;
+                $base = $porKilo ? (float) $kilos : (float) $cantidad;
+                $subtotal = round($base * (float) $precio->precio, 2);
+                $descuento = round($subtotal * $excedente, 2);
+
+                $detalles[] = [
+                    'recepcion_id' => (int) $r->id,
+                ] + ($porCalibre ? ['calibre_id' => $calibreId] : []) + [
+                    'cantidad' => round((float) $cantidad, 2),
+                    'kilos' => round((float) $kilos, 2),
+                    'rezaga_kg' => round((float) $rezaga, 2),
+                    'precio' => round((float) $precio->precio, 4),
+                    'porcentaje_productor' => round($pct, 2),
+                    'subtotal' => $subtotal,
+                    'descuento' => $descuento,
+                    'a_pagar' => round(($subtotal - $descuento) * $pct / 100, 2),
+                ];
+            }
         }
 
+        if ($sinRenglones !== []) {
+            throw ValidationException::withMessages([
+                'recepcion_ids' => 'Las recepciones '.implode(', ', $sinRenglones).' no tienen renglones por calibre.',
+            ]);
+        }
         if ($sinPrecio !== []) {
             throw ValidationException::withMessages([
                 'recepcion_ids' => 'Las recepciones '.implode(', ', $sinPrecio).' no tienen un precio vigente a su fecha.',

@@ -45,7 +45,8 @@ class FlujoLiquidacion
         }
 
         $convenio = Convenio::with('precios')->findOrFail($l->convenio_id);
-        $ids = LiquidacionDetalle::where('liquidacion_id', $l->id)->orderBy('id')->pluck('recepcion_id')->all();
+        // Por calibre hay un renglón por (recepción, calibre): la selección son las recepciones, sin repetir.
+        $ids = LiquidacionDetalle::where('liquidacion_id', $l->id)->orderBy('id')->pluck('recepcion_id')->unique()->values()->all();
         $recepciones = ReglasLiquidacion::validarSeleccion(
             $convenio, $ids, $l->periodo_inicio->format('Y-m-d'), $l->periodo_fin->format('Y-m-d'), $l->id,
         );

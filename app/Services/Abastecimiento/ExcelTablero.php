@@ -75,6 +75,11 @@ class ExcelTablero
 
         $this->hojaConvenios($libro->createSheet()->setTitle('Convenios'), $convenios, $cultivos, $porPagar, $verDinero, $moneda);
         $this->hojaSemanas($libro->createSheet()->setTitle('Semanas'), $convenios, $indicadores, $tablero['semana']['lunes'] ?? '');
+        // Solo si hay algún convenio por calibre: los tableros sin calibres conservan sus cuatro hojas.
+        $porCalibre = array_values(array_filter($convenios, fn (array $c) => ! empty($c['indicadores']['calibres'])));
+        if ($porCalibre !== []) {
+            $this->hojaCalibres($libro->createSheet()->setTitle('Calibres'), $porCalibre, $verDinero, $moneda);
+        }
         $this->hojaAvisos($libro->createSheet()->setTitle('Avisos'), $tablero['avisos'] ?? [], $convenios);
         $libro->setActiveSheetIndex(0);
 
@@ -194,6 +199,42 @@ class ExcelTablero
 
         $this->anchos($hoja, [12, 32, 9, 9, 12, 12, 12, 13, 14]);
         $this->congelar($hoja, 9, $f - 2);
+    }
+
+    /**
+     * Un renglón por (convenio, calibre) con los mismos números del desglose del tablero: pactado, recibido
+     * y avance; con permiso de dinero, también el comprometido y el valor recibido de cada calibre.
+     */
+    private function hojaCalibres(Worksheet $hoja, array $convenios, bool $verDinero, ?string $moneda): void
+    {
+        $titulos = ['Folio', 'Productor', 'Variedad', 'Calibre', 'Unidad', 'Pactado', 'Recibido', 'Avance'];
+        if ($verDinero) {
+            $sufijo = $moneda === null ? '' : " ({$moneda})";
+            array_push($titulos, "Comprometido{$sufijo}", "Valor recibido{$sufijo}");
+        }
+        $this->encabezado($hoja, 1, $titulos);
+
+        $f = 2;
+        foreach ($convenios as $c) {
+            foreach ($c['indicadores']['calibres'] as $k) {
+                $this->texto($hoja, 1, $f, $c['folio'] ?? null);
+                $this->texto($hoja, 2, $f, $c['productor']['nombre'] ?? null);
+                $this->texto($hoja, 3, $f, $c['variedad']['nombre'] ?? null);
+                $this->texto($hoja, 4, $f, $k['nombre'] ?? null);
+                $this->texto($hoja, 5, $f, self::UNIDADES[$c['unidad']] ?? $c['unidad']);
+                $this->numero($hoja, 6, $f, $k['pactado'] ?? null, self::FMT_CANTIDAD);
+                $this->numero($hoja, 7, $f, $k['recibido'] ?? null, self::FMT_CANTIDAD);
+                $this->numero($hoja, 8, $f, $k['avance'] ?? null, self::FMT_PCT);
+                if ($verDinero) {
+                    $this->numero($hoja, 9, $f, $k['comprometido'] ?? null, self::FMT_DINERO);
+                    $this->numero($hoja, 10, $f, $k['valor_recibido'] ?? null, self::FMT_DINERO);
+                }
+                $f++;
+            }
+        }
+
+        $this->anchos($hoja, array_slice([12, 32, 18, 16, 9, 12, 12, 10, 18, 18], 0, count($titulos)));
+        $this->congelar($hoja, count($titulos), $f - 2);
     }
 
     private function hojaAvisos(Worksheet $hoja, array $avisos, array $convenios): void

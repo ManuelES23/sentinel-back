@@ -6,7 +6,10 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-/** Renglón de una liquidación: una recepción con su precio y su importe. */
+/**
+ * Renglón de una liquidación: una recepción con su precio y su importe. En un convenio por calibre
+ * hay un renglón por (recepción, calibre) y `calibre_id` dice cuál; en uno clásico es nulo.
+ */
 class LiquidacionDetalle extends Model
 {
     use HasFactory;
@@ -16,6 +19,7 @@ class LiquidacionDetalle extends Model
     protected $fillable = [
         'liquidacion_id',
         'recepcion_id',
+        'calibre_id',
         'cantidad',
         'kilos',
         'rezaga_kg',
@@ -29,6 +33,7 @@ class LiquidacionDetalle extends Model
     protected $casts = [
         'liquidacion_id' => 'integer',
         'recepcion_id' => 'integer',
+        'calibre_id' => 'integer',
         'cantidad' => 'decimal:2',
         'kilos' => 'decimal:2',
         'rezaga_kg' => 'decimal:2',
@@ -47,5 +52,11 @@ class LiquidacionDetalle extends Model
     public function recepcion(): BelongsTo
     {
         return $this->belongsTo(Recepcion::class, 'recepcion_id');
+    }
+
+    /** Calibre del renglón (solo convenios por calibre); el catálogo no borra un calibre usado. */
+    public function calibre(): BelongsTo
+    {
+        return $this->belongsTo(\App\Models\CRM\CrmProductoCalibre::class, 'calibre_id');
     }
 }
