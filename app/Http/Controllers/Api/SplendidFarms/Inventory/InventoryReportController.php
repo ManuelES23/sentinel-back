@@ -182,6 +182,11 @@ class InventoryReportController extends Controller
             $query->where('quantity', '<=', 0);
         }
 
+        // Solo faltantes (existencia negativa por consumo de producción)
+        if ($request->boolean('solo_negativos')) {
+            $query->where('quantity', '<', 0);
+        }
+
         // Filtrar por lote
         if ($request->filled('lot_number')) {
             $query->where('lot_number', $request->lot_number);
@@ -199,9 +204,16 @@ class InventoryReportController extends Controller
 
         $stock = $query->get();
 
+        // Desde cuándo está en faltante. Las filas ya negativas antes de la migración no traen
+        // negativo_desde: se usa el último movimiento para que el front siempre tenga una fecha.
+        // Las filas con existencia >= 0 quedan en null.
+        $faltanteDesde = fn (InventoryStock $item) => (float) $item->quantity < 0
+            ? ($item->negativo_desde ?? $item->last_movement_at)
+            : null;
+
         // Agrupar por producto si se solicita
         if ($request->boolean('grouped_by_product')) {
-            $stock = $stock->groupBy('product_id')->map(function ($items) {
+            $stock = $stock->groupBy('product_id')->map(function ($items) use ($faltanteDesde) {
                 $product = $items->first()->product;
                 $totalConsumedQuantity = $items->sum('production_consumed_quantity');
                 $totalConsumedCost = $items->sum('production_consumed_cost');
@@ -214,7 +226,7 @@ class InventoryReportController extends Controller
                     'total_value' => round((float) $items->sum('total_cost'), 4),
                     'production_consumed_quantity' => round((float) $totalConsumedQuantity, 4),
                     'production_consumed_cost' => round((float) $totalConsumedCost, 4),
-                    'locations' => $items->map(function ($item) {
+                    'locations' => $items->map(function ($item) use ($faltanteDesde) {
                         return [
                             'entity_id' => $item->entity_id,
                             'entity_type' => $item->entity_type,
@@ -222,12 +234,14 @@ class InventoryReportController extends Controller
                             'quantity' => $item->quantity,
                             'lot_number' => $item->lot_number,
                             'expiry_date' => $item->expiry_date,
+                            'negativo_desde' => $faltanteDesde($item),
                         ];
                     }),
                 ];
             })->values();
         } else {
-            $stock->each(function ($item) use ($consumptionMap) {
+            $stock->each(function ($item) use ($consumptionMap, $faltanteDesde) {
+                $item->setAttribute('negativo_desde', $faltanteDesde($item));
                 $key = $item->entity_id . ':' . $item->product_id;
                 $consumed = $consumptionMap[$key] ?? ['quantity' => 0, 'cost' => 0];
 
