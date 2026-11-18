@@ -17,9 +17,6 @@ class ReglasLiquidacion
 {
     public const MENSAJE_NO_BORRADOR = 'Solo se puede cambiar o borrar una liquidación en borrador.';
 
-    /** Bloqueo temporal: el plan 3 calcula por (recepción, calibre) y reemplaza esta regla. */
-    public const MENSAJE_POR_CALIBRE = 'Las recepciones de un convenio por calibre se liquidan en la siguiente entrega.';
-
     /**
      * Recepciones del convenio dentro del periodo que se pueden liquidar: las que no están en
      * ninguna liquidación, más las de la liquidación indicada (al editar su borrador).
@@ -51,11 +48,6 @@ class ReglasLiquidacion
      */
     public static function validarSeleccion(Convenio $convenio, array $ids, string $desde, string $hasta, ?int $liquidacionId = null): Collection
     {
-        // Único punto de paso de previa, alta, edición, envío y carga inicial con recepciones: falla cerrado.
-        if ($convenio->usa_calibres) {
-            self::fallar(self::MENSAJE_POR_CALIBRE);
-        }
-
         $ids = array_map('intval', $ids);
         if ($ids === []) {
             self::fallar('Elige al menos una recepción.');
@@ -89,6 +81,12 @@ class ReglasLiquidacion
             if ($sinKilos->isNotEmpty()) {
                 self::fallar('Las recepciones '.self::folios($sinKilos).' no tienen kilos y el convenio se paga por kilo.');
             }
+        }
+
+        // Convenio por calibre: la calculadora liquida cada renglón; se cargan aquí, ya con las cabeceras
+        // bloqueadas (editar una recepción bloquea la misma fila, y una ya ligada a una liquidación no se edita).
+        if ($convenio->usa_calibres) {
+            $encontradas->load(['renglones.calibre:id,nombre,orden']);
         }
 
         return $encontradas->sortBy([['fecha', 'asc'], ['id', 'asc']])->values();
