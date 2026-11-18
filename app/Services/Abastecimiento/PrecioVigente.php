@@ -18,7 +18,7 @@ class PrecioVigente
 {
     /**
      * El precio del tipo de carga con la mayor `vigencia_inicio` menor o igual a la fecha.
-     * Con `$calibreId`, solo cuentan los precios de ese calibre (convenios por calibre).
+     * Con `$calibreId`, el especial de ese calibre o, si no tiene, el general (convenios por calibre).
      */
     public function para(Convenio $convenio, int $tipoCargaId, string $fecha, ?int $calibreId = null): ?ConvenioPrecio
     {
@@ -41,22 +41,32 @@ class PrecioVigente
      * precios dados (de un solo convenio), sin tocar la base.
      *
      * Con `$calibreId` nulo solo cuentan los precios sin calibre (convenios
-     * clásicos); con calibre, solo los de ese calibre.
+     * clásicos, o el precio general de uno por calibre). Con calibre (2026-11-18):
+     * el precio ESPECIAL de ese calibre vigente a la fecha y, si no tiene, el
+     * GENERAL (sin calibre), que vale para todos los calibres del convenio. El
+     * especial es un precio fijo propio: un cambio del general no lo mueve.
      *
      * @param  Collection<int, ConvenioPrecio>  $precios
      */
     public static function enColeccion(Collection $precios, int $tipoCargaId, string $fecha, ?int $calibreId = null): ?ConvenioPrecio
     {
-        return self::delTipo($precios, $tipoCargaId, $calibreId)
+        $vigente = fn (?int $calibre) => self::delTipo($precios, $tipoCargaId, $calibre)
             ->filter(fn (ConvenioPrecio $p) => $p->vigencia_inicio->format('Y-m-d') <= $fecha)
             ->last();
+
+        if ($calibreId === null) {
+            return $vigente(null);
+        }
+
+        return $vigente($calibreId) ?? $vigente(null);
     }
 
     /**
      * Versión pura de `principal`: el tipo principal es el primer renglón marcado
      * (o el primero por id) y su precio vigente a la fecha, o su primera vigencia.
-     * El tipo principal es uno por convenio, sin importar el calibre; `$calibreId`
-     * solo filtra las vigencias de ese tipo (nulo = las de los convenios clásicos).
+     * El tipo principal es uno por convenio, sin importar el calibre. Con `$calibreId`
+     * vale el especial del calibre o, sin él, el general (como en `enColeccion`); si
+     * ninguno está vigente aún, la vigencia que empiece primero (el especial en empate).
      *
      * @param  Collection<int, ConvenioPrecio>  $precios
      */
@@ -69,7 +79,18 @@ class PrecioVigente
             return null;
         }
 
-        return self::enColeccion($precios, $tipo, $fecha, $calibreId) ?? self::delTipo($precios, $tipo, $calibreId)->first();
+        $vigente = self::enColeccion($precios, $tipo, $fecha, $calibreId);
+        if ($vigente !== null || $calibreId === null) {
+            return $vigente ?? self::delTipo($precios, $tipo)->first();
+        }
+
+        $especial = self::delTipo($precios, $tipo, $calibreId)->first();
+        $general = self::delTipo($precios, $tipo)->first();
+        if ($especial === null || $general === null) {
+            return $especial ?? $general;
+        }
+
+        return $general->vigencia_inicio->format('Y-m-d') < $especial->vigencia_inicio->format('Y-m-d') ? $general : $especial;
     }
 
     /** @return Collection<int, ConvenioPrecio> */

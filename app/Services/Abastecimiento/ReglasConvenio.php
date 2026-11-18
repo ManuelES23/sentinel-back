@@ -34,9 +34,9 @@ class ReglasConvenio
 
             $calibre = $precio['calibre_id'] ?? null;
             $calibre = ($calibre === null || $calibre === '') ? null : $calibre;
-            if ($usaCalibres && $calibre === null) {
-                $errores["precios.{$i}.calibre_id"] = 'Elige el calibre.';
-            } elseif (! $usaCalibres && $calibre !== null) {
+            // En un convenio por calibre, un precio sin calibre es el GENERAL (vale para todos los
+            // calibres que no tengan un precio especial).
+            if (! $usaCalibres && $calibre !== null) {
                 $errores["precios.{$i}.calibre_id"] = 'Este convenio no es por calibre.';
             }
 
@@ -99,7 +99,8 @@ class ReglasConvenio
     /**
      * Calibres del convenio: al menos uno, todos de los `$permitidos` (activos y de la
      * variedad), sin precios de calibres no elegidos y con precio del tipo de carga
-     * principal en CADA calibre. `$precios` son las filas ya normalizadas.
+     * principal en CADA calibre: el general (sin calibre) o uno especial del calibre.
+     * `$precios` son las filas ya normalizadas.
      *
      * @param  array<int, array<string, mixed>>  $calibres  [['calibre_id', 'volumen_total'], ...]
      * @param  array<int, int|string>  $permitidos
@@ -116,10 +117,16 @@ class ReglasConvenio
         $permitidos = array_map('intval', $permitidos);
         $elegidos = array_map(fn ($c) => (int) ($c['calibre_id'] ?? 0), $calibres);
 
-        // Calibres con precio del tipo principal.
+        // Calibres con precio del tipo principal; un general del tipo principal los cubre a todos.
         $conPrincipal = [];
+        $generalPrincipal = false;
         foreach ($precios as $p) {
-            if (self::marcado($p) && ($p['calibre_id'] ?? null) !== null) {
+            if (! self::marcado($p)) {
+                continue;
+            }
+            if (($p['calibre_id'] ?? null) === null) {
+                $generalPrincipal = true;
+            } else {
                 $conPrincipal[(int) $p['calibre_id']] = true;
             }
         }
@@ -134,8 +141,8 @@ class ReglasConvenio
 
             if (! in_array($id, $permitidos, true)) {
                 $errores["calibres.{$i}.calibre_id"] = 'El calibre no es de la variedad del convenio o está inactivo.';
-            } elseif (! isset($conPrincipal[$id])) {
-                $errores["calibres.{$i}.calibre_id"] = 'Falta el precio del tipo de carga principal para este calibre.';
+            } elseif (! $generalPrincipal && ! isset($conPrincipal[$id])) {
+                $errores["calibres.{$i}.calibre_id"] = 'Falta el precio del tipo de carga principal: captura el precio general o uno especial para este calibre.';
             }
         }
 
