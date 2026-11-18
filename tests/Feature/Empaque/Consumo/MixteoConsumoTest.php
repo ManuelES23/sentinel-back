@@ -417,4 +417,31 @@ class MixteoConsumoTest extends TestCase
         $this->assertNeto(-220, $this->cajaB15);
         $this->assertInvariantes();
     }
+
+    public function test_cola_sin_entradas_en_el_mixto_no_revive_ni_consume_tarima(): void
+    {
+        $a = $this->cola(120);
+        $b = $this->cola(100);
+        $mixto = $this->mixtear([$a->id => 120, $b->id => 50]);
+        $this->assertSoftDeleted($a);
+
+        // Se borra del mixto la entrada que vino de A: devuelve sus 120 cajas; el JSON aún lista a A.
+        $entradaDeA = $mixto->detalles()->where('total_cajas', 120)->sole();
+        $this->deleteJson(self::URL."/{$mixto->id}/detalle/{$entradaDeA->id}")->assertOk();
+        $this->assertNeto(-100, $this->cajaB15);
+        $this->assertInvariantes();
+
+        $this->postJson(self::URL."/{$mixto->id}/revertir-mixteo")->assertOk();
+
+        // A no tiene nada que regresar: sigue borrada y no se lleva una tarima.
+        $this->assertSoftDeleted($a);
+        $this->assertSoftDeleted($mixto);
+        $this->assertEqualsWithDelta(0, $this->cantidadVigente($a, $this->tarima, RecipeItem::CONSUMO_AL_ARMAR), self::TOL);
+        $this->assertSame(100, (int) $b->fresh()->total_cajas);
+        $this->assertNeto(-1, $this->tarima); // solo la de B, el único pallet vivo
+        $this->assertNeto(0, $this->esquineros);
+        $this->assertNeto(-100, $this->cajaB15);
+        $this->assertFalse(ProduccionEmpaque::where('total_cajas', '<=', 0)->has('consumos')->exists());
+        $this->assertInvariantes();
+    }
 }

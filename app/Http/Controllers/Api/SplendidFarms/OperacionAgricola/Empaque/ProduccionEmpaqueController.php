@@ -817,6 +817,11 @@ class ProduccionEmpaqueController extends Controller
                 ->filter(fn ($d) => $this->extractMixSourceColaId($d->observaciones) == $sourceColaId)
                 ->values();
 
+            // Sin entradas en el mixto (p. ej. se borró su entrada): no hay nada que regresar a esa cola.
+            if ($detallesParaEstaCola->isEmpty()) {
+                continue;
+            }
+
             $this->restaurarColaOrigen($cola);
 
             $nextEntrada = (int) ($cola->detalles()->max('numero_entrada') ?? 0) + 1;
@@ -2138,7 +2143,8 @@ class ProduccionEmpaqueController extends Controller
      */
     private function tarimaDeColaRestaurada(ProduccionEmpaque $cola): void
     {
-        if ($cola->congelado()) {
+        // Una cola sin cajas no existe físicamente: no carga con tarima.
+        if ((int) $cola->total_cajas <= 0 || $cola->congelado()) {
             return;
         }
 
