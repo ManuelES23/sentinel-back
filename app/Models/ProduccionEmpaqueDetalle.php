@@ -54,6 +54,11 @@ class ProduccionEmpaqueDetalle extends Model
         return $this->belongsTo(Recipe::class);
     }
 
+    public function consumos()
+    {
+        return $this->hasMany(ProduccionEmpaqueConsumo::class, 'detalle_id');
+    }
+
     public function creador()
     {
         return $this->belongsTo(User::class, 'created_by');

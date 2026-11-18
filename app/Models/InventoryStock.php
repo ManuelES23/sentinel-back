@@ -29,11 +29,13 @@ class InventoryStock extends Model
         'total_cost',
         'last_movement_at',
         'last_movement_id',
+        'negativo_desde',
     ];
 
     protected $casts = [
         'expiry_date' => 'date',
         'last_movement_at' => 'datetime',
+        'negativo_desde' => 'datetime',
         'quantity' => 'decimal:4',
         'reserved_quantity' => 'decimal:4',
         'unit_cost' => 'decimal:4',
@@ -176,7 +178,14 @@ class InventoryStock extends Model
                 'producto' => $c->productId, 'almacen' => $c->entityId, 'lote' => $c->lote, 'cantidad' => $nueva,
             ]);
         }
+        $antes = (float) ($stock->quantity ?? 0);
         $stock->quantity = $nueva;
+        // Fecha del cruce a faltante: se fija al pasar de >= 0 a < 0, se conserva mientras siga negativo y se limpia al regularizar.
+        if ($nueva < 0 && $antes >= 0) {
+            $stock->negativo_desde = now();
+        } elseif ($nueva >= 0) {
+            $stock->negativo_desde = null;
+        }
 
         if ($expiry) {
             $stock->expiry_date = $expiry;
