@@ -139,8 +139,8 @@ class ProgramaSemanalService
         $lunes = $plan->lunes;
         $temporadas = $this->catalogo->temporadasQueTocan($lunes, $this->masDias($lunes, 5));
         $embarques = ProgramaEmbarque::where('programa_id', $programa->id)
-            ->orderBy('cultivo_id')->orderBy('bodega_id')->orderBy('presentacion_id')->orderBy('tipo')->orderBy('dia')
-            ->get(['cultivo_id', 'bodega_id', 'presentacion_id', 'tipo', 'dia', 'cargas']);
+            ->orderBy('cultivo_id')->orderBy('bodega_id')->orderBy('tipo')->orderBy('dia')
+            ->get(['cultivo_id', 'bodega_id', 'tipo', 'dia', 'cargas']);
         $necesidades = $plan->necesidades();
 
         $cultivoIds = array_values(array_unique(array_merge(
@@ -190,7 +190,6 @@ class ProgramaSemanalService
             'embarques' => $embarques->map(fn (ProgramaEmbarque $e) => [
                 'cultivo_id' => $e->cultivo_id,
                 'bodega_id' => $e->bodega_id,
-                'presentacion_id' => $e->presentacion_id,
                 'tipo' => $e->tipo,
                 'dia' => $e->dia,
                 'cargas' => $e->cargas,

@@ -7,9 +7,8 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
- * Embarque planeado por cargas: cuántas cargas (Full o Sencillo) de una presentación
- * salen un día hacia una bodega. Una sola fila por programa · cultivo · bodega ·
- * presentación · tipo · día (presentación nula = capturado antes de pedirla).
+ * Embarque planeado por cargas: cuántas cargas (Full o Sencillo) salen un día
+ * hacia una bodega. Una sola fila por programa · cultivo · bodega · tipo · día.
  */
 class ProgramaEmbarque extends Model
 {
@@ -19,7 +18,6 @@ class ProgramaEmbarque extends Model
         'programa_id',
         'cultivo_id',
         'bodega_id',
-        'presentacion_id',
         'tipo',
         'dia',
         'cargas',
@@ -31,7 +29,6 @@ class ProgramaEmbarque extends Model
         'programa_id' => 'integer',
         'cultivo_id' => 'integer',
         'bodega_id' => 'integer',
-        'presentacion_id' => 'integer',
         'dia' => 'integer',
         'cargas' => 'integer',
     ];
@@ -44,11 +41,6 @@ class ProgramaEmbarque extends Model
     public function bodega(): BelongsTo
     {
         return $this->belongsTo(BodegaDestino::class, 'bodega_id');
-    }
-
-    public function presentacion(): BelongsTo
-    {
-        return $this->belongsTo(Presentacion::class, 'presentacion_id');
     }
 
     public function cultivo(): BelongsTo

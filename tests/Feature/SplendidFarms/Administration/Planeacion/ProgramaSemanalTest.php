@@ -262,8 +262,7 @@ class ProgramaSemanalTest extends TestCase
     public function test_embarques_y_notas_en_el_payload(): void
     {
         $p = ProgramaSemanal::create(['lunes' => '2026-11-23', 'notas' => 'Revisar Vallarta']);
-        $bulk = $this->presentacion('Bulk')->id;
-        $base = ['programa_id' => $p->id, 'cultivo_id' => $this->cultivo->id, 'bodega_id' => $this->bodega('Nogales')->id, 'presentacion_id' => $bulk];
+        $base = ['programa_id' => $p->id, 'cultivo_id' => $this->cultivo->id, 'bodega_id' => $this->bodega('Nogales')->id];
         ProgramaEmbarque::create($base + ['tipo' => 'sencillo', 'dia' => 2, 'cargas' => 1]);
         ProgramaEmbarque::create($base + ['tipo' => 'full', 'dia' => 0, 'cargas' => 3]);
 
@@ -271,8 +270,8 @@ class ProgramaSemanalTest extends TestCase
 
         $this->assertSame('Revisar Vallarta', $d['programa']['notas']);
         $this->assertSame([
-            ['cultivo_id' => $this->cultivo->id, 'bodega_id' => $this->bodega('Nogales')->id, 'presentacion_id' => $bulk, 'tipo' => 'full', 'dia' => 0, 'cargas' => 3],
-            ['cultivo_id' => $this->cultivo->id, 'bodega_id' => $this->bodega('Nogales')->id, 'presentacion_id' => $bulk, 'tipo' => 'sencillo', 'dia' => 2, 'cargas' => 1],
+            ['cultivo_id' => $this->cultivo->id, 'bodega_id' => $this->bodega('Nogales')->id, 'tipo' => 'full', 'dia' => 0, 'cargas' => 3],
+            ['cultivo_id' => $this->cultivo->id, 'bodega_id' => $this->bodega('Nogales')->id, 'tipo' => 'sencillo', 'dia' => 2, 'cargas' => 1],
         ], $d['embarques']);
     }
 
@@ -291,6 +290,18 @@ class ProgramaSemanalTest extends TestCase
         }
         $status = $this->postJson(self::URL.'/'.$p->id.'/cortes/repartir', [])->status();
         $this->assertContains($status, [404, 405], "cortes/repartir respondió {$status}");
+    }
+
+    public function test_el_catalogo_de_presentaciones_trae_las_cajas_de_full_y_sencillo(): void
+    {
+        $this->presentacion('Bulk')->update(['cajas_full' => 2080, 'cajas_sencillo' => 1040]);
+
+        $presentaciones = collect($this->semana('2026-11-23')->assertOk()->json('data.catalogos.presentaciones'));
+
+        $bulk = $presentaciones->firstWhere('id', $this->presentacion('Bulk')->id);
+        $this->assertSame(2080, $bulk['cajas_full']);
+        $this->assertSame(1040, $bulk['cajas_sencillo']);
+        $this->assertNull($presentaciones->firstWhere('id', $this->presentacion('Tray')->id)['cajas_full']);
     }
 
     public function test_semana_sin_temporadas_ni_renglones(): void
