@@ -11,7 +11,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
-/** Pago o anticipo a un productor; se aplica (total o parcialmente) a liquidaciones aprobadas. */
+/** Movimiento de la cuenta de un convenio: pago por recepción, abono, adelanto, saldo inicial o pago de la liquidación final. */
 class Abono extends Model
 {
     use HasFactory, SoftDeletes, Loggable;
@@ -39,7 +39,6 @@ class Abono extends Model
         'cancelado_motivo',
         'cancelado_by',
         'cancelado_at',
-        'aplicaciones_canceladas',
         'created_by',
     ];
 
@@ -57,7 +56,6 @@ class Abono extends Model
         'monto' => 'decimal:2',
         'cancelado_by' => 'integer',
         'cancelado_at' => 'datetime',
-        'aplicaciones_canceladas' => 'array',
         'created_by' => 'integer',
     ];
 
@@ -85,11 +83,6 @@ class Abono extends Model
     public function recepciones(): HasMany
     {
         return $this->hasMany(AbonoRecepcion::class, 'abono_id');
-    }
-
-    public function aplicaciones(): HasMany
-    {
-        return $this->hasMany(AbonoAplicacion::class, 'abono_id');
     }
 
     public function creador(): BelongsTo

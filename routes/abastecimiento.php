@@ -1,6 +1,5 @@
 <?php
 
-use App\Http\Controllers\Api\Abastecimiento\AbonoController;
 use App\Http\Controllers\Api\Abastecimiento\ConvenioController;
 use App\Http\Controllers\Api\Abastecimiento\CultivoController;
 use App\Http\Controllers\Api\Abastecimiento\LiquidacionController;
@@ -74,26 +73,6 @@ Route::prefix('abastecimiento')->name('abastecimiento.')->group(function () {
     Route::put('recepciones/{id}', [RecepcionController::class, 'update'])->whereNumber('id')->name('recepciones.update');
     Route::delete('recepciones/{id}', [RecepcionController::class, 'destroy'])->whereNumber('id')->name('recepciones.destroy');
 
-    // Liquidaciones (submódulo liquidaciones). `recepciones-disponibles` y `previa` van antes de las rutas con {id}.
-    Route::get('liquidaciones/recepciones-disponibles', [LiquidacionController::class, 'recepcionesDisponibles'])->name('liquidaciones.recepciones-disponibles');
-    Route::post('liquidaciones/previa', [LiquidacionController::class, 'previa'])->name('liquidaciones.previa');
-    // Carga inicial (permiso `liquidaciones.carga-inicial`): nace aprobada, sin cadena. Fija, antes de las rutas con {id}.
-    Route::post('liquidaciones/carga-inicial', [LiquidacionController::class, 'cargaInicial'])->name('liquidaciones.carga-inicial');
-    Route::get('liquidaciones', [LiquidacionController::class, 'index'])->name('liquidaciones.index');
+    // Liquidaciones (submódulo liquidaciones). Las rutas de la cuenta y de «Liquidar total» llegan en tasks posteriores.
     Route::get('liquidaciones/{id}', [LiquidacionController::class, 'show'])->whereNumber('id')->name('liquidaciones.show');
-    Route::post('liquidaciones', [LiquidacionController::class, 'store'])->name('liquidaciones.store');
-    Route::put('liquidaciones/{id}', [LiquidacionController::class, 'update'])->whereNumber('id')->name('liquidaciones.update');
-    Route::delete('liquidaciones/{id}', [LiquidacionController::class, 'destroy'])->whereNumber('id')->name('liquidaciones.destroy');
-    Route::post('liquidaciones/{id}/enviar', [LiquidacionController::class, 'enviar'])->whereNumber('id')->name('liquidaciones.enviar');
-    Route::post('liquidaciones/{id}/aprobar', [LiquidacionController::class, 'aprobar'])->whereNumber('id')->name('liquidaciones.aprobar');
-    Route::post('liquidaciones/{id}/rechazar', [LiquidacionController::class, 'rechazar'])->whereNumber('id')->name('liquidaciones.rechazar');
-    Route::post('liquidaciones/{id}/cancelar', [LiquidacionController::class, 'cancelar'])->whereNumber('id')->name('liquidaciones.cancelar');
-
-    // Abonos y anticipos (submódulo abonos). Los segmentos fijos van antes de las rutas con {id}.
-    Route::get('abonos/productores', [AbonoController::class, 'productores'])->name('abonos.productores');
-    Route::get('abonos/productores/{id}/estado-cuenta', [AbonoController::class, 'estadoCuenta'])->whereNumber('id')->name('abonos.estado-cuenta');
-    Route::get('abonos/liquidaciones-pendientes', [AbonoController::class, 'liquidacionesPendientes'])->name('abonos.liquidaciones-pendientes');
-    Route::get('abonos', [AbonoController::class, 'index'])->name('abonos.index');
-    Route::post('abonos', [AbonoController::class, 'store'])->name('abonos.store');
-    Route::post('abonos/{id}/cancelar', [AbonoController::class, 'cancelar'])->whereNumber('id')->name('abonos.cancelar');
 });

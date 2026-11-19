@@ -124,13 +124,12 @@ class ConvenioController extends AbastecimientoController
             'indicadores' => IndicadoresConvenio::de($convenio) + ['por_pagar' => $verDinero ? SaldoProductor::deConvenio($convenio)['por_pagar'] : null],
             'liquidaciones' => ! $verDinero ? null : Liquidacion::where('convenio_id', $convenio->id)
                 ->orderByDesc('id')
-                ->get(['id', 'folio', 'status', 'periodo_inicio', 'periodo_fin', 'monto_final', 'moneda'])
+                ->get(['id', 'folio', 'status', 'liquidada_at', 'monto_final', 'moneda'])
                 ->map(fn (Liquidacion $l) => [
                     'id' => $l->id,
                     'folio' => $l->folio,
                     'status' => $l->status,
-                    'periodo_inicio' => $l->periodo_inicio->format('Y-m-d'),
-                    'periodo_fin' => $l->periodo_fin->format('Y-m-d'),
+                    'liquidada_at' => $l->liquidada_at?->toIso8601String(),
                     'monto_final' => round((float) $l->monto_final, 2),
                     'moneda' => $l->moneda,
                 ])->values()->all(),

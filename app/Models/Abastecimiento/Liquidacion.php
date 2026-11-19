@@ -11,13 +11,12 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
-/** Liquidación a un productor por las recepciones de un convenio en un periodo. */
+/** Liquidación final de un convenio: cierra la cuenta del productor (una sola vigente por convenio). */
 class Liquidacion extends Model
 {
     use HasFactory, SoftDeletes, Loggable;
 
-    public const STATUSES = ['borrador', 'en_revision', 'aprobada', 'pagada', 'cancelada'];
-    public const ORIGENES = ['normal', 'carga_inicial'];
+    public const STATUSES = ['liquidada', 'cancelada'];
 
     protected $table = 'abs_liquidaciones';
 
@@ -62,7 +61,7 @@ class Liquidacion extends Model
     ];
 
     protected $attributes = [
-        'status' => 'borrador',
+        'status' => 'liquidada',
         'origen' => 'normal',
         'ronda' => 0,
     ];
@@ -99,35 +98,6 @@ class Liquidacion extends Model
         'liquidada_by' => 'integer',
     ];
 
-    /**
-     * Agrega al usuario (sin repetir) a quienes crearon, editaron o enviaron la liquidación (separación de
-     * funciones: ninguno de ellos la aprueba ni la rechaza). No guarda; un rechazo no la vacía.
-     */
-    public function registrarIntervencion(?int $usuarioId): void
-    {
-        if ($usuarioId === null) {
-            return;
-        }
-        $ids = array_map('intval', $this->intervinieron ?? []);
-        if (! in_array($usuarioId, $ids, true)) {
-            $ids[] = $usuarioId;
-        }
-        $this->intervinieron = $ids;
-    }
-
-    /** @return array<int, int> ids de quienes crearon, editaron o enviaron (incluye `created_by` y `enviada_by`) */
-    public function idsQueIntervinieron(): array
-    {
-        $ids = array_map('intval', $this->intervinieron ?? []);
-        foreach ([$this->created_by, $this->enviada_by] as $id) {
-            if ($id !== null) {
-                $ids[] = (int) $id;
-            }
-        }
-
-        return array_values(array_unique($ids));
-    }
-
     public function scopeDeEmpresa(Builder $q, int $empresaId): Builder
     {
         return $q->where($this->getTable().'.enterprise_id', $empresaId);
@@ -148,20 +118,10 @@ class Liquidacion extends Model
         return $this->hasMany(LiquidacionDetalle::class, 'liquidacion_id');
     }
 
-    public function aprobaciones(): HasMany
-    {
-        return $this->hasMany(LiquidacionAprobacion::class, 'liquidacion_id');
-    }
-
     /** Recepciones ligadas por `abs_recepciones.liquidacion_id` (desde que es borrador). */
     public function recepciones(): HasMany
     {
         return $this->hasMany(Recepcion::class, 'liquidacion_id');
-    }
-
-    public function aplicaciones(): HasMany
-    {
-        return $this->hasMany(AbonoAplicacion::class, 'liquidacion_id');
     }
 
     public function creador(): BelongsTo

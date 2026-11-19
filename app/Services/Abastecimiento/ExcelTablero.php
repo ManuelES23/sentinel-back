@@ -51,7 +51,7 @@ class ExcelTablero
     private const UNIDADES = ['caja' => 'Cajas', 'kg' => 'Kg'];
 
     private const AVISOS = [
-        'atrasado' => 'Atrasado', 'inicia' => 'Inicia la semana siguiente', 'liquidaciones_en_revision' => 'Liquidaciones en revisión',
+        'atrasado' => 'Atrasado', 'inicia' => 'Inicia la semana siguiente',
     ];
 
     /**

@@ -291,9 +291,9 @@ trait CreatesAbastecimientoFixtures
     }
 
     /**
-     * Liquidación en borrador del convenio, creada directo (sin pasar por los servicios):
-     * mismo periodo, moneda y productor que el convenio, importes en cero. `$over` pisa
-     * cualquier columna; el folio sale de GeneradorFolio ('LQ') salvo que se indique.
+     * Liquidación final (`liquidada`, sin periodo) del convenio, creada directo (sin pasar por los
+     * servicios): misma moneda y productor que el convenio, importes en cero. `$over` pisa cualquier
+     * columna; el folio sale de GeneradorFolio ('LQ') salvo que se indique.
      */
     protected function crearLiquidacion(Convenio $convenio, array $over = []): Liquidacion
     {
@@ -305,8 +305,8 @@ trait CreatesAbastecimientoFixtures
             'convenio_id' => $convenio->id,
             'productor_id' => $convenio->productor_id,
             'moneda' => $convenio->moneda,
-            'periodo_inicio' => $convenio->fecha_inicio->format('Y-m-d'),
-            'periodo_fin' => $convenio->fecha_fin->format('Y-m-d'),
+            'status' => 'liquidada',
+            'liquidada_at' => now(),
         ], $over)));
     }
 
@@ -346,17 +346,24 @@ trait CreatesAbastecimientoFixtures
     }
 
     /**
-     * Abono aplicado al productor, creado directo (sin aplicaciones). Por omisión: 100 MXN
-     * por transferencia el 2026-06-10; el folio sale de GeneradorFolio ('AB') salvo que se indique.
+     * Abono (tipo `abono`) a la cuenta de un convenio del productor, creado directo. El convenio sale de
+     * `$over['convenio_id']` o, si no se indica, es el primero del productor. Por omisión: 100 MXN por
+     * transferencia el 2026-06-10; el folio sale de GeneradorFolio ('AB') salvo que se indique.
      */
     protected function crearAbono(Productor $productor, array $over = []): Abono
     {
         $empresa = Enterprise::findOrFail($productor->enterprise_id);
+        $convenioId = $over['convenio_id'] ?? Convenio::where('productor_id', $productor->id)->orderBy('id')->value('id');
+        if ($convenioId === null) {
+            throw new \InvalidArgumentException('crearAbono: el productor no tiene convenio; indica convenio_id.');
+        }
 
         return DB::transaction(fn () => Abono::create(array_merge([
             'enterprise_id' => $empresa->id,
             'folio' => $over['folio'] ?? app(GeneradorFolio::class)->siguiente($empresa, 'AB'),
             'productor_id' => $productor->id,
+            'convenio_id' => $convenioId,
+            'tipo' => 'abono',
             'fecha' => '2026-06-10',
             'monto' => 100,
             'moneda' => 'MXN',

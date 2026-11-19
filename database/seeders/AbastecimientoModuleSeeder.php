@@ -32,7 +32,10 @@ class AbastecimientoModuleSeeder extends Seeder
 {
     public const EMPRESA = 'splendidbyporvenir';
 
-    /** Submódulos en orden de menú. El plan 2 agregó `liquidaciones` y `abonos`; el plan 3, `importar` y `carga-inicial`. */
+    /**
+     * Submódulos en orden de menú. `liquidaciones` es la cuenta por convenio (pagos, abonos, adelantos, saldo inicial y
+     * liquidación final); el submódulo `abonos` y los permisos `aprobar` y `edit` de liquidaciones se retiran en `retirarFlujoAnterior`.
+     */
     public const SUBMODULOS = [
         'tablero' => ['nombre' => 'Tablero', 'icono' => 'LayoutDashboard', 'permisos' => ['view']],
         'convenios' => ['nombre' => 'Convenios', 'icono' => 'FileSignature', 'permisos' => ['view', 'create', 'edit', 'delete']],
@@ -41,8 +44,7 @@ class AbastecimientoModuleSeeder extends Seeder
         'temporadas' => ['nombre' => 'Temporadas', 'icono' => 'CalendarRange', 'permisos' => ['view', 'create', 'edit', 'delete']],
         'variedades' => ['nombre' => 'Cultivos y variedades', 'icono' => 'Sprout', 'permisos' => ['view', 'create', 'edit', 'delete']],
         'tipos-carga' => ['nombre' => 'Tipos de carga', 'icono' => 'Package', 'permisos' => ['view', 'create', 'edit', 'delete']],
-        'liquidaciones' => ['nombre' => 'Liquidaciones', 'icono' => 'Receipt', 'permisos' => ['view', 'create', 'edit', 'delete', 'aprobar', 'carga-inicial']],
-        'abonos' => ['nombre' => 'Abonos', 'icono' => 'Wallet', 'permisos' => ['view', 'create', 'edit', 'delete', 'cancelar']],
+        'liquidaciones' => ['nombre' => 'Liquidaciones', 'icono' => 'Receipt', 'permisos' => ['view', 'create', 'cancelar', 'liquidar', 'delete', 'carga-inicial']],
     ];
 
     private const PERMISOS = [
@@ -50,10 +52,10 @@ class AbastecimientoModuleSeeder extends Seeder
         'create' => ['name' => 'Crear', 'description' => 'Crear nuevos registros', 'order' => 2],
         'edit' => ['name' => 'Editar', 'description' => 'Editar registros existentes', 'order' => 3],
         'delete' => ['name' => 'Eliminar', 'description' => 'Eliminar registros', 'order' => 4],
-        'aprobar' => ['name' => 'Aprobar', 'description' => 'Aprobar liquidaciones', 'order' => 5],
-        'cancelar' => ['name' => 'Cancelar', 'description' => 'Cancelar abonos', 'order' => 5],
+        'liquidar' => ['name' => 'Liquidar', 'description' => 'Liquidar el convenio completo', 'order' => 5],
+        'cancelar' => ['name' => 'Cancelar', 'description' => 'Cancelar pagos', 'order' => 5],
         'importar' => ['name' => 'Importar', 'description' => 'Importar recepciones desde Excel', 'order' => 5],
-        'carga-inicial' => ['name' => 'Carga inicial', 'description' => 'Registrar liquidaciones de carga inicial', 'order' => 5],
+        'carga-inicial' => ['name' => 'Carga inicial', 'description' => 'Registrar el saldo inicial de un convenio', 'order' => 5],
     ];
 
     private const CATALOGO = [
@@ -81,7 +83,7 @@ class AbastecimientoModuleSeeder extends Seeder
         [$app, $modulo, $submodulos] = $this->estructura($empresa);
         $this->accesoUsuariosBase($app, $modulo, $submodulos);
         $this->catalogoInicial($empresa);
-        $this->procesoAprobacion();
+        $this->retirarFlujoAnterior($modulo);
 
         $this->command?->info("  ✓ {$slug}/administration/abastecimiento (".count($submodulos).' submódulos)');
     }
@@ -116,7 +118,8 @@ class AbastecimientoModuleSeeder extends Seeder
             );
             foreach ($def['permisos'] as $permiso) {
                 $p = self::PERMISOS[$permiso];
-                SubmodulePermissionType::firstOrCreate(
+                // updateOrCreate: las descripciones de los permisos que se conservan (p. ej. `carga-inicial`) cambian de sentido.
+                SubmodulePermissionType::updateOrCreate(
                     ['submodule_id' => $sub->id, 'slug' => $permiso],
                     ['name' => $p['name'], 'description' => $p['description'], 'order' => $p['order']]
                 );
@@ -158,20 +161,30 @@ class AbastecimientoModuleSeeder extends Seeder
         }
     }
 
-    /** Proceso de aprobación de las liquidaciones (global, como los demás); lo ya existente no se toca ni se reactiva. */
-    private function procesoAprobacion(): void
+    /**
+     * Retira lo del flujo anterior (liquidaciones por periodo con cadena de aprobación y abonos aplicados):
+     * - los tipos de permiso `aprobar` y `edit` de `liquidaciones` (las asignaciones caen por cascade);
+     * - todos los tipos de permiso del submódulo `abonos`, que queda inactivo;
+     * - el proceso de aprobación `supply_settlements`, desactivado (no se borra: conserva su historial).
+     * Idempotente; no crea nada.
+     */
+    public function retirarFlujoAnterior(Module $modulo): void
     {
-        ApprovalProcess::firstOrCreate(
-            ['code' => ApprovalProcess::SUPPLY_SETTLEMENTS],
-            [
-                'name' => 'Liquidaciones de abastecimiento',
-                'description' => 'Aprobación de liquidaciones de abastecimiento antes de pagarse',
-                'module' => self::EMPRESA.'/abastecimiento',
-                'entity_type' => 'App\Models\Abastecimiento\Liquidacion',
-                'requires_approval' => true,
-                'is_active' => true,
-            ]
-        );
+        $liquidaciones = Submodule::where('module_id', $modulo->id)->where('slug', 'liquidaciones')->first();
+        if ($liquidaciones) {
+            SubmodulePermissionType::where('submodule_id', $liquidaciones->id)
+                ->whereIn('slug', ['aprobar', 'edit'])
+                ->get()
+                ->each->delete();
+        }
+
+        $abonos = Submodule::where('module_id', $modulo->id)->where('slug', 'abonos')->first();
+        if ($abonos) {
+            SubmodulePermissionType::where('submodule_id', $abonos->id)->get()->each->delete();
+            $abonos->update(['is_active' => false]);
+        }
+
+        ApprovalProcess::where('code', ApprovalProcess::SUPPLY_SETTLEMENTS)->update(['is_active' => false]);
     }
 
     /** Cultivos, variedades y tipo de carga iniciales; lo ya existente (incluso desactivado) no se toca. */

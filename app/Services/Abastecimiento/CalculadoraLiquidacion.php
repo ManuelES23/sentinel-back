@@ -21,7 +21,7 @@ use Illuminate\Validation\ValidationException;
  * con `calibre_id` y el precio de ese calibre; la rezaga sigue siendo UNA sola por
  * liquidación (Σ rezaga ÷ Σ kilos de las cabeceras, que son la suma de sus renglones)
  * y el descuento se reparte en proporción al subtotal de cada renglón. Carga antes
- * `renglones.calibre` de las recepciones (lo hace `ReglasLiquidacion::validarSeleccion`).
+ * `renglones.calibre` de las recepciones (quien llama a la calculadora).
  */
 class CalculadoraLiquidacion
 {
