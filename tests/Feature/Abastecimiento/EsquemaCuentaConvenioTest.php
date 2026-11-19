@@ -7,6 +7,7 @@ use App\Models\Abastecimiento\AbonoRecepcion;
 use App\Models\Abastecimiento\Productor;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use RuntimeException;
 use Tests\Concerns\CreatesAbastecimientoFixtures;
@@ -127,5 +128,100 @@ class EsquemaCuentaConvenioTest extends TestCase
         // Y vuelve a subir limpio.
         $this->migracion()->up();
         $this->assertTrue(Schema::hasTable('abs_abono_recepciones'));
+    }
+
+    /** Deja el esquema como antes de la migración (sin datos), para probar `up()` desde cero. */
+    private function revertirLimpio(): void
+    {
+        $this->migracion()->down();
+        $this->assertFalse(Schema::hasColumn('abs_abonos', 'tipo'));
+    }
+
+    public function test_up_se_detiene_con_un_abono_del_flujo_viejo_sin_aplicaciones(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        $this->revertirLimpio();
+
+        // Un anticipo del plan 2 sin aplicaciones: sigue «aplicado» y, con `tipo` por omisión `abono`, contaría en `pagado`.
+        DB::table('abs_abonos')->insert([
+            'enterprise_id' => $this->sbp->id, 'folio' => 'AB-0001', 'productor_id' => $convenio->productor_id,
+            'convenio_id' => $convenio->id, 'fecha' => '2026-06-10', 'monto' => 500, 'moneda' => 'MXN',
+            'status' => 'aplicado', 'created_at' => now(), 'updated_at' => now(),
+        ]);
+
+        try {
+            $this->migracion()->up();
+            $this->fail('Debió negarse a migrar con abonos del flujo anterior.');
+        } catch (RuntimeException $e) {
+            $this->assertSame('Hay abonos del flujo anterior: límpialos antes de migrar.', $e->getMessage());
+        }
+        $this->assertFalse(Schema::hasColumn('abs_abonos', 'tipo'));
+
+        // Un abono ya borrado no estorba.
+        DB::table('abs_abonos')->update(['deleted_at' => now()]);
+        $this->migracion()->up();
+        $this->assertTrue(Schema::hasColumn('abs_abonos', 'tipo'));
+    }
+
+    public function test_up_con_las_columnas_ya_puestas_no_revisa_los_abonos(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        $this->crearPago($convenio, ['tipo' => 'recepcion']);
+
+        // Ya migrada: volver a correr `up()` con abonos nuevos es inocuo.
+        $this->migracion()->up();
+        $this->assertSame(1, DB::table('abs_abonos')->count());
+    }
+
+    public function test_down_se_detiene_con_cualquier_abono_vivo(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        $abono = $this->crearAbono(Productor::findOrFail($convenio->productor_id), ['tipo' => 'abono', 'convenio_id' => $convenio->id]);
+
+        try {
+            $this->migracion()->down();
+            $this->fail('Debió negarse a revertir con un abono.');
+        } catch (RuntimeException $e) {
+            $this->assertSame('No se puede revertir: ya hay cuentas por convenio con datos.', $e->getMessage());
+        }
+        $this->assertTrue(Schema::hasColumn('abs_abonos', 'tipo'));
+
+        // Borrado (softDelete) ya no estorba.
+        $abono->delete();
+        $this->migracion()->down();
+        $this->assertFalse(Schema::hasColumn('abs_abonos', 'tipo'));
+    }
+
+    public function test_down_se_detiene_con_una_liquidacion_cancelada_de_periodos_nulos(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        $liq = $this->crearLiquidacion($convenio, ['status' => 'cancelada', 'periodo_inicio' => null, 'periodo_fin' => null]);
+
+        try {
+            $this->migracion()->down();
+            $this->fail('Debió negarse a revertir con una liquidación sin periodos.');
+        } catch (RuntimeException $e) {
+            $this->assertSame('No se puede revertir: ya hay cuentas por convenio con datos.', $e->getMessage());
+        }
+        // Sin media reversión: el esquema sigue completo.
+        $this->assertTrue(Schema::hasTable('abs_abono_recepciones'));
+        $this->assertTrue(Schema::hasColumns('abs_abonos', ['tipo', 'liquidacion_id']));
+        $this->assertTrue(Schema::hasColumns('abs_liquidaciones', ['saldo_inicial', 'liquidada_at']));
+
+        $liq->forceDelete();
+        $this->migracion()->down();
+        $this->assertFalse(Schema::hasColumn('abs_liquidaciones', 'liquidada_at'));
+    }
+
+    public function test_sube_baja_y_sube_limpio(): void
+    {
+        $this->migracion()->down();
+        $this->migracion()->up();
+        $this->migracion()->down();
+        $this->migracion()->up();
+
+        $this->assertTrue(Schema::hasTable('abs_abono_recepciones'));
+        $this->assertTrue(Schema::hasColumns('abs_abonos', ['tipo', 'liquidacion_id']));
+        $this->assertTrue(Schema::hasColumns('abs_liquidaciones', ['saldo_inicial', 'liquidada_at', 'liquidada_by']));
     }
 }

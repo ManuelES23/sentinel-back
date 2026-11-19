@@ -459,6 +459,14 @@ class ConvenioController extends AbastecimientoController
             $errores['usa_calibres'] = $sinCambio;
         }
 
+        // Pactar rezaga (de nada a algo) deja `no_pagable` («Falta la rezaga») las recepciones ya pagadas sin ese dato,
+        // y un pago vigente impide editarlas: el convenio quedaría atorado hasta cancelar sus pagos. Bajar la rezaga o
+        // cambiarla entre valores positivos no cambia esa condición, así que sí se permite.
+        if ((float) $convenio->porcentaje_rezaga <= 0 && (float) $datos['porcentaje_rezaga'] > 0
+            && $convenio->pagos()->where('tipo', 'recepcion')->where('status', '!=', 'cancelado')->exists()) {
+            $errores['porcentaje_rezaga'] = 'No se puede pactar rezaga: hay recepciones pagadas sin dato de rezaga; cancela sus pagos primero.';
+        }
+
         // Fechas y precios solo se cuidan contra recepciones.
         if (! $conRecepciones) {
             return $errores;

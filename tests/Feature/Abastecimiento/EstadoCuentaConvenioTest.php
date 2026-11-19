@@ -230,6 +230,54 @@ class EstadoCuentaConvenioTest extends TestCase
         $this->assertEqualsWithDelta($this->porPagar($convenio), $e['saldo_final'], 0.001);
     }
 
+    public function test_liquidacion_cancelada_con_su_pago_cancelado_no_agrega_ajuste_ni_mueve_el_saldo(): void
+    {
+        [$convenio, [$r1]] = $this->convenioCon(2);
+        $this->crearPago($convenio, ['fecha' => '2026-06-05'], [$r1->id => 300]);
+        $liq = $this->crearLiquidacion($convenio, [
+            'status' => 'cancelada', 'monto_final' => 1500, 'periodo_inicio' => null, 'periodo_fin' => null,
+            'cancelada_at' => '2026-06-21 12:00:00', 'cancelada_motivo' => 'Error',
+        ]);
+        $this->crearPago($convenio, [
+            'fecha' => '2026-06-20', 'tipo' => 'liquidacion', 'monto' => 1200, 'liquidacion_id' => $liq->id,
+            'status' => 'cancelado', 'cancelado_motivo' => 'Se canceló la liquidación',
+        ]);
+
+        $e = $this->estado($convenio);
+
+        $this->assertSame('abierta', $e['estado']);
+        $this->assertNull(collect($e['movimientos'])->firstWhere('tipo', 'ajuste_liquidacion'));
+        $cancelado = collect($e['movimientos'])->firstWhere('concepto', 'Pago de liquidación');
+        $this->assertNotNull($cancelado);
+        $this->assertTrue($cancelado['cancelado']);
+        $this->assertEqualsWithDelta(1200, $cancelado['abono'], 0.001);
+        // El pago cancelado no mueve el saldo: 2,000 de recepciones menos 300 pagados.
+        $this->assertEquals([1000.0, 2000.0, 1700.0, 1700.0], $this->saldos($e));
+        $this->assertEqualsWithDelta(1700, $e['saldo_final'], 0.001);
+        $this->assertEqualsWithDelta($this->porPagar($convenio), $e['saldo_final'], 0.001);
+        $this->assertEqualsWithDelta($e['totales']['por_pagar'], $e['saldo_final'], 0.001);
+    }
+
+    public function test_pago_de_liquidacion_vigente_en_cuenta_liquidada_cuadra_con_por_pagar(): void
+    {
+        // Liquidada en 1,900 (rezaga de 100 sobre 2,000) y pagada con un pago de liquidación de 1,900.
+        [$convenio] = $this->convenioCon(2);
+        $liq = $this->crearLiquidacion($convenio, ['monto_final' => 1900, 'liquidada_at' => '2026-06-20 12:00:00']);
+        $this->crearPago($convenio, ['fecha' => '2026-06-20', 'tipo' => 'liquidacion', 'monto' => 1900, 'liquidacion_id' => $liq->id]);
+
+        $e = $this->estado($convenio);
+
+        $this->assertSame('liquidada', $e['estado']);
+        $pago = collect($e['movimientos'])->firstWhere('concepto', 'Pago de liquidación');
+        $this->assertNotNull($pago);
+        $this->assertFalse($pago['cancelado']);
+        $this->assertEqualsWithDelta(1900, $pago['abono'], 0.001);
+        $this->assertNotNull(collect($e['movimientos'])->firstWhere('tipo', 'ajuste_liquidacion'));
+        $this->assertEqualsWithDelta(0, $e['saldo_final'], 0.001);
+        $this->assertEqualsWithDelta($this->porPagar($convenio), $e['saldo_final'], 0.001);
+        $this->assertEqualsWithDelta($e['totales']['por_pagar'], $e['saldo_final'], 0.001);
+        $this->assertEqualsWithDelta(end($e['movimientos'])['saldo'], $e['saldo_final'], 0.001);
+    }
     public function test_orden_cargos_antes_que_abonos_a_igual_fecha(): void
     {
         [$convenio] = $this->convenioCon(1);

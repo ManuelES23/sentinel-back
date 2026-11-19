@@ -405,8 +405,12 @@ class OrdenBloqueoDineroTest extends TestCase
         // se comprueba en el código de la importación (un bloqueo sobre `abs_liquidaciones` pone bloqueos de hueco que
         // estorban a liquidar otros convenios y cierra un ciclo con liquidar; ver el comentario del importador).
         $fuente = file_get_contents((new \ReflectionClass(\App\Services\Abastecimiento\ImportadorRecepciones::class))->getFileName());
-        $this->assertSame(1, preg_match('/Liquidacion::whereIn\([^;]*;/s', $fuente, $m), 'No se encontró la lectura de liquidaciones.');
-        $this->assertStringNotContainsString('Lock', $m[0], 'La lectura de liquidaciones de la importación no debe bloquear.');
+        // Sin los comentarios (que mencionan el bloqueo a propósito); cada sentencia que toca `Liquidacion::` va hasta su `;`.
+        $codigo = preg_replace('~^\s*//.*$~m', '', $fuente);
+        $this->assertGreaterThan(0, preg_match_all('/Liquidacion::[^;]*;/s', $codigo, $m), 'No se encontró la lectura de liquidaciones.');
+        foreach ($m[0] as $sentencia) {
+            $this->assertDoesNotMatchRegularExpression('/lock|for\s*update|for\s*share/i', $sentencia, 'La lectura de liquidaciones de la importación no debe bloquear.');
+        }
     }
     public function test_bloquear_pago_devuelve_convenio_y_pago_y_da_404_fuera_de_la_empresa(): void
     {

@@ -159,6 +159,55 @@ class ConvenioEdicionConRecepcionesTest extends TestCase
         ]))->assertOk();
     }
 
+    private const SIN_REZAGA = 'No se puede pactar rezaga: hay recepciones pagadas sin dato de rezaga; cancela sus pagos primero.';
+
+    /** Convenio activo con una recepción y, si se pide, un pago por esa recepción (tipo `recepcion`). */
+    private function convenioConRezaga(float $rezaga, bool $conPagoDeRecepcion): array
+    {
+        $c = $this->crearConvenio($this->sbp, ['status' => 'activo', 'porcentaje_rezaga' => $rezaga]);
+        $r = $this->crearRecepcion($c, ['fecha' => '2026-06-10']);
+        if ($conPagoDeRecepcion) {
+            $this->crearPago($c, [], [$r->id => 500]);
+        }
+
+        return [$c, $r];
+    }
+
+    public function test_pactar_rezaga_con_recepciones_pagadas_sin_rezaga_422(): void
+    {
+        [$c] = $this->convenioConRezaga(0, true);
+
+        $this->putJson($this->url($c), $this->cuerpoDe($c, ['porcentaje_rezaga' => 5]))
+            ->assertStatus(422)->assertJsonPath('errors.porcentaje_rezaga.0', self::SIN_REZAGA);
+        $this->assertEquals(0, (float) $c->fresh()->porcentaje_rezaga);
+    }
+
+    public function test_pactar_rezaga_sin_pagos_de_recepcion_se_permite(): void
+    {
+        // Sin pagos.
+        [$c] = $this->convenioConRezaga(0, false);
+        $this->putJson($this->url($c), $this->cuerpoDe($c, ['porcentaje_rezaga' => 5]))->assertOk();
+        $this->assertEquals(5, (float) $c->fresh()->porcentaje_rezaga);
+
+        // Solo un abono y un adelanto (no ligados a recepciones) y un pago de recepción ya cancelado.
+        [$c, $r] = $this->convenioConRezaga(0, false);
+        $this->crearPago($c, ['tipo' => 'abono', 'monto' => 100]);
+        $this->crearPago($c, ['tipo' => 'adelanto', 'monto' => 200]);
+        $this->crearPago($c, ['status' => 'cancelado', 'cancelado_motivo' => 'Error'], [$r->id => 300]);
+        $this->putJson($this->url($c), $this->cuerpoDe($c, ['porcentaje_rezaga' => 5]))->assertOk();
+        $this->assertEquals(5, (float) $c->fresh()->porcentaje_rezaga);
+    }
+
+    public function test_cambiar_una_rezaga_ya_pactada_con_pagos_se_permite(): void
+    {
+        [$c] = $this->convenioConRezaga(5, true);
+
+        $this->putJson($this->url($c), $this->cuerpoDe($c, ['porcentaje_rezaga' => 8]))->assertOk();
+        $this->assertEquals(8, (float) $c->fresh()->porcentaje_rezaga);
+
+        $this->putJson($this->url($c), $this->cuerpoDe($c, ['porcentaje_rezaga' => 0]))->assertOk();
+        $this->assertEquals(0, (float) $c->fresh()->porcentaje_rezaga);
+    }
     public function test_agregar_tipos_de_carga_y_vigencias_nuevas_con_recepciones(): void
     {
         $c = $this->convenioConRecepcion();

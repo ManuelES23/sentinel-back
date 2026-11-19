@@ -28,6 +28,13 @@ return new class extends Migration
             );
         }
 
+        // Un abono del plan anterior sin aplicaciones (un anticipo suelto, o uno cuya liquidación se canceló) sigue
+        // `aplicado` y, al estrenar `tipo` con `abono` por omisión, contaría como pagado del convenio. Solo se revisa
+        // la primera vez: después los abonos ya son del flujo nuevo.
+        if (! Schema::hasColumn('abs_abonos', 'tipo') && DB::table('abs_abonos')->whereNull('deleted_at')->exists()) {
+            throw new RuntimeException('Hay abonos del flujo anterior: límpialos antes de migrar.');
+        }
+
         // Liquidación: estado `liquidada`, periodos opcionales, saldo inicial y quién/cuándo la cerró.
         if (! Schema::hasColumn('abs_liquidaciones', 'liquidada_at')) {
             Schema::table('abs_liquidaciones', function (Blueprint $table) {
@@ -80,9 +87,13 @@ return new class extends Migration
 
     public function down(): void
     {
+        // Cualquier abono vivo es del flujo nuevo (el viejo no se admite al subir). Una liquidación `liquidada` o una
+        // con periodo nulo (por ejemplo, liquidada y luego cancelada) no cabe en el esquema anterior: sin esta revisión
+        // `down()` borraría las columnas y fallaría después en MySQL al volver a exigir los periodos.
         $hayDatos = (Schema::hasTable('abs_abono_recepciones') && DB::table('abs_abono_recepciones')->exists())
-            || (Schema::hasColumn('abs_abonos', 'tipo') && DB::table('abs_abonos')->where('tipo', '!=', 'abono')->exists())
-            || DB::table('abs_liquidaciones')->where('status', 'liquidada')->exists();
+            || DB::table('abs_abonos')->whereNull('deleted_at')->exists()
+            || DB::table('abs_liquidaciones')->where(fn ($q) => $q->where('status', 'liquidada')
+                ->orWhereNull('periodo_inicio')->orWhereNull('periodo_fin'))->exists();
 
         if ($hayDatos) {
             throw new RuntimeException('No se puede revertir: ya hay cuentas por convenio con datos.');
