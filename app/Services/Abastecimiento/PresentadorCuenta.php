@@ -172,8 +172,8 @@ class PresentadorCuenta
         ])->values()->all();
     }
 
-    /** Datos del convenio que comparten la lista y la cuenta. */
-    private function convenio(Convenio $c): array
+    /** Datos del convenio que comparten la lista, la cuenta y el estado de cuenta. */
+    public function convenio(Convenio $c): array
     {
         return [
             'id' => $c->id,

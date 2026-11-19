@@ -7,6 +7,7 @@ use App\Models\Abastecimiento\Convenio;
 use App\Models\Abastecimiento\Liquidacion;
 use App\Models\Enterprise;
 use App\Services\Abastecimiento\CuentaConvenio;
+use App\Services\Abastecimiento\EstadoCuentaConvenio;
 use App\Services\Abastecimiento\PagosCuenta;
 use App\Services\Abastecimiento\PresentadorCuenta;
 use Illuminate\Http\JsonResponse;
@@ -15,8 +16,8 @@ use Illuminate\Validation\Rule;
 
 /**
  * Cuentas por convenio (submódulo `liquidaciones`): la lista de la temporada con sus totales, la cuenta de un
- * convenio con sus recepciones, pagos y acciones, y los pagos (registrar, cancelar y saldo inicial, vía
- * `PagosCuenta`). Leer exige `view`; cada escritura, `view` más su permiso (`create`, `cancelar`, `carga-inicial`).
+ * convenio con sus recepciones, pagos y acciones, su estado de cuenta con saldo corrido y los pagos (registrar,
+ * cancelar y saldo inicial, vía `PagosCuenta`). Leer exige `view`; cada escritura, `view` más su permiso (`create`, `cancelar`, `carga-inicial`).
  * La forma del JSON es de `PresentadorCuenta` y los números de `CuentaConvenio`.
  */
 class CuentaController extends AbastecimientoController
@@ -90,6 +91,21 @@ class CuentaController extends AbastecimientoController
         return response()->json([
             'success' => true,
             'data' => app(PresentadorCuenta::class)->completa($modelo, $empresa, $request->user()),
+        ]);
+    }
+
+    /**
+     * Estado de cuenta del convenio (para el PDF): movimientos con saldo corrido; el último saldo es el `por_pagar`
+     * de la cuenta. Solo `view` (404 si el convenio es de otra empresa).
+     */
+    public function estadoCuenta(Request $request, int $convenio): JsonResponse
+    {
+        $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'view');
+        $modelo = Convenio::deEmpresa($empresa->id)->findOrFail($convenio);
+
+        return response()->json([
+            'success' => true,
+            'data' => EstadoCuentaConvenio::armar(app(PresentadorCuenta::class), $empresa, $modelo),
         ]);
     }
 

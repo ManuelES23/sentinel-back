@@ -77,6 +77,7 @@ Route::prefix('abastecimiento')->name('abastecimiento.')->group(function () {
     // Liquidaciones y cuentas por convenio (submódulo liquidaciones). Los segmentos fijos (`cuentas`) van antes de las rutas con {id}.
     Route::get('liquidaciones/cuentas', [CuentaController::class, 'index'])->name('liquidaciones.cuentas.index');
     Route::get('liquidaciones/cuentas/{convenio}', [CuentaController::class, 'show'])->whereNumber('convenio')->name('liquidaciones.cuentas.show');
+    Route::get('liquidaciones/cuentas/{convenio}/estado-cuenta', [CuentaController::class, 'estadoCuenta'])->whereNumber('convenio')->name('liquidaciones.cuentas.estado-cuenta');
     Route::post('liquidaciones/cuentas/{convenio}/pagos', [CuentaController::class, 'registrarPago'])->whereNumber('convenio')->name('liquidaciones.cuentas.pagos.store');
     Route::post('liquidaciones/cuentas/{convenio}/saldo-inicial', [CuentaController::class, 'saldoInicial'])->whereNumber('convenio')->name('liquidaciones.cuentas.saldo-inicial');
     Route::post('liquidaciones/pagos/{id}/cancelar', [CuentaController::class, 'cancelarPago'])->whereNumber('id')->name('liquidaciones.pagos.cancelar');
