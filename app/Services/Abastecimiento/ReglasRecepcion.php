@@ -2,8 +2,11 @@
 
 namespace App\Services\Abastecimiento;
 
+use App\Models\Abastecimiento\Abono;
+use App\Models\Abastecimiento\AbonoRecepcion;
 use App\Models\Abastecimiento\Convenio;
 use App\Models\Abastecimiento\ConvenioPrecio;
+use App\Models\Abastecimiento\Liquidacion;
 use App\Models\Abastecimiento\Recepcion;
 use Illuminate\Validation\ValidationException;
 
@@ -19,6 +22,8 @@ class ReglasRecepcion
 
     public const MENSAJE_LIQUIDADA = 'Ya está en una liquidación: no se puede cambiar.';
 
+    public const MENSAJE_CONVENIO_LIQUIDADO = 'El convenio ya está liquidado: cancela la liquidación para recibir más.';
+
     /**
      * Valida el estado FINAL de la recepción contra el convenio al que quedará ligada
      * (en una edición, el del registro o el nuevo si cambió `convenio_id`). El convenio
@@ -27,9 +32,13 @@ class ReglasRecepcion
      * `$precios` permite pasar un PrecioVigente con los precios ya cargados (la importación
      * valida cientos de renglones sin una consulta por cada uno).
      *
+     * `$conveniosLiquidados` (ids de convenio con una liquidación `liquidada`) evita también una consulta por
+     * renglón: la importación lo trae de una sola vez. Sin él se consulta el convenio destino.
+     *
      * @param  array{fecha: string, tipo_carga_id: int|string, cantidad: int|float|string, kilos?: mixed, rezaga_kg?: mixed}  $datos
+     * @param  array<int, int>|null  $conveniosLiquidados
      */
-    public static function validar(Convenio $convenio, array $datos, ?Recepcion $actual = null, ?PrecioVigente $precios = null): void
+    public static function validar(Convenio $convenio, array $datos, ?Recepcion $actual = null, ?PrecioVigente $precios = null, ?array $conveniosLiquidados = null): void
     {
         if ($actual !== null) {
             self::exigirEditable($actual);
@@ -42,6 +51,15 @@ class ReglasRecepcion
         $cambiaDeConvenio = $actual === null || (int) $actual->convenio_id !== (int) $convenio->id;
         if ($cambiaDeConvenio && $convenio->status !== 'activo') {
             $errores['convenio_id'] = 'El convenio no está activo.';
+        }
+
+        // Una cuenta liquidada está cerrada: no entran recepciones (ni por alta, ni por cambio de convenio, ni
+        // por importación) hasta cancelar la liquidación.
+        $liquidado = $conveniosLiquidados === null
+            ? self::convenioLiquidado((int) $convenio->id)
+            : in_array((int) $convenio->id, $conveniosLiquidados, true);
+        if ($liquidado) {
+            $errores['convenio_id'] = self::MENSAJE_CONVENIO_LIQUIDADO;
         }
 
         $fecha = (string) $datos['fecha'];
@@ -118,12 +136,42 @@ class ReglasRecepcion
         }
     }
 
-    /** Una recepción en una liquidación ya no se edita ni se borra. */
+    /**
+     * Una recepción con pago vigente o en una liquidación no se edita ni se borra (la cuenta ya cuenta con ella).
+     * En orden: ligada a una liquidación `liquidada` (nombra el folio); ligada a una liquidación que ya no existe
+     * (`MENSAJE_LIQUIDADA`, el texto de siempre); con un pago vigente en `abs_abono_recepciones` (nombra el de
+     * menor id). Un pago cancelado no cuenta. Cancelar la liquidación o el pago libera la recepción.
+     *
+     * Lee sin bloquear: quien edita o borra ya tiene el convenio y la recepción bloqueados, y un pago o una
+     * liquidación necesitan el convenio, así que nada se cuela entre esta revisión y el cambio.
+     */
     public static function exigirEditable(Recepcion $recepcion): void
     {
         if ($recepcion->estaLiquidada()) {
-            throw ValidationException::withMessages(['id' => self::MENSAJE_LIQUIDADA]);
+            $liquidacion = Liquidacion::whereKey($recepcion->liquidacion_id)->first(['id', 'folio', 'status']);
+            if ($liquidacion === null) {
+                throw ValidationException::withMessages(['id' => self::MENSAJE_LIQUIDADA]);
+            }
+            if ($liquidacion->status === 'liquidada') {
+                throw ValidationException::withMessages([
+                    'id' => "Está en la liquidación {$liquidacion->folio}: cancela primero la liquidación.",
+                ]);
+            }
         }
+
+        $folioPago = Abono::where('status', '!=', 'cancelado')
+            ->whereIn('id', AbonoRecepcion::where('recepcion_id', $recepcion->id)->select('abono_id'))
+            ->orderBy('id')
+            ->value('folio');
+        if ($folioPago !== null) {
+            throw ValidationException::withMessages(['id' => "Tiene el pago {$folioPago}: cancela primero el pago."]);
+        }
+    }
+
+    /** ¿El convenio tiene una liquidación `liquidada` (cuenta cerrada)? */
+    public static function convenioLiquidado(int $convenioId): bool
+    {
+        return Liquidacion::where('convenio_id', $convenioId)->where('status', 'liquidada')->exists();
     }
 
     /**

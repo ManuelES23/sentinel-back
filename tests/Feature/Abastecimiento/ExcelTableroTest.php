@@ -2,7 +2,6 @@
 
 namespace Tests\Feature\Abastecimiento;
 
-use App\Models\Abastecimiento\AbonoAplicacion;
 use App\Models\Abastecimiento\Convenio;
 use App\Models\Abastecimiento\Productor;
 use App\Models\Abastecimiento\Temporada;
@@ -313,21 +312,33 @@ class ExcelTableroTest extends TestCase
 
     // ---- Por pagar ----
 
-    public function test_por_pagar_solo_con_liquidaciones_view_y_con_el_saldo_correcto(): void
+    /**
+     * Semanal liquidado en 1000 con un abono de 400 (por pagar 600); el de modo total abierto, con valor
+     * 275,975 (kilos × 9.5 × 70 % por recepción) y un adelanto de 975 (por pagar 275,000).
+     */
+    private function conPagos(): array
     {
         [$semanal, $total] = $this->dosConvenios();
-        $liq = $this->crearLiquidacion($semanal, [
-            'status' => 'aprobada', 'monto_calculado' => 1000, 'monto_final' => 1000, 'aprobada_at' => '2026-07-10 10:00:00',
-        ]);
-        $abono = $this->crearAbono(Productor::findOrFail($semanal->productor_id), ['monto' => 400]);
-        AbonoAplicacion::create(['abono_id' => $abono->id, 'liquidacion_id' => $liq->id, 'monto' => 400]);
+        $this->crearLiquidacion($semanal, ['monto_calculado' => 1000, 'monto_final' => 1000]);
+        $this->crearPago($semanal, ['tipo' => 'abono', 'monto' => 400]);
+        $this->crearPago($total, ['tipo' => 'adelanto', 'monto' => 975]);
+        // Un pago cancelado no cuenta.
+        $this->crearPago($total, ['tipo' => 'abono', 'monto' => 5000, 'status' => 'cancelado', 'cancelado_motivo' => 'Capturado por error']);
 
-        // Admin: la columna existe, con lo liquidado menos lo aplicado.
+        return [$semanal, $total];
+    }
+
+    public function test_por_pagar_solo_con_liquidaciones_view_y_con_el_saldo_correcto(): void
+    {
+        [$semanal, $total] = $this->conPagos();
+
+        // Admin: la columna existe, con el por pagar de la cuenta de cada convenio.
         $filas = array_column($this->filas($this->descargar($semanal->temporada_id)->getSheetByName('Convenios')), null, 'Folio');
         $this->assertArrayHasKey('Por pagar (MXN)', $filas[$semanal->folio]);
         $this->assertEqualsWithDelta(600, $filas[$semanal->folio]['Por pagar (MXN)'], 0.001);
-        $this->assertEqualsWithDelta(0, $filas[$total->folio]['Por pagar (MXN)'], 0.001);
+        $this->assertEqualsWithDelta(275000, $filas[$total->folio]['Por pagar (MXN)'], 0.001);
         $this->assertEqualsWithDelta(SaldoProductor::deConvenio($semanal)['por_pagar'], $filas[$semanal->folio]['Por pagar (MXN)'], 0.001);
+        $this->assertEqualsWithDelta(SaldoProductor::deConvenio($total)['por_pagar'], $filas[$total->folio]['Por pagar (MXN)'], 0.001);
 
         // Con tablero.view pero sin liquidaciones.view la columna no existe.
         Sanctum::actingAs($this->captor);
@@ -345,16 +356,15 @@ class ExcelTableroTest extends TestCase
 
     public function test_por_pagar_de_convenios_en_lote_coincide_con_el_de_cada_convenio(): void
     {
-        [$semanal, $total] = $this->dosConvenios();
-        $this->crearLiquidacion($semanal, ['status' => 'aprobada', 'monto_calculado' => 700, 'monto_final' => 700]);
-        $this->crearLiquidacion($total, ['status' => 'pagada', 'monto_calculado' => 300, 'monto_final' => 300]);
-        $this->crearLiquidacion($total, ['status' => 'borrador', 'monto_calculado' => 999, 'monto_final' => 999]);
+        [$semanal, $total] = $this->conPagos();
 
         $lote = SaldoProductor::porPagarDeConvenios($this->sbp, [$semanal->id, $total->id, $semanal->id]);
 
         $this->assertSame([$semanal->id, $total->id], array_keys($lote));
-        $this->assertEqualsWithDelta(SaldoProductor::deConvenio($semanal)['por_pagar'], $lote[$semanal->id], 0.001);
-        $this->assertEqualsWithDelta(SaldoProductor::deConvenio($total)['por_pagar'], $lote[$total->id], 0.001);
+        $this->assertSame(600.0, $lote[$semanal->id]);
+        $this->assertSame(275000.0, $lote[$total->id]);
+        $this->assertSame(SaldoProductor::deConvenio($semanal)['por_pagar'], $lote[$semanal->id]);
+        $this->assertSame(SaldoProductor::deConvenio($total)['por_pagar'], $lote[$total->id]);
         $this->assertSame([], SaldoProductor::porPagarDeConvenios($this->sbp, []));
     }
 
@@ -476,7 +486,8 @@ class ExcelTableroTest extends TestCase
     {
         [$semanal] = $this->dosConvenios();
         $temporada = $semanal->temporada_id;
-        $this->crearLiquidacion($semanal, ['status' => 'aprobada', 'monto_final' => 500, 'monto_calculado' => 500]);
+        $this->crearLiquidacion($semanal, ['status' => 'liquidada', 'monto_final' => 500, 'monto_calculado' => 500]);
+        $this->crearPago($semanal, ['tipo' => 'abono', 'monto' => 50]);
 
         $contar = function () use ($temporada): int {
             DB::flushQueryLog();
@@ -497,7 +508,8 @@ class ExcelTableroTest extends TestCase
                 'metas' => $this->metas(27, [100, 100, 100, 100]),
             ]);
             $this->recibir($extra, [27 => 80, 28 => 120]);
-            $this->crearLiquidacion($extra, ['status' => 'aprobada', 'monto_final' => 100, 'monto_calculado' => 100]);
+            $this->crearLiquidacion($extra, ['status' => 'liquidada', 'monto_final' => 100, 'monto_calculado' => 100]);
+            $this->crearPago($extra, ['tipo' => 'abono', 'monto' => 10]);
         }
         $this->assertSame(10, Convenio::count());
 

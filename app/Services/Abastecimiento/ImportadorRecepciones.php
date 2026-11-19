@@ -3,6 +3,7 @@
 namespace App\Services\Abastecimiento;
 
 use App\Models\Abastecimiento\Convenio;
+use App\Models\Abastecimiento\Liquidacion;
 use App\Models\Abastecimiento\Recepcion;
 use App\Models\Enterprise;
 use App\Models\User;
@@ -13,7 +14,7 @@ use Illuminate\Validation\ValidationException;
  * Guarda de una sola vez las recepciones que ValidadorImportacionRecepciones dejó listas
  * (todo o nada). Corre en una transacción: bloquea los convenios implicados (lectura
  * compartida, como el alta manual, en orden de id para no cruzarse con otra importación),
- * confirma que siguen activos y crea las recepciones en el orden del archivo con folios
+ * confirma que siguen activos y sin liquidar y crea las recepciones en el orden del archivo con folios
  * consecutivos. No difunde nada: el controlador lo hace después del commit.
  */
 class ImportadorRecepciones
@@ -41,12 +42,27 @@ class ImportadorRecepciones
                 ->get()
                 ->keyBy('id');
 
+            // Una cuenta liquidada está cerrada. Lectura SIN bloqueo a propósito: un bloqueo compartido sobre
+            // `abs_liquidaciones` tomaría bloqueos de hueco que estorban a `Liquidacion::create` de otros convenios y
+            // cierra un ciclo con liquidar (que tiene recepciones de otro convenio). No hace falta: el bloqueo compartido
+            // de los convenios de arriba es la primera sentencia de la transacción y no crea la foto (snapshot) de
+            // REPEATABLE READ; esta lectura la crea, ya con los convenios bloqueados, y liquidar o cancelar una
+            // liquidación de estos convenios necesitan el convenio exclusivo, así que no pueden confirmar mientras dura
+            // la importación: la foto ve todo lo confirmado antes del bloqueo y nada cambia después.
+            $liquidados = Liquidacion::whereIn('convenio_id', $convenioIds)->where('status', 'liquidada')
+                ->pluck('convenio_id')->map(fn ($id) => (int) $id)->all();
+
             foreach ($convenioIds as $id) {
                 $convenio = $convenios->get($id);
                 if ($convenio === null || $convenio->status !== 'activo') {
                     $folio = $convenio?->folio ?? "#{$id}";
                     throw ValidationException::withMessages([
                         'archivo' => "El convenio {$folio} ya no está activo; revisa el convenio y vuelve a subir el archivo.",
+                    ]);
+                }
+                if (in_array($id, $liquidados, true)) {
+                    throw ValidationException::withMessages([
+                        'archivo' => "El convenio {$convenio->folio} ya está liquidado; revisa el convenio y vuelve a subir el archivo.",
                     ]);
                 }
                 // Se revisa de nuevo bajo el bloqueo: el convenio pudo pasar a por calibre después de validar,
@@ -84,10 +100,11 @@ class ImportadorRecepciones
      * Revisa los tickets del archivo contra lo ya confirmado en esos convenios.
      *
      * Es una lectura CON bloqueo (`sharedLock`) a propósito: MySQL corre en REPEATABLE READ y la primera
-     * lectura sin bloqueo de la transacción (el `exists()` del contador de folios) fija el snapshot ANTES
-     * de esperar el bloqueo del contador. Una lectura normal vería ese snapshot viejo y no los tickets que
-     * otra importación confirmó mientras esta esperaba; una lectura con bloqueo lee lo último confirmado.
-     * No crea un orden de bloqueo nuevo: el contador ya serializa a los escritores.
+     * lectura sin bloqueo de la transacción (la de las liquidaciones de arriba, justo después del bloqueo compartido
+     * de los convenios) fija el snapshot ANTES de esperar el bloqueo del contador de folios. Una lectura normal
+     * vería ese snapshot viejo y no los tickets que otra importación confirmó mientras esta esperaba; una lectura
+     * con bloqueo lee lo último confirmado. No crea un orden de bloqueo nuevo: el contador ya serializa a los
+     * escritores.
      *
      * @param  list<int>  $convenioIds
      */

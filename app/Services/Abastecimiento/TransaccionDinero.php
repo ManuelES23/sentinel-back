@@ -3,26 +3,30 @@
 namespace App\Services\Abastecimiento;
 
 use App\Models\Abastecimiento\Abono;
+use App\Models\Abastecimiento\Convenio;
 use App\Models\Abastecimiento\Liquidacion;
 use App\Models\Abastecimiento\Productor;
+use App\Models\Abastecimiento\Recepcion;
 use Illuminate\Contracts\Database\ConcurrencyErrorDetector as DetectorConcurrencia;
 use Illuminate\Database\ConcurrencyErrorDetector;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 use Throwable;
 
 /**
- * Transacción de toda escritura que mueve dinero de Abastecimiento (liquidaciones y abonos).
+ * Transacción de toda escritura que mueve dinero de Abastecimiento (pagos y liquidación de la cuenta por convenio).
  *
- * Invariante (ver CLAUDE.md, plan 2):
+ * Invariante (ver CLAUDE.md):
  * - **READ COMMITTED.** MySQL corre REPEATABLE READ: una lectura sin bloqueo dentro de la transacción ve la foto
- *   tomada en su primera lectura, así que una suma de `abs_abono_aplicaciones` no vería lo que otra transacción
- *   confirmó mientras esta esperaba un bloqueo. Con READ COMMITTED cada sentencia lee lo último confirmado.
+ *   tomada en su primera lectura, así que una suma de pagos no vería lo que otra transacción confirmó mientras esta
+ *   esperaba un bloqueo. Con READ COMMITTED cada sentencia lee lo último confirmado.
  *   `SET TRANSACTION ISOLATION LEVEL` solo vale para la SIGUIENTE transacción, por eso se repite antes de cada
  *   intento (el reintento de `DB::transaction($fn, n)` abriría el segundo intento con el nivel por omisión).
- * - **Un solo orden de bloqueo:** la fila del productor PRIMERO, luego abonos (por id) y luego liquidaciones
- *   (por id). Todo escritor de dinero bloquea antes al productor afectado (`bloquearProductor` /
- *   `bloquearLiquidacion`), así que dos escritores del mismo productor se turnan y ninguno lee un saldo viejo.
+ * - **Un solo orden de bloqueo:** productor → convenio → recepciones (por id) → pagos (por id) → liquidación.
+ *   Todo escritor de dinero entra por `bloquearConvenio` (directo o vía `bloquearPago` / `bloquearLiquidacion`),
+ *   así que dos escritores del mismo convenio se turnan en la fila del convenio y ninguno lee un saldo viejo.
  *
  * En SQLite (pruebas) el `SET` no se ejecuta y `lockForUpdate` no hace nada: la concurrencia no se puede probar ahí.
  */
@@ -75,51 +79,89 @@ class TransaccionDinero
     }
 
     /**
-     * Para las acciones sobre una liquidación: lee SOLO su `productor_id` sin bloquear, bloquea al productor y
-     * después bloquea y recarga la liquidación. 404 si no es de la empresa. Fuera de borrador el `productor_id` ya
-     * no cambia (todas las rutas de dinero actúan sobre esos estados); un borrador sí puede pasar por `PUT` al
-     * convenio de otro productor, y por eso `update` pasa también ese productor en `$otrosProductores` (todos se
-     * bloquean en orden de id antes de releer la liquidación bloqueada).
+     * Productor y luego convenio: lee SOLO el `productor_id` del convenio sin bloquear, bloquea al productor
+     * (también si está borrado) y después bloquea y recarga el convenio. Si entre las dos lecturas otra transacción
+     * cambió el productor del convenio, el bloqueo tomado ya no es el correcto: 422 para que se reintente.
+     * 404 si el convenio no es de la empresa (o está borrado).
      */
-    public static function bloquearLiquidacion(int $empresaId, int $liquidacionId, array $otrosProductores = []): Liquidacion
+    public static function bloquearConvenio(int $empresaId, int $convenioId): Convenio
     {
-        $productorId = Liquidacion::deEmpresa($empresaId)->whereKey($liquidacionId)->value('productor_id');
+        $productorId = Convenio::deEmpresa($empresaId)->whereKey($convenioId)->value('productor_id');
         if ($productorId === null) {
-            throw (new ModelNotFoundException)->setModel(Liquidacion::class, [$liquidacionId]);
-        }
-        self::bloquearProductores($empresaId, array_merge([(int) $productorId], $otrosProductores));
-
-        return Liquidacion::deEmpresa($empresaId)->lockForUpdate()->findOrFail($liquidacionId);
-    }
-
-    /**
-     * Igual que `bloquearLiquidacion`, para un abono: productor primero y luego el abono. 404 si no es de la empresa.
-     * El `productor_id` de un abono no se edita (no hay ruta que lo cambie).
-     */
-    public static function bloquearAbono(int $empresaId, int $abonoId): Abono
-    {
-        $productorId = Abono::deEmpresa($empresaId)->whereKey($abonoId)->value('productor_id');
-        if ($productorId === null) {
-            throw (new ModelNotFoundException)->setModel(Abono::class, [$abonoId]);
+            throw (new ModelNotFoundException)->setModel(Convenio::class, [$convenioId]);
         }
         self::bloquearProductor($empresaId, (int) $productorId, true);
 
-        return Abono::deEmpresa($empresaId)->lockForUpdate()->findOrFail($abonoId);
+        $convenio = Convenio::deEmpresa($empresaId)->lockForUpdate()->findOrFail($convenioId);
+        if ((int) $convenio->productor_id !== (int) $productorId) {
+            throw ValidationException::withMessages([
+                'convenio' => 'El convenio cambió mientras se guardaba; vuelve a intentarlo.',
+            ]);
+        }
+
+        return $convenio;
     }
 
     /**
-     * Varios productores (p. ej. al cambiar el convenio de un borrador a otro productor), siempre en orden de id
-     * para que dos escritores nunca se esperen en cruz. Incluye los borrados (una liquidación vieja los conserva).
+     * Recepciones (no borradas) del convenio YA bloqueado entre `$ids`, bloqueadas en una sola sentencia por id
+     * ascendente. Los ids que no son del convenio (o están borrados) simplemente no vienen.
      *
      * @param  array<int, int>  $ids
+     * @return EloquentCollection<int, Recepcion>
      */
-    public static function bloquearProductores(int $empresaId, array $ids): void
+    public static function bloquearRecepciones(Convenio $convenio, array $ids): EloquentCollection
     {
         $ids = array_values(array_unique(array_map('intval', $ids)));
-        sort($ids);
-        foreach ($ids as $id) {
-            self::bloquearProductor($empresaId, $id, true);
+        if ($ids === []) {
+            return new EloquentCollection;
         }
+
+        return Recepcion::where('convenio_id', $convenio->id)
+            ->whereIn('id', $ids)
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->get();
+    }
+
+    /**
+     * Para cancelar un pago: lee SOLO su `convenio_id` sin bloquear, bloquea productor y convenio
+     * (`bloquearConvenio`) y al final el pago. El `convenio_id` de un pago no cambia (no hay ruta que lo edite).
+     * 404 si el pago no es de la empresa.
+     *
+     * @return array{0: Convenio, 1: Abono}
+     */
+    public static function bloquearPago(int $empresaId, int $pagoId): array
+    {
+        $convenioId = Abono::deEmpresa($empresaId)->whereKey($pagoId)->value('convenio_id');
+        if ($convenioId === null) {
+            throw (new ModelNotFoundException)->setModel(Abono::class, [$pagoId]);
+        }
+        $convenio = self::bloquearConvenio($empresaId, (int) $convenioId);
+        $pago = Abono::deEmpresa($empresaId)->lockForUpdate()->findOrFail($pagoId);
+
+        return [$convenio, $pago];
+    }
+
+    /**
+     * Para las acciones sobre una liquidación: productor y convenio (`bloquearConvenio`), sus recepciones ligadas
+     * (por id, también las borradas), sus pagos `liquidacion` (por id) y al final la liquidación. 404 si no es de
+     * la empresa.
+     *
+     * @return array{0: Convenio, 1: Liquidacion}
+     */
+    public static function bloquearLiquidacion(int $empresaId, int $liquidacionId): array
+    {
+        $convenioId = Liquidacion::deEmpresa($empresaId)->whereKey($liquidacionId)->value('convenio_id');
+        if ($convenioId === null) {
+            throw (new ModelNotFoundException)->setModel(Liquidacion::class, [$liquidacionId]);
+        }
+        $convenio = self::bloquearConvenio($empresaId, (int) $convenioId);
+
+        Recepcion::withTrashed()->where('liquidacion_id', $liquidacionId)->orderBy('id')->lockForUpdate()->get();
+        Abono::where('liquidacion_id', $liquidacionId)->where('tipo', 'liquidacion')->orderBy('id')->lockForUpdate()->get();
+        $liquidacion = Liquidacion::deEmpresa($empresaId)->lockForUpdate()->findOrFail($liquidacionId);
+
+        return [$convenio, $liquidacion];
     }
 
     private static function esConcurrencia(Throwable $e): bool

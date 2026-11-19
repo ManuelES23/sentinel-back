@@ -3,9 +3,7 @@
 namespace Tests\Feature\Abastecimiento;
 
 use App\Models\Abastecimiento\Abono;
-use App\Models\Abastecimiento\AbonoAplicacion;
 use App\Models\Abastecimiento\Liquidacion;
-use App\Models\Abastecimiento\LiquidacionAprobacion;
 use App\Models\Abastecimiento\LiquidacionDetalle;
 use App\Models\Abastecimiento\Productor;
 use App\Models\Abastecimiento\Recepcion;
@@ -63,7 +61,7 @@ class EsquemaDineroTest extends TestCase
         $liq = $this->crearLiquidacion($this->crearConvenio($this->sbp));
 
         $fresca = Liquidacion::findOrFail($liq->id);
-        $this->assertSame('borrador', $fresca->status);
+        $this->assertSame('liquidada', $fresca->status);
         $this->assertSame('normal', $fresca->origen);
         $this->assertSame(0, $fresca->ronda);
         $this->assertNull($fresca->paso_actual);
@@ -90,10 +88,7 @@ class EsquemaDineroTest extends TestCase
 
     public function test_folio_de_abono_es_unico_por_empresa(): void
     {
-        $productor = Productor::firstOrCreate(
-            ['enterprise_id' => $this->sbp->id, 'nombre' => 'Productor de prueba'],
-            ['tipo' => 'productor', 'is_active' => true],
-        );
+        $productor = Productor::findOrFail($this->crearConvenio($this->sbp)->productor_id);
         $abono = $this->crearAbono($productor);
 
         $this->expectException(QueryException::class);
@@ -124,35 +119,26 @@ class EsquemaDineroTest extends TestCase
             'rezaga_kg' => 5, 'precio' => 100.5, 'porcentaje_productor' => 80, 'subtotal' => 1005,
             'descuento' => 0, 'a_pagar' => 1005,
         ]);
-        LiquidacionAprobacion::create([
-            'liquidacion_id' => $liq->id, 'ronda' => 1, 'step_order' => 1, 'description' => 'Gerencia',
-            'rules' => [['type' => 'user', 'user_id' => 7]], 'decision' => 'waiting',
-        ]);
 
-        $liq = Liquidacion::with(['detalles', 'aprobaciones', 'convenio', 'productor'])->findOrFail($liq->id);
+        $liq = Liquidacion::with(['detalles', 'convenio', 'productor'])->findOrFail($liq->id);
         $this->assertCount(1, $liq->detalles);
         $this->assertSame($recepcion->id, $liq->detalles->first()->recepcion->id);
         $this->assertSame('100.5000', $liq->detalles->first()->precio);
-        $this->assertCount(1, $liq->aprobaciones);
-        $this->assertSame([['type' => 'user', 'user_id' => 7]], $liq->aprobaciones->first()->rules);
         $this->assertSame($convenio->id, $liq->convenio->id);
         $this->assertSame($convenio->productor_id, $liq->productor->id);
-        $this->assertSame('2026-06-01', $liq->periodo_inicio->format('Y-m-d'));
+        $this->assertNull($liq->periodo_inicio, 'La liquidación final no tiene periodo');
+        $this->assertNull($liq->periodo_fin);
         $this->assertSame('1000.00', $liq->monto_final);
 
         $abono = $this->crearAbono($liq->productor, ['monto' => 500]);
-        AbonoAplicacion::create(['abono_id' => $abono->id, 'liquidacion_id' => $liq->id, 'monto' => 300]);
 
-        $abono = Abono::with(['aplicaciones', 'productor'])->findOrFail($abono->id);
-        $this->assertCount(1, $abono->aplicaciones);
-        $this->assertSame($liq->id, $abono->aplicaciones->first()->liquidacion->id);
+        $abono = Abono::with(['convenio', 'productor'])->findOrFail($abono->id);
+        $this->assertSame($convenio->id, $abono->convenio->id);
+        $this->assertSame('abono', $abono->tipo);
         $this->assertSame($liq->productor_id, $abono->productor->id);
         $this->assertSame('2026-06-10', $abono->fecha->format('Y-m-d'));
         $this->assertSame('500.00', $abono->monto);
         $this->assertSame('aplicado', $abono->status);
-
-        $abono->update(['aplicaciones_canceladas' => [['liquidacion_id' => $liq->id, 'monto' => '300.00']]]);
-        $this->assertIsArray($abono->fresh()->aplicaciones_canceladas);
     }
 
     public function test_scope_de_empresa_separa_liquidaciones_y_abonos(): void

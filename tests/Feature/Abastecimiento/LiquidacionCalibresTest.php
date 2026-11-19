@@ -11,17 +11,15 @@ use App\Models\Abastecimiento\Recepcion;
 use App\Models\Abastecimiento\Variedad;
 use App\Models\CRM\CrmProductoCalibre;
 use App\Models\User;
-use App\Services\Abastecimiento\FlujoLiquidacion;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\DB;
 use Laravel\Sanctum\Sanctum;
 use Tests\Concerns\CreatesAbastecimientoFixtures;
 use Tests\TestCase;
 
 /**
- * Plan 3 de calibres: la liquidación de un convenio por calibre lleva un renglón por (recepción, calibre)
- * con el precio de ese calibre (el especial o, si no tiene, el general), UNA sola rezaga real por
- * liquidación y el descuento repartido en proporción al subtotal de cada renglón (spec C10).
+ * La liquidación de un convenio por calibre («Liquidar total» sobre todas sus recepciones) lleva un renglón por
+ * (recepción, calibre) con el precio de ese calibre (el especial o, si no tiene, el general), UNA sola rezaga real
+ * del convenio y el descuento repartido en proporción al subtotal de cada renglón (spec C10 y spec de la cuenta 5.4).
  *
  * Escenario de casi todas las pruebas: Jumbo con precio especial de 180 y Grande con el general de 150,
  * rezaga aceptada 5 %. R1 (2 jun): Jumbo 10 cajas / 100 kg / 10 kg de rezaga y Grande 4 / 40 / 4;
@@ -49,9 +47,9 @@ class LiquidacionCalibresTest extends TestCase
         Sanctum::actingAs($this->admin);
     }
 
-    private function url(string $ruta = 'liquidaciones'): string
+    private function url(string $ruta): string
     {
-        return "/api/splendidbyporvenir/administration/abastecimiento/{$ruta}";
+        return "/api/splendidbyporvenir/administration/abastecimiento/liquidaciones/{$ruta}";
     }
 
     /** @return array{0: Convenio, 1: Recepcion, 2: Recepcion} */
@@ -79,11 +77,14 @@ class LiquidacionCalibresTest extends TestCase
         return [$convenio->fresh(), $r1, $r2];
     }
 
-    private function cuerpo(Convenio $c, array $ids, array $over = []): array
+    private function previa(Convenio $c): \Illuminate\Testing\TestResponse
     {
-        return $over + [
-            'convenio_id' => $c->id, 'periodo_inicio' => '2026-06-01', 'periodo_fin' => '2026-06-15', 'recepcion_ids' => $ids,
-        ];
+        return $this->postJson($this->url("cuentas/{$c->id}/previa"), []);
+    }
+
+    private function liquidar(Convenio $c): \Illuminate\Testing\TestResponse
+    {
+        return $this->postJson($this->url("cuentas/{$c->id}/liquidar"), ['registrar_pago' => false]);
     }
 
     /** Renglones en una forma comparable: [folio de recepción, calibre, subtotal, descuento, a pagar]. */
@@ -98,8 +99,7 @@ class LiquidacionCalibresTest extends TestCase
     {
         [$c, $r1, $r2] = $this->escenario();
 
-        $data = $this->postJson($this->url('liquidaciones/previa'), $this->cuerpo($c, [$r2->id, $r1->id]))
-            ->assertOk()->json('data');
+        $data = $this->previa($c)->assertOk()->json('data');
 
         $this->assertSame([
             ['R1', 'Jumbo', 1800.0, 36.0, 1764.0],
@@ -114,42 +114,32 @@ class LiquidacionCalibresTest extends TestCase
         $this->assertEquals(3300, $data['bruto']);
         $this->assertEquals(7, $data['rezaga_real_pct']);
         $this->assertEquals(66, $data['descuento']);
+        $this->assertEquals(3234, $data['monto_calculado']);
         $this->assertEquals(3234, $data['monto_final']);
     }
 
-    public function test_borrador_y_envio_guardan_un_renglon_por_calibre(): void
+    public function test_liquidar_guarda_un_renglon_por_calibre(): void
     {
         [$c, $r1, $r2] = $this->escenario();
 
-        $id = $this->postJson($this->url(), $this->cuerpo($c, [$r1->id, $r2->id]))
-            ->assertStatus(201)->assertJsonPath('data.status', 'borrador')->assertJsonPath('data.monto_final', 3234)
-            ->json('data.id');
-        $this->assertSame(3, LiquidacionDetalle::where('liquidacion_id', $id)->count());
-        $this->assertSame($id, $r1->fresh()->liquidacion_id);
-
-        // Enviar arma la selección con los renglones guardados: R1 tiene dos y no debe verse «repetida».
-        $decide = User::factory()->create(['role' => 'admin']); // quien decide (el que envía no puede)
-        $liq = DB::transaction(fn () => FlujoLiquidacion::enviar(Liquidacion::findOrFail($id), $this->admin));
-        $this->assertSame('en_revision', $liq->status);
-        $this->assertEquals(3234, $liq->monto_final);
+        $res = $this->liquidar($c)->assertStatus(201);
+        $id = $res->json('data.liquidacion.id');
+        $this->assertEqualsWithDelta(3234, $res->json('data.liquidacion.monto_final'), 0.001);
         $this->assertSame(
             [$this->jumbo->id, $this->grande->id, $this->grande->id],
             LiquidacionDetalle::where('liquidacion_id', $id)->orderBy('id')->pluck('calibre_id')->all(),
         );
+        $this->assertSame($id, $r1->fresh()->liquidacion_id);
+        $this->assertSame($id, $r2->fresh()->liquidacion_id);
 
-        $ficha = $this->getJson($this->url("liquidaciones/{$id}"))->assertOk()->json('data');
+        $ficha = $this->getJson($this->url((string) $id))->assertOk()->json('data');
         $this->assertSame([
             ['R1', 'Jumbo', 1800.0, 36.0, 1764.0],
             ['R1', 'Grande', 600.0, 12.0, 588.0],
             ['R2', 'Grande', 900.0, 18.0, 882.0],
         ], $this->renglones($ficha['detalles'], [$r1->id => 'R1', $r2->id => 'R2']));
         $this->assertSame($this->jumbo->id, $ficha['detalles'][0]['calibre_id']);
-
-        // Bandeja de aprobaciones: cuenta 2 recepciones (no 3 renglones) y cada renglón trae su calibre.
-        Sanctum::actingAs($decide);
-        $bandeja = $this->getJson("/api/pending-approvals/supply_settlement/{$id}")->assertOk()->json('data');
-        $this->assertSame(2, collect($bandeja['details'])->firstWhere('label', 'Recepciones')['value']);
-        $this->assertSame(['Jumbo', 'Grande', 'Grande'], array_column(array_column($bandeja['detalles'], 'calibre'), 'nombre'));
+        $this->assertEqualsWithDelta(3234, $ficha['monto_final'], 0.001);
     }
 
     public function test_una_recepcion_por_calibre_sin_renglones_da_422_claro(): void
@@ -168,14 +158,14 @@ class LiquidacionCalibresTest extends TestCase
         // Cabecera sin renglones (no se puede capturar así; solo por datos viejos o a mano).
         $vacia = $this->crearRecepcion($c, ['fecha' => '2026-06-04', 'cantidad' => 5, 'kilos' => $kilos]);
 
-        $this->postJson($this->url('liquidaciones/previa'), $this->cuerpo($c, [$vacia->id]))
+        $this->previa($c)
             ->assertStatus(422)
-            ->assertJsonPath('errors.recepcion_ids.0', "Las recepciones {$vacia->folio} no tienen renglones por calibre.");
+            ->assertJsonPath('errors.convenio.0', "No se puede liquidar: {$vacia->folio} (Sin renglones por calibre).");
     }
 
     public function test_el_especial_no_se_mueve_si_cambia_el_general(): void
     {
-        [$c, $r1] = $this->escenario();
+        [$c] = $this->escenario();
         // Nueva vigencia del general (160) desde el 2 de junio: Grande sube, Jumbo sigue en 180.
         $tipo = ConvenioPrecio::where('convenio_id', $c->id)->value('tipo_carga_id');
         ConvenioPrecio::create([
@@ -183,47 +173,28 @@ class LiquidacionCalibresTest extends TestCase
             'vigencia_inicio' => '2026-06-02', 'es_principal' => true,
         ]);
 
-        $data = $this->postJson($this->url('liquidaciones/previa'), $this->cuerpo($c, [$r1->id]))->assertOk()->json('data');
+        $data = $this->previa($c)->assertOk()->json('data');
 
-        $this->assertEquals([180, 160], array_column($data['detalles'], 'precio'));
+        $this->assertEquals([180, 160, 160], array_column($data['detalles'], 'precio'));
     }
 
     public function test_un_calibre_sin_precio_vigente_da_422_con_folio_y_calibre(): void
     {
-        [$c, $r1] = $this->escenario();
+        [$c, $r1, $r2] = $this->escenario();
         ConvenioPrecio::where('convenio_id', $c->id)->whereNull('calibre_id')->delete();
 
-        $mensaje = $this->postJson($this->url('liquidaciones/previa'), $this->cuerpo($c, [$r1->id]))
-            ->assertStatus(422)->assertJsonValidationErrors(['recepcion_ids'])
-            ->json('errors.recepcion_ids.0');
+        $mensaje = $this->previa($c)->assertStatus(422)->assertJsonValidationErrors(['convenio'])->json('errors.convenio.0');
 
-        $this->assertSame("Las recepciones {$r1->folio} (Grande) no tienen un precio vigente a su fecha.", $mensaje);
+        $this->assertSame("No se puede liquidar: {$r1->folio} (Sin precio vigente: Grande), {$r2->folio} (Sin precio vigente: Grande).", $mensaje);
+        $this->liquidar($c)->assertStatus(422);
         $this->assertSame(0, Liquidacion::count());
-    }
-
-    public function test_recepciones_disponibles_traen_renglones_con_su_precio(): void
-    {
-        [$c, $r1] = $this->escenario();
-        $consulta = '?'.http_build_query(['convenio_id' => $c->id, 'periodo_inicio' => '2026-06-01', 'periodo_fin' => '2026-06-15']);
-
-        $fila = $this->getJson($this->url('liquidaciones/recepciones-disponibles').$consulta)
-            ->assertOk()->assertJsonCount(2, 'data')->json('data.0');
-
-        $this->assertSame($r1->id, $fila['id']);
-        $this->assertNull($fila['precio']);
-        $this->assertArrayNotHasKey('liquidable', $fila);
-        $this->assertSame(['Jumbo', 'Grande'], array_column(array_column($fila['renglones'], 'calibre'), 'nombre'));
-        $this->assertEquals([180, 150], array_column($fila['renglones'], 'precio'));
-        $this->assertEquals([10, 4], array_column($fila['renglones'], 'cantidad'));
-        $this->assertEquals([100, 40], array_column($fila['renglones'], 'kilos'));
     }
 
     public function test_por_kilo_cada_renglon_se_paga_por_sus_kilos(): void
     {
-        [$c, $r1, $r2] = $this->escenario(['unidad' => 'kg', 'porcentaje_rezaga' => 10]);
+        [$c] = $this->escenario(['unidad' => 'kg', 'porcentaje_rezaga' => 10]);
 
-        $data = $this->postJson($this->url('liquidaciones/previa'), $this->cuerpo($c, [$r1->id, $r2->id]))
-            ->assertOk()->json('data');
+        $data = $this->previa($c)->assertOk()->json('data');
 
         // Rezaga real 7 % ≤ 10 % aceptada: sin descuento. 100 × 180 + 40 × 150 + 60 × 150.
         $this->assertEquals([18000, 6000, 9000], array_column($data['detalles'], 'subtotal'));
@@ -231,52 +202,22 @@ class LiquidacionCalibresTest extends TestCase
         $this->assertEquals(33000, $data['monto_final']);
     }
 
-    public function test_carga_inicial_con_recepciones_por_calibre(): void
-    {
-        [$c, $r1, $r2] = $this->escenario();
-
-        $id = $this->postJson($this->url('liquidaciones/carga-inicial'), $this->cuerpo($c, [$r1->id, $r2->id]))
-            ->assertStatus(201)
-            ->assertJsonPath('data.status', 'aprobada')
-            ->assertJsonPath('data.monto_final', 3234)
-            ->json('data.id');
-
-        $this->assertSame(3, LiquidacionDetalle::where('liquidacion_id', $id)->whereNotNull('calibre_id')->count());
-        $this->assertSame($id, $r2->fresh()->liquidacion_id);
-    }
-
-    public function test_carga_inicial_solo_monto_sigue_funcionando_en_convenio_por_calibre(): void
-    {
-        [$c] = $this->escenario();
-
-        $this->postJson($this->url('liquidaciones/carga-inicial'), [
-            'convenio_id' => $c->id, 'periodo_inicio' => '2026-06-01', 'periodo_fin' => '2026-06-01',
-            'monto' => 5000, 'motivo' => 'Saldo pendiente de la temporada pasada',
-        ])->assertStatus(201)
-            ->assertJsonPath('data.status', 'aprobada')
-            ->assertJsonPath('data.monto_final', 5000);
-    }
-
     public function test_las_liquidaciones_clasicas_siguen_igual(): void
     {
         $c = $this->crearConvenio($this->sbp);
-        $a = $this->crearRecepcion($c, ['fecha' => '2026-06-02', 'cantidad' => 10]);
+        $this->crearRecepcion($c, ['fecha' => '2026-06-02', 'cantidad' => 10]);
 
-        $consulta = '?'.http_build_query(['convenio_id' => $c->id, 'periodo_inicio' => '2026-06-01', 'periodo_fin' => '2026-06-15']);
-        $fila = $this->getJson($this->url('liquidaciones/recepciones-disponibles').$consulta)->assertOk()->json('data.0');
-        $this->assertEquals(100, $fila['precio']);
-        $this->assertArrayNotHasKey('renglones', $fila);
-
-        $previa = $this->postJson($this->url('liquidaciones/previa'), $this->cuerpo($c, [$a->id]))
-            ->assertOk()->assertJsonPath('data.monto_final', 1000)->json('data.detalles.0');
+        $data = $this->previa($c)->assertOk()->json('data');
+        $this->assertEqualsWithDelta(1000, $data['monto_final'], 0.001);
+        $previa = $data['detalles'][0];
         $this->assertArrayNotHasKey('calibre_id', $previa);
         $this->assertArrayNotHasKey('calibre', $previa);
 
-        $id = $this->postJson($this->url(), $this->cuerpo($c, [$a->id]))
-            ->assertStatus(201)->assertJsonPath('data.status', 'borrador')->assertJsonPath('data.monto_final', 1000)
-            ->json('data.id');
+        $res = $this->liquidar($c)->assertStatus(201);
+        $this->assertEqualsWithDelta(1000, $res->json('data.liquidacion.monto_final'), 0.001);
+        $id = $res->json('data.liquidacion.id');
         $this->assertNull(LiquidacionDetalle::where('liquidacion_id', $id)->value('calibre_id'));
-        $this->getJson($this->url("liquidaciones/{$id}"))->assertOk()
+        $this->getJson($this->url((string) $id))->assertOk()
             ->assertJsonPath('data.detalles.0.calibre_id', null)
             ->assertJsonPath('data.detalles.0.calibre', null);
     }

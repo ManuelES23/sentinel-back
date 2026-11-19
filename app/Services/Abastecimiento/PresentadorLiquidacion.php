@@ -2,9 +2,9 @@
 
 namespace App\Services\Abastecimiento;
 
-use App\Models\Abastecimiento\AbonoAplicacion;
+use App\Models\Abastecimiento\Abono;
+use App\Models\Abastecimiento\Convenio;
 use App\Models\Abastecimiento\Liquidacion;
-use App\Models\Abastecimiento\LiquidacionAprobacion;
 use App\Models\Abastecimiento\LiquidacionDetalle;
 use App\Models\Enterprise;
 use App\Models\User;
@@ -62,8 +62,7 @@ class PresentadorLiquidacion
     }
 
     /**
-     * Ficha completa: detalle, convenio, productor, pasos de la ronda vigente (`aprobaciones`) y de las anteriores
-     * (`rondas`), acciones posibles del usuario y datos de la empresa.
+     * Ficha completa: detalle, convenio, productor, acciones posibles del usuario (`puede`) y datos de la empresa.
      */
     public function completa(Liquidacion $l, Enterprise $empresa, ?User $usuario): array
     {
@@ -75,16 +74,13 @@ class PresentadorLiquidacion
             'detalles.recepcion:id,folio,fecha,tipo_carga_id',
             'detalles.recepcion.tipoCarga:id,nombre',
             'detalles.calibre:id,nombre',
-            'aprobaciones' => fn ($q) => $q->orderBy('ronda')->orderBy('step_order')->orderBy('id'),
-            'aprobaciones.decisor:id,name',
         ]);
-
-        $porRonda = $l->aprobaciones->groupBy('ronda');
-        $rondas = $porRonda->filter(fn ($pasos, $ronda) => (int) $ronda < (int) $l->ronda)
-            ->map(fn ($pasos, $ronda) => [
-                'ronda' => (int) $ronda,
-                'aprobaciones' => $pasos->map(fn (LiquidacionAprobacion $a) => $this->aprobacion($a))->values()->all(),
-            ])->sortKeys()->values()->all();
+        // Lo vivo de la cuenta (pagado, restante y saldos iniciales) solo se muestra en la liquidación vigente: en una
+        // cancelada sería la cuenta de hoy (abierta de nuevo), no la de esa liquidación. Su detalle y sus montos siguen
+        // congelados.
+        $vigente = $l->status === 'liquidada';
+        // El convenio completo (la relación viene recortada): la cuenta necesita `usa_calibres` y sus precios.
+        $saldo = $vigente ? SaldoProductor::deConvenio(Convenio::withTrashed()->findOrFail($l->convenio_id)) : null;
 
         return $this->base($l) + [
             'convenio' => $this->datosConvenio($l),
@@ -107,9 +103,22 @@ class PresentadorLiquidacion
                 'descuento' => $this->f($d->descuento),
                 'a_pagar' => $this->f($d->a_pagar),
             ])->values()->all(),
-            'aprobaciones' => ($porRonda->get((int) $l->ronda) ?? collect())
-                ->map(fn (LiquidacionAprobacion $a) => $this->aprobacion($a))->values()->all(),
-            'rondas' => $rondas,
+            // Renglón aparte «Saldo inicial» de la ficha y el PDF: los saldos iniciales vigentes del convenio.
+            'saldos_iniciales' => ! $vigente ? [] : Abono::where('convenio_id', $l->convenio_id)
+                ->where('tipo', 'saldo_inicial')
+                ->where('status', '!=', 'cancelado')
+                ->orderBy('fecha')->orderBy('id')
+                ->get(['id', 'folio', 'fecha', 'monto', 'notas'])
+                ->map(fn (Abono $p) => [
+                    'id' => $p->id,
+                    'folio' => $p->folio,
+                    'fecha' => $p->fecha->format('Y-m-d'),
+                    'monto' => (float) $p->monto,
+                    'motivo' => $p->notas,
+                ])->values()->all(),
+            // Lo pagado y lo que falta de la cuenta del convenio (`SaldoProductor`, la misma regla que la cuenta).
+            'pagado' => $saldo['pagado'] ?? null,
+            'restante' => $saldo['por_pagar'] ?? null,
             'puede' => $this->puede($l, $empresa, $usuario),
             'empresa' => [
                 'id' => $empresa->id,
@@ -126,44 +135,19 @@ class PresentadorLiquidacion
 
     /**
      * Acciones que el usuario tiene a la mano sobre la liquidación (lo mismo que el controlador exige al ejecutarlas):
-     * editar y enviar = borrador y `edit`; aprobar y rechazar = en revisión, `view` y que le toque el paso actual
-     * (cada regla permite aprobar y/o rechazar); cancelar = `delete` en borrador, en revisión o aprobada sin abonos aplicados.
+     * cancelar = permiso `delete` y liquidación vigente (`liquidada`).
      *
-     * @return array{editar: bool, enviar: bool, aprobar: bool, rechazar: bool, cancelar: bool}
+     * @return array{cancelar: bool}
      */
     public function puede(Liquidacion $l, Enterprise $empresa, ?User $usuario): array
     {
-        $nada = ['editar' => false, 'enviar' => false, 'aprobar' => false, 'rechazar' => false, 'cancelar' => false];
         if ($usuario === null) {
-            return $nada;
-        }
-
-        $borrador = $l->status === 'borrador';
-        $edita = $this->ctx->puede($usuario, $empresa, self::SUBMODULO, 'edit');
-
-        $aprueba = false;
-        $rechaza = false;
-        if ($l->status === 'en_revision' && $this->ctx->puede($usuario, $empresa, self::SUBMODULO, 'view')) {
-            $paso = CadenaLiquidacion::pasoActual($l);
-            if ($paso !== null) {
-                $aprueba = AprobadorLiquidaciones::puedeDecidir($usuario, $l, $paso, 'aprobar');
-                $rechaza = AprobadorLiquidaciones::puedeDecidir($usuario, $l, $paso, 'rechazar');
-            }
-        }
-
-        $cancela = false;
-        if ($this->ctx->puede($usuario, $empresa, self::SUBMODULO, 'delete')) {
-            $cancela = in_array($l->status, ['borrador', 'en_revision'], true)
-                || ($l->status === 'aprobada' && ! AbonoAplicacion::where('liquidacion_id', $l->id)->exists());
+            return ['cancelar' => false];
         }
 
         return [
-            'editar' => $borrador && $edita,
-            'enviar' => $borrador && $edita,
-            'aprobar' => $aprueba,
-            'rechazar' => $rechaza,
-            'cancelar' => $cancela,
-        ] + $nada;
+            'cancelar' => $l->status === 'liquidada' && $this->ctx->puede($usuario, $empresa, self::SUBMODULO, 'delete'),
+        ];
     }
 
     // ---- Piezas ----
@@ -171,21 +155,6 @@ class PresentadorLiquidacion
     private function f($valor): ?float
     {
         return $valor === null ? null : (float) $valor;
-    }
-
-    private function aprobacion(LiquidacionAprobacion $a): array
-    {
-        return [
-            'id' => $a->id,
-            'ronda' => $a->ronda,
-            'step_order' => $a->step_order,
-            'description' => $a->description,
-            'decision' => $a->decision,
-            'decided_by' => $a->decided_by,
-            'decided_by_name' => $a->decisor?->name,
-            'comment' => $a->comment,
-            'decided_at' => $a->decided_at?->toIso8601String(),
-        ];
     }
 
     /** Campos propios de la liquidación, con los importes como números. */
@@ -197,8 +166,8 @@ class PresentadorLiquidacion
             'convenio_id' => $l->convenio_id,
             'productor_id' => $l->productor_id,
             'moneda' => $l->moneda,
-            'periodo_inicio' => $l->periodo_inicio->format('Y-m-d'),
-            'periodo_fin' => $l->periodo_fin->format('Y-m-d'),
+            'periodo_inicio' => $l->periodo_inicio?->format('Y-m-d'),
+            'periodo_fin' => $l->periodo_fin?->format('Y-m-d'),
             'cantidad' => $this->f($l->cantidad),
             'kilos' => $this->f($l->kilos),
             'bruto' => $this->f($l->bruto),
@@ -211,12 +180,8 @@ class PresentadorLiquidacion
             'monto_final' => $this->f($l->monto_final),
             'status' => $l->status,
             'origen' => $l->origen,
-            'paso_actual' => $l->paso_actual,
-            'ronda' => $l->ronda,
-            'enviada_at' => $l->enviada_at?->toIso8601String(),
-            'aprobada_at' => $l->aprobada_at?->toIso8601String(),
-            'rechazo_motivo' => $l->rechazo_motivo,
-            'rechazada_at' => $l->rechazada_at?->toIso8601String(),
+            'saldo_inicial' => $this->f($l->saldo_inicial),
+            'liquidada_at' => $l->liquidada_at?->toIso8601String(),
             'cancelada_at' => $l->cancelada_at?->toIso8601String(),
             'cancelada_motivo' => $l->cancelada_motivo,
             'notas' => $l->notas,

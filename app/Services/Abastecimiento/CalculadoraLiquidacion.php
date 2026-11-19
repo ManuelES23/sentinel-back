@@ -21,7 +21,7 @@ use Illuminate\Validation\ValidationException;
  * con `calibre_id` y el precio de ese calibre; la rezaga sigue siendo UNA sola por
  * liquidación (Σ rezaga ÷ Σ kilos de las cabeceras, que son la suma de sus renglones)
  * y el descuento se reparte en proporción al subtotal de cada renglón. Carga antes
- * `renglones.calibre` de las recepciones (lo hace `ReglasLiquidacion::validarSeleccion`).
+ * `renglones.calibre` de las recepciones (quien llama a la calculadora).
  */
 class CalculadoraLiquidacion
 {
@@ -71,16 +71,14 @@ class CalculadoraLiquidacion
 
             // Convenio por calibre: un renglón de liquidación por (recepción, calibre), cada uno con su
             // precio (el especial del calibre o, si no hay, el general). La cabecera es la suma de sus renglones.
-            $partes = $porCalibre
-                ? $r->renglones->map(fn ($c) => [(int) $c->calibre_id, $c->cantidad, $c->kilos, $c->rezaga_kg, $c->calibre?->nombre])->all()
-                : [[null, $r->cantidad, $r->kilos, $r->rezaga_kg, null]];
+            $partes = ValorACuenta::partes($convenio, $r);
             if ($partes === []) {
                 $sinRenglones[] = $folio;
 
                 continue;
             }
 
-            foreach ($partes as [$calibreId, $cantidad, $kilos, $rezaga, $nombreCalibre]) {
+            foreach ($partes as ['calibre_id' => $calibreId, 'cantidad' => $cantidad, 'kilos' => $kilos, 'rezaga_kg' => $rezaga, 'calibre' => $nombreCalibre]) {
                 $precio = PrecioVigente::enColeccion($precios, (int) $r->tipo_carga_id, $fecha, $calibreId);
                 if ($precio === null) {
                     $sinPrecio[] = $calibreId === null ? $folio : $folio.' ('.($nombreCalibre ?? 'calibre #'.$calibreId).')';
