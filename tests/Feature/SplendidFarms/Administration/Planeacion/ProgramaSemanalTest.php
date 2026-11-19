@@ -262,7 +262,8 @@ class ProgramaSemanalTest extends TestCase
     public function test_embarques_y_notas_en_el_payload(): void
     {
         $p = ProgramaSemanal::create(['lunes' => '2026-11-23', 'notas' => 'Revisar Vallarta']);
-        $base = ['programa_id' => $p->id, 'cultivo_id' => $this->cultivo->id, 'bodega_id' => $this->bodega('Nogales')->id];
+        $bulk = $this->presentacion('Bulk')->id;
+        $base = ['programa_id' => $p->id, 'cultivo_id' => $this->cultivo->id, 'bodega_id' => $this->bodega('Nogales')->id, 'presentacion_id' => $bulk];
         ProgramaEmbarque::create($base + ['tipo' => 'sencillo', 'dia' => 2, 'cargas' => 1]);
         ProgramaEmbarque::create($base + ['tipo' => 'full', 'dia' => 0, 'cargas' => 3]);
 
@@ -270,8 +271,8 @@ class ProgramaSemanalTest extends TestCase
 
         $this->assertSame('Revisar Vallarta', $d['programa']['notas']);
         $this->assertSame([
-            ['cultivo_id' => $this->cultivo->id, 'bodega_id' => $this->bodega('Nogales')->id, 'tipo' => 'full', 'dia' => 0, 'cargas' => 3],
-            ['cultivo_id' => $this->cultivo->id, 'bodega_id' => $this->bodega('Nogales')->id, 'tipo' => 'sencillo', 'dia' => 2, 'cargas' => 1],
+            ['cultivo_id' => $this->cultivo->id, 'bodega_id' => $this->bodega('Nogales')->id, 'presentacion_id' => $bulk, 'tipo' => 'full', 'dia' => 0, 'cargas' => 3],
+            ['cultivo_id' => $this->cultivo->id, 'bodega_id' => $this->bodega('Nogales')->id, 'presentacion_id' => $bulk, 'tipo' => 'sencillo', 'dia' => 2, 'cargas' => 1],
         ], $d['embarques']);
     }
 

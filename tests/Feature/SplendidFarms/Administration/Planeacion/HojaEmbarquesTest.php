@@ -4,6 +4,7 @@ namespace Tests\Feature\SplendidFarms\Administration\Planeacion;
 
 use App\Events\ProgramaSemanalUpdated;
 use App\Models\Cultivo;
+use App\Models\Planeacion\Presentacion;
 use App\Models\Planeacion\ProgramaEmbarque;
 use App\Models\Planeacion\ProgramaSemanal;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -49,23 +50,26 @@ class HojaEmbarquesTest extends TestCase
         return self::BASE.'/programa/'.($p ?? $this->programa)->id.'/notas';
     }
 
-    private function celda(string $bodega, string $tipo, int $dia, ?int $cargas, ?int $cultivoId = null): array
+    /** Por omisión, presentación «Bulk»; `$presentacion = false` = sin presentación (embarque anterior a pedirla). */
+    private function celda(string $bodega, string $tipo, int $dia, ?int $cargas, ?int $cultivoId = null, string|false $presentacion = 'Bulk'): array
     {
         return [
             'cultivo_id' => $cultivoId ?? $this->cultivo->id,
             'bodega_id' => $this->bodega($bodega)->id,
+            'presentacion_id' => $presentacion === false ? null : $this->presentacion($presentacion)->id,
             'tipo' => $tipo,
             'dia' => $dia,
             'cargas' => $cargas,
         ];
     }
 
-    private function embarque(string $bodega, string $tipo, int $dia, int $cargas, ?ProgramaSemanal $p = null): ProgramaEmbarque
+    private function embarque(string $bodega, string $tipo, int $dia, int $cargas, ?ProgramaSemanal $p = null, string|false $presentacion = 'Bulk'): ProgramaEmbarque
     {
         return ProgramaEmbarque::create([
             'programa_id' => ($p ?? $this->programa)->id,
             'cultivo_id' => $this->cultivo->id,
             'bodega_id' => $this->bodega($bodega)->id,
+            'presentacion_id' => $presentacion === false ? null : $this->presentacion($presentacion)->id,
             'tipo' => $tipo,
             'dia' => $dia,
             'cargas' => $cargas,
@@ -124,8 +128,8 @@ class HojaEmbarquesTest extends TestCase
         $this->embarque('Texas', 'full', 2, 1);
 
         $this->putJson($this->urlHoja(), ['celdas' => [
-            ['cultivo_id' => $this->cultivo->id, 'bodega_id' => $this->bodega('Texas')->id, 'tipo' => 'full', 'dia' => 1, 'cargas' => null],
-            ['cultivo_id' => $this->cultivo->id, 'bodega_id' => $this->bodega('Texas')->id, 'tipo' => 'full', 'dia' => 2, 'cargas' => ''],
+            ['cultivo_id' => $this->cultivo->id, 'bodega_id' => $this->bodega('Texas')->id, 'presentacion_id' => $this->presentacion('Bulk')->id, 'tipo' => 'full', 'dia' => 1, 'cargas' => null],
+            ['cultivo_id' => $this->cultivo->id, 'bodega_id' => $this->bodega('Texas')->id, 'presentacion_id' => $this->presentacion('Bulk')->id, 'tipo' => 'full', 'dia' => 2, 'cargas' => ''],
         ]])->assertOk();
 
         $this->assertSame([], $this->guardadas());
@@ -270,6 +274,81 @@ class HojaEmbarquesTest extends TestCase
         $this->assertSame([], $this->guardadas());
     }
 
+    public function test_cada_presentacion_es_una_celda_distinta(): void
+    {
+        $this->comoLogistica();
+        $this->embarque('Texas', 'full', 0, 3, null, 'Bulk');
+
+        // Mismo destino, tipo y día en otra presentación: otra fila, no pisa la de Bulk.
+        $this->guardar([
+            $this->celda('Texas', 'full', 0, 5, null, 'Tray'),
+            $this->celda('Texas', 'full', 1, 2, null, 'Bulk'),
+        ])->assertOk();
+
+        $porPresentacion = ProgramaEmbarque::where('programa_id', $this->programa->id)->get()
+            ->map(fn ($e) => [$e->presentacion->nombre, $e->dia, $e->cargas])->sortBy(fn ($f) => $f[0].$f[1])->values()->all();
+        $this->assertSame([['Bulk', 0, 3], ['Bulk', 1, 2], ['Tray', 0, 5]], $porPresentacion);
+
+        // Cambiar la de Tray no toca la de Bulk del mismo día; 0 borra solo la de Tray.
+        $this->guardar([$this->celda('Texas', 'full', 0, 0, null, 'Tray')])->assertOk();
+        $this->assertSame(3, ProgramaEmbarque::where('presentacion_id', $this->presentacion('Bulk')->id)->where('dia', 0)->value('cargas'));
+        $this->assertSame(0, ProgramaEmbarque::where('presentacion_id', $this->presentacion('Tray')->id)->count());
+    }
+
+    public function test_subir_cargas_exige_una_presentacion_valida(): void
+    {
+        $this->comoLogistica();
+        $otroCultivo = Cultivo::create(['nombre' => 'Pepino']);
+        $ajena = Presentacion::create(['cultivo_id' => $otroCultivo->id, 'nombre' => 'Granel']);
+        $this->presentacion('Tray')->update(['is_active' => false]);
+
+        $this->guardar([$this->celda('Texas', 'full', 0, 2, null, false)])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['celdas.0.presentacion_id' => 'Elige la presentación del embarque.']);
+
+        $celda = $this->celda('Texas', 'full', 0, 2);
+        $celda['presentacion_id'] = $ajena->id;
+        $this->guardar([$celda])->assertUnprocessable()->assertJsonValidationErrors(['celdas.0.presentacion_id']);
+
+        $this->guardar([$this->celda('Texas', 'full', 0, 2, null, 'Tray')])
+            ->assertUnprocessable()->assertJsonValidationErrors(['celdas.0.presentacion_id']);
+
+        $celda['presentacion_id'] = 999999;
+        $this->guardar([$celda])->assertUnprocessable()->assertJsonValidationErrors(['celdas.0.presentacion_id']);
+
+        $this->assertSame([], $this->guardadas());
+    }
+
+    public function test_un_embarque_sin_presentacion_se_puede_bajar_y_borrar_pero_no_subir(): void
+    {
+        $this->comoLogistica();
+        $this->embarque('Texas', 'full', 0, 4, null, false);
+        $this->embarque('Texas', 'full', 1, 2, null, false);
+        $this->presentacion('Tray')->update(['is_active' => false]);
+
+        // Bajar y borrar no piden presentación (ni que esté activa).
+        $this->guardar([
+            $this->celda('Texas', 'full', 0, 3, null, false),
+            $this->celda('Texas', 'full', 1, 0, null, false),
+        ])->assertOk();
+        $this->assertSame([['Texas', 'full', 0, 3]], $this->guardadas());
+
+        // Subir sin presentación, no.
+        $this->guardar([$this->celda('Texas', 'full', 0, 5, null, false)])
+            ->assertUnprocessable()->assertJsonValidationErrors(['celdas.0.presentacion_id']);
+        $this->assertSame([['Texas', 'full', 0, 3]], $this->guardadas());
+    }
+
+    public function test_una_presentacion_con_embarques_no_se_borra_del_catalogo(): void
+    {
+        Sanctum::actingAs($this->usuarioCon(['configuracion' => ['view', 'editar']]));
+        $this->embarque('Texas', 'full', 0, 4, null, 'Bulk');
+
+        $this->deleteJson(self::BASE.'/configuracion/presentaciones/'.$this->presentacion('Bulk')->id)
+            ->assertUnprocessable();
+        $this->assertNotNull($this->presentacion('Bulk'));
+    }
+
     public function test_embarques_exige_capturar(): void
     {
         Sanctum::actingAs($this->usuarioCon(['embarques' => ['view'], 'tablero-semanal' => ['view', 'editar-notas']]));
@@ -306,9 +385,10 @@ class HojaEmbarquesTest extends TestCase
 
         $d = $this->getJson(self::BASE.'/programa?lunes=2026-11-23')->assertOk()->json('data');
         $nogales = $this->bodega('Nogales')->id;
+        $bulk = $this->presentacion('Bulk')->id;
         $this->assertSame([
-            ['cultivo_id' => $this->cultivo->id, 'bodega_id' => $nogales, 'tipo' => 'full', 'dia' => 0, 'cargas' => 3],
-            ['cultivo_id' => $this->cultivo->id, 'bodega_id' => $nogales, 'tipo' => 'sencillo', 'dia' => 2, 'cargas' => 1],
+            ['cultivo_id' => $this->cultivo->id, 'bodega_id' => $nogales, 'presentacion_id' => $bulk, 'tipo' => 'full', 'dia' => 0, 'cargas' => 3],
+            ['cultivo_id' => $this->cultivo->id, 'bodega_id' => $nogales, 'presentacion_id' => $bulk, 'tipo' => 'sencillo', 'dia' => 2, 'cargas' => 1],
         ], $d['embarques']);
     }
 

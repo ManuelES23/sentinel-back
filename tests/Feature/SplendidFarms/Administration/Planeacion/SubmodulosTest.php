@@ -6,6 +6,7 @@ use App\Models\Application;
 use App\Models\Cultivo;
 use App\Models\Enterprise;
 use App\Models\Planeacion\BodegaDestino;
+use App\Models\Planeacion\Presentacion;
 use App\Models\Planeacion\ProgramaSemanal;
 use App\Models\User;
 use Illuminate\Database\QueryException;
@@ -256,7 +257,10 @@ class SubmodulosTest extends TestCase
         $bodega = BodegaDestino::firstOrCreate(['nombre' => 'Texas'], ['orden' => 1]);
         $programa = ProgramaSemanal::create(['lunes' => '2026-11-23', 'notas' => 'Junta del lunes']);
 
-        $celda = ['cultivo_id' => $cultivo->id, 'bodega_id' => $bodega->id, 'tipo' => 'full', 'dia' => 2, 'cargas' => 3, 'created_by' => $usuario->id];
+        $bulk = Presentacion::create(['cultivo_id' => $cultivo->id, 'nombre' => 'Bulk']);
+        $tray = Presentacion::create(['cultivo_id' => $cultivo->id, 'nombre' => 'Tray']);
+
+        $celda = ['cultivo_id' => $cultivo->id, 'bodega_id' => $bodega->id, 'presentacion_id' => $bulk->id, 'tipo' => 'full', 'dia' => 2, 'cargas' => 3, 'created_by' => $usuario->id];
         $programa->embarques()->create($celda);
 
         $this->assertSame('Junta del lunes', $programa->fresh()->notas);
@@ -264,6 +268,8 @@ class SubmodulosTest extends TestCase
 
         // Otro tipo en el mismo día sí cabe.
         $programa->embarques()->create(array_merge($celda, ['tipo' => 'sencillo']));
+        // Otra presentación, también.
+        $programa->embarques()->create(array_merge($celda, ['presentacion_id' => $tray->id]));
 
         $this->expectException(QueryException::class);
         $programa->embarques()->create(array_merge($celda, ['cargas' => 9]));
