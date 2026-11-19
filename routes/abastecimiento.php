@@ -80,6 +80,9 @@ Route::prefix('abastecimiento')->name('abastecimiento.')->group(function () {
     Route::post('liquidaciones/cuentas/{convenio}/pagos', [CuentaController::class, 'registrarPago'])->whereNumber('convenio')->name('liquidaciones.cuentas.pagos.store');
     Route::post('liquidaciones/cuentas/{convenio}/saldo-inicial', [CuentaController::class, 'saldoInicial'])->whereNumber('convenio')->name('liquidaciones.cuentas.saldo-inicial');
     Route::post('liquidaciones/pagos/{id}/cancelar', [CuentaController::class, 'cancelarPago'])->whereNumber('id')->name('liquidaciones.pagos.cancelar');
-    // «Liquidar total» (vista previa, liquidar y cancelar la liquidación) llega en una task posterior.
+    // «Liquidar total»: vista previa y liquidación del convenio completo, ficha y cancelación de la liquidación.
+    Route::post('liquidaciones/cuentas/{convenio}/previa', [LiquidacionController::class, 'previa'])->whereNumber('convenio')->name('liquidaciones.cuentas.previa');
+    Route::post('liquidaciones/cuentas/{convenio}/liquidar', [LiquidacionController::class, 'liquidar'])->whereNumber('convenio')->name('liquidaciones.cuentas.liquidar');
     Route::get('liquidaciones/{id}', [LiquidacionController::class, 'show'])->whereNumber('id')->name('liquidaciones.show');
+    Route::post('liquidaciones/{id}/cancelar', [LiquidacionController::class, 'cancelar'])->whereNumber('id')->name('liquidaciones.cancelar');
 });

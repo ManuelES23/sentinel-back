@@ -33,6 +33,25 @@ class PresentadorCuenta
     }
 
     /**
+     * Carga del evento en tiempo real de un pago. Como el de las liquidaciones, lo recibe cualquiera con acceso al
+     * módulo: sin montos, notas ni referencias.
+     *
+     * @return array{id: int, folio: string, tipo: string, status: string, convenio_id: int, productor_id: int, moneda: string}
+     */
+    public static function eventoPago(Abono $pago): array
+    {
+        return [
+            'id' => $pago->id,
+            'folio' => $pago->folio,
+            'tipo' => $pago->tipo,
+            'status' => $pago->status,
+            'convenio_id' => $pago->convenio_id,
+            'productor_id' => $pago->productor_id,
+            'moneda' => $pago->moneda,
+        ];
+    }
+
+    /**
      * Fila de la lista de cuentas.
      *
      * @param  array  $totales  los de este convenio en `CuentaConvenio::totales`

@@ -2,6 +2,8 @@
 
 namespace App\Services\Abastecimiento;
 
+use App\Models\Abastecimiento\Abono;
+use App\Models\Abastecimiento\Convenio;
 use App\Models\Abastecimiento\Liquidacion;
 use App\Models\Abastecimiento\LiquidacionDetalle;
 use App\Models\Enterprise;
@@ -73,6 +75,8 @@ class PresentadorLiquidacion
             'detalles.recepcion.tipoCarga:id,nombre',
             'detalles.calibre:id,nombre',
         ]);
+        // El convenio completo (la relación viene recortada): la cuenta necesita `usa_calibres` y sus precios.
+        $saldo = SaldoProductor::deConvenio(Convenio::withTrashed()->findOrFail($l->convenio_id));
 
         return $this->base($l) + [
             'convenio' => $this->datosConvenio($l),
@@ -95,6 +99,22 @@ class PresentadorLiquidacion
                 'descuento' => $this->f($d->descuento),
                 'a_pagar' => $this->f($d->a_pagar),
             ])->values()->all(),
+            // Renglón aparte «Saldo inicial» de la ficha y el PDF: los saldos iniciales vigentes del convenio.
+            'saldos_iniciales' => Abono::where('convenio_id', $l->convenio_id)
+                ->where('tipo', 'saldo_inicial')
+                ->where('status', '!=', 'cancelado')
+                ->orderBy('fecha')->orderBy('id')
+                ->get(['id', 'folio', 'fecha', 'monto', 'notas'])
+                ->map(fn (Abono $p) => [
+                    'id' => $p->id,
+                    'folio' => $p->folio,
+                    'fecha' => $p->fecha->format('Y-m-d'),
+                    'monto' => (float) $p->monto,
+                    'motivo' => $p->notas,
+                ])->values()->all(),
+            // Lo pagado y lo que falta de la cuenta del convenio (`SaldoProductor`, la misma regla que la cuenta).
+            'pagado' => $saldo['pagado'],
+            'restante' => $saldo['por_pagar'],
             'puede' => $this->puede($l, $empresa, $usuario),
             'empresa' => [
                 'id' => $empresa->id,

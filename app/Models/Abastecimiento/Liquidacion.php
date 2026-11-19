@@ -124,6 +124,12 @@ class Liquidacion extends Model
         return $this->hasMany(Recepcion::class, 'liquidacion_id');
     }
 
+    /** Pagos ligados por `abs_abonos.liquidacion_id` (los de tipo `liquidacion` que registra «Liquidar total»). */
+    public function pagos(): HasMany
+    {
+        return $this->hasMany(Abono::class, 'liquidacion_id');
+    }
+
     public function creador(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');

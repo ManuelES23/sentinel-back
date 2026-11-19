@@ -205,6 +205,60 @@ class OrdenBloqueoDineroTest extends TestCase
         TransaccionDinero::ejecutar(fn () => TransaccionDinero::bloquearLiquidacion($this->otra->id, $liq->id));
     }
 
+    public function test_liquidar_bloquea_productor_convenio_y_recepciones_antes_de_leer_dinero_y_escribir(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        $r1 = $this->crearRecepcion($convenio);
+        $this->crearRecepcion($convenio, ['fecha' => '2026-06-02']);
+        $this->crearPago($convenio, [], [$r1->id => 500]);
+        Sanctum::actingAs($this->usuario(['view', 'liquidar']));
+
+        $this->grabar();
+        $this->postJson("/api/splendidbyporvenir/administration/abastecimiento/liquidaciones/cuentas/{$convenio->id}/liquidar", [
+            'registrar_pago' => true, 'pago' => ['fecha' => '2026-06-30', 'metodo_pago' => 'transferencia'],
+        ])->assertCreated();
+
+        $this->assertEnOrden([
+            'select * from "abs_productores"',
+            'select * from "abs_convenios"',
+            'select * from "abs_recepciones"',
+            'insert into "abs_liquidaciones"',
+            'insert into "abs_liquidacion_detalles"',
+            'update "abs_recepciones"',
+            'insert into "abs_abonos"',
+        ]);
+        $tx = $this->transaccion();
+        $recepciones = $this->primera($tx, 'select * from "abs_recepciones"');
+        $this->assertStringContainsString('order by "id" asc', $tx[$recepciones]);
+        // Ni pagos ni liquidaciones se leen antes de bloquear las recepciones.
+        foreach (array_slice($tx, 0, $recepciones) as $s) {
+            $this->assertFalse(str_contains($s, '"abs_abonos"') || str_contains($s, '"abs_liquidaciones"'), "Se leyó dinero antes de bloquear: {$s}");
+        }
+    }
+
+    public function test_cancelar_liquidacion_bloquea_en_orden_antes_de_escribir(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        $liq = $this->crearLiquidacion($convenio, ['monto_final' => 1000]);
+        $this->crearRecepcion($convenio, ['liquidacion_id' => $liq->id]);
+        $this->crearPago($convenio, ['tipo' => 'liquidacion', 'liquidacion_id' => $liq->id, 'monto' => 1000]);
+        Sanctum::actingAs($this->usuario(['view', 'delete']));
+
+        $this->grabar();
+        $this->postJson("/api/splendidbyporvenir/administration/abastecimiento/liquidaciones/{$liq->id}/cancelar", [
+            'motivo' => 'Precio mal capturado',
+        ])->assertOk();
+
+        $this->assertEnOrden([
+            'select * from "abs_productores"',
+            'select * from "abs_convenios"',
+            'select * from "abs_recepciones"',
+            'select * from "abs_abonos"',
+            'select * from "abs_liquidaciones"',
+            'update "abs_liquidaciones"',
+        ]);
+    }
+
     public function test_bloquear_pago_devuelve_convenio_y_pago_y_da_404_fuera_de_la_empresa(): void
     {
         $convenio = $this->crearConvenio($this->sbp);
