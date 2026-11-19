@@ -208,6 +208,12 @@ class KardexYReporteConsumoTest extends TestCase
             ->firstWhere('product_id', $this->cajaB15->id);
         $this->assertEqualsWithDelta(120 + 240, (float) $stock['production_consumed_quantity'], 0.0001);
 
+        // Existencias ya no muestra el gasto: con sin_consumo=1 no se calcula y vale 0.
+        $sinGasto = collect($this->reporte('/stock?sin_consumo=1')->assertOk()->json('data.stock'))
+            ->firstWhere('product_id', $this->cajaB15->id);
+        $this->assertNotNull($sinGasto);
+        $this->assertEqualsWithDelta(0.0, (float) $sinGasto['production_consumed_quantity'], 0.0001);
+
         $this->assertCapasConsistentes();
     }
 }

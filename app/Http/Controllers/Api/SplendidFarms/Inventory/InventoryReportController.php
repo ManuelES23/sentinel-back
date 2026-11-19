@@ -129,14 +129,18 @@ class InventoryReportController extends Controller
             ]);
         }
 
-        $consumptionDateFrom = $request->input('consumption_date_from');
-        $consumptionDateTo = $request->input('consumption_date_to');
-        $productionConsumption = $this->getProductionConsumptionData(
-            $ownEntityIds,
-            $consumptionDateFrom,
-            $consumptionDateTo,
-        );
-        $consumptionMap = $productionConsumption['map_by_entity_product'];
+        // El gasto de producción por renglón (production_consumed_*) es caro de calcular; la pantalla de
+        // Existencias ya no lo muestra y manda sin_consumo=1 para saltárselo (vale 0). Sin el parámetro
+        // se sigue calculando, para un front anterior.
+        $consumptionMap = [];
+        if (! $request->boolean('sin_consumo')) {
+            $productionConsumption = $this->getProductionConsumptionData(
+                $ownEntityIds,
+                $request->input('consumption_date_from'),
+                $request->input('consumption_date_to'),
+            );
+            $consumptionMap = $productionConsumption['map_by_entity_product'];
+        }
 
         $query = InventoryStock::with([
             'product:id,code,name,sku,min_stock,max_stock,reorder_point,cost_price,sale_price,image,brand_id,category_id,unit_id,dias_alerta_caducidad',
