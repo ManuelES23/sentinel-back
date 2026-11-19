@@ -330,6 +330,78 @@ class ConfiguracionTest extends TestCase
         $this->assertSame(1300, ConfiguracionPlaneacion::valor('cajas_por_carga', 1040));
     }
 
+    public function test_cajas_por_presentacion_guarda_full_y_sencillo(): void
+    {
+        $this->conPermisos();
+        $bulk = $this->presentacion('Bulk');
+        $tray = $this->presentacion('Tray');
+
+        $this->putJson(self::URL.'/configuracion/cajas-por-presentacion', ['filas' => [
+            ['presentacion_id' => $bulk->id, 'cajas_full' => 2080, 'cajas_sencillo' => 1040],
+            ['presentacion_id' => $tray->id, 'cajas_full' => 1800, 'cajas_sencillo' => null],
+        ]])->assertOk()
+            ->assertJsonPath('data.0.cajas_full', 2080)
+            ->assertJsonPath('data.1.cajas_sencillo', null);
+
+        $this->assertSame(2080, $bulk->fresh()->cajas_full);
+        $this->assertSame(1040, $bulk->fresh()->cajas_sencillo);
+        $this->assertSame(1800, $tray->fresh()->cajas_full);
+        $this->assertNull($tray->fresh()->cajas_sencillo);
+
+        // La configuración las devuelve junto a cada presentación.
+        $presentaciones = collect($this->getJson(self::URL.'/configuracion')->assertOk()->json('data.presentaciones'));
+        $this->assertSame(2080, $presentaciones->firstWhere('id', $bulk->id)['cajas_full']);
+        $this->assertNull($presentaciones->firstWhere('id', $tray->id)['cajas_sencillo']);
+
+        // Vaciar una presentación la deja sin capturar.
+        $this->putJson(self::URL.'/configuracion/cajas-por-presentacion', ['filas' => [
+            ['presentacion_id' => $bulk->id, 'cajas_full' => null, 'cajas_sencillo' => null],
+        ]])->assertOk();
+        $this->assertNull($bulk->fresh()->cajas_full);
+        // Lo que no viene en la petición no cambia.
+        $this->assertSame(1800, $tray->fresh()->cajas_full);
+    }
+
+    public function test_cajas_por_presentacion_valida_y_no_guarda_nada_si_falla(): void
+    {
+        $this->conPermisos();
+        $bulk = $this->presentacion('Bulk');
+        $tray = $this->presentacion('Tray');
+        $bulk->update(['cajas_full' => 2000]);
+
+        foreach ([0, 5001, 'abc', 1.5] as $malo) {
+            $this->putJson(self::URL.'/configuracion/cajas-por-presentacion', ['filas' => [
+                ['presentacion_id' => $tray->id, 'cajas_full' => 900, 'cajas_sencillo' => 450],
+                ['presentacion_id' => $bulk->id, 'cajas_full' => $malo, 'cajas_sencillo' => 1],
+            ]])->assertStatus(422)->assertJsonValidationErrors(['filas.1.cajas_full']);
+        }
+        // Presentación inexistente, repetida o sin las dos claves.
+        $this->putJson(self::URL.'/configuracion/cajas-por-presentacion', ['filas' => [
+            ['presentacion_id' => 999999, 'cajas_full' => 1, 'cajas_sencillo' => 1],
+        ]])->assertStatus(422);
+        $this->putJson(self::URL.'/configuracion/cajas-por-presentacion', ['filas' => [
+            ['presentacion_id' => $bulk->id, 'cajas_full' => 1, 'cajas_sencillo' => 1],
+            ['presentacion_id' => $bulk->id, 'cajas_full' => 2, 'cajas_sencillo' => 2],
+        ]])->assertStatus(422);
+        $this->putJson(self::URL.'/configuracion/cajas-por-presentacion', ['filas' => [
+            ['presentacion_id' => $bulk->id, 'cajas_full' => 1],
+        ]])->assertStatus(422);
+
+        $this->assertNull($tray->fresh()->cajas_full);
+        $this->assertSame(2000, $bulk->fresh()->cajas_full);
+    }
+
+    public function test_cajas_por_presentacion_exige_permiso_de_edicion(): void
+    {
+        $this->conPermisos(['configuracion' => ['view']]);
+        $bulk = $this->presentacion('Bulk');
+
+        $this->putJson(self::URL.'/configuracion/cajas-por-presentacion', ['filas' => [
+            ['presentacion_id' => $bulk->id, 'cajas_full' => 1, 'cajas_sencillo' => 1],
+        ]])->assertForbidden();
+        $this->assertNull($bulk->fresh()->cajas_full);
+    }
+
     public function test_recetas_combinacion_reemplaza_todas_las_filas(): void
     {
         $this->conPermisos();

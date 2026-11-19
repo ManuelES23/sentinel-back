@@ -85,7 +85,7 @@ class ConfiguracionPlaneacionController extends Controller
                 'bodegas' => BodegaDestino::orderBy('orden')->orderBy('id')->get()
                     ->map(fn ($m) => $this->catalogo($m))->all(),
                 'presentaciones' => $presentaciones
-                    ->map(fn ($m) => $this->catalogo($m) + ['cultivo_id' => $m->cultivo_id])->all(),
+                    ->map(fn ($m) => $this->formatear('presentaciones', $m))->all(),
                 'tipos_empaque' => TipoEmpaque::orderBy('orden')->orderBy('id')->get()
                     ->map(fn ($m) => $this->catalogo($m))->all(),
                 'grupos' => $grupos,
@@ -376,6 +376,43 @@ class ConfiguracionPlaneacionController extends Controller
     }
 
     /**
+     * Cajas que lleva un Full y un Sencillo de cada presentación. Guarda todas las
+     * filas o ninguna; una caja nula deja la presentación sin capturar.
+     */
+    public function cajasPorPresentacion(Request $request): JsonResponse
+    {
+        $this->exigirPermiso('configuracion', 'editar');
+
+        $datos = $request->validate([
+            'filas' => ['required', 'array', 'min:1', 'max:500'],
+            'filas.*.presentacion_id' => ['required', 'integer', 'distinct', Rule::exists('plan_presentaciones', 'id')],
+            'filas.*.cajas_full' => ['present', 'nullable', 'integer', 'min:1', 'max:5000'],
+            'filas.*.cajas_sencillo' => ['present', 'nullable', 'integer', 'min:1', 'max:5000'],
+        ], [
+            'filas.*.cajas_full.min' => 'Las cajas del Full deben ser de 1 a 5,000.',
+            'filas.*.cajas_full.max' => 'Las cajas del Full deben ser de 1 a 5,000.',
+            'filas.*.cajas_sencillo.min' => 'Las cajas del Sencillo deben ser de 1 a 5,000.',
+            'filas.*.cajas_sencillo.max' => 'Las cajas del Sencillo deben ser de 1 a 5,000.',
+        ]);
+
+        DB::transaction(function () use ($datos) {
+            foreach ($datos['filas'] as $fila) {
+                Presentacion::whereKey($fila['presentacion_id'])->update([
+                    'cajas_full' => $fila['cajas_full'],
+                    'cajas_sencillo' => $fila['cajas_sencillo'],
+                ]);
+            }
+        });
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Cajas por presentación guardadas.',
+            'data' => Presentacion::orderBy('cultivo_id')->orderBy('orden')->orderBy('id')->get()
+                ->map(fn ($m) => $this->formatear('presentaciones', $m))->all(),
+        ]);
+    }
+
+    /**
      * Inventario inicial manual de un grupo en esta semana (crea o actualiza).
      * Con `cajas: null` se quita y el grupo vuelve a arrastrar el final del
      * programa anterior. Solo avisa en tiempo real si el valor cambió.
@@ -501,7 +538,11 @@ class ConfiguracionPlaneacionController extends Controller
 
     private function formatear(string $catalogo, Model $fila): array
     {
-        return $this->catalogo($fila) + ($catalogo === 'presentaciones' ? ['cultivo_id' => $fila->cultivo_id] : []);
+        return $this->catalogo($fila) + ($catalogo === 'presentaciones' ? [
+            'cultivo_id' => $fila->cultivo_id,
+            'cajas_full' => $fila->cajas_full,
+            'cajas_sencillo' => $fila->cajas_sencillo,
+        ] : []);
     }
 
     private function catalogo(Model $m): array
