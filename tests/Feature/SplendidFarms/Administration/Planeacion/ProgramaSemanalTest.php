@@ -292,6 +292,18 @@ class ProgramaSemanalTest extends TestCase
         $this->assertContains($status, [404, 405], "cortes/repartir respondió {$status}");
     }
 
+    public function test_el_catalogo_de_presentaciones_trae_las_cajas_de_full_y_sencillo(): void
+    {
+        $this->presentacion('Bulk')->update(['cajas_full' => 2080, 'cajas_sencillo' => 1040]);
+
+        $presentaciones = collect($this->semana('2026-11-23')->assertOk()->json('data.catalogos.presentaciones'));
+
+        $bulk = $presentaciones->firstWhere('id', $this->presentacion('Bulk')->id);
+        $this->assertSame(2080, $bulk['cajas_full']);
+        $this->assertSame(1040, $bulk['cajas_sencillo']);
+        $this->assertNull($presentaciones->firstWhere('id', $this->presentacion('Tray')->id)['cajas_full']);
+    }
+
     public function test_semana_sin_temporadas_ni_renglones(): void
     {
         $d = $this->semana('2027-08-02')->assertOk()->json('data');

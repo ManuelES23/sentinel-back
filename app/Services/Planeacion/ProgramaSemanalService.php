@@ -347,7 +347,11 @@ class ProgramaSemanalService
         return [
             'bodegas' => BodegaDestino::orderBy('orden')->orderBy('id')->get()->map($fila)->all(),
             'presentaciones' => Presentacion::orderBy('cultivo_id')->orderBy('orden')->orderBy('id')->get()
-                ->map(fn ($m) => $fila($m) + ['cultivo_id' => $m->cultivo_id])->all(),
+                ->map(fn ($m) => $fila($m) + [
+                    'cultivo_id' => $m->cultivo_id,
+                    'cajas_full' => $m->cajas_full,
+                    'cajas_sencillo' => $m->cajas_sencillo,
+                ])->all(),
             'tipos_empaque' => TipoEmpaque::orderBy('orden')->orderBy('id')->get()->map($fila)->all(),
             'cajas_por_carga' => ConfiguracionPlaneacion::valor('cajas_por_carga', 1040),
         ];
