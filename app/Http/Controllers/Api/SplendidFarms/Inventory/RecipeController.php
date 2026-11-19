@@ -129,6 +129,7 @@ class RecipeController extends Controller
             'items.*.is_default' => 'nullable|boolean',
             'items.*.solo_interno' => 'nullable|boolean',
             'items.*.calibre_id' => 'nullable|exists:calibres,id',
+            'items.*.consumo' => 'nullable|in:por_caja,al_armar,al_cerrar',
             // Calibres y PLUs
             'calibres' => 'nullable|array',
             'calibres.*.calibre_id' => 'required|exists:calibres,id',
@@ -186,7 +187,7 @@ class RecipeController extends Controller
             }
 
             foreach ($items as $index => $item) {
-                $recipe->items()->create(array_merge($item, [
+                $recipe->items()->create(array_merge($this->sinConsumoNulo($item), [
                     'sort_order' => $item['sort_order'] ?? $index,
                     'enterprise_id' => $recipe->enterprise_id,
                 ]));
@@ -302,6 +303,7 @@ class RecipeController extends Controller
             'items.*.is_default' => 'nullable|boolean',
             'items.*.solo_interno' => 'nullable|boolean',
             'items.*.calibre_id' => 'nullable|exists:calibres,id',
+            'items.*.consumo' => 'nullable|in:por_caja,al_armar,al_cerrar',
             // Calibres y PLUs
             'calibres' => 'nullable|array',
             'calibres.*.calibre_id' => 'required|exists:calibres,id',
@@ -366,7 +368,7 @@ class RecipeController extends Controller
                 $recipe->items()->delete();
 
                 foreach ($items as $index => $item) {
-                    $recipe->items()->create(array_merge($item, [
+                    $recipe->items()->create(array_merge($this->sinConsumoNulo($item), [
                         'sort_order' => $item['sort_order'] ?? $index,
                         'enterprise_id' => $recipe->enterprise_id,
                     ]));
@@ -490,6 +492,7 @@ class RecipeController extends Controller
             'is_default' => 'nullable|boolean',
             'solo_interno' => 'nullable|boolean',
             'calibre_id' => 'nullable|exists:calibres,id',
+            'consumo' => 'nullable|in:por_caja,al_armar,al_cerrar',
         ]);
 
         // Verificar duplicado solo para items sin grupo o dentro del mismo grupo
@@ -518,7 +521,7 @@ class RecipeController extends Controller
 
         $validated['enterprise_id'] = $recipe->enterprise_id;
 
-        $item = $recipe->items()->create($validated);
+        $item = $recipe->items()->create($this->sinConsumoNulo($validated));
         $item->load(['product:id,name,code', 'unit:id,name,abbreviation', 'calibre:id,nombre,valor']);
 
         // Recalcular costo
@@ -559,9 +562,10 @@ class RecipeController extends Controller
             'is_default' => 'nullable|boolean',
             'solo_interno' => 'nullable|boolean',
             'calibre_id' => 'nullable|exists:calibres,id',
+            'consumo' => 'nullable|in:por_caja,al_armar,al_cerrar',
         ]);
 
-        $item->update($validated);
+        $item->update($this->sinConsumoNulo($validated));
         $item->load(['product:id,name,code', 'unit:id,name,abbreviation', 'calibre:id,nombre,valor']);
 
         // Recalcular costo
@@ -618,6 +622,19 @@ class RecipeController extends Controller
                 'estimated_cost' => $recipe->estimated_cost,
             ],
         ]);
+    }
+
+    /**
+     * `consumo` es NOT NULL con default 'por_caja': un null explícito no debe
+     * pisar el valor existente ni romper el insert.
+     */
+    private function sinConsumoNulo(array $item): array
+    {
+        if (array_key_exists('consumo', $item) && $item['consumo'] === null) {
+            unset($item['consumo']);
+        }
+
+        return $item;
     }
 
     /**

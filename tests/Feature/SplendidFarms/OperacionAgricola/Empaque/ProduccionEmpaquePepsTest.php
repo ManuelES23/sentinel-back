@@ -13,7 +13,7 @@ use Tests\TestCase;
 
 /**
  * El consumo de insumos de una producción de Empaque mueve capas PEPS con referencia
- * "empaque_produccion:{id}" y su reverso (editar/borrar) devuelve las mismas porciones.
+ * "empaque_consumo:{id}" por renglón y su reverso (editar/borrar) devuelve las mismas porciones.
  */
 class ProduccionEmpaquePepsTest extends TestCase
 {
@@ -48,6 +48,10 @@ class ProduccionEmpaquePepsTest extends TestCase
             'enterprise_id' => $this->enterprise->id,
             'code' => 'RCP-EMP-01',
             'name' => 'Caja mango',
+            // Producción solo acepta recetas de empaque activas.
+            'recipe_type' => 'empaque',
+            'status' => 'active',
+            'is_active' => true,
             'output_quantity' => 1,
         ]);
         $this->receta->items()->create([
