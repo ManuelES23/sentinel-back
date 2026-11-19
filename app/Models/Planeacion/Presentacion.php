@@ -13,10 +13,12 @@ class Presentacion extends Model
 {
     protected $table = 'plan_presentaciones';
 
-    protected $fillable = ['cultivo_id', 'nombre', 'orden', 'is_active'];
+    protected $fillable = ['cultivo_id', 'nombre', 'cajas_full', 'cajas_sencillo', 'orden', 'is_active'];
 
     protected $casts = [
         'cultivo_id' => 'integer',
+        'cajas_full' => 'integer',
+        'cajas_sencillo' => 'integer',
         'orden' => 'integer',
         'is_active' => 'boolean',
     ];
