@@ -24,6 +24,8 @@ Route::prefix('organizacion')->group(function () {
         ->parameters(['tipos-entidades' => 'entityType']);
     // Entidades externas disponibles para vincular
     Route::get('entidades/disponibles-externas', [EntityController::class, 'externalCandidates']);
+    // Usuarios que pueden ser encargados de un almacén (acceso activo a la empresa)
+    Route::get('entidades/encargados-disponibles', [EntityController::class, 'encargadosDisponibles']);
     // Vincular / desvincular entidad de otra empresa (sin crear copia)
     Route::post('entidades/vincular', [EntityController::class, 'vincular']);
     Route::delete('entidades/{entity}/desvincular', [EntityController::class, 'desvincular']);

@@ -178,9 +178,12 @@ class CapasCosto
     /**
      * Devuelve a $origen (o la lleva a $destino) las porciones no devueltas de una salida,
      * de la última a la primera, valuadas al costo del propio consumo (no al actual de la capa).
+     * Con $crearSiFalta = false lo que no tenga porciones NO entra (no inventa existencia) y el
+     * resultado trae solo lo realmente devuelto.
      */
     public function devolver(Cubeta $origen, float $cantidad, ?int $detalleId = null, ?string $referencia = null,
-        ?Cubeta $destino = null, float $costoRespaldo = 0.0, ?int $movimientoId = null): ResultadoMovimiento
+        ?Cubeta $destino = null, float $costoRespaldo = 0.0, ?int $movimientoId = null,
+        bool $crearSiFalta = true): ResultadoMovimiento
     {
         $cantidad = round($cantidad, 4);
         if ($cantidad <= self::TOL) {
@@ -233,6 +236,10 @@ class CapasCosto
             }
         }
 
+        if ($restante > self::TOL && ! $crearSiFalta) {
+            return new ResultadoMovimiento(round($cantidad - $restante, 4), $importe);
+        }
+
         if ($restante > self::TOL) {
             // Salida anterior al despliegue (sin porciones): entra al costo de respaldo.
             // No se llama a entrar(): conciliaría contra una fila que el llamador aún no ajusta
@@ -250,6 +257,54 @@ class CapasCosto
         }
 
         return new ResultadoMovimiento($cantidad, $importe);
+    }
+
+    /**
+     * Pasa $cantidad de las porciones vigentes (cantidad − cantidad_devuelta) de la referencia $de
+     * a porciones nuevas con referencia $a (misma capa y costo), de la más nueva a la más vieja.
+     * No toca capas ni filas de stock: solo cambia a qué referencia se devolverá lo consumido.
+     * Si $de tiene menos vigente que $cantidad, mueve lo que hay. Devuelve el importe movido.
+     */
+    public function partirReferencia(string $de, string $a, float $cantidad): float
+    {
+        $restante = round($cantidad, 4);
+        if ($restante <= self::TOL || $de === $a) {
+            return 0.0;
+        }
+
+        $consumos = ConsumoCapa::query()
+            ->where('referencia', $de)
+            ->whereColumn('cantidad_devuelta', '<', 'cantidad')
+            ->orderByDesc('id')
+            ->lockForUpdate()
+            ->get();
+
+        $importe = 0.0;
+        foreach ($consumos as $consumo) {
+            $libre = round((float) $consumo->cantidad - (float) $consumo->cantidad_devuelta, 4);
+            $toma = round(min($restante, $libre), 4);
+            if ($toma <= self::TOL) {
+                continue;
+            }
+
+            $consumo->update(['cantidad' => round((float) $consumo->cantidad - $toma, 4)]);
+            ConsumoCapa::create([
+                'layer_id' => $consumo->layer_id,
+                'movement_id' => $consumo->movement_id,
+                'movement_detail_id' => $consumo->movement_detail_id,
+                'referencia' => $a,
+                'cantidad' => $toma,
+                'unit_cost' => $consumo->unit_cost,
+                'cantidad_devuelta' => 0,
+            ]);
+            $importe += $toma * (float) $consumo->unit_cost;
+            $restante = round($restante - $toma, 4);
+            if ($restante <= self::TOL) {
+                break;
+            }
+        }
+
+        return $importe;
     }
 
     /**

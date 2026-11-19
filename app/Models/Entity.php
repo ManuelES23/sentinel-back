@@ -23,6 +23,7 @@ class Entity extends Model
         'description',
         'location',
         'responsible',
+        'encargado_user_id',
         'area_m2',
         'is_active',
         'is_external',
@@ -128,6 +129,11 @@ class Entity extends Model
     public function branch()
     {
         return $this->belongsTo(Branch::class);
+    }
+
+    public function encargado()
+    {
+        return $this->belongsTo(User::class, 'encargado_user_id');
     }
 
     public function entityType()

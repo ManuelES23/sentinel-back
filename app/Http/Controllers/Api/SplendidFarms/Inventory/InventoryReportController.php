@@ -9,6 +9,7 @@ use App\Models\InventoryStock;
 use App\Models\InventoryKardex;
 use App\Models\Product;
 use App\Models\ProduccionEmpaque;
+use App\Models\ProduccionEmpaqueConsumo;
 use App\Models\ProduccionEmpaqueDetalle;
 use App\Services\Inventory\AlmacenAccessService;
 use Illuminate\Http\Request;
@@ -182,6 +183,11 @@ class InventoryReportController extends Controller
             $query->where('quantity', '<=', 0);
         }
 
+        // Solo faltantes (existencia negativa por consumo de producción)
+        if ($request->boolean('solo_negativos')) {
+            $query->where('quantity', '<', 0);
+        }
+
         // Filtrar por lote
         if ($request->filled('lot_number')) {
             $query->where('lot_number', $request->lot_number);
@@ -199,9 +205,16 @@ class InventoryReportController extends Controller
 
         $stock = $query->get();
 
+        // Desde cuándo está en faltante. Las filas ya negativas antes de la migración no traen
+        // negativo_desde: se usa el último movimiento para que el front siempre tenga una fecha.
+        // Las filas con existencia >= 0 quedan en null.
+        $faltanteDesde = fn (InventoryStock $item) => (float) $item->quantity < 0
+            ? ($item->negativo_desde ?? $item->last_movement_at)
+            : null;
+
         // Agrupar por producto si se solicita
         if ($request->boolean('grouped_by_product')) {
-            $stock = $stock->groupBy('product_id')->map(function ($items) {
+            $stock = $stock->groupBy('product_id')->map(function ($items) use ($faltanteDesde) {
                 $product = $items->first()->product;
                 $totalConsumedQuantity = $items->sum('production_consumed_quantity');
                 $totalConsumedCost = $items->sum('production_consumed_cost');
@@ -214,7 +227,7 @@ class InventoryReportController extends Controller
                     'total_value' => round((float) $items->sum('total_cost'), 4),
                     'production_consumed_quantity' => round((float) $totalConsumedQuantity, 4),
                     'production_consumed_cost' => round((float) $totalConsumedCost, 4),
-                    'locations' => $items->map(function ($item) {
+                    'locations' => $items->map(function ($item) use ($faltanteDesde) {
                         return [
                             'entity_id' => $item->entity_id,
                             'entity_type' => $item->entity_type,
@@ -222,12 +235,14 @@ class InventoryReportController extends Controller
                             'quantity' => $item->quantity,
                             'lot_number' => $item->lot_number,
                             'expiry_date' => $item->expiry_date,
+                            'negativo_desde' => $faltanteDesde($item),
                         ];
                     }),
                 ];
             })->values();
         } else {
-            $stock->each(function ($item) use ($consumptionMap) {
+            $stock->each(function ($item) use ($consumptionMap, $faltanteDesde) {
+                $item->setAttribute('negativo_desde', $faltanteDesde($item));
                 $key = $item->entity_id . ':' . $item->product_id;
                 $consumed = $consumptionMap[$key] ?? ['quantity' => 0, 'cost' => 0];
 
@@ -449,6 +464,46 @@ class InventoryReportController extends Controller
             }
         };
 
+        // Fuente principal: lo vigente del registro de consumos de la producción (cantidad que sigue
+        // descontada y costo PEPS proporcional). Fecha = la de la entrada o, sin entrada, la del pallet;
+        // los pallets borrados quedan fuera aunque su renglón siga en la tabla (ya están devueltos).
+        $registroQuery = ProduccionEmpaqueConsumo::query()
+            ->join('produccion_empaque as pe', function ($join) {
+                $join->on('pe.id', '=', 'produccion_empaque_consumos.produccion_id')
+                    ->whereNull('pe.deleted_at');
+            })
+            ->leftJoin('produccion_empaque_detalles as ped', 'ped.id', '=', 'produccion_empaque_consumos.detalle_id')
+            ->whereIn('produccion_empaque_consumos.entity_id', $entityIds)
+            ->whereColumn('produccion_empaque_consumos.cantidad_devuelta', '<', 'produccion_empaque_consumos.cantidad')
+            ->where('produccion_empaque_consumos.cantidad', '>', 0)
+            ->select([
+                'produccion_empaque_consumos.entity_id',
+                'produccion_empaque_consumos.product_id',
+                'produccion_empaque_consumos.cantidad',
+                'produccion_empaque_consumos.cantidad_devuelta',
+                'produccion_empaque_consumos.costo_total',
+                'ped.marca as detalle_marca',
+                'pe.marca as produccion_marca',
+            ]);
+
+        if ($dateFrom) {
+            $registroQuery->whereRaw('DATE(COALESCE(ped.fecha_produccion, pe.fecha_produccion)) >= ?', [$dateFrom]);
+        }
+        if ($dateTo) {
+            $registroQuery->whereRaw('DATE(COALESCE(ped.fecha_produccion, pe.fecha_produccion)) <= ?', [$dateTo]);
+        }
+
+        foreach ($registroQuery->get() as $renglon) {
+            $cantidad = (float) $renglon->cantidad;
+            $vigente = round($cantidad - (float) $renglon->cantidad_devuelta, 4);
+            $costo = round((float) $renglon->costo_total * $vigente / $cantidad, 4);
+            $marca = trim((string) ($renglon->detalle_marca ?? $renglon->produccion_marca ?? ''));
+
+            $accumulate((int) $renglon->entity_id, (int) $renglon->product_id, $marca, $vigente, $costo);
+        }
+
+        // Pallets congelados (anteriores al registro, sin ningún renglón): se conserva el cálculo teórico
+        // con la receta para que los reportes históricos no cambien.
         $detallesQuery = ProduccionEmpaqueDetalle::query()
             ->with([
                 'produccion:id,entity_id,fecha_produccion,is_cola,deleted_at',
@@ -456,7 +511,7 @@ class InventoryReportController extends Controller
                 'recipe.items:id,recipe_id,product_id,quantity,waste_percentage,cost_per_unit,is_optional,group_key,is_default',
             ])
             ->whereHas('produccion', function ($q) use ($entityIds) {
-                $q->whereIn('entity_id', $entityIds);
+                $q->whereIn('entity_id', $entityIds)->doesntHave('consumos');
             })
             ->whereNotNull('recipe_id')
             ->where('total_cajas', '>', 0);
@@ -491,7 +546,8 @@ class InventoryReportController extends Controller
             ->whereIn('entity_id', $entityIds)
             ->whereNotNull('recipe_id')
             ->where('total_cajas', '>', 0)
-            ->doesntHave('detalles');
+            ->doesntHave('detalles')
+            ->doesntHave('consumos');
 
         if ($dateFrom) {
             $produccionesSinDetalleQuery->whereDate('fecha_produccion', '>=', $dateFrom);
@@ -568,11 +624,6 @@ class InventoryReportController extends Controller
             $cost = round((float) $item['consumed_cost'], 4);
             $key = $item['entity_id'] . ':' . $item['product_id'];
 
-            $mapByEntityProduct[$key] = [
-                'quantity' => $quantity,
-                'cost' => $cost,
-            ];
-
             $rows[] = [
                 'entity_id' => $item['entity_id'],
                 'entity' => $entity,
@@ -635,14 +686,10 @@ class InventoryReportController extends Controller
 
         // Filtrar por rango de fechas
         if ($request->filled('date_from')) {
-            $query->whereHas('movement', function ($q) use ($request) {
-                $q->whereDate('movement_date', '>=', $request->date_from);
-            });
+            $query->whereDate('movement_date', '>=', $request->date_from);
         }
         if ($request->filled('date_to')) {
-            $query->whereHas('movement', function ($q) use ($request) {
-                $q->whereDate('movement_date', '<=', $request->date_to);
-            });
+            $query->whereDate('movement_date', '<=', $request->date_to);
         }
 
         // Filtrar por tipo de transacción
@@ -882,14 +929,10 @@ class InventoryReportController extends Controller
 
         // Filtrar por rango de fechas
         if ($request->filled('date_from')) {
-            $query->whereHas('movement', function ($q) use ($request) {
-                $q->whereDate('movement_date', '>=', $request->date_from);
-            });
+            $query->whereDate('movement_date', '>=', $request->date_from);
         }
         if ($request->filled('date_to')) {
-            $query->whereHas('movement', function ($q) use ($request) {
-                $q->whereDate('movement_date', '<=', $request->date_to);
-            });
+            $query->whereDate('movement_date', '<=', $request->date_to);
         }
 
         $query->orderBy('created_at', 'asc');
@@ -901,9 +944,7 @@ class InventoryReportController extends Controller
         if ($request->filled('date_from')) {
             $initialBalance = InventoryKardex::where('product_id', $product->id)
                 ->whereIn('entity_id', $ids)
-                ->whereHas('movement', function ($q) use ($request) {
-                    $q->whereDate('movement_date', '<', $request->date_from);
-                })
+                ->whereDate('movement_date', '<', $request->date_from)
                 ->sum(DB::raw('CASE WHEN transaction_type = "increase" THEN quantity ELSE -quantity END'));
         }
 
@@ -919,6 +960,9 @@ class InventoryReportController extends Controller
             return [
                 'id' => $entry->id,
                 'movement' => $entry->movement,
+                'movement_date' => $entry->movement_date,
+                'document_number' => $entry->document_number,
+                'description' => $entry->description,
                 'transaction_type' => $entry->transaction_type,
                 'quantity' => $entry->quantity,
                 'unit_cost' => $entry->unit_cost,

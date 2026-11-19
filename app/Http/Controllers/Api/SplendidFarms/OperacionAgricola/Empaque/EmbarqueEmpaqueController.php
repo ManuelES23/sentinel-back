@@ -2,17 +2,22 @@
 
 namespace App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque;
 
+use App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\Concerns\AlternativasDeConsumo;
 use App\Http\Controllers\Controller;
 use App\Models\EmbarqueEmpaque;
 use App\Models\PreEmbarqueEmpaque;
 use App\Models\ProduccionEmpaque;
 use App\Models\ProduccionEmpaqueDetalle;
+use App\Models\RecipeItem;
+use App\Services\Empaque\ConsumoProduccion;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class EmbarqueEmpaqueController extends Controller
 {
+    use AlternativasDeConsumo;
+
     private array $eagerLoad = [
         'temporada:id,cultivo_id,nombre',
         'temporada.cultivo:id,nombre',
@@ -208,6 +213,10 @@ class EmbarqueEmpaqueController extends Controller
         $validated['peso_bascula_total_kg'] = $pallets->sum('peso_bascula_kg');
 
         $embarque = DB::transaction(function () use ($validated, $pallets, $palletMetrics, $posiciones) {
+            // Punto de serialización por pallet (id ascendente): se relee su estado bajo el bloqueo
+            // para no consumir el cierre de una cola que otra petición cerró entre tanto.
+            $this->bloquearPallets($pallets);
+
             // Generar folio dentro de la transacción con lock para evitar duplicados por concurrencia
             $validated['folio_embarque'] = $this->generarFolio($validated);
 
@@ -252,6 +261,8 @@ class EmbarqueEmpaqueController extends Controller
                     'total_cajas' => (int) ($metric['total_cajas'] ?? 0),
                     'peso_neto_kg' => (float) ($metric['peso_neto_kg'] ?? 0),
                 ]);
+
+                $this->consumirCierreDeCola($pallet);
             }
 
             return $embarque;
@@ -264,6 +275,7 @@ class EmbarqueEmpaqueController extends Controller
             'success' => true,
             'message' => 'Embarque registrado exitosamente',
             'data' => $embarque,
+            'faltantes' => app(ConsumoProduccion::class)->faltantes(),
         ], 201);
     }
 
@@ -338,6 +350,12 @@ class EmbarqueEmpaqueController extends Controller
         $preEmbarque = DB::transaction(function () use ($embarque, $request) {
             $detalles = $embarque->detalles()->orderBy('id')->get();
 
+            // Punto de serialización por pallet (id ascendente) antes de devolver cierres.
+            ProduccionEmpaque::whereIn('id', $detalles->pluck('produccion_id')->filter()->unique()->values())
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get(['id']);
+
             $espaciosCaja = (int) ($embarque->espacios_caja ?: 0);
             $totalPallets = $detalles->count();
             if ($espaciosCaja < $totalPallets) {
@@ -370,6 +388,11 @@ class EmbarqueEmpaqueController extends Controller
                 ProduccionEmpaque::where('id', $det->produccion_id)
                     ->update(['status' => 'en_almacen', 'en_cuarto_frio' => true]);
 
+                $pallet = ProduccionEmpaque::find($det->produccion_id);
+                if ($pallet) {
+                    $this->devolverCierreDeCola($pallet);
+                }
+
                 $pos = (int) ($det->posicion_carga ?: 0);
                 if ($pos <= 0 || in_array($pos, $usedPositions, true)) {
                     while (in_array($nextPos, $usedPositions, true)) {
@@ -400,7 +423,56 @@ class EmbarqueEmpaqueController extends Controller
                 'pre_embarque_id' => $preEmbarque->id,
                 'folio_pre_embarque' => $preEmbarque->folio_pre_embarque,
             ],
+            'faltantes' => app(ConsumoProduccion::class)->faltantes(),
         ]);
+    }
+
+    /**
+     * Una cola que se embarca sin cerrar consume sus insumos de cierre y sigue siendo cola. Un
+     * pallet cerrado ya los consumió al cerrarse; uno congelado (anterior al registro de consumos)
+     * no mueve inventario.
+     */
+    private function consumirCierreDeCola(ProduccionEmpaque $pallet): void
+    {
+        if (! $pallet->is_cola || $pallet->congelado()) {
+            return;
+        }
+
+        $consumo = app(ConsumoProduccion::class);
+        $receta = $consumo->recetaDePallet($pallet);
+        if ($receta) {
+            $consumo->consumirPorPallet($pallet, $receta, RecipeItem::CONSUMO_AL_CERRAR,
+                $this->alternativasParaConsumir($this->alternativasRegistradas($pallet, null, true), null, $receta));
+        }
+    }
+
+    /**
+     * Bloquea los pallets del embarque en id ascendente y refresca sus atributos con lo leído bajo el
+     * bloqueo (las relaciones ya cargadas para el snapshot se conservan).
+     *
+     * @param \Illuminate\Database\Eloquent\Collection<int, ProduccionEmpaque> $pallets
+     */
+    private function bloquearPallets($pallets): void
+    {
+        $filas = ProduccionEmpaque::whereIn('id', $pallets->pluck('id')->all())
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->get()
+            ->keyBy('id');
+
+        foreach ($pallets as $pallet) {
+            if ($fila = $filas->get($pallet->id)) {
+                $pallet->setRawAttributes($fila->getAttributes(), true);
+            }
+        }
+    }
+
+    /** Al sacarla del embarque, la cola abierta devuelve su cierre; el pallet cerrado conserva el suyo. */
+    private function devolverCierreDeCola(ProduccionEmpaque $pallet): void
+    {
+        if ($pallet->is_cola) {
+            app(ConsumoProduccion::class)->devolverMomento($pallet, RecipeItem::CONSUMO_AL_CERRAR);
+        }
     }
 
     private function generarFolio(array $data): string

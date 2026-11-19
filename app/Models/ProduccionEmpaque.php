@@ -40,6 +40,14 @@ class ProduccionEmpaque extends Model
     public function evaluacionesCalidad() { return $this->morphMany(CalidadEmpaque::class, 'evaluable'); }
     public function detalles() { return $this->hasMany(ProduccionEmpaqueDetalle::class, 'produccion_id')->orderBy('numero_entrada'); }
 
+    public function consumos() { return $this->hasMany(ProduccionEmpaqueConsumo::class, 'produccion_id'); }
+
+    /** Pallet anterior al registro de consumos: no mueve inventario al editarse o borrarse. */
+    public function congelado(): bool
+    {
+        return ! $this->consumos()->exists();
+    }
+
     public function scopeByTemporada($query, $id) { return $query->where('temporada_id', $id); }
     public function scopeByStatus($query, $s) { return $query->where('status', $s); }
     public function scopeDisponible($query) { return $query->whereIn('status', ['empacado', 'en_almacen']); }

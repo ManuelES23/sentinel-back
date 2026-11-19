@@ -153,4 +153,43 @@ class InventoryKardex extends Model
             'productor_id' => $productorId,
         ]);
     }
+
+    /**
+     * Fila de kardex de producción de Empaque: no hay movimiento de inventario, así que la
+     * fecha, el documento (número de pallet) y la descripción vienen del llamador. El saldo
+     * se arrastra igual que en recordEntry().
+     */
+    public static function registrarProduccion(
+        int $productId,
+        int $entityId,
+        string $tipo, // 'increase' o 'decrease'
+        float $cantidad,
+        float $costoUnitario,
+        string $fecha,
+        string $documento,
+        string $descripcion
+    ): self {
+        $ultima = self::where('product_id', $productId)
+            ->where('entity_id', $entityId)
+            ->orderBy('id', 'desc')
+            ->first();
+
+        $signo = $tipo === 'increase' ? 1 : -1;
+        $total = $cantidad * $costoUnitario;
+
+        return self::create([
+            'product_id' => $productId,
+            'entity_id' => $entityId,
+            'movement_id' => null,
+            'movement_date' => $fecha,
+            'document_number' => $documento,
+            'transaction_type' => $tipo,
+            'description' => $descripcion,
+            'quantity' => $cantidad,
+            'balance_quantity' => (float) ($ultima->balance_quantity ?? 0) + $signo * $cantidad,
+            'unit_cost' => $costoUnitario,
+            'total_cost' => $total,
+            'balance_value' => (float) ($ultima->balance_value ?? 0) + $signo * $total,
+        ]);
+    }
 }

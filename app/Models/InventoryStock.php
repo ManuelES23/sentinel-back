@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Services\Inventory\CapasCosto;
 use App\Support\Inventario\Cubeta;
+use App\Support\Inventario\ResultadoMovimiento;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -29,11 +30,13 @@ class InventoryStock extends Model
         'total_cost',
         'last_movement_at',
         'last_movement_id',
+        'negativo_desde',
     ];
 
     protected $casts = [
         'expiry_date' => 'date',
         'last_movement_at' => 'datetime',
+        'negativo_desde' => 'datetime',
         'quantity' => 'decimal:4',
         'reserved_quantity' => 'decimal:4',
         'unit_cost' => 'decimal:4',
@@ -152,6 +155,21 @@ class InventoryStock extends Model
     }
 
     /**
+     * Devuelve solo lo que la referencia realmente tomó (sus porciones vigentes): lo que se pida
+     * de más no entra a ningún costo, así no se inventa existencia. Ajusta la fila por lo devuelto.
+     */
+    public static function devolverPorReferenciaExacta(int $productId, int $entityId, float $cantidad, string $referencia): ResultadoMovimiento
+    {
+        $c = new Cubeta($productId, $entityId);
+        $r = app(CapasCosto::class)->devolver($c, $cantidad, null, $referencia, crearSiFalta: false);
+        if ($r->cantidad > 0) {
+            self::ajustarCantidad($c, $r->cantidad, null, null, true);
+        }
+
+        return $r;
+    }
+
+    /**
      * Único escritor de cantidades. Llamar DESPUÉS de la operación del motor de
      * capas (CapasCosto); al final sincroniza unit_cost/total_cost desde las capas.
      */
@@ -176,7 +194,14 @@ class InventoryStock extends Model
                 'producto' => $c->productId, 'almacen' => $c->entityId, 'lote' => $c->lote, 'cantidad' => $nueva,
             ]);
         }
+        $antes = (float) ($stock->quantity ?? 0);
         $stock->quantity = $nueva;
+        // Fecha del cruce a faltante: se fija al pasar de >= 0 a < 0, se conserva mientras siga negativo y se limpia al regularizar.
+        if ($nueva < 0 && $antes >= 0) {
+            $stock->negativo_desde = now();
+        } elseif ($nueva >= 0) {
+            $stock->negativo_desde = null;
+        }
 
         if ($expiry) {
             $stock->expiry_date = $expiry;

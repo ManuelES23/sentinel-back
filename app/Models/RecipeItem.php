@@ -11,6 +11,10 @@ class RecipeItem extends Model
 {
     use HasFactory, Loggable;
 
+    public const CONSUMO_POR_CAJA = 'por_caja';
+    public const CONSUMO_AL_ARMAR = 'al_armar';
+    public const CONSUMO_AL_CERRAR = 'al_cerrar';
+
     protected $fillable = [
         'enterprise_id',
         'recipe_id',
@@ -25,6 +29,7 @@ class RecipeItem extends Model
         'group_key',
         'is_default',
         'solo_interno',
+        'consumo',
         'calibre_id',
     ];
 

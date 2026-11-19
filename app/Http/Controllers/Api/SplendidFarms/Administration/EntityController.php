@@ -8,6 +8,8 @@ use App\Models\Branch;
 use App\Models\Enterprise;
 use App\Models\Entity;
 use App\Models\EntityType;
+use App\Models\User;
+use App\Models\UserEnterpriseAccess;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -31,6 +33,52 @@ class EntityController extends Controller
         $entity->loadMissing('branch:id,enterprise_id');
 
         return (int) $entity->branch?->enterprise_id === $enterpriseId;
+    }
+
+    /**
+     * 422 si el encargado no tiene acceso ACTIVO a la empresa dueña de la entidad
+     * (siempre la empresa actual: store y update ya exigen que la sucursal sea suya).
+     * Sin encargado (null) no hay nada que validar.
+     */
+    private function rechazarEncargadoSinAcceso(?int $userId, Enterprise $empresa): ?JsonResponse
+    {
+        if ($userId === null || $this->usuariosConAcceso($empresa)->whereKey($userId)->exists()) {
+            return null;
+        }
+
+        return response()->json([
+            'status' => 'error',
+            'message' => 'El encargado debe tener acceso a la empresa.',
+        ], 422);
+    }
+
+    /** Usuarios con acceso activo a la empresa (fila vigente en user_enterprise_access). */
+    private function usuariosConAcceso(Enterprise $empresa)
+    {
+        return User::whereIn('id', UserEnterpriseAccess::where('enterprise_id', $empresa->id)
+            ->where('is_active', true)
+            ->select('user_id'));
+    }
+
+    /**
+     * Usuarios que pueden ser encargados de un almacén de la empresa de la URL.
+     */
+    public function encargadosDisponibles(Request $request): JsonResponse
+    {
+        $currentEnterprise = $this->getCurrentEnterprise($request);
+        if (!$currentEnterprise) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No se pudo determinar la empresa actual desde el header X-Enterprise-Slug',
+            ], 422);
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => $this->usuariosConAcceso($currentEnterprise)
+                ->orderBy('name')
+                ->get(['id', 'name', 'email']),
+        ]);
     }
 
     /**
@@ -126,7 +174,7 @@ class EntityController extends Controller
             ], 422);
         }
 
-        $relations = ['branch.enterprise:id,name,slug', 'entityType', 'areas', 'cultivos:id,nombre', 'zonasCultivo:id,nombre'];
+        $relations = ['branch.enterprise:id,name,slug', 'entityType', 'areas', 'cultivos:id,nombre', 'zonasCultivo:id,nombre', 'encargado:id,name'];
 
         // ── 1. Entidades propias ──────────────────────────────────────────
         $ownQuery = Entity::with($relations)
@@ -302,6 +350,7 @@ class EntityController extends Controller
             'description' => 'nullable|string',
             'location' => 'nullable|string|max:255',
             'responsible' => 'nullable|string|max:255',
+            'encargado_user_id' => 'nullable|integer|exists:users,id',
             'area_m2' => 'nullable|numeric|min:0',
             'is_active' => 'boolean',
             'is_external' => 'boolean',
@@ -331,6 +380,10 @@ class EntityController extends Controller
                 'status' => 'error',
                 'message' => 'La sucursal seleccionada no pertenece a la empresa actual',
             ], 422);
+        }
+
+        if ($respuesta = $this->rechazarEncargadoSinAcceso($validated['encargado_user_id'] ?? null, $currentEnterprise)) {
+            return $respuesta;
         }
 
         $cultivoIds = $validated['cultivo_ids'] ?? [];
@@ -432,7 +485,7 @@ class EntityController extends Controller
             ], 422);
         }
 
-        $entity->load(['branch.enterprise:id,name,slug', 'entityType', 'areas', 'cultivos:id,nombre', 'zonasCultivo:id,nombre']);
+        $entity->load(['branch.enterprise:id,name,slug', 'entityType', 'areas', 'cultivos:id,nombre', 'zonasCultivo:id,nombre', 'encargado:id,name']);
 
         // Broadcast evento en tiempo real
         broadcast(new EntityUpdated('created', $entity->toArray()));
@@ -464,7 +517,7 @@ class EntityController extends Controller
             ], 404);
         }
 
-        $entity->load(['branch.enterprise:id,name,slug', 'entityType', 'areas', 'cultivos:id,nombre', 'zonasCultivo:id,nombre']);
+        $entity->load(['branch.enterprise:id,name,slug', 'entityType', 'areas', 'cultivos:id,nombre', 'zonasCultivo:id,nombre', 'encargado:id,name']);
 
         return response()->json([
             'success' => true,
@@ -513,6 +566,7 @@ class EntityController extends Controller
             'description' => 'nullable|string',
             'location' => 'nullable|string|max:255',
             'responsible' => 'nullable|string|max:255',
+            'encargado_user_id' => 'nullable|integer|exists:users,id',
             'area_m2' => 'nullable|numeric|min:0',
             'is_active' => 'boolean',
             'is_external' => 'boolean',
@@ -538,6 +592,10 @@ class EntityController extends Controller
             }
         }
 
+        if ($respuesta = $this->rechazarEncargadoSinAcceso($validated['encargado_user_id'] ?? null, $currentEnterprise)) {
+            return $respuesta;
+        }
+
         $cultivoIds = $validated['cultivo_ids'] ?? null;
         unset($validated['cultivo_ids']);
         $zonaIds = $validated['zona_cultivo_ids'] ?? null;
@@ -556,7 +614,7 @@ class EntityController extends Controller
         }
 
         // Recargar la entidad con sus relaciones
-        $entity = $entity->fresh(['branch.enterprise:id,name,slug', 'entityType', 'areas', 'cultivos:id,nombre', 'zonasCultivo:id,nombre']);
+        $entity = $entity->fresh(['branch.enterprise:id,name,slug', 'entityType', 'areas', 'cultivos:id,nombre', 'zonasCultivo:id,nombre', 'encargado:id,name']);
 
         // Broadcast evento en tiempo real
         broadcast(new EntityUpdated('updated', $entity->toArray()));
