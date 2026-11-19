@@ -164,6 +164,13 @@ class PagosCuenta
                 if (empty($datos['liquidacion_id'])) {
                     throw ValidationException::withMessages(['liquidacion_id' => 'El pago de liquidación necesita su liquidación.']);
                 }
+                $esDelConvenio = Liquidacion::whereKey((int) $datos['liquidacion_id'])
+                    ->where('convenio_id', $convenio->id)
+                    ->where('enterprise_id', $convenio->enterprise_id)
+                    ->exists();
+                if (! $esDelConvenio) {
+                    throw ValidationException::withMessages(['liquidacion_id' => 'La liquidación no es de este convenio.']);
+                }
                 $montoCts = self::centavos($datos['monto'] ?? 0);
         }
 

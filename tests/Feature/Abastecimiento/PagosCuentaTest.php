@@ -9,7 +9,9 @@ use App\Models\Abastecimiento\Convenio;
 use App\Models\Abastecimiento\ConvenioPrecio;
 use App\Models\Abastecimiento\Productor;
 use App\Models\User;
+use App\Services\Abastecimiento\PagosCuenta;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Testing\TestResponse;
 use Laravel\Sanctum\Sanctum;
@@ -519,12 +521,73 @@ class PagosCuentaTest extends TestCase
         $this->otorgarAbs($usuario, $this->sbp, 'liquidaciones', ['carga-inicial']);
         $this->saldoInicial($convenio, [])->assertCreated();
 
+        // Cada permiso de escritura SIN `view`: 403 y nada escrito (la respuesta trae la cuenta con dinero).
+        $sinVer = function (array $permisos): User {
+            $u = User::factory()->create(['role' => 'user']);
+            $this->otorgarAbs($u, $this->sbp, 'liquidaciones', $permisos);
+            Sanctum::actingAs($u);
+
+            return $u;
+        };
+        $vigente = $this->crearPago($convenio);
+        $antes = Abono::count();
+        $sinVer(['create']);
+        $this->pagar($convenio, ['tipo' => 'abono', 'monto' => 10])->assertForbidden();
+        $sinVer(['cancelar']);
+        $this->cancelar($vigente->id)->assertForbidden();
+        $sinVer(['carga-inicial']);
+        $this->saldoInicial($convenio, [])->assertForbidden();
+        $sinVer(['create', 'cancelar', 'carga-inicial', 'liquidar', 'delete']);
+        $this->pagar($convenio, ['tipo' => 'abono', 'monto' => 10])->assertForbidden();
+        $this->cancelar($vigente->id)->assertForbidden();
+        $this->saldoInicial($convenio, [])->assertForbidden();
+        $this->assertSame($antes, Abono::count());
+        $this->assertSame('aplicado', $vigente->fresh()->status);
+
+        // Con su permiso + `view`, cada una pasa.
+        $sinVer(['view', 'cancelar']);
+        $this->cancelar($vigente->id)->assertOk();
+        $sinVer(['view', 'carga-inicial']);
+        $this->saldoInicial($convenio, [])->assertCreated();
+        $sinVer(['view', 'create']);
+        $this->pagar($convenio, ['tipo' => 'abono', 'monto' => 10])->assertCreated();
+
         // Permisos de otro submódulo no cuentan.
         $otro = User::factory()->create(['role' => 'user']);
         $this->otorgarAbs($otro, $this->sbp, 'recepciones', ['view', 'create']);
         $this->otorgarAbs($otro, $this->sbp, 'convenios', ['view', 'create', 'edit']);
         Sanctum::actingAs($otro);
         $this->pagar($convenio, ['tipo' => 'abono', 'monto' => 10])->assertForbidden();
+    }
+
+    public function test_crear_un_pago_de_liquidacion_exige_una_liquidacion_del_mismo_convenio(): void
+    {
+        [$convenio] = $this->conDosRecepciones();
+        $otro = $this->crearConvenio($this->sbp);
+        $deOtroConvenio = $this->crearLiquidacion($otro, ['monto_final' => 100]);
+        $deOtraEmpresa = $this->crearLiquidacion($this->crearConvenio($this->otra), ['monto_final' => 100]);
+        $propia = $this->crearLiquidacion($convenio, ['monto_final' => 1500]);
+        $usuario = User::factory()->create(['role' => 'admin']);
+        $servicio = app(PagosCuenta::class);
+        $datos = fn (int $liquidacionId) => [
+            'tipo' => 'liquidacion', 'liquidacion_id' => $liquidacionId, 'monto' => 1500,
+            'fecha' => '2026-06-30', 'metodo_pago' => 'transferencia',
+        ];
+
+        foreach ([$deOtroConvenio->id, $deOtraEmpresa->id, 999999] as $id) {
+            try {
+                $servicio->crear(Convenio::findOrFail($convenio->id), $usuario, $datos($id));
+                $this->fail('Debió rechazar la liquidación ajena.');
+            } catch (ValidationException $e) {
+                $this->assertSame(['liquidacion_id' => ['La liquidación no es de este convenio.']], $e->errors());
+            }
+        }
+        $this->assertSame(0, Abono::count());
+
+        $pago = $servicio->crear(Convenio::findOrFail($convenio->id), $usuario, $datos($propia->id));
+        $this->assertSame('liquidacion', $pago->tipo);
+        $this->assertSame($propia->id, $pago->liquidacion_id);
+        $this->assertSame('1500.00', $pago->fresh()->monto);
     }
 
     public function test_precio_corregido_despues_de_pagar_limita_por_lo_que_falta_vivo(): void

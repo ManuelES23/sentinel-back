@@ -113,8 +113,13 @@ class OrdenBloqueoDineroTest extends TestCase
             'insert into "abs_abonos"',
         ]);
         // El bloqueo de recepciones es uno solo, ordenado por id.
-        $bloqueo = $this->transaccion()[$this->primera($this->transaccion(), 'select * from "abs_recepciones"')];
-        $this->assertStringContainsString('order by "id" asc', $bloqueo);
+        $tx = $this->transaccion();
+        $recepciones = $this->primera($tx, 'select * from "abs_recepciones"');
+        $this->assertStringContainsString('order by "id" asc', $tx[$recepciones]);
+        // Ningún pago (ni la suma de lo pagado) se lee antes de bloquear las recepciones.
+        foreach (array_slice($tx, 0, $recepciones) as $s) {
+            $this->assertStringNotContainsString('"abs_abonos"', $s, "Se leyeron pagos antes de bloquear las recepciones: {$s}");
+        }
     }
 
     public function test_abonar_bloquea_productor_y_convenio_antes_de_leer_los_pagos(): void

@@ -16,7 +16,7 @@ use Illuminate\Validation\Rule;
 /**
  * Cuentas por convenio (submódulo `liquidaciones`): la lista de la temporada con sus totales, la cuenta de un
  * convenio con sus recepciones, pagos y acciones, y los pagos (registrar, cancelar y saldo inicial, vía
- * `PagosCuenta`). Leer exige `view`; cada escritura, su permiso (`create`, `cancelar`, `carga-inicial`).
+ * `PagosCuenta`). Leer exige `view`; cada escritura, `view` más su permiso (`create`, `cancelar`, `carga-inicial`).
  * La forma del JSON es de `PresentadorCuenta` y los números de `CuentaConvenio`.
  */
 class CuentaController extends AbastecimientoController
@@ -99,7 +99,7 @@ class CuentaController extends AbastecimientoController
      */
     public function registrarPago(Request $request, int $convenio): JsonResponse
     {
-        $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'create');
+        $empresa = $this->autorizarEscritura($request, 'create');
         $datos = $request->validate([
             'tipo' => ['required', Rule::in(PagosCuenta::TIPOS_REGISTRABLES)],
             'fecha' => ['required', 'date_format:Y-m-d', 'before_or_equal:today'],
@@ -121,7 +121,7 @@ class CuentaController extends AbastecimientoController
     /** Cancela un pago con su motivo (`cancelar`). Responde la cuenta completa. */
     public function cancelarPago(Request $request, int $id): JsonResponse
     {
-        $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'cancelar');
+        $empresa = $this->autorizarEscritura($request, 'cancelar');
         $datos = $request->validate([
             'motivo' => ['required', 'string', 'max:2000'],
         ]);
@@ -134,7 +134,7 @@ class CuentaController extends AbastecimientoController
     /** Saldo inicial (deuda sin recepciones) de la cuenta (`carga-inicial`). El motivo se guarda en las notas. */
     public function saldoInicial(Request $request, int $convenio): JsonResponse
     {
-        $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'carga-inicial');
+        $empresa = $this->autorizarEscritura($request, 'carga-inicial');
         $datos = $request->validate([
             'monto' => ['required', ...self::MONTO],
             'fecha' => ['required', 'date_format:Y-m-d', 'before_or_equal:today'],
@@ -144,6 +144,17 @@ class CuentaController extends AbastecimientoController
         $pago = app(PagosCuenta::class)->saldoInicial($empresa, $request->user(), $convenio, $datos);
 
         return $this->respuestaPago($request, $empresa, $pago, 'created', 'Saldo inicial registrado.', 201);
+    }
+
+    /**
+     * Las escrituras responden con la cuenta completa (dinero), así que exigen `view` ADEMÁS de su permiso
+     * (el administrador siempre pasa). Se revisa antes de validar, bloquear o escribir: un 403 no deja rastro.
+     */
+    private function autorizarEscritura(Request $request, string $permiso): Enterprise
+    {
+        $this->ctx->autorizar($request, self::SUBMODULO, 'view');
+
+        return $this->ctx->autorizar($request, self::SUBMODULO, $permiso);
     }
 
     /**
