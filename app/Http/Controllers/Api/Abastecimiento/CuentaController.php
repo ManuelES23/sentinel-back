@@ -2,22 +2,29 @@
 
 namespace App\Http\Controllers\Api\Abastecimiento;
 
+use App\Models\Abastecimiento\Abono;
 use App\Models\Abastecimiento\Convenio;
 use App\Models\Abastecimiento\Liquidacion;
+use App\Models\Enterprise;
 use App\Services\Abastecimiento\CuentaConvenio;
+use App\Services\Abastecimiento\PagosCuenta;
 use App\Services\Abastecimiento\PresentadorCuenta;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 
 /**
- * Cuentas por convenio (submódulo `liquidaciones`), solo lectura: la lista de la temporada con sus totales y la
- * cuenta de un convenio con sus recepciones, pagos y acciones. El dinero se ve únicamente con `liquidaciones.view`.
+ * Cuentas por convenio (submódulo `liquidaciones`): la lista de la temporada con sus totales, la cuenta de un
+ * convenio con sus recepciones, pagos y acciones, y los pagos (registrar, cancelar y saldo inicial, vía
+ * `PagosCuenta`). Leer exige `view`; cada escritura, su permiso (`create`, `cancelar`, `carga-inicial`).
  * La forma del JSON es de `PresentadorCuenta` y los números de `CuentaConvenio`.
  */
 class CuentaController extends AbastecimientoController
 {
     private const SUBMODULO = 'liquidaciones';
+
+    /** Monto de dinero: > 0, hasta 2 decimales y dentro de `decimal(14,2)`. */
+    private const MONTO = ['numeric', 'gt:0', 'decimal:0,2', 'max:999999999999.99'];
 
     /**
      * Cuentas de los convenios de una temporada (no borradores, con recepciones o algún pago), por productor y
@@ -84,5 +91,83 @@ class CuentaController extends AbastecimientoController
             'success' => true,
             'data' => app(PresentadorCuenta::class)->completa($modelo, $empresa, $request->user()),
         ]);
+    }
+
+    /**
+     * Registra un pago por recepción, abono o adelanto (`create`). La moneda es la del convenio: si el cliente
+     * manda `moneda`, se ignora. Responde 201 con la cuenta completa.
+     */
+    public function registrarPago(Request $request, int $convenio): JsonResponse
+    {
+        $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'create');
+        $datos = $request->validate([
+            'tipo' => ['required', Rule::in(PagosCuenta::TIPOS_REGISTRABLES)],
+            'fecha' => ['required', 'date_format:Y-m-d', 'before_or_equal:today'],
+            'metodo_pago' => ['required', Rule::in(Abono::METODOS_PAGO)],
+            'referencia' => ['nullable', 'string', 'max:120'],
+            'notas' => ['nullable', 'string', 'max:5000'],
+            'monto' => ['exclude_if:tipo,recepcion', 'required', ...self::MONTO],
+            'recepciones' => ['exclude_unless:tipo,recepcion', 'required', 'array', 'min:1', 'max:200'],
+            'recepciones.*' => ['exclude_unless:tipo,recepcion', 'array'],
+            'recepciones.*.recepcion_id' => ['exclude_unless:tipo,recepcion', 'required', 'integer'],
+            'recepciones.*.monto' => ['exclude_unless:tipo,recepcion', 'required', ...self::MONTO],
+        ]);
+
+        $pago = app(PagosCuenta::class)->registrar($empresa, $request->user(), $convenio, $datos);
+
+        return $this->respuestaPago($request, $empresa, $pago, 'created', 'Pago registrado.', 201);
+    }
+
+    /** Cancela un pago con su motivo (`cancelar`). Responde la cuenta completa. */
+    public function cancelarPago(Request $request, int $id): JsonResponse
+    {
+        $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'cancelar');
+        $datos = $request->validate([
+            'motivo' => ['required', 'string', 'max:2000'],
+        ]);
+
+        $pago = app(PagosCuenta::class)->cancelar($empresa, $request->user(), $id, $datos['motivo']);
+
+        return $this->respuestaPago($request, $empresa, $pago, 'updated', 'Pago cancelado.', 200);
+    }
+
+    /** Saldo inicial (deuda sin recepciones) de la cuenta (`carga-inicial`). El motivo se guarda en las notas. */
+    public function saldoInicial(Request $request, int $convenio): JsonResponse
+    {
+        $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'carga-inicial');
+        $datos = $request->validate([
+            'monto' => ['required', ...self::MONTO],
+            'fecha' => ['required', 'date_format:Y-m-d', 'before_or_equal:today'],
+            'motivo' => ['required', 'string', 'min:10', 'max:5000'],
+        ]);
+
+        $pago = app(PagosCuenta::class)->saldoInicial($empresa, $request->user(), $convenio, $datos);
+
+        return $this->respuestaPago($request, $empresa, $pago, 'created', 'Saldo inicial registrado.', 201);
+    }
+
+    /**
+     * Ya confirmada la transacción: emite el evento recortado (sin montos ni notas; una falla del websocket no rompe
+     * la respuesta) y responde con la cuenta completa recién leída.
+     */
+    private function respuestaPago(Request $request, Enterprise $empresa, Abono $pago, string $accion, string $mensaje, int $status): JsonResponse
+    {
+        $this->difundir('pago', $accion, [
+            'id' => $pago->id,
+            'folio' => $pago->folio,
+            'tipo' => $pago->tipo,
+            'status' => $pago->status,
+            'convenio_id' => $pago->convenio_id,
+            'productor_id' => $pago->productor_id,
+            'moneda' => $pago->moneda,
+        ], $empresa);
+
+        $convenio = Convenio::deEmpresa($empresa->id)->findOrFail($pago->convenio_id);
+
+        return response()->json([
+            'success' => true,
+            'message' => $mensaje,
+            'data' => app(PresentadorCuenta::class)->completa($convenio, $empresa, $request->user()),
+        ], $status);
     }
 }

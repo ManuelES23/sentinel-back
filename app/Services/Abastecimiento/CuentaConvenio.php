@@ -114,12 +114,14 @@ class CuentaConvenio
         $convenio->loadMissing('precios');
         $liquidacion = self::liquidacionesVigentes([$convenio->id])[$convenio->id] ?? null;
 
-        // Reparto de los pagos vigentes (no cancelados ni borrados) entre las recepciones.
+        // Reparto de los pagos por recepción vigentes (no cancelados ni borrados) entre las recepciones. Solo los de
+        // tipo `recepcion` tienen reparto; el filtro evita contar filas sueltas colgadas de otro tipo de pago.
         $pagado = [];
         $folios = [];
         foreach (DB::table('abs_abono_recepciones as ar')
             ->join('abs_abonos as a', 'a.id', '=', 'ar.abono_id')
             ->where('a.convenio_id', $convenio->id)
+            ->where('a.tipo', 'recepcion')
             ->whereNull('a.deleted_at')
             ->where('a.status', '!=', 'cancelado')
             ->orderBy('a.id')

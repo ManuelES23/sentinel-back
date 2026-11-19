@@ -431,4 +431,58 @@ class SaldoProductorTest extends TestCase
         $this->assertSame($porMoneda, SaldoProductor::porPagarDeTemporada($this->sbp, $a->temporada_id));
         $this->assertSame([], SaldoProductor::porPagarDeConvenios($this->sbp, []));
     }
+
+    // ---------------------------------------------------------------- endurecimiento (revisión de la task 4)
+
+    public function test_un_pago_de_liquidacion_cuenta_en_pagado(): void
+    {
+        [$convenio] = $this->conDosRecepciones();
+        $liq = $this->crearLiquidacion($convenio, ['monto_calculado' => 1500, 'monto_final' => 1500]);
+        $this->pagar($convenio, 'liquidacion', 900, null, ['liquidacion_id' => $liq->id]);
+        $this->pagar($convenio, 'abono', 100);
+
+        $t = $this->totales($convenio);
+        $this->assertSame('liquidada', $t['estado']);
+        $this->assertSame(1000.0, $t['pagado']);
+        $this->assertSame(500.0, $t['por_pagar']);
+    }
+
+    public function test_una_liquidacion_liquidada_pero_borrada_deja_la_cuenta_abierta(): void
+    {
+        [$convenio] = $this->conDosRecepciones();
+        $this->crearLiquidacion($convenio, ['monto_calculado' => 9999, 'monto_final' => 9999])->delete();
+
+        $t = $this->totales($convenio);
+        $this->assertSame('abierta', $t['estado']);
+        $this->assertNull($t['liquidacion_id']);
+        $this->assertSame(1500.0, $t['por_pagar']);
+    }
+
+    public function test_una_recepcion_borrada_no_cuenta_en_valor_ni_en_el_detalle(): void
+    {
+        [$convenio, $r1, $r2] = $this->conDosRecepciones();
+        $r2->delete();
+
+        $t = $this->totales($convenio);
+        $this->assertSame(1000.0, $t['valor_recibido']);
+        $this->assertSame(1, $t['recepciones']);
+        $this->assertSame([$r1->id], array_keys($this->detalle($convenio)));
+    }
+
+    public function test_el_pagado_por_recepcion_solo_cuenta_pagos_de_tipo_recepcion(): void
+    {
+        [$convenio, $r1] = $this->conDosRecepciones();
+        // Filas de reparto colgadas de un pago que no es por recepción (no deberían existir, pero no cuentan).
+        $abono = $this->pagar($convenio, 'abono', 300);
+        DB::table('abs_abono_recepciones')->insert([
+            'abono_id' => $abono->id, 'recepcion_id' => $r1->id, 'monto' => 300, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $porRecepcion = $this->pagar($convenio, 'recepcion', 200, [$r1->id => 200]);
+
+        $d = $this->detalle($convenio);
+        $this->assertSame(200.0, $d[$r1->id]['pagado']);
+        $this->assertSame(800.0, $d[$r1->id]['falta']);
+        $this->assertSame([$porRecepcion->folio], $d[$r1->id]['pagos']);
+        $this->assertSame(500.0, $this->totales($convenio)['pagado']);
+    }
 }
