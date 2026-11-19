@@ -3,6 +3,7 @@
 namespace Tests\Concerns;
 
 use App\Models\Abastecimiento\Abono;
+use App\Models\Abastecimiento\AbonoRecepcion;
 use App\Models\Abastecimiento\Convenio;
 use App\Models\Abastecimiento\ConvenioCalibre;
 use App\Models\Abastecimiento\ConvenioMeta;
@@ -369,5 +370,38 @@ trait CreatesAbastecimientoFixtures
             'moneda' => 'MXN',
             'metodo_pago' => 'transferencia',
         ], $over)));
+    }
+
+    /**
+     * Pago a la cuenta de un convenio, creado directo (sin pasar por los servicios): productor y moneda
+     * del convenio, 2026-06-10 por transferencia. Con `$recepciones` (recepcion_id => monto) es un pago
+     * por recepción: crea su reparto en `abs_abono_recepciones` y, si no se indica `monto`, el monto es la
+     * suma. `$over` pisa cualquier columna (`tipo`, `status`, `monto`, `fecha`, …).
+     *
+     * @param  array<int, float|int>  $recepciones
+     */
+    protected function crearPago(Convenio $convenio, array $over = [], array $recepciones = []): Abono
+    {
+        $empresa = Enterprise::findOrFail($convenio->enterprise_id);
+
+        return DB::transaction(function () use ($convenio, $empresa, $over, $recepciones) {
+            $pago = Abono::create(array_merge([
+                'enterprise_id' => $empresa->id,
+                'folio' => $over['folio'] ?? app(GeneradorFolio::class)->siguiente($empresa, 'AB'),
+                'productor_id' => $convenio->productor_id,
+                'convenio_id' => $convenio->id,
+                'tipo' => $recepciones === [] ? 'abono' : 'recepcion',
+                'fecha' => '2026-06-10',
+                'monto' => $recepciones === [] ? 100 : array_sum($recepciones),
+                'moneda' => $convenio->moneda,
+                'metodo_pago' => 'transferencia',
+            ], $over));
+
+            foreach ($recepciones as $recepcionId => $monto) {
+                AbonoRecepcion::create(['abono_id' => $pago->id, 'recepcion_id' => $recepcionId, 'monto' => $monto]);
+            }
+
+            return $pago;
+        });
     }
 }

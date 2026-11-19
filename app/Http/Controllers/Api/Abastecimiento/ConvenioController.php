@@ -119,8 +119,8 @@ class ConvenioController extends AbastecimientoController
             'productor' => $convenio->productor,
             'variedad' => $convenio->variedad,
             'precio_principal' => $this->precioPrincipal($convenio),
-            // Plan 2: dinero solo con `liquidaciones.view` (null = sin permiso; [] = sin liquidaciones). `por_pagar` sale de
-            // SaldoProductor (aprobadas y pagadas menos lo aplicado de ESTE convenio).
+            // Dinero solo con `liquidaciones.view` (null = sin permiso; [] = sin liquidaciones). `por_pagar` es el de la
+            // cuenta de ESTE convenio (SaldoProductor::deConvenio, sobre CuentaConvenio).
             'indicadores' => IndicadoresConvenio::de($convenio) + ['por_pagar' => $verDinero ? SaldoProductor::deConvenio($convenio)['por_pagar'] : null],
             'liquidaciones' => ! $verDinero ? null : Liquidacion::where('convenio_id', $convenio->id)
                 ->orderByDesc('id')

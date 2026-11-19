@@ -9,6 +9,7 @@ use App\Models\Abastecimiento\Productor;
 use App\Models\Abastecimiento\Variedad;
 use App\Models\CRM\CrmProductoCalibre;
 use App\Models\User;
+use App\Services\Abastecimiento\CuentaConvenio;
 use App\Services\Abastecimiento\IndicadoresConvenio;
 use App\Services\Abastecimiento\SaldoProductor;
 use Carbon\Carbon;
@@ -193,17 +194,19 @@ class IndicadoresCalibresTest extends TestCase
         $this->assertEquals(0, $porCalibre[$this->grande->id]['valor_recibido']);
     }
 
-    public function test_sin_liquidar_valora_por_renglon(): void
+    public function test_la_cuenta_valora_por_renglon(): void
     {
         $convenio = $this->porCalibre();
-        $this->crearRecepcionConRenglones($convenio, [$this->renglon($this->jumbo, 2), $this->renglon($this->grande, 3)], ['fecha' => '2026-06-01']);
-        $liquidacion = $this->crearLiquidacion($convenio);
-        $this->crearRecepcionConRenglones($convenio, [$this->renglon($this->jumbo, 100)], ['fecha' => '2026-06-02', 'liquidacion_id' => $liquidacion->id]);
+        $mixta = $this->crearRecepcionConRenglones($convenio, [$this->renglon($this->jumbo, 2), $this->renglon($this->grande, 3)], ['fecha' => '2026-06-01']);
+        $this->crearRecepcionConRenglones($convenio, [$this->renglon($this->jumbo, 100)], ['fecha' => '2026-06-02']);
+
+        // Jumbo 2 × $10 + Grande 3 × $20 = 80 la primera; Jumbo 100 × $10 = 1000 la segunda.
+        $detalle = array_column(CuentaConvenio::recepciones($convenio->fresh()), 'valor', 'id');
+        $this->assertSame(80.0, $detalle[$mixta->id]);
 
         $saldo = SaldoProductor::porProductores($this->sbp, [$convenio->productor_id])->get($convenio->productor_id);
-
-        // Solo la libre: Jumbo 2 × $10 + Grande 3 × $20.
-        $this->assertEquals(80, $saldo['MXN']['sin_liquidar'] ?? null);
+        $this->assertSame(1080.0, $saldo['MXN']['valor_recibido']);
+        $this->assertSame(1080.0, $saldo['MXN']['por_pagar']);
     }
 
     public function test_tablero_con_convenios_por_calibre_tiene_consultas_constantes(): void

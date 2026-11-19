@@ -70,7 +70,7 @@ class TableroAbastecimiento
             ), 2),
         ];
 
-        // Dinero (plan 2): la misma definición de SaldoProductor, limitada a la temporada (Ruling 10).
+        // Dinero: el por pagar de las cuentas de los convenios de la temporada (SaldoProductor, misma regla que la cuenta).
         $saldoPorPagar = $moneda === null ? 0.0 : (SaldoProductor::porPagarDeTemporada($empresa, $temporadaId)[$moneda] ?? 0.0);
 
         return [

@@ -7,6 +7,8 @@ use App\Models\Abastecimiento\Liquidacion;
 use App\Models\Abastecimiento\Productor;
 use App\Models\Abastecimiento\Temporada;
 use App\Models\User;
+use App\Services\Abastecimiento\CuentaConvenio;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Laravel\Sanctum\Sanctum;
@@ -14,9 +16,9 @@ use Tests\Concerns\CreatesAbastecimientoFixtures;
 use Tests\TestCase;
 
 /**
- * Visibilidad del dinero (solo con `liquidaciones.view`; el administrador siempre) y forma de la ficha del convenio.
- * Las pruebas de «una sola cifra» del saldo (tablero, ficha, productores) las reescribe la cuenta por convenio
- * sobre su propio flujo de pagos.
+ * Una sola cifra del saldo (tablero, ficha del convenio, productores y cuenta del convenio salen de
+ * `CuentaConvenio`), visibilidad del dinero (solo con `liquidaciones.view`; el administrador siempre) y forma
+ * de la ficha del convenio.
  */
 class IntegracionDineroTest extends TestCase
 {
@@ -66,6 +68,83 @@ class IntegracionDineroTest extends TestCase
     private function porMoneda(array $saldos, string $moneda): ?array
     {
         return collect($saldos)->firstWhere('moneda', $moneda);
+    }
+
+    /** Convenio con una recepción de 1000 y un pago por recepción de 400: por pagar 600. */
+    private function conPago(array $over = []): Convenio
+    {
+        $convenio = $this->crearConvenio($this->sbp, $over);
+        $recepcion = $this->crearRecepcion($convenio, ['cantidad' => 10]);
+        $this->crearPago($convenio, [], [$recepcion->id => 400]);
+
+        return $convenio;
+    }
+
+    public function test_tablero_ficha_productores_y_cuenta_dan_la_misma_cifra(): void
+    {
+        $convenio = $this->conPago();
+
+        $tablero = $this->tablero($convenio->temporada_id);
+        $this->assertEqualsWithDelta(600, $tablero['kpis']['saldo_por_pagar'], 0.001);
+
+        $ficha = $this->getJson($this->url("convenios/{$convenio->id}"))->assertOk()->json('data');
+        $this->assertEqualsWithDelta(600, $ficha['indicadores']['por_pagar'], 0.001);
+
+        $lista = $this->getJson($this->url('productores'))->assertOk()->json('data.data');
+        $this->assertSame(['moneda', 'valor_recibido', 'pagado', 'por_pagar'], array_keys($lista[0]['saldo'][0]));
+        $mxn = $this->porMoneda($lista[0]['saldo'], 'MXN');
+        $this->assertEqualsWithDelta(1000, $mxn['valor_recibido'], 0.001);
+        $this->assertEqualsWithDelta(400, $mxn['pagado'], 0.001);
+        $this->assertEqualsWithDelta(600, $mxn['por_pagar'], 0.001);
+
+        $selector = $this->getJson($this->url('productores/list'))->assertOk()->json('data');
+        $this->assertEqualsWithDelta(600, $this->porMoneda($selector[0]['saldo'], 'MXN')['por_pagar'], 0.001);
+
+        $cuenta = CuentaConvenio::totales(new EloquentCollection([Convenio::findOrFail($convenio->id)]))[$convenio->id];
+        $this->assertSame(600.0, $cuenta['por_pagar']);
+    }
+
+    public function test_un_convenio_de_otra_temporada_cambia_al_productor_pero_no_al_tablero(): void
+    {
+        $uno = $this->conPago();
+        $dos = $this->crearConvenio($this->sbp, [
+            'temporada_id' => $this->otraTemporada($uno)->id, 'productor_id' => $uno->productor_id,
+            'fecha_inicio' => '2026-10-05', 'fecha_fin' => '2026-10-30',
+            'metas' => ['2026-10-05' => 100],
+        ]);
+        $this->crearPago($dos, ['tipo' => 'saldo_inicial', 'monto' => 250]);
+
+        // Tablero de la primera temporada: solo 600; el de la segunda: solo 250.
+        $this->assertEqualsWithDelta(600, $this->tablero($uno->temporada_id)['kpis']['saldo_por_pagar'], 0.001);
+        $this->assertEqualsWithDelta(250, $this->tablero($dos->temporada_id)['kpis']['saldo_por_pagar'], 0.001);
+
+        // El productor suma las dos; las fichas, cada una lo suyo.
+        $fila = $this->getJson($this->url('productores'))->assertOk()->json('data.data.0');
+        $this->assertEqualsWithDelta(850, $this->porMoneda($fila['saldo'], 'MXN')['por_pagar'], 0.001);
+        $this->assertEqualsWithDelta(600, $this->getJson($this->url("convenios/{$uno->id}"))->json('data.indicadores.por_pagar'), 0.001);
+        $this->assertEqualsWithDelta(250, $this->getJson($this->url("convenios/{$dos->id}"))->json('data.indicadores.por_pagar'), 0.001);
+    }
+
+    public function test_el_tablero_no_mezcla_monedas(): void
+    {
+        $mxn = $this->conPago();
+        $usd = $this->crearConvenio($this->sbp, [
+            'moneda' => 'USD', 'precio' => 50, 'productor_id' => $this->productorNuevo('Exportador USD')->id,
+        ]);
+        $this->crearRecepcion($usd, ['cantidad' => 10]);
+
+        $this->assertEqualsWithDelta(600, $this->tablero($mxn->temporada_id, '&moneda=MXN')['kpis']['saldo_por_pagar'], 0.001);
+        $enUsd = $this->tablero($mxn->temporada_id, '&moneda=USD');
+        $this->assertSame('USD', $enUsd['moneda']);
+        $this->assertEqualsWithDelta(500, $enUsd['kpis']['saldo_por_pagar'], 0.001);
+
+        // Un productor con convenios en las dos monedas ve una fila por moneda.
+        $mixto = $this->crearConvenio($this->sbp, ['moneda' => 'USD', 'precio' => 7, 'productor_id' => $mxn->productor_id]);
+        $this->crearRecepcion($mixto, ['cantidad' => 10]);
+        $fila = collect($this->getJson($this->url('productores'))->json('data.data'))->firstWhere('id', $mxn->productor_id);
+        $this->assertSame(['MXN', 'USD'], array_column($fila['saldo'], 'moneda'));
+        $this->assertEqualsWithDelta(600, $this->porMoneda($fila['saldo'], 'MXN')['por_pagar'], 0.001);
+        $this->assertEqualsWithDelta(70, $this->porMoneda($fila['saldo'], 'USD')['por_pagar'], 0.001);
     }
 
     public function test_sin_movimiento_el_saldo_es_un_arreglo_vacio_y_el_tablero_marca_cero(): void
@@ -127,7 +206,7 @@ class IntegracionDineroTest extends TestCase
         DB::flushQueryLog();
         DB::enableQueryLog();
         $this->getJson($this->url($ruta))->assertOk();
-        $n = collect(DB::getQueryLog())->filter(fn ($q) => preg_match('/abs_(liquidaciones|abonos|abono_aplicaciones)/', $q['query']))->count();
+        $n = collect(DB::getQueryLog())->filter(fn ($q) => preg_match('/abs_(liquidaciones|abonos|abono_recepciones|abono_aplicaciones)/', $q['query']))->count();
         DB::disableQueryLog();
 
         return $n;
@@ -142,30 +221,32 @@ class IntegracionDineroTest extends TestCase
         return $convenio;
     }
 
-    public function test_productores_oculta_el_saldo_sin_abonos_ni_liquidaciones_view(): void
+    public function test_productores_oculta_el_saldo_sin_liquidaciones_view_aunque_tenga_abonos_view(): void
     {
         $this->conSaldo();
-        $this->usuarioCon(['productores']);
 
-        foreach (['productores' => 'data.data.0', 'productores/list' => 'data.0'] as $ruta => $fila) {
-            $res = $this->getJson($this->url($ruta))->assertOk();
-            $this->assertArrayHasKey('saldo', $res->json($fila), $ruta);
-            $this->assertNull($res->json("{$fila}.saldo"), $ruta);
-            $this->assertSame(0, $this->consultasDeDinero($ruta), "{$ruta}: no debe consultar el dinero.");
+        // Ni sin permisos de dinero ni con el viejo abonos.view: solo liquidaciones.view abre el saldo.
+        foreach ([['productores'], ['productores', 'abonos']] as $submodulos) {
+            $this->usuarioCon($submodulos);
+
+            foreach (['productores' => 'data.data.0', 'productores/list' => 'data.0'] as $ruta => $fila) {
+                $res = $this->getJson($this->url($ruta))->assertOk();
+                $this->assertArrayHasKey('saldo', $res->json($fila), $ruta);
+                $this->assertNull($res->json("{$fila}.saldo"), $ruta);
+                $this->assertSame(0, $this->consultasDeDinero($ruta), "{$ruta}: no debe consultar el dinero.");
+            }
         }
     }
 
-    public function test_productores_muestra_el_saldo_con_abonos_view_o_con_liquidaciones_view(): void
+    public function test_productores_muestra_el_saldo_con_liquidaciones_view(): void
     {
         $this->conSaldo();
+        $this->usuarioCon(['productores', 'liquidaciones']);
 
-        foreach (['abonos', 'liquidaciones'] as $submodulo) {
-            $this->usuarioCon(['productores', $submodulo]);
-
-            foreach (['productores' => 'data.data.0', 'productores/list' => 'data.0'] as $ruta => $fila) {
-                $saldo = $this->getJson($this->url($ruta))->assertOk()->json("{$fila}.saldo");
-                $this->assertIsArray($saldo, "{$submodulo} / {$ruta}");
-            }
+        foreach (['productores' => 'data.data.0', 'productores/list' => 'data.0'] as $ruta => $fila) {
+            $saldo = $this->getJson($this->url($ruta))->assertOk()->json("{$fila}.saldo");
+            $this->assertIsArray($saldo, $ruta);
+            $this->assertEqualsWithDelta(1000, $this->porMoneda($saldo, 'MXN')['por_pagar'], 0.001, $ruta);
         }
     }
 
@@ -259,7 +340,9 @@ class IntegracionDineroTest extends TestCase
     private function conMovimiento(string $nombre): void
     {
         $convenio = $this->crearConvenio($this->sbp, ['productor_id' => $this->productorNuevo($nombre)->id]);
-        $this->crearRecepcion($convenio);
+        $recepcion = $this->crearRecepcion($convenio);
+        $this->crearPago($convenio, [], [$recepcion->id => 300]);
+        $this->crearPago($convenio, ['tipo' => 'saldo_inicial', 'monto' => 20]);
         $this->liquidacion($convenio, 500);
     }
 }
