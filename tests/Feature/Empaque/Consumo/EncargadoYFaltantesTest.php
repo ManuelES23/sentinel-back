@@ -137,7 +137,7 @@ class EncargadoYFaltantesTest extends TestCase
         $filas = collect($plano->json('data.stock'))->keyBy('product_id');
         $this->assertEqualsCanonicalizing([$this->tarima->id, $this->fleje->id], $filas->keys()->all());
         $this->assertNotNull($filas[$this->tarima->id]['negativo_desde']);
-        $this->assertStringStartsWith(now()->format('Y-m-d'), $filas[$this->tarima->id]['negativo_desde']);
+        $this->assertStringStartsWith(now()->utc()->format('Y-m-d'), $filas[$this->tarima->id]['negativo_desde']);
         $this->assertStringStartsWith('2026-10-01', $filas[$this->fleje->id]['negativo_desde']);
         $this->assertSame(2, $plano->json('data.totals.total_items'));
 
