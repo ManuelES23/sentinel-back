@@ -56,6 +56,9 @@ class Liquidacion extends Model
         'notas',
         'created_by',
         'intervinieron',
+        'saldo_inicial',
+        'liquidada_at',
+        'liquidada_by',
     ];
 
     protected $attributes = [
@@ -91,6 +94,9 @@ class Liquidacion extends Model
         'cancelada_by' => 'integer',
         'created_by' => 'integer',
         'intervinieron' => 'array',
+        'saldo_inicial' => 'decimal:2',
+        'liquidada_at' => 'datetime',
+        'liquidada_by' => 'integer',
     ];
 
     /**

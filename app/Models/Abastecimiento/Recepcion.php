@@ -72,6 +72,12 @@ class Recepcion extends Model
         return $this->belongsTo(Liquidacion::class, 'liquidacion_id');
     }
 
+    /** Pagos que le tocan a esta recepción (reparto de los abonos de tipo `recepcion`). */
+    public function pagos(): HasMany
+    {
+        return $this->hasMany(AbonoRecepcion::class, 'recepcion_id');
+    }
+
     public function creador(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');

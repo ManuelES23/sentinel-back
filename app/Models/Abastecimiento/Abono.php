@@ -17,6 +17,7 @@ class Abono extends Model
     use HasFactory, SoftDeletes, Loggable;
 
     public const STATUSES = ['aplicado', 'cancelado'];
+    public const TIPOS = ['recepcion', 'abono', 'adelanto', 'liquidacion', 'saldo_inicial'];
     public const METODOS_PAGO = ['transferencia', 'cheque', 'efectivo', 'otro'];
 
     protected $table = 'abs_abonos';
@@ -26,6 +27,8 @@ class Abono extends Model
         'folio',
         'productor_id',
         'convenio_id',
+        'tipo',
+        'liquidacion_id',
         'fecha',
         'monto',
         'moneda',
@@ -42,12 +45,14 @@ class Abono extends Model
 
     protected $attributes = [
         'status' => 'aplicado',
+        'tipo' => 'abono',
     ];
 
     protected $casts = [
         'enterprise_id' => 'integer',
         'productor_id' => 'integer',
         'convenio_id' => 'integer',
+        'liquidacion_id' => 'integer',
         'fecha' => 'date:Y-m-d',
         'monto' => 'decimal:2',
         'cancelado_by' => 'integer',
@@ -69,6 +74,17 @@ class Abono extends Model
     public function convenio(): BelongsTo
     {
         return $this->belongsTo(Convenio::class, 'convenio_id');
+    }
+
+    public function liquidacion(): BelongsTo
+    {
+        return $this->belongsTo(Liquidacion::class, 'liquidacion_id');
+    }
+
+    /** Reparto del pago entre recepciones (pagos de tipo `recepcion`). */
+    public function recepciones(): HasMany
+    {
+        return $this->hasMany(AbonoRecepcion::class, 'abono_id');
     }
 
     public function aplicaciones(): HasMany

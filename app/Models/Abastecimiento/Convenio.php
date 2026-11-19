@@ -109,6 +109,12 @@ class Convenio extends Model
         return $this->hasMany(Recepcion::class, 'convenio_id');
     }
 
+    /** Pagos (abonos) del convenio, de cualquier tipo. */
+    public function pagos(): HasMany
+    {
+        return $this->hasMany(Abono::class, 'convenio_id');
+    }
+
     public function liquidaciones(): HasMany
     {
         return $this->hasMany(Liquidacion::class, 'convenio_id');
