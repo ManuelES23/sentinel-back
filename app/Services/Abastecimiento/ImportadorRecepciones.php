@@ -42,10 +42,15 @@ class ImportadorRecepciones
                 ->get()
                 ->keyBy('id');
 
-            // Una cuenta liquidada está cerrada. Se lee con bloqueo compartido (lee lo último confirmado, no la foto
-            // de la transacción) y después de tener los convenios: liquidar necesita el convenio, así que no se cuela.
+            // Una cuenta liquidada está cerrada. Lectura SIN bloqueo a propósito: un bloqueo compartido sobre
+            // `abs_liquidaciones` tomaría bloqueos de hueco que estorban a `Liquidacion::create` de otros convenios y
+            // cierra un ciclo con liquidar (que tiene recepciones de otro convenio). No hace falta: el bloqueo compartido
+            // de los convenios de arriba es la primera sentencia de la transacción y no crea la foto (snapshot) de
+            // REPEATABLE READ; esta lectura la crea, ya con los convenios bloqueados, y liquidar o cancelar una
+            // liquidación de estos convenios necesitan el convenio exclusivo, así que no pueden confirmar mientras dura
+            // la importación: la foto ve todo lo confirmado antes del bloqueo y nada cambia después.
             $liquidados = Liquidacion::whereIn('convenio_id', $convenioIds)->where('status', 'liquidada')
-                ->sharedLock()->pluck('convenio_id')->map(fn ($id) => (int) $id)->all();
+                ->pluck('convenio_id')->map(fn ($id) => (int) $id)->all();
 
             foreach ($convenioIds as $id) {
                 $convenio = $convenios->get($id);
@@ -95,10 +100,11 @@ class ImportadorRecepciones
      * Revisa los tickets del archivo contra lo ya confirmado en esos convenios.
      *
      * Es una lectura CON bloqueo (`sharedLock`) a propósito: MySQL corre en REPEATABLE READ y la primera
-     * lectura sin bloqueo de la transacción (el `exists()` del contador de folios) fija el snapshot ANTES
-     * de esperar el bloqueo del contador. Una lectura normal vería ese snapshot viejo y no los tickets que
-     * otra importación confirmó mientras esta esperaba; una lectura con bloqueo lee lo último confirmado.
-     * No crea un orden de bloqueo nuevo: el contador ya serializa a los escritores.
+     * lectura sin bloqueo de la transacción (la de las liquidaciones de arriba, justo después del bloqueo compartido
+     * de los convenios) fija el snapshot ANTES de esperar el bloqueo del contador de folios. Una lectura normal
+     * vería ese snapshot viejo y no los tickets que otra importación confirmó mientras esta esperaba; una lectura
+     * con bloqueo lee lo último confirmado. No crea un orden de bloqueo nuevo: el contador ya serializa a los
+     * escritores.
      *
      * @param  list<int>  $convenioIds
      */

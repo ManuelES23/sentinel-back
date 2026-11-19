@@ -187,7 +187,7 @@ class CuentaConvenioReglasTest extends TestCase
         $this->assertSame('No se puede cambiar: el convenio ya tiene pagos o una liquidación.', $this->error($this->putJson($this->url("convenios/{$c->id}"), $cuerpo), 'moneda'));
         $this->assertSame('MXN', $c->fresh()->moneda);
 
-        // Finalizar sí se puede; y un pago cancelado ya no cuenta.
+        // Con el pago cancelado ya no hay dinero vigente: el convenio sí se puede cancelar.
         $pago->update(['status' => 'cancelado']);
         $this->patchJson($this->url("convenios/{$c->id}/estado"), ['status' => 'cancelado'])->assertOk();
     }

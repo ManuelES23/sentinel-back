@@ -380,6 +380,34 @@ class OrdenBloqueoDineroTest extends TestCase
         $tx = $this->transaccion();
         $this->assertStringContainsString('"abs_liquidaciones"', $tx[$this->primera($tx, 'select exists')]);
     }
+    public function test_la_importacion_lee_las_liquidaciones_sin_bloqueo_entre_los_convenios_y_el_contador_de_folios(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        $tipo = $convenio->precios()->where('es_principal', true)->value('tipo_carga_id');
+        $filas = [['fila' => 2, 'datos' => [
+            'convenio_id' => $convenio->id, 'fecha' => '2026-06-05', 'tipo_carga_id' => $tipo,
+            'cantidad' => 7, 'kilos' => null, 'rezaga_kg' => null, 'ticket_proveedor' => null, 'notas' => null,
+        ]]];
+
+        $this->grabar();
+        app(\App\Services\Abastecimiento\ImportadorRecepciones::class)
+            ->importar($this->sbp, User::factory()->create(['role' => 'admin']), $filas);
+
+        // Orden: convenios (compartido) → liquidaciones (la lectura que crea la foto REPEATABLE READ) → folios → insert.
+        $this->assertEnOrden([
+            'select * from "abs_convenios"',
+            'select "convenio_id" from "abs_liquidaciones"',
+            'select exists',
+            'insert into "abs_recepciones"',
+        ]);
+
+        // SQLite no emite `for share` / `lock in share mode`, así que el SQL no puede probar la ausencia del bloqueo:
+        // se comprueba en el código de la importación (un bloqueo sobre `abs_liquidaciones` pone bloqueos de hueco que
+        // estorban a liquidar otros convenios y cierra un ciclo con liquidar; ver el comentario del importador).
+        $fuente = file_get_contents((new \ReflectionClass(\App\Services\Abastecimiento\ImportadorRecepciones::class))->getFileName());
+        $this->assertSame(1, preg_match('/Liquidacion::whereIn\([^;]*;/s', $fuente, $m), 'No se encontró la lectura de liquidaciones.');
+        $this->assertStringNotContainsString('Lock', $m[0], 'La lectura de liquidaciones de la importación no debe bloquear.');
+    }
     public function test_bloquear_pago_devuelve_convenio_y_pago_y_da_404_fuera_de_la_empresa(): void
     {
         $convenio = $this->crearConvenio($this->sbp);
