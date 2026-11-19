@@ -3,18 +3,24 @@
 namespace Tests\Feature\Abastecimiento;
 
 use App\Models\Abastecimiento\Abono;
-use App\Models\Abastecimiento\AbonoAplicacion;
 use App\Models\Abastecimiento\Convenio;
-use App\Models\Abastecimiento\Liquidacion;
+use App\Models\Abastecimiento\ConvenioPrecio;
 use App\Models\Abastecimiento\Productor;
-use App\Services\Abastecimiento\AplicadorAbonos;
+use App\Models\Abastecimiento\Recepcion;
+use App\Models\Abastecimiento\Temporada;
+use App\Models\Abastecimiento\Variedad;
+use App\Services\Abastecimiento\CuentaConvenio;
 use App\Services\Abastecimiento\SaldoProductor;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Validation\ValidationException;
 use Tests\Concerns\CreatesAbastecimientoFixtures;
 use Tests\TestCase;
 
+/**
+ * Cuenta por convenio (spec 5.3): valor recibido (valor a cuenta vivo, sin rezaga), pagado (sin saldo inicial),
+ * cargos iniciales y por pagar; y `SaldoProductor` sumando las cuentas por productor y moneda.
+ */
 class SaldoProductorTest extends TestCase
 {
     use RefreshDatabase, CreatesAbastecimientoFixtures;
@@ -25,17 +31,27 @@ class SaldoProductorTest extends TestCase
         $this->setUpAbastecimiento();
     }
 
-    /** Liquidación aprobada creada directo (como la deja el flujo al aprobar). */
-    private function aprobada(Convenio $convenio, float $monto, array $over = []): Liquidacion
+    // ---------------------------------------------------------------- ayudas
+
+    /**
+     * Pago de un tipo a la cuenta. Con `$recepciones` (recepcion_id => monto) es un pago por recepción.
+     *
+     * @param  array<int, float|int>|null  $recepciones
+     */
+    private function pagar(Convenio $convenio, string $tipo, float $monto, ?array $recepciones = null, array $over = []): Abono
     {
-        return $this->crearLiquidacion($convenio, array_merge([
-            'status' => 'aprobada', 'monto_calculado' => $monto, 'monto_final' => $monto, 'aprobada_at' => now(),
-        ], $over));
+        return $this->crearPago($convenio, array_merge(['tipo' => $tipo, 'monto' => $monto], $over), $recepciones ?? []);
     }
 
-    private function aplicar(Abono $abono, array $aplicaciones): void
+    private function totales(Convenio $convenio): array
     {
-        DB::transaction(fn () => app(AplicadorAbonos::class)->aplicar($abono, $aplicaciones));
+        return CuentaConvenio::totales(new EloquentCollection([Convenio::findOrFail($convenio->id)]))[$convenio->id];
+    }
+
+    /** @return array<int, array> recepcion_id => detalle */
+    private function detalle(Convenio $convenio): array
+    {
+        return array_column(CuentaConvenio::recepciones(Convenio::findOrFail($convenio->id)), null, 'id');
     }
 
     private function saldo(Productor|int $productor, ?int $temporadaId = null): array
@@ -45,516 +61,428 @@ class SaldoProductorTest extends TestCase
         return SaldoProductor::porProductores($this->sbp, [$id], $temporadaId)->get($id, []);
     }
 
-    private function productor(Convenio $convenio): Productor
+    private function productorNuevo(string $nombre): Productor
     {
-        return Productor::findOrFail($convenio->productor_id);
+        return Productor::create(['enterprise_id' => $this->sbp->id, 'nombre' => $nombre, 'tipo' => 'productor', 'is_active' => true]);
     }
 
-    private function assertSinEscribir(Abono $abono, int $aplicacionesEsperadas = 0): void
+    /** Convenio clásico (100 por caja) con dos recepciones de valor 1000 y 500. */
+    private function conDosRecepciones(array $over = []): array
     {
-        $this->assertSame($aplicacionesEsperadas, AbonoAplicacion::where('abono_id', $abono->id)->count());
+        $convenio = $this->crearConvenio($this->sbp, $over);
+        $r1 = $this->crearRecepcion($convenio, ['cantidad' => 10]);
+        $r2 = $this->crearRecepcion($convenio, ['cantidad' => 5, 'fecha' => '2026-06-02']);
+
+        return [$convenio, $r1, $r2];
     }
 
-    // ---------------------------------------------------------------- saldo
+    private function cambiarPrecio(Convenio $convenio, float $precio): void
+    {
+        ConvenioPrecio::where('convenio_id', $convenio->id)->update(['precio' => $precio]);
+    }
 
-    public function test_saldo_con_liquidacion_aprobada_y_abono_aplicado(): void
+    // ---------------------------------------------------------------- cuenta del convenio
+
+    public function test_cuenta_abierta_por_pagar_es_valor_mas_cargos_menos_pagado(): void
+    {
+        [$convenio, $r1, $r2] = $this->conDosRecepciones();
+        $pago = $this->pagar($convenio, 'recepcion', 600, [$r1->id => 600]);
+        $this->pagar($convenio, 'adelanto', 100);
+        $this->pagar($convenio, 'saldo_inicial', 50);
+
+        $t = $this->totales($convenio);
+        $this->assertSame([
+            'moneda' => 'MXN',
+            'valor_recibido' => 1500.0,
+            'pagado' => 700.0,
+            'cargos_iniciales' => 50.0,
+            'por_pagar' => 850.0,
+            'estado' => 'abierta',
+            'liquidacion_id' => null,
+            'sin_valor' => 0,
+            'recepciones' => 2,
+        ], $t);
+
+        $d = $this->detalle($convenio);
+        $this->assertSame([$r1->id, $r2->id], array_keys($d));
+        $this->assertSame(1000.0, $d[$r1->id]['valor']);
+        $this->assertSame(600.0, $d[$r1->id]['pagado']);
+        $this->assertSame(400.0, $d[$r1->id]['falta']);
+        $this->assertSame(0.0, $d[$r1->id]['de_mas']);
+        $this->assertSame('parcial', $d[$r1->id]['estado']);
+        $this->assertNull($d[$r1->id]['motivo']);
+        $this->assertSame([$pago->folio], $d[$r1->id]['pagos']);
+        $this->assertSame(100.0, $d[$r1->id]['precio']);
+        $this->assertSame([], $d[$r1->id]['renglones']);
+        $this->assertSame($r1->folio, $d[$r1->id]['folio']);
+        $this->assertSame('2026-06-01', $d[$r1->id]['fecha']);
+        $this->assertSame((int) $r1->tipo_carga_id, $d[$r1->id]['tipo_carga']['id']);
+        $this->assertSame(10.0, $d[$r1->id]['cantidad']);
+
+        $this->assertSame(500.0, $d[$r2->id]['valor']);
+        $this->assertSame(0.0, $d[$r2->id]['pagado']);
+        $this->assertSame(500.0, $d[$r2->id]['falta']);
+        $this->assertSame('pendiente', $d[$r2->id]['estado']);
+        $this->assertSame([], $d[$r2->id]['pagos']);
+
+        // El saldo del productor es la misma cuenta.
+        $mxn = $this->saldo($convenio->productor_id)['MXN'];
+        $this->assertSame(['moneda' => 'MXN', 'valor_recibido' => 1500.0, 'pagado' => 700.0, 'cargos_iniciales' => 50.0, 'por_pagar' => 850.0], $mxn);
+    }
+
+    public function test_pagos_cancelados_no_cuentan(): void
+    {
+        [$convenio, $r1] = $this->conDosRecepciones();
+        $cancelado = ['status' => 'cancelado', 'cancelado_motivo' => 'Capturado por error', 'cancelado_at' => now()];
+        $this->pagar($convenio, 'recepcion', 1000, [$r1->id => 1000], $cancelado);
+        $this->pagar($convenio, 'adelanto', 300, null, $cancelado);
+        $this->pagar($convenio, 'saldo_inicial', 80, null, $cancelado);
+        // Un pago borrado (soft delete) tampoco cuenta.
+        $this->pagar($convenio, 'abono', 70)->delete();
+        $vigente = $this->pagar($convenio, 'abono', 200);
+
+        $t = $this->totales($convenio);
+        $this->assertSame(200.0, $t['pagado']);
+        $this->assertSame(0.0, $t['cargos_iniciales']);
+        $this->assertSame(1300.0, $t['por_pagar']);
+
+        $d = $this->detalle($convenio);
+        $this->assertSame(0.0, $d[$r1->id]['pagado']);
+        $this->assertSame('pendiente', $d[$r1->id]['estado']);
+        $this->assertSame([], $d[$r1->id]['pagos']);
+        $this->assertNotNull($vigente->id);
+    }
+
+    public function test_cuenta_liquidada_usa_el_monto_final(): void
+    {
+        [$convenio, $r1, $r2] = $this->conDosRecepciones();
+        $this->pagar($convenio, 'recepcion', 600, [$r1->id => 600]);
+        $this->pagar($convenio, 'adelanto', 100);
+        // Una liquidación cancelada no cierra la cuenta.
+        $this->crearLiquidacion($convenio, ['status' => 'cancelada', 'monto_final' => 999, 'monto_calculado' => 999, 'liquidada_at' => null]);
+        $this->assertSame('abierta', $this->totales($convenio)['estado']);
+
+        $liq = $this->crearLiquidacion($convenio, ['monto_calculado' => 1400, 'monto_final' => 1400]);
+        Recepcion::whereIn('id', [$r1->id, $r2->id])->update(['liquidacion_id' => $liq->id]);
+
+        $t = $this->totales($convenio);
+        $this->assertSame('liquidada', $t['estado']);
+        $this->assertSame($liq->id, $t['liquidacion_id']);
+        $this->assertSame(1500.0, $t['valor_recibido']);
+        $this->assertSame(700.0, $t['pagado']);
+        $this->assertSame(700.0, $t['por_pagar']);
+
+        $d = $this->detalle($convenio);
+        $this->assertSame('liquidada', $d[$r1->id]['estado']);
+        $this->assertSame('liquidada', $d[$r2->id]['estado']);
+    }
+
+    public function test_pagado_de_mas_es_negativo(): void
+    {
+        [$convenio] = $this->conDosRecepciones();
+        $this->pagar($convenio, 'adelanto', 2000);
+
+        $this->assertSame(-500.0, $this->totales($convenio)['por_pagar']);
+        $this->assertSame(-500.0, $this->saldo($convenio->productor_id)['MXN']['por_pagar']);
+    }
+
+    public function test_precio_corregido_despues_de_pagar_deja_la_recepcion_parcial_y_la_cuenta_cuadra(): void
     {
         $convenio = $this->crearConvenio($this->sbp);
-        $liq = $this->aprobada($convenio, 1000);
-        $abono = $this->crearAbono($this->productor($convenio), ['monto' => 400]);
-        $this->aplicar($abono, [['liquidacion_id' => $liq->id, 'monto' => 400]]);
+        $r = $this->crearRecepcion($convenio, ['cantidad' => 10]);
+        $this->pagar($convenio, 'recepcion', 1000, [$r->id => 1000]);
+        $this->assertSame('pagada', $this->detalle($convenio)[$r->id]['estado']);
+        $this->assertSame(0.0, $this->totales($convenio)['por_pagar']);
 
-        $mxn = $this->saldo($this->productor($convenio))['MXN'];
+        // Sube el precio: el valor es vivo, falta la diferencia.
+        $this->cambiarPrecio($convenio, 120);
+        $d = $this->detalle($convenio)[$r->id];
+        $t = $this->totales($convenio);
+        $this->assertSame(1200.0, $d['valor']);
+        $this->assertSame('parcial', $d['estado']);
+        $this->assertSame(200.0, $d['falta']);
+        $this->assertSame(0.0, $d['de_mas']);
+        $this->assertSame(200.0, $t['por_pagar']);
+        $this->assertSame($t['por_pagar'], round($t['valor_recibido'] + $t['cargos_iniciales'] - $t['pagado'], 2));
 
-        $this->assertSame('MXN', $mxn['moneda']);
-        $this->assertSame(1000.0, $mxn['liquidado']);
-        $this->assertSame(400.0, $mxn['aplicado']);
-        $this->assertSame(600.0, $mxn['por_pagar']);
-        $this->assertSame(0.0, $mxn['anticipos_sin_aplicar']);
-        $this->assertSame('aprobada', $liq->fresh()->status);
+        // Baja el precio: queda pagada con lo de más a la vista.
+        $this->cambiarPrecio($convenio, 80);
+        $d = $this->detalle($convenio)[$r->id];
+        $t = $this->totales($convenio);
+        $this->assertSame(800.0, $d['valor']);
+        $this->assertSame('pagada', $d['estado']);
+        $this->assertSame(0.0, $d['falta']);
+        $this->assertSame(200.0, $d['de_mas']);
+        $this->assertSame(-200.0, $t['por_pagar']);
+        $this->assertSame($t['por_pagar'], round($t['valor_recibido'] + $t['cargos_iniciales'] - $t['pagado'], 2));
     }
 
-    public function test_la_liquidacion_pasa_a_pagada_cuando_lo_aplicado_la_cubre(): void
+    public function test_recepcion_sin_precio_cuenta_cero_y_se_cuenta_en_sin_valor(): void
     {
         $convenio = $this->crearConvenio($this->sbp);
-        $liq = $this->aprobada($convenio, 1000);
-        $abono1 = $this->crearAbono($this->productor($convenio), ['monto' => 400]);
-        $abono2 = $this->crearAbono($this->productor($convenio), ['monto' => 600]);
+        $con = $this->crearRecepcion($convenio, ['cantidad' => 10]);
+        // Antes de la vigencia del único precio: sin precio vigente.
+        $sin = $this->crearRecepcion($convenio, ['cantidad' => 7, 'fecha' => '2026-05-20']);
 
-        $this->aplicar($abono1, [['liquidacion_id' => $liq->id, 'monto' => 400]]);
-        $this->assertSame('aprobada', $liq->fresh()->status);
+        $t = $this->totales($convenio);
+        $this->assertSame(1000.0, $t['valor_recibido']);
+        $this->assertSame(1, $t['sin_valor']);
+        $this->assertSame(2, $t['recepciones']);
 
-        $this->aplicar($abono2, [['liquidacion_id' => $liq->id, 'monto' => 600]]);
-        $this->assertSame('pagada', $liq->fresh()->status);
-
-        $mxn = $this->saldo($this->productor($convenio))['MXN'];
-        $this->assertSame(1000.0, $mxn['liquidado']);   // pagadas cuentan igual que aprobadas
-        $this->assertSame(0.0, $mxn['por_pagar']);
+        $d = $this->detalle($convenio);
+        $this->assertSame(0.0, $d[$sin->id]['valor']);
+        $this->assertSame('Sin precio vigente', $d[$sin->id]['motivo']);
+        $this->assertSame('no_pagable', $d[$sin->id]['estado']);
+        $this->assertNull($d[$sin->id]['precio']);
+        $this->assertSame('pendiente', $d[$con->id]['estado']);
     }
 
-    public function test_los_borradores_y_las_canceladas_no_cuentan_como_liquidado(): void
+    public function test_por_calibre_un_renglon_sin_rezaga_queda_no_pagable_pero_su_valor_cuenta(): void
     {
-        $convenio = $this->crearConvenio($this->sbp);
-        $this->aprobada($convenio, 500);
-        $this->crearLiquidacion($convenio, ['status' => 'borrador', 'monto_final' => 300]);
-        $this->crearLiquidacion($convenio, ['status' => 'en_revision', 'monto_final' => 200]);
-        $this->crearLiquidacion($convenio, ['status' => 'cancelada', 'monto_final' => 100]);
+        $base = $this->crearConvenio($this->sbp);
+        $variedad = Variedad::findOrFail($base->variedad_id);
+        $jumbo = $this->crearCalibre($variedad, 'Jumbo', true, 1);
+        $grande = $this->crearCalibre($variedad, 'Grande', true, 2);
+        $convenio = $this->crearConvenioPorCalibre($this->sbp, [
+            ['calibre' => $jumbo, 'volumen' => 100, 'precio' => 120],
+            ['calibre' => $grande, 'volumen' => 100, 'precio' => 100],
+        ], ['porcentaje_rezaga' => 5, 'productor_id' => $this->productorNuevo('Calibres')->id]);
 
-        $this->assertSame(500.0, $this->saldo($this->productor($convenio))['MXN']['liquidado']);
+        $r = $this->crearRecepcionConRenglones($convenio, [
+            ['calibre_id' => $jumbo->id, 'cantidad' => 10, 'rezaga_kg' => 1],
+            ['calibre_id' => $grande->id, 'cantidad' => 5, 'rezaga_kg' => null],
+        ]);
+
+        $t = $this->totales($convenio);
+        $this->assertSame(1700.0, $t['valor_recibido']);
+        $this->assertSame(0, $t['sin_valor']);
+        $this->assertSame(1700.0, $t['por_pagar']);
+
+        $d = $this->detalle($convenio)[$r->id];
+        $this->assertSame(1700.0, $d['valor']);
+        $this->assertSame('Falta la rezaga', $d['motivo']);
+        $this->assertSame('no_pagable', $d['estado']);
+        $this->assertNull($d['precio']);
+        $this->assertSame([
+            ['calibre_id' => $jumbo->id, 'calibre' => 'Jumbo', 'cantidad' => 10.0, 'kilos' => null, 'rezaga_kg' => 1.0, 'precio' => 120.0],
+            ['calibre_id' => $grande->id, 'calibre' => 'Grande', 'cantidad' => 5.0, 'kilos' => null, 'rezaga_kg' => null, 'precio' => 100.0],
+        ], $d['renglones']);
     }
 
-    public function test_anticipo_sin_aplicar_aparece_como_saldo_a_favor(): void
-    {
-        $convenio = $this->crearConvenio($this->sbp);
-        $liq = $this->aprobada($convenio, 1000);
-        $this->crearAbono($this->productor($convenio), ['monto' => 500]);                        // anticipo completo
-        $parcial = $this->crearAbono($this->productor($convenio), ['monto' => 300]);
-        $this->aplicar($parcial, [['liquidacion_id' => $liq->id, 'monto' => 100]]);              // queda 200
-        $cancelado = $this->crearAbono($this->productor($convenio), ['monto' => 999, 'status' => 'cancelado']);
-
-        $mxn = $this->saldo($this->productor($convenio))['MXN'];
-
-        $this->assertSame(700.0, $mxn['anticipos_sin_aplicar']);
-        $this->assertSame(100.0, $mxn['aplicado']);
-        $this->assertSame(900.0, $mxn['por_pagar']);
-        $this->assertNotNull($cancelado->id);
-    }
+    // ---------------------------------------------------------------- saldo del productor
 
     public function test_mxn_y_usd_nunca_se_mezclan(): void
     {
-        $mxn = $this->crearConvenio($this->sbp);
-        $usd = $this->crearConvenio($this->sbp, ['moneda' => 'USD', 'productor_id' => $mxn->productor_id]);
-        $this->aprobada($mxn, 1000);
-        $this->aprobada($usd, 50);
-        $this->crearAbono($this->productor($mxn), ['monto' => 70, 'moneda' => 'USD']);
-        $this->crearRecepcion($mxn, ['cantidad' => 2]);
-        $this->crearRecepcion($usd, ['cantidad' => 3]);
+        $productor = $this->productorNuevo('Dos monedas');
+        [$mxn, $r] = $this->conDosRecepciones(['productor_id' => $productor->id]);
+        $this->pagar($mxn, 'recepcion', 300, [$r->id => 300]);
+        $usd = $this->crearConvenio($this->sbp, ['productor_id' => $productor->id, 'moneda' => 'USD', 'precio' => 12]);
+        $this->crearRecepcion($usd, ['cantidad' => 10]);
+        $this->pagar($usd, 'adelanto', 20);
+        $this->pagar($usd, 'saldo_inicial', 5);
 
-        $saldo = $this->saldo($this->productor($mxn));
-
-        $this->assertEqualsCanonicalizing(['MXN', 'USD'], array_keys($saldo));
-        $this->assertSame(1000.0, $saldo['MXN']['liquidado']);
-        $this->assertSame(0.0, $saldo['MXN']['anticipos_sin_aplicar']);
-        $this->assertSame(200.0, $saldo['MXN']['sin_liquidar']);
-        $this->assertSame(50.0, $saldo['USD']['liquidado']);
-        $this->assertSame(70.0, $saldo['USD']['anticipos_sin_aplicar']);
-        $this->assertSame(300.0, $saldo['USD']['sin_liquidar']);
+        $saldo = $this->saldo($productor);
+        $this->assertSame(['MXN', 'USD'], array_keys($saldo));
+        $this->assertSame(['moneda' => 'MXN', 'valor_recibido' => 1500.0, 'pagado' => 300.0, 'cargos_iniciales' => 0.0, 'por_pagar' => 1200.0], $saldo['MXN']);
+        $this->assertSame(['moneda' => 'USD', 'valor_recibido' => 120.0, 'pagado' => 20.0, 'cargos_iniciales' => 5.0, 'por_pagar' => 105.0], $saldo['USD']);
+        $this->assertSame('USD', $this->totales($usd)['moneda']);
     }
 
-    public function test_sin_liquidar_cuenta_las_recepciones_libres_y_no_las_de_una_liquidacion_vigente(): void
+    public function test_con_temporada_solo_cuentan_sus_convenios(): void
     {
-        $convenio = $this->crearConvenio($this->sbp, ['precio' => 100]);
-        $this->crearRecepcion($convenio, ['cantidad' => 10]);                                   // libre: 1000
-        $liq = $this->aprobada($convenio, 500);
-        $this->crearRecepcion($convenio, ['cantidad' => 5, 'liquidacion_id' => $liq->id]);      // liquidada
-        $cancelada = $this->crearLiquidacion($convenio, ['status' => 'cancelada']);
-        $this->crearRecepcion($convenio, ['cantidad' => 2, 'liquidacion_id' => $cancelada->id]); // apunta a cancelada: libre
-
-        $this->assertSame(1200.0, $this->saldo($this->productor($convenio))['MXN']['sin_liquidar']);
-    }
-
-    public function test_con_temporada_solo_cuentan_los_convenios_de_esa_temporada_y_se_omiten_los_anticipos(): void
-    {
-        $a = $this->crearConvenio($this->sbp);
-        $temporadaB = \App\Models\Abastecimiento\Temporada::create([
-            'enterprise_id' => $this->sbp->id, 'cultivo_id' => $a->cultivo_id, 'nombre' => 'Otra temporada',
-            'fecha_inicio' => '2026-10-01', 'fecha_fin' => '2027-01-31', 'estado' => 'activa',
+        $productor = $this->productorNuevo('Dos temporadas');
+        [$actual] = $this->conDosRecepciones(['productor_id' => $productor->id]);
+        $siguiente = Temporada::create([
+            'enterprise_id' => $this->sbp->id, 'cultivo_id' => $actual->cultivo_id, 'nombre' => 'Temporada siguiente',
+            'fecha_inicio' => '2026-10-01', 'fecha_fin' => '2027-03-31', 'estado' => 'activa',
         ]);
-        $b = $this->crearConvenio($this->sbp, ['temporada_id' => $temporadaB->id, 'productor_id' => $a->productor_id]);
-        $liqA = $this->aprobada($a, 1000);
-        $liqB = $this->aprobada($b, 700);
-        $abono = $this->crearAbono($this->productor($a), ['monto' => 900]);
-        $this->aplicar($abono, [['liquidacion_id' => $liqA->id, 'monto' => 300], ['liquidacion_id' => $liqB->id, 'monto' => 400]]);
-        $this->crearAbono($this->productor($a), ['monto' => 50]);
-        $this->crearRecepcion($a, ['cantidad' => 1]);
-        $this->crearRecepcion($b, ['cantidad' => 4, 'fecha' => '2026-10-02']);
+        $otro = $this->crearConvenio($this->sbp, ['productor_id' => $productor->id, 'temporada_id' => $siguiente->id]);
+        $this->crearRecepcion($otro, ['cantidad' => 3]);
+        $this->pagar($otro, 'adelanto', 50);
+        // Un convenio cancelado no cuenta en ningún caso.
+        $cancelado = $this->crearConvenio($this->sbp, ['productor_id' => $productor->id, 'status' => 'cancelado']);
+        $this->crearRecepcion($cancelado, ['cantidad' => 4]);
 
-        $total = $this->saldo($this->productor($a))['MXN'];
-        $this->assertSame(1700.0, $total['liquidado']);
-        $this->assertSame(700.0, $total['aplicado']);
-        $this->assertSame(1000.0, $total['por_pagar']);
-        $this->assertSame(250.0, $total['anticipos_sin_aplicar']);   // (900 - 700) + 50
-        $this->assertSame(500.0, $total['sin_liquidar']);            // 1 x 100 + 4 x 100
-
-        $soloA = $this->saldo($this->productor($a), $a->temporada_id)['MXN'];
-        $this->assertSame(1000.0, $soloA['liquidado']);
-        $this->assertSame(300.0, $soloA['aplicado']);
-        $this->assertSame(700.0, $soloA['por_pagar']);
-        $this->assertSame(0.0, $soloA['anticipos_sin_aplicar']);
-        $this->assertSame(100.0, $soloA['sin_liquidar']);
+        $this->assertSame(1500.0, $this->saldo($productor, $actual->temporada_id)['MXN']['por_pagar']);
+        $this->assertSame(250.0, $this->saldo($productor, $siguiente->id)['MXN']['por_pagar']);
+        $this->assertSame(1750.0, $this->saldo($productor)['MXN']['por_pagar']);
+        $this->assertSame(1800.0, $this->saldo($productor)['MXN']['valor_recibido']);
     }
 
-    public function test_productores_sin_movimiento_regresan_arreglo_vacio_y_no_se_filtran_ajenos(): void
+    public function test_productores_sin_movimiento_regresan_arreglo_vacio(): void
     {
-        $convenio = $this->crearConvenio($this->sbp);
-        $this->aprobada($convenio, 100);
-        $otro = Productor::create(['enterprise_id' => $this->sbp->id, 'nombre' => 'Sin movimiento', 'tipo' => 'productor', 'is_active' => true]);
+        $sinConvenio = $this->productorNuevo('Sin convenio');
+        $sinMovimiento = $this->productorNuevo('Sin movimiento');
+        $quieto = $this->crearConvenio($this->sbp, ['productor_id' => $sinMovimiento->id]);
+        // Un pago cancelado no es movimiento.
+        $this->pagar($quieto, 'adelanto', 100, null, ['status' => 'cancelado', 'cancelado_motivo' => 'Capturado por error']);
+        $conMovimiento = $this->productorNuevo('Con movimiento');
+        $this->conDosRecepciones(['productor_id' => $conMovimiento->id]);
 
-        $res = SaldoProductor::porProductores($this->sbp, [$convenio->productor_id, $otro->id]);
+        $saldos = SaldoProductor::porProductores($this->sbp, [$sinConvenio->id, $sinMovimiento->id, $conMovimiento->id]);
 
-        $this->assertSame([], $res->get($otro->id));
-        $this->assertSame(100.0, $res->get($convenio->productor_id)['MXN']['liquidado']);
-        // Otra empresa no ve nada de SBP.
-        $this->assertSame([], SaldoProductor::porProductores($this->otra, [$convenio->productor_id])->all()[$convenio->productor_id] ?? []);
+        $this->assertSame([], $saldos->get($sinConvenio->id));
+        $this->assertSame([], $saldos->get($sinMovimiento->id));
+        $this->assertSame(['MXN'], array_keys($saldos->get($conMovimiento->id)));
+        $this->assertTrue(SaldoProductor::porProductores($this->sbp, [])->isEmpty());
+        // Otra empresa no se cuela.
+        $ajeno = $this->crearConvenio($this->otra);
+        $this->crearRecepcion($ajeno);
+        $this->assertSame([], SaldoProductor::porProductores($this->sbp, [$ajeno->productor_id])->get($ajeno->productor_id));
     }
 
-    public function test_sin_consultas_por_productor(): void
+    // ---------------------------------------------------------------- consultas
+
+    /** Convenio con movimiento completo: recepciones, pago por recepción, adelanto, saldo inicial y, si se pide, liquidado. */
+    private function conMovimiento(string $nombre, bool $liquidado = false, bool $porCalibre = false): Convenio
     {
-        $ids = [];
-        for ($i = 1; $i <= 20; $i++) {
-            $p = Productor::create(['enterprise_id' => $this->sbp->id, 'nombre' => "Productor {$i}", 'tipo' => 'productor', 'is_active' => true]);
-            $convenio = $this->crearConvenio($this->sbp, ['productor_id' => $p->id]);
-            $liq = $this->aprobada($convenio, 100 * $i);
-            $this->crearRecepcion($convenio, ['cantidad' => $i]);
-            $abono = $this->crearAbono($p, ['monto' => 50]);
-            $this->aplicar($abono, [['liquidacion_id' => $liq->id, 'monto' => 20]]);
-            $ids[] = $p->id;
+        $productor = $this->productorNuevo($nombre);
+        if ($porCalibre) {
+            $base = Convenio::firstOrFail();
+            $calibre = $this->crearCalibre(Variedad::findOrFail($base->variedad_id), "Calibre {$nombre}");
+            $convenio = $this->crearConvenioPorCalibre($this->sbp, [['calibre' => $calibre, 'precio' => 90]], ['productor_id' => $productor->id]);
+            $r = $this->crearRecepcionConRenglones($convenio, [['calibre_id' => $calibre->id, 'cantidad' => 4]]);
+        } else {
+            $convenio = $this->crearConvenio($this->sbp, ['productor_id' => $productor->id]);
+            $r = $this->crearRecepcion($convenio, ['cantidad' => 3]);
+        }
+        $this->crearRecepcion($convenio, ['cantidad' => 2, 'fecha' => '2026-06-03']);
+        $this->pagar($convenio, 'recepcion', 50, [$r->id => 50]);
+        $this->pagar($convenio, 'adelanto', 10);
+        $this->pagar($convenio, 'saldo_inicial', 5);
+        if ($liquidado) {
+            $this->crearLiquidacion($convenio, ['monto_final' => 400, 'monto_calculado' => 395]);
         }
 
-        $consultas = function (array $productores): int {
-            DB::flushQueryLog();
-            DB::enableQueryLog();
-            SaldoProductor::porProductores($this->sbp, $productores);
-            $n = count(DB::getQueryLog());
-            DB::disableQueryLog();
+        return $convenio;
+    }
 
-            return $n;
+    private function contarConsultas(callable $fn): int
+    {
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $fn();
+        $n = count(DB::getQueryLog());
+        DB::disableQueryLog();
+
+        return $n;
+    }
+
+    public function test_numero_de_consultas_no_depende_de_los_convenios(): void
+    {
+        $this->conMovimiento('P0', liquidado: true);
+        $this->conMovimiento('P1', porCalibre: true);
+
+        // Convenios recién leídos (sin precios cargados): las consultas de la cuenta son las mismas con 2 o con 6.
+        $totales = function (): int {
+            $convenios = Convenio::orderBy('id')->get();
+
+            return $this->contarConsultas(fn () => CuentaConvenio::totales($convenios));
         };
+        $saldo = fn () => $this->contarConsultas(fn () => SaldoProductor::porProductores($this->sbp, Productor::pluck('id')->all()));
+        $temporada = fn () => $this->contarConsultas(fn () => SaldoProductor::porPagarDeTemporada($this->sbp, Convenio::firstOrFail()->temporada_id));
+        $lote = fn () => $this->contarConsultas(fn () => SaldoProductor::porPagarDeConvenios($this->sbp, Convenio::pluck('id')->all()));
 
-        $con2 = $consultas(array_slice($ids, 0, 2));
-        $con20 = $consultas($ids);
+        $con2 = [$totales(), $saldo(), $temporada(), $lote()];
 
-        $this->assertSame($con2, $con20, 'El número de consultas creció con el número de productores.');
-        $this->assertLessThanOrEqual(8, $con20);
-        $todos = SaldoProductor::porProductores($this->sbp);
-        $this->assertCount(20, $todos);
-        $this->assertSame(2000.0, $todos->get($ids[19])['MXN']['liquidado']);
+        $this->conMovimiento('P2', liquidado: true);
+        $this->conMovimiento('P3', porCalibre: true);
+        $this->conMovimiento('P4');
+        $this->conMovimiento('P5', liquidado: true, porCalibre: true);
+        $this->assertSame(6, Convenio::count());
+
+        $this->assertSame($con2, [$totales(), $saldo(), $temporada(), $lote()]);
+        // Recepciones, renglones, calibres, precios, pagos y liquidaciones: nunca una por convenio.
+        $this->assertSame(6, $con2[0]);
     }
 
-    // ------------------------------------------------------------ anticipos
-
-    public function test_anticipo_de_500_se_aplica_solo_al_aprobar_una_liquidacion_de_300(): void
+    public function test_de_convenio_y_por_pagar_de_convenios_y_de_temporada_coinciden_con_por_productores(): void
     {
-        $convenio = $this->crearConvenio($this->sbp);
-        $anticipo = $this->crearAbono($this->productor($convenio), ['monto' => 500]);
-        $liq = $this->aprobada($convenio, 300);
+        $a = $this->conMovimiento('A', liquidado: true);
+        $b = $this->conMovimiento('B', porCalibre: true);
+        $c = $this->conMovimiento('C');
+        $usd = $this->crearConvenio($this->sbp, ['productor_id' => $c->productor_id, 'moneda' => 'USD', 'precio' => 12]);
+        $this->crearRecepcion($usd, ['cantidad' => 10]);
+        $this->pagar($usd, 'abono', 33.33);
 
-        DB::transaction(fn () => app(AplicadorAbonos::class)->aplicarAnticiposA($liq));
+        $saldos = SaldoProductor::porProductores($this->sbp);
+        $lote = SaldoProductor::porPagarDeConvenios($this->sbp, [$b->id, $a->id, $c->id, $usd->id, $a->id, 999999]);
 
-        $this->assertSame('pagada', $liq->fresh()->status);
-        $this->assertSame(300.0, (float) AbonoAplicacion::where('abono_id', $anticipo->id)->where('liquidacion_id', $liq->id)->sum('monto'));
-        $mxn = $this->saldo($this->productor($convenio))['MXN'];
-        $this->assertSame(200.0, $mxn['anticipos_sin_aplicar']);
-        $this->assertSame(0.0, $mxn['por_pagar']);
-    }
-
-    public function test_los_anticipos_se_aplican_del_mas_antiguo_al_mas_nuevo(): void
-    {
-        $convenio = $this->crearConvenio($this->sbp);
-        $nuevo = $this->crearAbono($this->productor($convenio), ['monto' => 400, 'fecha' => '2026-06-20']);
-        $viejo = $this->crearAbono($this->productor($convenio), ['monto' => 400, 'fecha' => '2026-06-05']);
-        $liq = $this->aprobada($convenio, 500);
-
-        DB::transaction(fn () => app(AplicadorAbonos::class)->aplicarAnticiposA($liq));
-
-        $this->assertSame(400.0, (float) AbonoAplicacion::where('abono_id', $viejo->id)->sum('monto'));
-        $this->assertSame(100.0, (float) AbonoAplicacion::where('abono_id', $nuevo->id)->sum('monto'));
-        $this->assertSame('pagada', $liq->fresh()->status);
-    }
-
-    public function test_anticipo_ligado_a_otro_convenio_no_se_aplica(): void
-    {
-        $a = $this->crearConvenio($this->sbp);
-        $b = $this->crearConvenio($this->sbp, ['productor_id' => $a->productor_id]);
-        $anticipoB = $this->crearAbono($this->productor($a), ['monto' => 500, 'convenio_id' => $b->id]);
-        $liqA = $this->aprobada($a, 300);
-
-        DB::transaction(fn () => app(AplicadorAbonos::class)->aplicarAnticiposA($liqA));
-
-        $this->assertSame(0, AbonoAplicacion::count());
-        $this->assertSame('aprobada', $liqA->fresh()->status);
-
-        // Al revés sí: el anticipo ligado a B se aplica a una liquidación de B.
-        $liqB = $this->aprobada($b, 300);
-        DB::transaction(fn () => app(AplicadorAbonos::class)->aplicarAnticiposA($liqB));
-        $this->assertSame(300.0, (float) AbonoAplicacion::where('abono_id', $anticipoB->id)->sum('monto'));
-    }
-
-    public function test_los_anticipos_de_otro_productor_o_moneda_no_se_aplican(): void
-    {
-        $convenio = $this->crearConvenio($this->sbp);
-        $otroProductor = Productor::create(['enterprise_id' => $this->sbp->id, 'nombre' => 'Otro', 'tipo' => 'productor', 'is_active' => true]);
-        $this->crearAbono($otroProductor, ['monto' => 500]);
-        $this->crearAbono($this->productor($convenio), ['monto' => 500, 'moneda' => 'USD']);
-        $this->crearAbono($this->productor($convenio), ['monto' => 500, 'status' => 'cancelado']);
-        $liq = $this->aprobada($convenio, 300);
-
-        DB::transaction(fn () => app(AplicadorAbonos::class)->aplicarAnticiposA($liq));
-
-        $this->assertSame(0, AbonoAplicacion::count());
-    }
-
-    public function test_aplicar_anticipos_no_hace_nada_si_la_liquidacion_no_esta_aprobada(): void
-    {
-        $convenio = $this->crearConvenio($this->sbp);
-        $this->crearAbono($this->productor($convenio), ['monto' => 500]);
-        $liq = $this->crearLiquidacion($convenio, ['status' => 'en_revision', 'monto_final' => 300]);
-
-        DB::transaction(fn () => app(AplicadorAbonos::class)->aplicarAnticiposA($liq));
-
-        $this->assertSame(0, AbonoAplicacion::count());
-    }
-
-    // -------------------------------------------------- validación de aplicar
-
-    public function test_abono_con_convenio_solo_aplica_a_liquidaciones_de_ese_convenio(): void
-    {
-        $a = $this->crearConvenio($this->sbp);
-        $b = $this->crearConvenio($this->sbp, ['productor_id' => $a->productor_id]);
-        $liqB = $this->aprobada($b, 300);
-        $abono = $this->crearAbono($this->productor($a), ['monto' => 300, 'convenio_id' => $a->id]);
-
-        $this->expectException(ValidationException::class);
-        try {
-            $this->aplicar($abono, [['liquidacion_id' => $liqB->id, 'monto' => 300]]);
-        } finally {
-            $this->assertSinEscribir($abono);
+        $this->assertSame([$b->id, $a->id, $c->id, $usd->id, 999999], array_keys($lote));
+        $this->assertSame(0.0, $lote[999999]);
+        foreach ([$a, $b, $usd] as $convenio) {
+            $deConvenio = SaldoProductor::deConvenio(Convenio::findOrFail($convenio->id));
+            $this->assertSame(array_intersect_key($this->totales($convenio), $deConvenio), $deConvenio);
+            $this->assertSame($deConvenio['por_pagar'], $lote[$convenio->id]);
         }
-    }
+        // A y B tienen un solo convenio: su saldo es el de su convenio.
+        $this->assertSame(SaldoProductor::deConvenio(Convenio::findOrFail($a->id)), $saldos->get($a->productor_id)['MXN']);
+        $this->assertSame(SaldoProductor::deConvenio(Convenio::findOrFail($b->id)), $saldos->get($b->productor_id)['MXN']);
+        $this->assertSame(SaldoProductor::deConvenio(Convenio::findOrFail($usd->id)), $saldos->get($c->productor_id)['USD']);
 
-    public function test_aplicaciones_que_suman_mas_que_el_abono_dan_422_sin_escribir(): void
-    {
-        $convenio = $this->crearConvenio($this->sbp);
-        $l1 = $this->aprobada($convenio, 500);
-        $l2 = $this->aprobada($convenio, 500);
-        $abono = $this->crearAbono($this->productor($convenio), ['monto' => 400]);
-
-        try {
-            $this->aplicar($abono, [['liquidacion_id' => $l1->id, 'monto' => 300], ['liquidacion_id' => $l2->id, 'monto' => 200]]);
-            $this->fail('Debió fallar.');
-        } catch (ValidationException $e) {
-            $this->assertArrayHasKey('aplicaciones', $e->errors());
-        }
-        $this->assertSinEscribir($abono);
-        $this->assertSame('aprobada', $l1->fresh()->status);
-    }
-
-    public function test_aplicacion_mayor_al_saldo_de_la_liquidacion_da_422(): void
-    {
-        $convenio = $this->crearConvenio($this->sbp);
-        $liq = $this->aprobada($convenio, 300);
-        $previo = $this->crearAbono($this->productor($convenio), ['monto' => 100]);
-        $this->aplicar($previo, [['liquidacion_id' => $liq->id, 'monto' => 100]]);
-        $abono = $this->crearAbono($this->productor($convenio), ['monto' => 500]);
-
-        try {
-            $this->aplicar($abono, [['liquidacion_id' => $liq->id, 'monto' => 250]]);   // saldo = 200
-            $this->fail('Debió fallar.');
-        } catch (ValidationException $e) {
-            $this->assertArrayHasKey('aplicaciones', $e->errors());
-        }
-        $this->assertSinEscribir($abono);
-    }
-
-    public function test_liquidacion_de_otra_moneda_otro_productor_o_no_aprobada_da_422(): void
-    {
-        $convenio = $this->crearConvenio($this->sbp);
-        $usd = $this->crearConvenio($this->sbp, ['moneda' => 'USD', 'productor_id' => $convenio->productor_id]);
-        $otroProd = Productor::create(['enterprise_id' => $this->sbp->id, 'nombre' => 'Otro', 'tipo' => 'productor', 'is_active' => true]);
-        $deOtro = $this->crearConvenio($this->sbp, ['productor_id' => $otroProd->id]);
-        $abono = $this->crearAbono($this->productor($convenio), ['monto' => 500]);
-
-        $casos = [
-            'moneda' => [$this->aprobada($usd, 300), 'moneda'],
-            'productor' => [$this->aprobada($deOtro, 300), 'liquidacion_id'],
-            'borrador' => [$this->crearLiquidacion($convenio, ['status' => 'borrador', 'monto_final' => 300]), 'liquidacion_id'],
-            'pagada' => [$this->aprobada($convenio, 300, ['status' => 'pagada']), 'liquidacion_id'],
-            'cancelada' => [$this->crearLiquidacion($convenio, ['status' => 'cancelada', 'monto_final' => 300]), 'liquidacion_id'],
-        ];
-
-        foreach ($casos as $nombre => [$liq, $campo]) {
-            try {
-                $this->aplicar($abono, [['liquidacion_id' => $liq->id, 'monto' => 100]]);
-                $this->fail("Caso {$nombre}: debió fallar.");
-            } catch (ValidationException $e) {
-                $this->assertArrayHasKey($campo, $e->errors(), "Caso {$nombre}");
+        // La temporada suma a todos los productores, por moneda.
+        $porMoneda = [];
+        foreach ($saldos as $monedas) {
+            foreach ($monedas as $moneda => $s) {
+                $porMoneda[$moneda] = round(($porMoneda[$moneda] ?? 0) + $s['por_pagar'], 2);
             }
-            $this->assertSinEscribir($abono);
         }
+        ksort($porMoneda);
+        $this->assertSame($porMoneda, SaldoProductor::porPagarDeTemporada($this->sbp, $a->temporada_id));
+        $this->assertSame([], SaldoProductor::porPagarDeConvenios($this->sbp, []));
     }
 
-    public function test_liquidacion_repetida_inexistente_o_monto_invalido_da_422(): void
-    {
-        $convenio = $this->crearConvenio($this->sbp);
-        $liq = $this->aprobada($convenio, 500);
-        $abono = $this->crearAbono($this->productor($convenio), ['monto' => 500]);
+    // ---------------------------------------------------------------- endurecimiento (revisión de la task 4)
 
-        // [aplicaciones, clave del 422]
-        $casos = [
-            'repetida' => [[['liquidacion_id' => $liq->id, 'monto' => 100], ['liquidacion_id' => $liq->id, 'monto' => 100]], 'aplicaciones'],
-            'inexistente' => [[['liquidacion_id' => 999999, 'monto' => 100]], 'liquidacion_id'],
-            'monto cero' => [[['liquidacion_id' => $liq->id, 'monto' => 0]], 'aplicaciones'],
-            'monto negativo' => [[['liquidacion_id' => $liq->id, 'monto' => -5]], 'aplicaciones'],
-            'sin monto' => [[['liquidacion_id' => $liq->id]], 'aplicaciones'],
-        ];
-        foreach ($casos as $nombre => [$aplicaciones, $campo]) {
-            try {
-                $this->aplicar($abono, $aplicaciones);
-                $this->fail("Caso {$nombre}: debió fallar.");
-            } catch (ValidationException $e) {
-                $this->assertArrayHasKey($campo, $e->errors(), "Caso {$nombre}");
-            }
-            $this->assertSinEscribir($abono);
-            $this->assertSame(0, AbonoAplicacion::count(), "Caso {$nombre}");
-            $this->assertSame('aprobada', $liq->fresh()->status, "Caso {$nombre}");
-        }
+    public function test_un_pago_de_liquidacion_cuenta_en_pagado(): void
+    {
+        [$convenio] = $this->conDosRecepciones();
+        $liq = $this->crearLiquidacion($convenio, ['monto_calculado' => 1500, 'monto_final' => 1500]);
+        $this->pagar($convenio, 'liquidacion', 900, null, ['liquidacion_id' => $liq->id]);
+        $this->pagar($convenio, 'abono', 100);
+
+        $t = $this->totales($convenio);
+        $this->assertSame('liquidada', $t['estado']);
+        $this->assertSame(1000.0, $t['pagado']);
+        $this->assertSame(500.0, $t['por_pagar']);
     }
 
-    public function test_liquidacion_de_otra_empresa_da_422(): void
+    public function test_una_liquidacion_liquidada_pero_borrada_deja_la_cuenta_abierta(): void
     {
-        $convenio = $this->crearConvenio($this->sbp);
-        $ajena = $this->crearConvenio($this->otra);
-        $liqAjena = $this->aprobada($ajena, 300);
-        $abono = $this->crearAbono($this->productor($convenio), ['monto' => 500]);
+        [$convenio] = $this->conDosRecepciones();
+        $this->crearLiquidacion($convenio, ['monto_calculado' => 9999, 'monto_final' => 9999])->delete();
 
-        try {
-            $this->aplicar($abono, [['liquidacion_id' => $liqAjena->id, 'monto' => 100]]);
-            $this->fail('Debió fallar.');
-        } catch (ValidationException $e) {
-            $this->assertArrayHasKey('liquidacion_id', $e->errors());
-        }
-        $this->assertSinEscribir($abono);
-        $this->assertSame(0, AbonoAplicacion::where('liquidacion_id', $liqAjena->id)->count());
-        $this->assertSame('aprobada', $liqAjena->fresh()->status);
+        $t = $this->totales($convenio);
+        $this->assertSame('abierta', $t['estado']);
+        $this->assertNull($t['liquidacion_id']);
+        $this->assertSame(1500.0, $t['por_pagar']);
     }
 
-    public function test_aplicaciones_vacias_dejan_el_anticipo_completo(): void
+    public function test_una_recepcion_borrada_no_cuenta_en_valor_ni_en_el_detalle(): void
     {
-        $convenio = $this->crearConvenio($this->sbp);
-        $abono = $this->crearAbono($this->productor($convenio), ['monto' => 500]);
+        [$convenio, $r1, $r2] = $this->conDosRecepciones();
+        $r2->delete();
 
-        $this->aplicar($abono, []);
-
-        $this->assertSinEscribir($abono);
-        $this->assertSame(500.0, $this->saldo($this->productor($convenio))['MXN']['anticipos_sin_aplicar']);
+        $t = $this->totales($convenio);
+        $this->assertSame(1000.0, $t['valor_recibido']);
+        $this->assertSame(1, $t['recepciones']);
+        $this->assertSame([$r1->id], array_keys($this->detalle($convenio)));
     }
 
-    public function test_un_abono_cancelado_no_se_puede_aplicar(): void
+    public function test_el_pagado_por_recepcion_solo_cuenta_pagos_de_tipo_recepcion(): void
     {
-        $convenio = $this->crearConvenio($this->sbp);
-        $liq = $this->aprobada($convenio, 300);
-        $abono = $this->crearAbono($this->productor($convenio), ['monto' => 500, 'status' => 'cancelado']);
+        [$convenio, $r1] = $this->conDosRecepciones();
+        // Filas de reparto colgadas de un pago que no es por recepción (no deberían existir, pero no cuentan).
+        $abono = $this->pagar($convenio, 'abono', 300);
+        DB::table('abs_abono_recepciones')->insert([
+            'abono_id' => $abono->id, 'recepcion_id' => $r1->id, 'monto' => 300, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $porRecepcion = $this->pagar($convenio, 'recepcion', 200, [$r1->id => 200]);
 
-        $this->expectException(ValidationException::class);
-        $this->aplicar($abono, [['liquidacion_id' => $liq->id, 'monto' => 100]]);
-    }
-
-    // -------------------------------------------------------------- cancelar
-
-    public function test_cancelar_el_abono_regresa_la_liquidacion_a_aprobada_y_guarda_las_aplicaciones(): void
-    {
-        $convenio = $this->crearConvenio($this->sbp);
-        $liq = $this->aprobada($convenio, 1000);
-        $abono = $this->crearAbono($this->productor($convenio), ['monto' => 1000]);
-        $this->aplicar($abono, [['liquidacion_id' => $liq->id, 'monto' => 1000]]);
-        $this->assertSame('pagada', $liq->fresh()->status);
-
-        DB::transaction(fn () => app(AplicadorAbonos::class)->cancelar($abono, $this->captor, 'Pago devuelto por el banco'));
-
-        $abono = $abono->fresh();
-        $this->assertSame('cancelado', $abono->status);
-        $this->assertSame('Pago devuelto por el banco', $abono->cancelado_motivo);
-        $this->assertSame($this->captor->id, $abono->cancelado_by);
-        $this->assertNotNull($abono->cancelado_at);
-        $this->assertCount(1, $abono->aplicaciones_canceladas);
-        $this->assertSame($liq->id, $abono->aplicaciones_canceladas[0]['liquidacion_id']);
-        $this->assertEquals(1000, $abono->aplicaciones_canceladas[0]['monto']);
-        $this->assertSame(0, AbonoAplicacion::where('abono_id', $abono->id)->count());
-        $this->assertSame('aprobada', $liq->fresh()->status);
-
-        $mxn = $this->saldo($this->productor($convenio))['MXN'];
-        $this->assertSame(1000.0, $mxn['por_pagar']);
-        $this->assertSame(0.0, $mxn['anticipos_sin_aplicar']);   // el cancelado no es anticipo
-    }
-
-    public function test_cancelar_vuelve_a_ofrecer_los_anticipos_a_la_liquidacion(): void
-    {
-        $convenio = $this->crearConvenio($this->sbp);
-        $liq = $this->aprobada($convenio, 400);
-        $pago = $this->crearAbono($this->productor($convenio), ['monto' => 400, 'fecha' => '2026-06-01']);
-        $this->aplicar($pago, [['liquidacion_id' => $liq->id, 'monto' => 400]]);
-        $anticipo = $this->crearAbono($this->productor($convenio), ['monto' => 300, 'fecha' => '2026-06-02']);
-        $this->assertSame('pagada', $liq->fresh()->status);
-
-        DB::transaction(function () use ($pago, $liq) {
-            $aplicador = app(AplicadorAbonos::class);
-            $aplicador->cancelar($pago, $this->captor, 'Cheque rebotado');
-            $aplicador->aplicarAnticiposA($liq->fresh());
-        });
-
-        $this->assertSame(300.0, (float) AbonoAplicacion::where('abono_id', $anticipo->id)->sum('monto'));
-        $this->assertSame('aprobada', $liq->fresh()->status);   // 300 de 400
-        $this->assertSame(100.0, $this->saldo($this->productor($convenio))['MXN']['por_pagar']);
-    }
-
-    public function test_cancelar_requiere_motivo_y_no_se_puede_cancelar_dos_veces(): void
-    {
-        $convenio = $this->crearConvenio($this->sbp);
-        $abono = $this->crearAbono($this->productor($convenio), ['monto' => 500]);
-
-        try {
-            DB::transaction(fn () => app(AplicadorAbonos::class)->cancelar($abono, $this->captor, '   '));
-            $this->fail('Debió exigir motivo.');
-        } catch (ValidationException $e) {
-            $this->assertArrayHasKey('motivo', $e->errors());
-        }
-        $this->assertSame('aplicado', $abono->fresh()->status);
-
-        DB::transaction(fn () => app(AplicadorAbonos::class)->cancelar($abono, $this->captor, 'Error de captura'));
-        $this->expectException(ValidationException::class);
-        DB::transaction(fn () => app(AplicadorAbonos::class)->cancelar($abono, $this->captor, 'Otra vez'));
-    }
-
-    public function test_cancelar_un_abono_que_cubria_varias_liquidaciones_las_regresa_todas(): void
-    {
-        $convenio = $this->crearConvenio($this->sbp);
-        $l1 = $this->aprobada($convenio, 300);
-        $l2 = $this->aprobada($convenio, 200);
-        $abono = $this->crearAbono($this->productor($convenio), ['monto' => 500]);
-        $this->aplicar($abono, [['liquidacion_id' => $l1->id, 'monto' => 300], ['liquidacion_id' => $l2->id, 'monto' => 200]]);
-        $this->assertSame(['pagada', 'pagada'], [$l1->fresh()->status, $l2->fresh()->status]);
-
-        DB::transaction(fn () => app(AplicadorAbonos::class)->cancelar($abono, $this->captor, 'Duplicado'));
-
-        $this->assertSame(['aprobada', 'aprobada'], [$l1->fresh()->status, $l2->fresh()->status]);
-        $this->assertCount(2, $abono->fresh()->aplicaciones_canceladas);
-    }
-
-    // ------------------------------------------------------- refrescarPagada
-
-    public function test_refrescar_pagada_ajusta_el_estado_segun_lo_aplicado(): void
-    {
-        $convenio = $this->crearConvenio($this->sbp);
-        $liq = $this->aprobada($convenio, 300);
-        $abono = $this->crearAbono($this->productor($convenio), ['monto' => 300]);
-        AbonoAplicacion::create(['abono_id' => $abono->id, 'liquidacion_id' => $liq->id, 'monto' => 300]);
-
-        DB::transaction(fn () => app(AplicadorAbonos::class)->refrescarPagada($liq));
-        $this->assertSame('pagada', $liq->fresh()->status);
-        $this->assertSame('pagada', $liq->status);   // también el modelo recibido
-
-        AbonoAplicacion::where('abono_id', $abono->id)->delete();
-        DB::transaction(fn () => app(AplicadorAbonos::class)->refrescarPagada($liq));
-        $this->assertSame('aprobada', $liq->fresh()->status);
-    }
-
-    public function test_refrescar_pagada_no_toca_liquidaciones_que_no_estan_aprobadas_ni_pagadas(): void
-    {
-        $convenio = $this->crearConvenio($this->sbp);
-        $liq = $this->crearLiquidacion($convenio, ['status' => 'en_revision', 'monto_final' => 300]);
-
-        DB::transaction(fn () => app(AplicadorAbonos::class)->refrescarPagada($liq));
-
-        $this->assertSame('en_revision', $liq->fresh()->status);
+        $d = $this->detalle($convenio);
+        $this->assertSame(200.0, $d[$r1->id]['pagado']);
+        $this->assertSame(800.0, $d[$r1->id]['falta']);
+        $this->assertSame([$porRecepcion->folio], $d[$r1->id]['pagos']);
+        $this->assertSame(500.0, $this->totales($convenio)['pagado']);
     }
 }

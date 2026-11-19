@@ -18,6 +18,7 @@ use App\Services\Abastecimiento\ReglasRenglonesRecepcion;
 use App\Services\Abastecimiento\Semanas;
 use App\Services\Abastecimiento\ValidadorImportacionRecepciones;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
@@ -299,13 +300,16 @@ class RecepcionController extends AbastecimientoController
     public function update(Request $request, int $id): JsonResponse
     {
         $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'edit');
-        Recepcion::deEmpresa($empresa->id)->findOrFail($id);
+        $origenId = (int) Recepcion::deEmpresa($empresa->id)->findOrFail($id)->convenio_id;
         $datos = $this->validar($request, $empresa);
 
-        $recepcion = DB::transaction(function () use ($empresa, $id, $datos) {
-            // Se relee con bloqueo: una liquidación concurrente no debe colarse entre la revisión y el cambio.
-            $recepcion = Recepcion::deEmpresa($empresa->id)->lockForUpdate()->findOrFail($id);
-            $convenio = Convenio::deEmpresa($empresa->id)->sharedLock()->findOrFail($datos['convenio_id']);
+        $recepcion = DB::transaction(function () use ($empresa, $id, $datos, $origenId) {
+            // Orden de bloqueo (convenio → recepción): primero el convenio de origen y el de destino (compartido, por
+            // id; un pago o una liquidación los toman exclusivos, así que esperan a esta edición o la esperan), después la
+            // recepción. La recepción se relee con bloqueo: nada se cuela entre la revisión y el cambio.
+            $convenios = $this->bloquearConvenios($empresa, [$origenId, (int) $datos['convenio_id']]);
+            $recepcion = $this->bloquearRecepcion($empresa, $id, $convenios);
+            $convenio = $convenios[(int) $datos['convenio_id']];
             ReglasRecepcion::exigirEditable($recepcion);
             $this->exigirMismoTipoDeConvenio($recepcion, $convenio);
             // Se valida el estado final; el convenio debe estar activo solo si la recepción cambia de convenio.
@@ -326,8 +330,11 @@ class RecepcionController extends AbastecimientoController
     public function destroy(Request $request, int $id): JsonResponse
     {
         $empresa = $this->ctx->autorizar($request, self::SUBMODULO, 'delete');
-        $data = DB::transaction(function () use ($empresa, $id) {
-            $recepcion = Recepcion::deEmpresa($empresa->id)->lockForUpdate()->findOrFail($id);
+        $origenId = (int) Recepcion::deEmpresa($empresa->id)->findOrFail($id)->convenio_id;
+        $data = DB::transaction(function () use ($empresa, $id, $origenId) {
+            // Convenio (compartido) antes que la recepción: no se cruza con un pago ni una liquidación en curso.
+            $convenios = $this->bloquearConvenios($empresa, [$origenId]);
+            $recepcion = $this->bloquearRecepcion($empresa, $id, $convenios);
             ReglasRecepcion::exigirEditable($recepcion);
 
             $recepcion->load(self::CARGA);
@@ -341,6 +348,41 @@ class RecepcionController extends AbastecimientoController
         $this->difundir('recepcion', 'deleted', $data, $empresa);
 
         return response()->json(['success' => true, 'message' => 'Recepción eliminada.', 'data' => ['id' => $id]]);
+    }
+
+    /**
+     * Bloqueo compartido de los convenios (sin repetir, por id ascendente en una sola sentencia, como el alta y la
+     * importación). Un convenio que no es de la empresa o está borrado da 404.
+     *
+     * @param  list<int>  $ids
+     * @return array<int, Convenio> por id
+     */
+    private function bloquearConvenios(Enterprise $empresa, array $ids): array
+    {
+        $ids = array_values(array_unique($ids));
+        $convenios = Convenio::deEmpresa($empresa->id)->whereIn('id', $ids)->orderBy('id')->sharedLock()->get()->keyBy('id');
+        if ($convenios->count() !== count($ids)) {
+            throw (new ModelNotFoundException)->setModel(Convenio::class, $ids);
+        }
+
+        return $convenios->all();
+    }
+
+    /**
+     * Relee la recepción con bloqueo exclusivo DESPUÉS de los convenios. El convenio de origen se leyó antes de
+     * bloquear: si otra edición la movió de convenio mientras tanto, el bloqueo tomado ya no es el correcto y se
+     * pide reintentar.
+     *
+     * @param  array<int, Convenio>  $convenios  los ya bloqueados, por id
+     */
+    private function bloquearRecepcion(Enterprise $empresa, int $id, array $convenios): Recepcion
+    {
+        $recepcion = Recepcion::deEmpresa($empresa->id)->lockForUpdate()->findOrFail($id);
+        if (! isset($convenios[(int) $recepcion->convenio_id])) {
+            throw ValidationException::withMessages(['id' => 'La recepción cambió mientras se guardaba; vuelve a intentarlo.']);
+        }
+
+        return $recepcion;
     }
 
     /**

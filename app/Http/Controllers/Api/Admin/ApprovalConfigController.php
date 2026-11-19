@@ -26,12 +26,7 @@ class ApprovalConfigController extends Controller
      * Procesos con lista propia de tipos de aprobador (con su nombre en pantalla).
      * Un proceso que está aquí solo acepta esos tipos y siempre con alcance de toda la empresa.
      */
-    private const TIPOS_POR_PROCESO = [
-        ApprovalProcess::SUPPLY_SETTLEMENTS => [
-            ApprovalFlowStep::TYPE_USER => 'Usuario específico',
-            'position' => 'Puesto',
-        ],
-    ];
+    private const TIPOS_POR_PROCESO = [];
 
     /**
      * Listar todos los procesos de aprobación

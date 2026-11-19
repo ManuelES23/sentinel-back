@@ -26,10 +26,11 @@ class TableroTest extends TestCase
     /**
      * Tope documentado de consultas de GET tablero, sea cual sea el número de convenios.
      * Medido con un administrador: empresa + módulo + temporada + convenios + productor + variedad + precios +
-     * tipo de carga + metas + recepciones agrupadas + recepciones sin liquidar + liquidado + aplicado + aviso de revisión = 14 (igual con 2 o con 10 convenios).
+     * tipo de carga + metas + recepciones agrupadas + recepciones sin liquidar + saldo de la temporada (convenios,
+     * recepciones, precios, pagos y liquidación vigente de CuentaConvenio) = 16 (igual con 5 o con 13 convenios).
      * Si crece, revisar que no sea por convenio.
      */
-    private const TOPE_CONSULTAS_TABLERO = 14;
+    private const TOPE_CONSULTAS_TABLERO = 16;
 
     protected function setUp(): void
     {

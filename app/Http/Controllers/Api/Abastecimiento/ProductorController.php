@@ -87,25 +87,23 @@ class ProductorController extends AbastecimientoController
         ]);
     }
 
-    /** El saldo es dinero: solo con Abonos o Liquidaciones (`view`); el administrador siempre. */
+    /** El saldo es dinero: solo con `liquidaciones.view`; el administrador siempre. */
     private function verDinero(Request $request, Enterprise $empresa): bool
     {
-        $usuario = $request->user();
-
-        return $this->ctx->puede($usuario, $empresa, 'abonos', 'view') || $this->ctx->puede($usuario, $empresa, 'liquidaciones', 'view');
+        return $this->ctx->puede($request->user(), $empresa, 'liquidaciones', 'view');
     }
 
     /**
-     * Saldo de un productor por moneda (`SaldoProductor`): `[{moneda, por_pagar, anticipos_sin_aplicar, sin_liquidar}]`,
+     * Saldo de un productor por moneda (`SaldoProductor`): `[{moneda, valor_recibido, pagado, por_pagar}]`,
      * vacío si no tiene movimiento.
      */
     private static function saldoDe(Collection $saldos, int $productorId): array
     {
         return collect($saldos->get($productorId, []))->sortKeys()->map(fn (array $s) => [
             'moneda' => $s['moneda'],
+            'valor_recibido' => $s['valor_recibido'],
+            'pagado' => $s['pagado'],
             'por_pagar' => $s['por_pagar'],
-            'anticipos_sin_aplicar' => $s['anticipos_sin_aplicar'],
-            'sin_liquidar' => $s['sin_liquidar'],
         ])->values()->all();
     }
 
