@@ -399,7 +399,7 @@ class ConveniosCalibresTest extends TestCase
         $this->crearLiquidacion($otro);
         $this->putJson($this->url("convenios/{$otro->id}"), $body)
             ->assertStatus(422)
-            ->assertJsonPath('errors.usa_calibres.0', 'No se puede cambiar: el convenio ya tiene liquidaciones.');
+            ->assertJsonPath('errors.usa_calibres.0', 'No se puede cambiar: el convenio ya tiene pagos o una liquidación.');
     }
 
     // ---- Estatus ----

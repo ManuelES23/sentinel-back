@@ -37,7 +37,7 @@ class LiquidarConvenio
      * saldo inicial, `pagado`, `restante` = monto_final − pagado, `moneda` y `unidad`. Cada detalle lleva además
      * `folio`, `fecha`, `tipo_carga` y, en convenios por calibre, `calibre`.
      *
-     * @throws ValidationException `convenio` si ya está liquidado, no tiene recepciones o alguna no se puede liquidar; `motivo_ajuste`
+     * @throws ValidationException `convenio` si está en borrador o cancelado, ya está liquidado, no tiene recepciones o alguna no se puede liquidar; `motivo_ajuste`
      */
     public function previa(Convenio $convenio, ?float $montoAjustado, ?string $motivoAjuste): array
     {
@@ -177,6 +177,13 @@ class LiquidarConvenio
      */
     private function calculo(Convenio $convenio, EloquentCollection $recepciones, ?float $montoAjustado, ?string $motivoAjuste): array
     {
+        // Solo un convenio en marcha o ya cerrado de forma normal se liquida: un borrador aún no recibe nada y uno
+        // cancelado quedó sin efecto. Activo, suspendido y finalizado sí.
+        if (in_array($convenio->status, ['borrador', 'cancelado'], true)) {
+            $estado = $convenio->status === 'borrador' ? 'en borrador' : 'cancelado';
+            throw ValidationException::withMessages(['convenio' => "El convenio está {$estado}: no se liquida."]);
+        }
+
         $totales = CuentaConvenio::totales(new EloquentCollection([$convenio]))[$convenio->id];
         if ($totales['estado'] === 'liquidada') {
             $folio = Liquidacion::whereKey($totales['liquidacion_id'])->value('folio');

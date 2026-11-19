@@ -3,6 +3,7 @@
 namespace App\Services\Abastecimiento;
 
 use App\Models\Abastecimiento\Convenio;
+use App\Models\Abastecimiento\Liquidacion;
 use App\Models\Abastecimiento\Recepcion;
 use App\Models\Abastecimiento\TipoCarga;
 use App\Models\Enterprise;
@@ -42,6 +43,9 @@ class ValidadorImportacionRecepciones
         $tipos = $this->tipos($empresa);
         $existentes = $this->ticketsExistentes($convenios);
         $precios = $this->preciosEnMemoria($convenios);
+        // Una sola consulta: los convenios del archivo que ya están liquidados (no reciben más recepciones).
+        $liquidados = $convenios->isEmpty() ? [] : Liquidacion::whereIn('convenio_id', $convenios->pluck('id')->all())
+            ->where('status', 'liquidada')->pluck('convenio_id')->map(fn ($id) => (int) $id)->all();
 
         $resultado = [];
         $identicas = [];
@@ -118,7 +122,7 @@ class ValidadorImportacionRecepciones
                     'ticket_proveedor' => $ticket,
                     'notas' => null,
                 ];
-                array_push($errores, ...$this->reglas($convenio, $datos, $precios));
+                array_push($errores, ...$this->reglas($convenio, $datos, $precios, $liquidados));
                 $errores = array_merge($errores, $this->duplicados(
                     $convenio, $datos, $numero, $identicas, $ticketsDelArchivo, $existentes,
                 ));
@@ -158,7 +162,7 @@ class ValidadorImportacionRecepciones
     }
 
     /** Errores de ReglasRecepcion como lista de mensajes (una sola ValidationException por renglón). */
-    private function reglas(Convenio $convenio, array $datos, PrecioVigente $precios): array
+    private function reglas(Convenio $convenio, array $datos, PrecioVigente $precios, array $liquidados): array
     {
         // El formato actual del Excel no trae calibre: los convenios por calibre no se importan todavía.
         if ($convenio->usa_calibres) {
@@ -166,7 +170,7 @@ class ValidadorImportacionRecepciones
         }
 
         try {
-            ReglasRecepcion::validar($convenio, $datos, null, $precios);
+            ReglasRecepcion::validar($convenio, $datos, null, $precios, $liquidados);
         } catch (ValidationException $e) {
             return array_values(array_map(fn (array $mensajes) => $mensajes[0], $e->errors()));
         }

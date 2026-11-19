@@ -259,6 +259,127 @@ class OrdenBloqueoDineroTest extends TestCase
         ]);
     }
 
+    /** Ruta de recepciones (no la de liquidaciones). */
+    private function rutaRecepciones(string $sufijo = ''): string
+    {
+        return '/api/splendidbyporvenir/administration/abastecimiento/recepciones'.$sufijo;
+    }
+
+    /** Nada de pagos ni liquidaciones se lee antes del bloqueo de la recepción (el dinero se revisa ya bloqueado). */
+    private function assertSinLecturaDeDineroAntesDeLaRecepcion(): void
+    {
+        $tx = $this->transaccion();
+        $recepcion = $this->primera($tx, 'select * from "abs_recepciones"');
+        foreach (array_slice($tx, 0, $recepcion) as $s) {
+            $this->assertFalse(
+                str_contains($s, '"abs_abonos"') || str_contains($s, '"abs_liquidaciones"') || str_contains($s, '"abs_abono_recepciones"'),
+                "Se leyó dinero antes de bloquear la recepción: {$s}",
+            );
+        }
+    }
+
+    public function test_editar_una_recepcion_bloquea_el_convenio_antes_que_la_recepcion_y_revisa_el_dinero_despues(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        $r = $this->crearRecepcion($convenio, ['fecha' => '2026-06-02']);
+        Sanctum::actingAs(User::factory()->create(['role' => 'admin']));
+
+        $this->grabar();
+        $this->putJson($this->rutaRecepciones("/{$r->id}"), [
+            'convenio_id' => $convenio->id, 'fecha' => '2026-06-02', 'tipo_carga_id' => $r->tipo_carga_id, 'cantidad' => 12,
+        ])->assertOk();
+
+        $this->assertEnOrden([
+            'select * from "abs_convenios"',
+            'select * from "abs_recepciones"',
+            'select "folio" from "abs_abonos"',
+            'update "abs_recepciones"',
+        ]);
+        $this->assertSinLecturaDeDineroAntesDeLaRecepcion();
+    }
+
+    public function test_pasar_una_recepcion_a_otro_convenio_bloquea_los_dos_convenios_juntos_por_id_antes_de_la_recepcion(): void
+    {
+        $origen = $this->crearConvenio($this->sbp);
+        $destino = $this->crearConvenio($this->sbp);
+        $r = $this->crearRecepcion($origen, ['fecha' => '2026-06-02']);
+        Sanctum::actingAs(User::factory()->create(['role' => 'admin']));
+
+        $this->grabar();
+        $this->putJson($this->rutaRecepciones("/{$r->id}"), [
+            'convenio_id' => $destino->id, 'fecha' => '2026-06-02', 'tipo_carga_id' => $r->tipo_carga_id, 'cantidad' => 10,
+        ])->assertOk();
+
+        $tx = $this->transaccion();
+        $convenios = $this->primera($tx, 'select * from "abs_convenios"');
+        // Un solo bloqueo de los dos convenios, por id ascendente.
+        $this->assertStringContainsString('order by "id" asc', $tx[$convenios]);
+        $this->assertStringContainsString('in (?, ?)', $tx[$convenios]);
+        $this->assertLessThan($this->primera($tx, 'select * from "abs_recepciones"'), $convenios);
+        $this->assertSinLecturaDeDineroAntesDeLaRecepcion();
+        $this->assertSame($destino->id, $r->fresh()->convenio_id);
+    }
+
+    public function test_borrar_una_recepcion_bloquea_el_convenio_antes_que_la_recepcion(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        $r = $this->crearRecepcion($convenio, ['fecha' => '2026-06-02']);
+        Sanctum::actingAs(User::factory()->create(['role' => 'admin']));
+
+        $this->grabar();
+        $this->deleteJson($this->rutaRecepciones("/{$r->id}"))->assertOk();
+
+        $this->assertEnOrden([
+            'select * from "abs_convenios"',
+            'select * from "abs_recepciones"',
+            'select "folio" from "abs_abonos"',
+            'update "abs_recepciones"',
+        ]);
+        $this->assertSinLecturaDeDineroAntesDeLaRecepcion();
+    }
+
+    public function test_una_recepcion_movida_a_otro_convenio_mientras_tanto_pide_reintentar(): void
+    {
+        $origen = $this->crearConvenio($this->sbp);
+        $otro = $this->crearConvenio($this->sbp);
+        $r = $this->crearRecepcion($origen, ['fecha' => '2026-06-02']);
+        Sanctum::actingAs(User::factory()->create(['role' => 'admin']));
+
+        // Simula otra edición que mueve la recepción justo después de que esta leyó su convenio sin bloquear.
+        $hecho = false;
+        DB::listen(function ($q) use (&$hecho, $r, $otro) {
+            if (! $hecho && str_starts_with($q->sql, 'select * from "abs_convenios"')) {
+                $hecho = true;
+                DB::table('abs_recepciones')->where('id', $r->id)->update(['convenio_id' => $otro->id]);
+            }
+        });
+
+        $this->putJson($this->rutaRecepciones("/{$r->id}"), [
+            'convenio_id' => $origen->id, 'fecha' => '2026-06-02', 'tipo_carga_id' => $r->tipo_carga_id, 'cantidad' => 12,
+        ])->assertStatus(422)->assertJsonPath('errors.id.0', 'La recepción cambió mientras se guardaba; vuelve a intentarlo.');
+        $this->assertTrue($hecho);
+        $this->assertSame('10.00', $r->fresh()->cantidad);
+    }
+
+    public function test_el_alta_de_una_recepcion_bloquea_el_convenio_antes_de_revisar_la_liquidacion_y_de_escribir(): void
+    {
+        $convenio = $this->crearConvenio($this->sbp);
+        $tipo = $convenio->precios()->where('es_principal', true)->value('tipo_carga_id');
+        Sanctum::actingAs(User::factory()->create(['role' => 'admin']));
+
+        $this->grabar();
+        $this->postJson($this->rutaRecepciones(), [
+            'convenio_id' => $convenio->id, 'fecha' => '2026-06-02', 'tipo_carga_id' => $tipo, 'cantidad' => 5,
+        ])->assertCreated();
+
+        $this->assertEnOrden([
+            'select * from "abs_convenios"',
+            'select exists',
+            'insert into "abs_recepciones"',
+        ]);
+        $tx = $this->transaccion();
+        $this->assertStringContainsString('"abs_liquidaciones"', $tx[$this->primera($tx, 'select exists')]);
+    }
     public function test_bloquear_pago_devuelve_convenio_y_pago_y_da_404_fuera_de_la_empresa(): void
     {
         $convenio = $this->crearConvenio($this->sbp);

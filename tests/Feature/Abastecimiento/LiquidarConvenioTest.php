@@ -358,6 +358,48 @@ class LiquidarConvenioTest extends TestCase
         $this->assertSame(0, Recepcion::whereNotNull('liquidacion_id')->count());
     }
 
+    public function test_un_convenio_en_borrador_o_cancelado_no_se_liquida_ni_en_la_previa(): void
+    {
+        foreach (['borrador' => 'El convenio está en borrador: no se liquida.', 'cancelado' => 'El convenio está cancelado: no se liquida.'] as $status => $mensaje) {
+            $c = $this->crearConvenio($this->sbp, ['status' => 'activo']);
+            $this->crearRecepcion($c, ['fecha' => '2026-06-02']);
+            $c->update(['status' => $status]);
+
+            $this->assertSame($mensaje, $this->error($this->previa($c), 'convenio'));
+            $this->assertSame($mensaje, $this->error($this->liquidarPagando($c), 'convenio'));
+        }
+        $this->assertSame(0, Liquidacion::count());
+        $this->assertSame(0, Abono::count());
+        $this->assertSame(0, Recepcion::whereNotNull('liquidacion_id')->count());
+
+        // Suspendido y finalizado siguen pudiéndose liquidar.
+        foreach (['suspendido', 'finalizado'] as $status) {
+            $c = $this->crearConvenio($this->sbp, ['status' => $status]);
+            $this->crearRecepcion($c, ['fecha' => '2026-06-02']);
+            $this->previa($c)->assertOk();
+            $this->liquidar($c)->assertCreated();
+        }
+    }
+
+    public function test_por_calibre_un_solo_renglon_sin_rezaga_impide_liquidar_pero_la_recepcion_sigue_valiendo(): void
+    {
+        [$c, $r1, $r2] = $this->escenario();
+        // Solo UN renglón (Grande de R1) sin dato de rezaga; el resto de R1 y R2 lo traen.
+        $renglon = $r1->renglones()->whereHas('calibre', fn ($q) => $q->where('nombre', 'Grande'))->sole();
+        $renglon->update(['rezaga_kg' => null]);
+
+        $mensaje = "No se puede liquidar: {$r1->folio} (Falta la rezaga).";
+        $this->assertSame($mensaje, $this->error($this->previa($c), 'convenio'));
+        $this->assertSame($mensaje, $this->error($this->liquidarPagando($c), 'convenio'));
+        $this->assertSame(0, Liquidacion::count());
+        $this->assertSame(0, Abono::count());
+        $this->assertSame(0, Recepcion::whereNotNull('liquidacion_id')->count());
+
+        // La falta de rezaga no quita valor: la cuenta sigue contando las dos recepciones (2400 + 900).
+        $totales = $this->getJson($this->url("cuentas/{$c->id}"))->assertOk()->json('data.totales');
+        $this->assertEqualsWithDelta(3300, $totales['valor_recibido'], 0.001);
+    }
+
     // ---------------------------------------------------------------- cancelar
 
     public function test_cancelar_libera_recepciones_cancela_el_pago_de_liquidacion_y_conserva_los_demas_y_se_puede_liquidar_de_nuevo(): void
@@ -480,6 +522,28 @@ class LiquidarConvenioTest extends TestCase
         $this->assertEqualsWithDelta(2400, $data['pagado'], 0.001);
         $this->assertEqualsWithDelta(1334, $data['restante'], 0.001);
         $this->assertTrue($data['puede']['cancelar']);
+    }
+
+    public function test_la_ficha_de_una_liquidacion_cancelada_no_muestra_la_cuenta_de_hoy(): void
+    {
+        [$c, $r1] = $this->escenario();
+        $this->saldoInicial($c, 500)->assertCreated();
+        $this->pagarRecepcion($c, $r1, 2400)->assertCreated();
+        $id = $this->liquidar($c)->assertCreated()->json('data.liquidacion.id');
+        $this->cancelar($id)->assertOk();
+        // Hoy la cuenta está abierta de nuevo, con su propio pagado y restante.
+        $this->abonar($c, 50)->assertCreated();
+
+        $data = $this->getJson($this->url((string) $id))->assertOk()->json('data');
+
+        $this->assertSame('cancelada', $data['status']);
+        // Lo congelado se conserva; lo vivo de la cuenta (pagado, restante y saldos iniciales de hoy) no se muestra.
+        $this->assertCount(3, $data['detalles']);
+        $this->assertEqualsWithDelta(3734, $data['monto_final'], 0.001);
+        $this->assertNull($data['pagado']);
+        $this->assertNull($data['restante']);
+        $this->assertSame([], $data['saldos_iniciales']);
+        $this->assertFalse($data['puede']['cancelar']);
     }
 
     // ---------------------------------------------------------------- permisos

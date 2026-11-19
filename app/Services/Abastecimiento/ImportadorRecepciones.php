@@ -3,6 +3,7 @@
 namespace App\Services\Abastecimiento;
 
 use App\Models\Abastecimiento\Convenio;
+use App\Models\Abastecimiento\Liquidacion;
 use App\Models\Abastecimiento\Recepcion;
 use App\Models\Enterprise;
 use App\Models\User;
@@ -13,7 +14,7 @@ use Illuminate\Validation\ValidationException;
  * Guarda de una sola vez las recepciones que ValidadorImportacionRecepciones dejó listas
  * (todo o nada). Corre en una transacción: bloquea los convenios implicados (lectura
  * compartida, como el alta manual, en orden de id para no cruzarse con otra importación),
- * confirma que siguen activos y crea las recepciones en el orden del archivo con folios
+ * confirma que siguen activos y sin liquidar y crea las recepciones en el orden del archivo con folios
  * consecutivos. No difunde nada: el controlador lo hace después del commit.
  */
 class ImportadorRecepciones
@@ -41,12 +42,22 @@ class ImportadorRecepciones
                 ->get()
                 ->keyBy('id');
 
+            // Una cuenta liquidada está cerrada. Se lee con bloqueo compartido (lee lo último confirmado, no la foto
+            // de la transacción) y después de tener los convenios: liquidar necesita el convenio, así que no se cuela.
+            $liquidados = Liquidacion::whereIn('convenio_id', $convenioIds)->where('status', 'liquidada')
+                ->sharedLock()->pluck('convenio_id')->map(fn ($id) => (int) $id)->all();
+
             foreach ($convenioIds as $id) {
                 $convenio = $convenios->get($id);
                 if ($convenio === null || $convenio->status !== 'activo') {
                     $folio = $convenio?->folio ?? "#{$id}";
                     throw ValidationException::withMessages([
                         'archivo' => "El convenio {$folio} ya no está activo; revisa el convenio y vuelve a subir el archivo.",
+                    ]);
+                }
+                if (in_array($id, $liquidados, true)) {
+                    throw ValidationException::withMessages([
+                        'archivo' => "El convenio {$convenio->folio} ya está liquidado; revisa el convenio y vuelve a subir el archivo.",
                     ]);
                 }
                 // Se revisa de nuevo bajo el bloqueo: el convenio pudo pasar a por calibre después de validar,

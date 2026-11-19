@@ -276,10 +276,11 @@ class ConvenioController extends AbastecimientoController
             if ($destino === 'cancelado' && $convenio->recepciones()->exists()) {
                 throw ValidationException::withMessages(['status' => 'Tiene recepciones: finalízalo en lugar de cancelarlo.']);
             }
-            // Una liquidación (también la de carga inicial, aunque no tenga recepciones) es deuda con el productor:
-            // cancelar el convenio la dejaría contando en el saldo sin convenio vivo. Finalizar y suspender siguen igual.
-            if ($destino === 'cancelado' && $this->tieneLiquidacionesVigentes($convenio)) {
-                throw ValidationException::withMessages(['status' => 'Tiene liquidaciones: cancélalas primero o finaliza el convenio en lugar de cancelarlo.']);
+            // Un pago (abono, adelanto, saldo inicial, por recepción) o una liquidación es dinero de la cuenta (también
+            // sin recepciones): cancelar el convenio lo dejaría contando en el saldo sin convenio vivo. Finalizar y
+            // suspender siguen igual.
+            if ($destino === 'cancelado' && $this->tieneDineroVigente($convenio)) {
+                throw ValidationException::withMessages(['status' => 'Tiene pagos o una liquidación: cancélalos primero o finaliza el convenio en lugar de cancelarlo.']);
             }
 
             $convenio->update(['status' => $destino]);
@@ -435,17 +436,18 @@ class ConvenioController extends AbastecimientoController
     private function erroresConRecepciones(Convenio $convenio, array $datos): array
     {
         $conRecepciones = $convenio->recepciones()->exists();
-        $conLiquidaciones = $this->tieneLiquidacionesVigentes($convenio);
-        if (! $conRecepciones && ! $conLiquidaciones) {
+        $conDinero = $this->tieneDineroVigente($convenio);
+        if (! $conRecepciones && ! $conDinero) {
             return [];
         }
 
-        // Con recepciones o con liquidaciones no canceladas (aunque sean de carga inicial, sin recepciones) lo ya
-        // capturado o liquidado no se reinterpreta: cambiar moneda, productor o temporada movería deuda ya aprobada.
+        // Con recepciones, pagos o una liquidación vigente (aunque no haya recepciones: un adelanto, un saldo inicial)
+        // lo ya capturado, pagado o liquidado no se reinterpreta: cambiar moneda, productor o temporada movería dinero ya
+        // movido.
         $errores = [];
         $sinCambio = $conRecepciones
             ? 'No se puede cambiar: el convenio ya tiene recepciones.'
-            : 'No se puede cambiar: el convenio ya tiene liquidaciones.';
+            : 'No se puede cambiar: el convenio ya tiene pagos o una liquidación.';
         foreach (['unidad', 'moneda', 'productor_id', 'variedad_id', 'temporada_id'] as $campo) {
             if ((string) $datos[$campo] !== (string) $convenio->{$campo}) {
                 $errores[$campo] = $sinCambio;
@@ -498,10 +500,11 @@ class ConvenioController extends AbastecimientoController
         return $errores;
     }
 
-    /** ¿Tiene liquidaciones que no estén canceladas (borrador, en revisión, aprobada o pagada)? */
-    private function tieneLiquidacionesVigentes(Convenio $convenio): bool
+    /** ¿Tiene una liquidación `liquidada` o algún pago (de cualquier tipo) que no esté cancelado? */
+    private function tieneDineroVigente(Convenio $convenio): bool
     {
-        return $convenio->liquidaciones()->where('status', '!=', 'cancelada')->exists();
+        return $convenio->liquidaciones()->where('status', 'liquidada')->exists()
+            || $convenio->pagos()->where('status', '!=', 'cancelado')->exists();
     }
 
     private function columnas(array $datos): array
