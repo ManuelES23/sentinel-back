@@ -5,7 +5,6 @@ namespace App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion;
 use App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\Concerns\PermisoPlaneacion;
 use App\Http\Controllers\Controller;
 use App\Models\Planeacion\BodegaDestino;
-use App\Models\Planeacion\Presentacion;
 use App\Models\Planeacion\ProgramaEmbarque;
 use App\Models\Planeacion\ProgramaSemanal;
 use App\Services\Planeacion\ProgramaSemanalService;
@@ -20,7 +19,7 @@ use Illuminate\Validation\ValidationException;
 
 /**
  * Hoja de embarques de la semana: guarda en una sola petición atómica las
- * celdas (cultivo · bodega · presentación · tipo · día, en cargas) que cambiaron. Exige
+ * celdas (cultivo · bodega · tipo · día, en cargas) que cambiaron. Exige
  * `embarques.capturar`.
  *
  * Solo toca las celdas enviadas: una celda con 0 o vacía borra la fila de esa
@@ -42,10 +41,6 @@ class HojaEmbarquesController extends Controller
 
     private const MENSAJE_BODEGA = 'La bodega no existe o está desactivada.';
 
-    private const MENSAJE_PRESENTACION_FALTA = 'Elige la presentación del embarque.';
-
-    private const MENSAJE_PRESENTACION = 'La presentación no existe, está desactivada o es de otro cultivo.';
-
     private const MAX_CARGAS = 99;
 
     public function guardar(Request $request, ProgramaSemanal $programa, ProgramaSemanalService $servicio, RegistroCambiosPrograma $registro): JsonResponse
@@ -58,7 +53,6 @@ class HojaEmbarquesController extends Controller
             'celdas.*' => ['array'],
             'celdas.*.cultivo_id' => ['required', 'integer'],
             'celdas.*.bodega_id' => ['required', 'integer'],
-            'celdas.*.presentacion_id' => ['nullable', 'integer'],
             'celdas.*.tipo' => ['required', 'in:full,sencillo'],
             'celdas.*.dia' => ['required', 'integer', 'between:0,5'],
             'celdas.*.cargas' => ['present', 'nullable', 'integer', "between:0,$max"],
@@ -89,7 +83,7 @@ class HojaEmbarquesController extends Controller
                 $existentes = $celdas === []
                     ? collect()
                     : ProgramaEmbarque::where('programa_id', $programa->id)->get()
-                        ->keyBy(fn (ProgramaEmbarque $e) => self::clave($e->cultivo_id, $e->bodega_id, $e->presentacion_id, $e->tipo, $e->dia));
+                        ->keyBy(fn (ProgramaEmbarque $e) => self::clave($e->cultivo_id, $e->bodega_id, $e->tipo, $e->dia));
 
                 $plan = $this->planear($programa, $celdas, $existentes, $servicio);
 
@@ -115,19 +109,18 @@ class HojaEmbarquesController extends Controller
         ]);
     }
 
-    /** La presentación nula (embarque anterior a pedirla) cuenta como 0. */
-    private static function clave(int|string $cultivoId, int|string $bodegaId, int|string|null $presentacionId, string $tipo, int|string $dia): string
+    private static function clave(int|string $cultivoId, int|string $bodegaId, string $tipo, int|string $dia): string
     {
-        return (int) $cultivoId.'|'.(int) $bodegaId.'|'.(int) $presentacionId.'|'.$tipo.'|'.(int) $dia;
+        return (int) $cultivoId.'|'.(int) $bodegaId.'|'.$tipo.'|'.(int) $dia;
     }
 
     /**
      * Valida las celdas y devuelve lo que hay que escribir; si algo falla
      * lanza un 422 y no se ha tocado nada.
      *
-     * @param  list<array{cultivo_id: int|string, bodega_id: int|string, presentacion_id?: int|string|null, tipo: string, dia: int|string, cargas: int|string|null}>  $celdas
+     * @param  list<array{cultivo_id: int|string, bodega_id: int|string, tipo: string, dia: int|string, cargas: int|string|null}>  $celdas
      * @param  Collection<string, ProgramaEmbarque>  $existentes
-     * @return list<array{actual: ?ProgramaEmbarque, cultivo_id: int, bodega_id: int, presentacion_id: ?int, tipo: string, dia: int, cargas: int}>
+     * @return list<array{actual: ?ProgramaEmbarque, cultivo_id: int, bodega_id: int, tipo: string, dia: int, cargas: int}>
      */
     private function planear(ProgramaSemanal $programa, array $celdas, Collection $existentes, ProgramaSemanalService $servicio): array
     {
@@ -141,17 +134,11 @@ class HojaEmbarquesController extends Controller
             ->pluck('id')
             ->map(fn ($id) => (int) $id)
             ->all();
-        // Presentaciones activas citadas: id => cultivo_id.
-        $presentacionesActivas = Presentacion::whereIn('id', array_values(array_unique(array_filter(array_map(fn ($c) => (int) ($c['presentacion_id'] ?? 0), $celdas)))))
-            ->where('is_active', true)
-            ->pluck('cultivo_id', 'id')
-            ->map(fn ($id) => (int) $id)
-            ->all();
 
         $vistas = [];
         $plan = [];
         foreach ($celdas as $i => $celda) {
-            $clave = self::clave($celda['cultivo_id'], $celda['bodega_id'], $celda['presentacion_id'] ?? null, $celda['tipo'], $celda['dia']);
+            $clave = self::clave($celda['cultivo_id'], $celda['bodega_id'], $celda['tipo'], $celda['dia']);
             if (isset($vistas[$clave])) {
                 throw ValidationException::withMessages(["celdas.$i.cargas" => 'La celda viene repetida en la misma petición.']);
             }
@@ -161,7 +148,6 @@ class HojaEmbarquesController extends Controller
             $cargas = (int) ($celda['cargas'] ?? 0);
             $cultivoId = (int) $celda['cultivo_id'];
             $bodegaId = (int) $celda['bodega_id'];
-            $presentacionId = ($celda['presentacion_id'] ?? null) === null ? null : (int) $celda['presentacion_id'];
 
             // Solo una celda nueva o que sube sus cargas se valida contra los
             // catálogos: borrar y bajar siempre se puede.
@@ -172,19 +158,12 @@ class HojaEmbarquesController extends Controller
                 if (! in_array($bodegaId, $bodegasActivas, true)) {
                     throw ValidationException::withMessages(["celdas.$i.bodega_id" => self::MENSAJE_BODEGA]);
                 }
-                if ($presentacionId === null) {
-                    throw ValidationException::withMessages(["celdas.$i.presentacion_id" => self::MENSAJE_PRESENTACION_FALTA]);
-                }
-                if (($presentacionesActivas[$presentacionId] ?? null) !== $cultivoId) {
-                    throw ValidationException::withMessages(["celdas.$i.presentacion_id" => self::MENSAJE_PRESENTACION]);
-                }
             }
 
             $plan[] = [
                 'actual' => $actual,
                 'cultivo_id' => $cultivoId,
                 'bodega_id' => $bodegaId,
-                'presentacion_id' => $presentacionId,
                 'tipo' => (string) $celda['tipo'],
                 'dia' => (int) $celda['dia'],
                 'cargas' => $cargas,
@@ -197,7 +176,7 @@ class HojaEmbarquesController extends Controller
     /**
      * Sin cambio de valor no hay escritura ni aviso.
      *
-     * @param  array{actual: ?ProgramaEmbarque, cultivo_id: int, bodega_id: int, presentacion_id: ?int, tipo: string, dia: int, cargas: int}  $paso
+     * @param  array{actual: ?ProgramaEmbarque, cultivo_id: int, bodega_id: int, tipo: string, dia: int, cargas: int}  $paso
      */
     private function aplicar(ProgramaSemanal $programa, array $paso): bool
     {
@@ -217,7 +196,6 @@ class HojaEmbarquesController extends Controller
                 'programa_id' => $programa->id,
                 'cultivo_id' => $paso['cultivo_id'],
                 'bodega_id' => $paso['bodega_id'],
-                'presentacion_id' => $paso['presentacion_id'],
                 'tipo' => $paso['tipo'],
                 'dia' => $paso['dia'],
                 'cargas' => $paso['cargas'],

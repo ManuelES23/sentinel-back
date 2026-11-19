@@ -56,7 +56,7 @@ class ConfiguracionPlaneacionController extends Controller
         ],
         'presentaciones' => [
             'modelo' => Presentacion::class,
-            'usos' => [['programa_necesidades', 'presentacion_id'], ['programa_embarques', 'presentacion_id'], ['plan_recetas_combinacion', 'presentacion_id']],
+            'usos' => [['programa_necesidades', 'presentacion_id'], ['plan_recetas_combinacion', 'presentacion_id']],
         ],
         'tipos-empaque' => [
             'modelo' => TipoEmpaque::class,

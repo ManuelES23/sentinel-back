@@ -139,8 +139,8 @@ class ProgramaSemanalService
         $lunes = $plan->lunes;
         $temporadas = $this->catalogo->temporadasQueTocan($lunes, $this->masDias($lunes, 5));
         $embarques = ProgramaEmbarque::where('programa_id', $programa->id)
-            ->orderBy('cultivo_id')->orderBy('bodega_id')->orderBy('presentacion_id')->orderBy('tipo')->orderBy('dia')
-            ->get(['cultivo_id', 'bodega_id', 'presentacion_id', 'tipo', 'dia', 'cargas']);
+            ->orderBy('cultivo_id')->orderBy('bodega_id')->orderBy('tipo')->orderBy('dia')
+            ->get(['cultivo_id', 'bodega_id', 'tipo', 'dia', 'cargas']);
         $necesidades = $plan->necesidades();
 
         $cultivoIds = array_values(array_unique(array_merge(
@@ -190,7 +190,6 @@ class ProgramaSemanalService
             'embarques' => $embarques->map(fn (ProgramaEmbarque $e) => [
                 'cultivo_id' => $e->cultivo_id,
                 'bodega_id' => $e->bodega_id,
-                'presentacion_id' => $e->presentacion_id,
                 'tipo' => $e->tipo,
                 'dia' => $e->dia,
                 'cargas' => $e->cargas,
@@ -348,11 +347,7 @@ class ProgramaSemanalService
         return [
             'bodegas' => BodegaDestino::orderBy('orden')->orderBy('id')->get()->map($fila)->all(),
             'presentaciones' => Presentacion::orderBy('cultivo_id')->orderBy('orden')->orderBy('id')->get()
-                ->map(fn ($m) => $fila($m) + [
-                    'cultivo_id' => $m->cultivo_id,
-                    'cajas_full' => $m->cajas_full,
-                    'cajas_sencillo' => $m->cajas_sencillo,
-                ])->all(),
+                ->map(fn ($m) => $fila($m) + ['cultivo_id' => $m->cultivo_id])->all(),
             'tipos_empaque' => TipoEmpaque::orderBy('orden')->orderBy('id')->get()->map($fila)->all(),
             'cajas_por_carga' => ConfiguracionPlaneacion::valor('cajas_por_carga', 1040),
         ];
