@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\Abastecimiento\ConvenioController;
+use App\Http\Controllers\Api\Abastecimiento\CuentaController;
 use App\Http\Controllers\Api\Abastecimiento\CultivoController;
 use App\Http\Controllers\Api\Abastecimiento\LiquidacionController;
 use App\Http\Controllers\Api\Abastecimiento\PermisosController;
@@ -73,6 +74,9 @@ Route::prefix('abastecimiento')->name('abastecimiento.')->group(function () {
     Route::put('recepciones/{id}', [RecepcionController::class, 'update'])->whereNumber('id')->name('recepciones.update');
     Route::delete('recepciones/{id}', [RecepcionController::class, 'destroy'])->whereNumber('id')->name('recepciones.destroy');
 
-    // Liquidaciones (submódulo liquidaciones). Las rutas de la cuenta y de «Liquidar total» llegan en tasks posteriores.
+    // Liquidaciones y cuentas por convenio (submódulo liquidaciones). Los segmentos fijos (`cuentas`) van antes de las rutas con {id}.
+    Route::get('liquidaciones/cuentas', [CuentaController::class, 'index'])->name('liquidaciones.cuentas.index');
+    Route::get('liquidaciones/cuentas/{convenio}', [CuentaController::class, 'show'])->whereNumber('convenio')->name('liquidaciones.cuentas.show');
+    // Las demás rutas de la cuenta y de «Liquidar total» llegan en tasks posteriores.
     Route::get('liquidaciones/{id}', [LiquidacionController::class, 'show'])->whereNumber('id')->name('liquidaciones.show');
 });

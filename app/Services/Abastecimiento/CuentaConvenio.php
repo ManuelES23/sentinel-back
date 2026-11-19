@@ -102,9 +102,10 @@ class CuentaConvenio
      * los pagos vigentes, lo que falta o lo pagado de más, y su estado:
      * `liquidada` (en la liquidación vigente) › `no_pagable` (con motivo) › `pagada` › `parcial` › `pendiente`.
      * `precio` solo trae valor en un convenio clásico (null en uno por calibre) y `renglones` solo en uno por
-     * calibre ([] en uno clásico).
+     * calibre ([] en uno clásico). `sin_valor` es true cuando la recepción no vale nada por falta de precio o de kilos
+     * (la falta de rezaga solo da `motivo`).
      *
-     * @return list<array{id: int, folio: string, fecha: string, tipo_carga: ?array{id: int, nombre: string}, cantidad: float, kilos: ?float, rezaga_kg: ?float, precio: ?float, renglones: list<array{calibre_id: int, calibre: ?string, cantidad: float, kilos: ?float, rezaga_kg: ?float, precio: ?float}>, valor: float, pagado: float, falta: float, de_mas: float, estado: string, motivo: ?string, pagos: list<string>}>
+     * @return list<array{id: int, folio: string, fecha: string, tipo_carga: ?array{id: int, nombre: string}, cantidad: float, kilos: ?float, rezaga_kg: ?float, precio: ?float, renglones: list<array{calibre_id: int, calibre: ?string, cantidad: float, kilos: ?float, rezaga_kg: ?float, precio: ?float}>, valor: float, sin_valor: bool, pagado: float, falta: float, de_mas: float, estado: string, motivo: ?string, pagos: list<string>}>
      */
     public static function recepciones(Convenio $convenio): array
     {
@@ -164,6 +165,7 @@ class CuentaConvenio
                     'precio' => $precioDe((int) $g->calibre_id),
                 ])->values()->all(),
                 'valor' => self::pesos($valorCts),
+                'sin_valor' => $valor['sin_valor'],
                 'pagado' => self::pesos($pagadoCts),
                 'falta' => self::pesos(max(0, $valorCts - $pagadoCts)),
                 'de_mas' => self::pesos(max(0, $pagadoCts - $valorCts)),

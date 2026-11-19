@@ -85,6 +85,11 @@ class Abono extends Model
         return $this->hasMany(AbonoRecepcion::class, 'abono_id');
     }
 
+    public function canceladoPor(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'cancelado_by');
+    }
+
     public function creador(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');
