@@ -11,6 +11,7 @@ use App\Models\Product;
 use App\Models\ProduccionEmpaque;
 use App\Models\ProduccionEmpaqueConsumo;
 use App\Models\ProduccionEmpaqueDetalle;
+use App\Models\Temporada;
 use App\Services\Inventory\AlmacenAccessService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -327,6 +328,8 @@ class InventoryReportController extends Controller
             $request->filled('product_id') ? (int) $request->product_id : null,
             $request->filled('category_id') ? (int) $request->category_id : null,
             $request->filled('brand_id') ? (int) $request->brand_id : null,
+            $request->filled('temporada_id') ? (int) $request->temporada_id : null,
+            $request->filled('cultivo_id') ? (int) $request->cultivo_id : null,
         );
 
         return response()->json([
@@ -334,8 +337,36 @@ class InventoryReportController extends Controller
             'data' => [
                 'rows' => $data['rows'],
                 'totals' => $data['totals'],
+                'por_temporada' => $data['por_temporada'] ?? [],
+                'filtros' => $this->filtrosTemporadaCultivo(),
             ],
         ]);
+    }
+
+    /**
+     * Temporadas (con su cultivo) y cultivos para los filtros del reporte de gasto de producción.
+     * Las temporadas van de la más reciente a la más antigua.
+     */
+    private function filtrosTemporadaCultivo(): array
+    {
+        $temporadas = Temporada::query()
+            ->with('cultivo:id,nombre')
+            ->orderByDesc('fecha_inicio')
+            ->orderByDesc('id')
+            ->get(['id', 'nombre', 'cultivo_id', 'estado', 'fecha_inicio', 'fecha_fin']);
+
+        return [
+            'temporadas' => $temporadas->map(fn (Temporada $t) => [
+                'id' => $t->id,
+                'nombre' => $t->nombre,
+                'estado' => $t->estado,
+                'cultivo_id' => $t->cultivo_id,
+                'cultivo' => $t->cultivo?->nombre,
+            ])->values()->all(),
+            'cultivos' => $temporadas->pluck('cultivo')->filter()->unique('id')
+                ->sortBy('nombre')->map(fn ($c) => ['id' => $c->id, 'nombre' => $c->nombre])
+                ->values()->all(),
+        ];
     }
 
     /**
@@ -348,8 +379,22 @@ class InventoryReportController extends Controller
         ?int $productId = null,
         ?int $categoryId = null,
         ?int $brandId = null,
+        ?int $temporadaId = null,
+        ?int $cultivoId = null,
     ): array {
-        if (empty($entityIds)) {
+        // Temporadas a las que se limita el reporte (la temporada sale del pallet; el cultivo, de la
+        // temporada). null = sin filtro; una lista vacía = ninguna coincide.
+        $temporadasFiltro = null;
+        if ($cultivoId) {
+            $temporadasFiltro = Temporada::where('cultivo_id', $cultivoId)->pluck('id')->map(fn ($id) => (int) $id)->all();
+        }
+        if ($temporadaId) {
+            $temporadasFiltro = $temporadasFiltro === null
+                ? [$temporadaId]
+                : array_values(array_intersect($temporadasFiltro, [$temporadaId]));
+        }
+
+        if (empty($entityIds) || $temporadasFiltro === []) {
             return [
                 'rows' => [],
                 'totals' => [
@@ -359,6 +404,7 @@ class InventoryReportController extends Controller
                     'total_consumed_quantity' => 0,
                     'total_consumed_cost' => 0,
                 ],
+                'por_temporada' => [],
                 'map_by_entity_product' => [],
             ];
         }
@@ -371,18 +417,20 @@ class InventoryReportController extends Controller
             string $productionBrand,
             float $quantity,
             float $cost,
+            ?int $temporadaIdValue = null,
         ) use (&$aggregated): void {
             if ($quantity <= 0) {
                 return;
             }
 
             $normalizedBrand = trim($productionBrand) !== '' ? trim($productionBrand) : 'SIN MARCA';
-            $key = $entityId . ':' . $productIdValue . ':' . $normalizedBrand;
+            $key = $entityId . ':' . $productIdValue . ':' . $normalizedBrand . ':' . ($temporadaIdValue ?? 0);
             if (! isset($aggregated[$key])) {
                 $aggregated[$key] = [
                     'entity_id' => $entityId,
                     'product_id' => $productIdValue,
                     'production_brand' => $normalizedBrand,
+                    'temporada_id' => $temporadaIdValue,
                     'consumed_quantity' => 0.0,
                     'consumed_cost' => 0.0,
                 ];
@@ -398,6 +446,7 @@ class InventoryReportController extends Controller
             $recipe,
             int $totalCajas,
             bool $isCola,
+            ?int $temporadaIdValue = null,
         ) use ($accumulate): void {
             if ($totalCajas <= 0 || ! $recipe) {
                 return;
@@ -460,6 +509,7 @@ class InventoryReportController extends Controller
                     $productionBrand,
                     $consumedQty,
                     $consumedCost,
+                    $temporadaIdValue,
                 );
             }
         };
@@ -484,8 +534,12 @@ class InventoryReportController extends Controller
                 'produccion_empaque_consumos.costo_total',
                 'ped.marca as detalle_marca',
                 'pe.marca as produccion_marca',
+                'pe.temporada_id',
             ]);
 
+        if ($temporadasFiltro !== null) {
+            $registroQuery->whereIn('pe.temporada_id', $temporadasFiltro);
+        }
         if ($dateFrom) {
             $registroQuery->whereRaw('DATE(COALESCE(ped.fecha_produccion, pe.fecha_produccion)) >= ?', [$dateFrom]);
         }
@@ -499,19 +553,23 @@ class InventoryReportController extends Controller
             $costo = round((float) $renglon->costo_total * $vigente / $cantidad, 4);
             $marca = trim((string) ($renglon->detalle_marca ?? $renglon->produccion_marca ?? ''));
 
-            $accumulate((int) $renglon->entity_id, (int) $renglon->product_id, $marca, $vigente, $costo);
+            $temporadaRenglon = $renglon->temporada_id !== null ? (int) $renglon->temporada_id : null;
+            $accumulate((int) $renglon->entity_id, (int) $renglon->product_id, $marca, $vigente, $costo, $temporadaRenglon);
         }
 
         // Pallets congelados (anteriores al registro, sin ningún renglón): se conserva el cálculo teórico
         // con la receta para que los reportes históricos no cambien.
         $detallesQuery = ProduccionEmpaqueDetalle::query()
             ->with([
-                'produccion:id,entity_id,fecha_produccion,is_cola,deleted_at',
+                'produccion:id,entity_id,temporada_id,fecha_produccion,is_cola,marca,deleted_at',
                 'recipe:id,output_quantity',
                 'recipe.items:id,recipe_id,product_id,quantity,waste_percentage,cost_per_unit,is_optional,group_key,is_default',
             ])
-            ->whereHas('produccion', function ($q) use ($entityIds) {
+            ->whereHas('produccion', function ($q) use ($entityIds, $temporadasFiltro) {
                 $q->whereIn('entity_id', $entityIds)->doesntHave('consumos');
+                if ($temporadasFiltro !== null) {
+                    $q->whereIn('temporada_id', $temporadasFiltro);
+                }
             })
             ->whereNotNull('recipe_id')
             ->where('total_cajas', '>', 0);
@@ -535,7 +593,8 @@ class InventoryReportController extends Controller
 
             $isCola = (bool) ($detalle->produccion?->is_cola ?? false);
 
-            $applyRecipeItems($entityId, $productionBrand, $detalle->recipe, $totalCajas, $isCola);
+            $temporadaDetalle = $detalle->produccion?->temporada_id !== null ? (int) $detalle->produccion->temporada_id : null;
+            $applyRecipeItems($entityId, $productionBrand, $detalle->recipe, $totalCajas, $isCola, $temporadaDetalle);
         }
 
         $produccionesSinDetalleQuery = ProduccionEmpaque::query()
@@ -549,6 +608,9 @@ class InventoryReportController extends Controller
             ->doesntHave('detalles')
             ->doesntHave('consumos');
 
+        if ($temporadasFiltro !== null) {
+            $produccionesSinDetalleQuery->whereIn('temporada_id', $temporadasFiltro);
+        }
         if ($dateFrom) {
             $produccionesSinDetalleQuery->whereDate('fecha_produccion', '>=', $dateFrom);
         }
@@ -568,7 +630,8 @@ class InventoryReportController extends Controller
 
             $isCola = (bool) ($produccion->is_cola ?? false);
 
-            $applyRecipeItems($entityId, $productionBrand, $produccion->recipe, $totalCajas, $isCola);
+            $temporadaPallet = $produccion->temporada_id !== null ? (int) $produccion->temporada_id : null;
+            $applyRecipeItems($entityId, $productionBrand, $produccion->recipe, $totalCajas, $isCola, $temporadaPallet);
         }
 
         if (empty($aggregated)) {
@@ -581,6 +644,7 @@ class InventoryReportController extends Controller
                     'total_consumed_quantity' => 0,
                     'total_consumed_cost' => 0,
                 ],
+                'por_temporada' => [],
                 'map_by_entity_product' => [],
             ];
         }
@@ -609,9 +673,15 @@ class InventoryReportController extends Controller
             ->whereIn('id', $entityIdsFound)
             ->get(['id', 'name', 'code', 'branch_id'])
             ->keyBy('id');
+        $temporadas = Temporada::withTrashed()
+            ->with('cultivo:id,nombre')
+            ->whereIn('id', collect($aggregated)->pluck('temporada_id')->filter()->unique()->values())
+            ->get(['id', 'nombre', 'cultivo_id', 'fecha_inicio'])
+            ->keyBy('id');
 
         $rows = [];
         $mapByEntityProduct = [];
+        $porTemporada = [];
 
         foreach ($aggregated as $item) {
             $product = $products->get($item['product_id']);
@@ -620,6 +690,7 @@ class InventoryReportController extends Controller
             }
 
             $entity = $entities->get($item['entity_id']);
+            $temporada = $item['temporada_id'] ? $temporadas->get($item['temporada_id']) : null;
             $quantity = round((float) $item['consumed_quantity'], 4);
             $cost = round((float) $item['consumed_cost'], 4);
             $key = $item['entity_id'] . ':' . $item['product_id'];
@@ -630,9 +701,28 @@ class InventoryReportController extends Controller
                 'product_id' => $item['product_id'],
                 'product' => $product,
                 'production_brand' => $item['production_brand'] ?? 'SIN MARCA',
+                'temporada_id' => $item['temporada_id'],
+                'temporada' => $temporada?->nombre,
+                'cultivo_id' => $temporada?->cultivo_id,
+                'cultivo' => $temporada?->cultivo?->nombre,
                 'consumed_quantity' => $quantity,
                 'consumed_cost' => $cost,
             ];
+
+            $claveTemporada = $item['temporada_id'] ?? 0;
+            if (! isset($porTemporada[$claveTemporada])) {
+                $porTemporada[$claveTemporada] = [
+                    'temporada_id' => $item['temporada_id'],
+                    'temporada' => $temporada?->nombre ?? 'Sin temporada',
+                    'cultivo_id' => $temporada?->cultivo_id,
+                    'cultivo' => $temporada?->cultivo?->nombre,
+                    'fecha_inicio' => $temporada?->fecha_inicio,
+                    'productos' => [],
+                    'consumed_cost' => 0.0,
+                ];
+            }
+            $porTemporada[$claveTemporada]['productos'][$item['product_id']] = true;
+            $porTemporada[$claveTemporada]['consumed_cost'] += $cost;
 
             if (! isset($mapByEntityProduct[$key])) {
                 $mapByEntityProduct[$key] = [
@@ -655,9 +745,31 @@ class InventoryReportController extends Controller
             'total_consumed_cost' => round((float) collect($rows)->sum('consumed_cost'), 4),
         ];
 
+        // Resumen por temporada (la más reciente primero; «Sin temporada» al final). Solo costo y
+        // número de insumos: sumar cantidades de insumos distintos (piezas, metros, kilos) no dice nada.
+        $porTemporada = collect($porTemporada)
+            ->map(fn (array $t) => [
+                'temporada_id' => $t['temporada_id'],
+                'temporada' => $t['temporada'],
+                'cultivo_id' => $t['cultivo_id'],
+                'cultivo' => $t['cultivo'],
+                'total_products' => count($t['productos']),
+                'consumed_cost' => round($t['consumed_cost'], 4),
+                'orden' => $t['fecha_inicio'] ? (string) $t['fecha_inicio'] : '',
+            ])
+            ->sortByDesc('orden')
+            ->map(function (array $t) {
+                unset($t['orden']);
+
+                return $t;
+            })
+            ->values()
+            ->all();
+
         return [
             'rows' => $rows,
             'totals' => $totals,
+            'por_temporada' => $porTemporada,
             'map_by_entity_product' => $mapByEntityProduct,
         ];
     }
