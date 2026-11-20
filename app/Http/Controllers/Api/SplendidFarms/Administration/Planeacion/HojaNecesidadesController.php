@@ -4,15 +4,13 @@ namespace App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion;
 
 use App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\Concerns\PermisoPlaneacion;
 use App\Http\Controllers\Controller;
-use App\Models\Planeacion\BodegaDestino;
-use App\Models\Planeacion\GrupoBalance;
 use App\Models\Planeacion\Presentacion;
 use App\Models\Planeacion\ProgramaNecesidad;
 use App\Models\Planeacion\ProgramaSemanal;
-use App\Models\Planeacion\TipoEmpaque;
 use App\Services\Planeacion\ClientesCrmSbp;
 use App\Services\Planeacion\ProgramaSemanalService;
 use App\Services\Planeacion\RegistroCambiosPrograma;
+use App\Services\Planeacion\ValidadorRenglonPlaneacion;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -37,10 +35,6 @@ use Illuminate\Validation\ValidationException;
 class HojaNecesidadesController extends Controller
 {
     use PermisoPlaneacion;
-
-    private const MENSAJE_GRUPO = 'Las variedades deben ser del mismo grupo de balance';
-
-    private const MENSAJE_TEMPORADA = 'El cultivo no tiene una temporada abierta en esta semana.';
 
     public function guardar(Request $request, ProgramaSemanal $programa, ProgramaSemanalService $servicio, RegistroCambiosPrograma $registro): JsonResponse
     {
@@ -76,13 +70,12 @@ class HojaNecesidadesController extends Controller
                 : ProgramaNecesidad::whereIn('id', $ids)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
 
             $clientes = new ClientesCrmSbp;
-            $presentaciones = Presentacion::whereIn('id', $this->idsPresentacion($nuevas, $cambios))
-                ->get(['id', 'cultivo_id', 'is_active'])
-                ->keyBy('id');
+            $validador = new ValidadorRenglonPlaneacion($servicio);
+            $presentaciones = $validador->presentaciones([...$nuevas, ...$cambios]);
 
             $aBorrar = $this->planearBorradas($programa, $borradas, $existentes);
-            $planCambios = $this->planearCambios($programa, $cambios, $existentes, $presentaciones, $clientes, $servicio);
-            $planNuevas = $this->planearNuevas($programa, $nuevas, $presentaciones, $clientes, $servicio);
+            $planCambios = $this->planearCambios($programa, $cambios, $existentes, $presentaciones, $clientes, $validador);
+            $planNuevas = $this->planearNuevas($programa, $nuevas, $presentaciones, $clientes, $validador);
 
             // Todo está validado: desde aquí solo se escribe.
             $hubo = false;
@@ -178,23 +171,6 @@ class HojaNecesidadesController extends Controller
         }
     }
 
-    /**
-     * @param  list<array<string, mixed>>  $nuevas
-     * @param  list<array<string, mixed>>  $cambios
-     * @return list<int>
-     */
-    private function idsPresentacion(array $nuevas, array $cambios): array
-    {
-        $ids = [];
-        foreach ([...$nuevas, ...$cambios] as $fila) {
-            if (isset($fila['presentacion_id'])) {
-                $ids[(int) $fila['presentacion_id']] = true;
-            }
-        }
-
-        return array_keys($ids);
-    }
-
     // ── Planeación (valida todo, no escribe) ────────────
 
     /**
@@ -227,20 +203,17 @@ class HojaNecesidadesController extends Controller
      * @param  Collection<int, Presentacion>  $presentaciones
      * @return list<array{clave: string, atributos: array<string, mixed>, variedades: list<int>}>
      */
-    private function planearNuevas(ProgramaSemanal $programa, array $filas, Collection $presentaciones, ClientesCrmSbp $clientes, ProgramaSemanalService $servicio): array
+    private function planearNuevas(ProgramaSemanal $programa, array $filas, Collection $presentaciones, ClientesCrmSbp $clientes, ValidadorRenglonPlaneacion $validador): array
     {
         $salida = [];
         foreach ($filas as $i => $fila) {
             $ruta = "nuevas.$i";
 
-            $presentacion = $presentaciones->get((int) $fila['presentacion_id']);
-            if (! $presentacion || ! $presentacion->is_active) {
-                throw ValidationException::withMessages(["$ruta.presentacion_id" => 'La presentación no existe o está desactivada.']);
-            }
+            $presentacion = $validador->presentacionActiva($presentaciones, (int) $fila['presentacion_id'], "$ruta.presentacion_id");
             $cultivoId = (int) $presentacion->cultivo_id;
 
-            $variedades = $this->resolverVariedades($fila, $cultivoId, $servicio, $ruta);
-            $this->exigirTemporadaAbierta($programa, $cultivoId, $servicio, "$ruta.presentacion_id");
+            $variedades = $validador->resolverVariedades($fila, $cultivoId, $ruta);
+            $validador->exigirTemporadaAbierta($programa, $cultivoId, "$ruta.presentacion_id");
             [$clienteId, $nombre] = $this->resolverCliente($fila, $clientes, $ruta);
 
             $salida[] = [
@@ -269,7 +242,7 @@ class HojaNecesidadesController extends Controller
      * @param  Collection<int, Presentacion>  $presentaciones
      * @return list<array{necesidad: ProgramaNecesidad, atributos: array<string, mixed>, variedades: ?list<int>}>
      */
-    private function planearCambios(ProgramaSemanal $programa, array $filas, Collection $existentes, Collection $presentaciones, ClientesCrmSbp $clientes, ProgramaSemanalService $servicio): array
+    private function planearCambios(ProgramaSemanal $programa, array $filas, Collection $existentes, Collection $presentaciones, ClientesCrmSbp $clientes, ValidadorRenglonPlaneacion $validador): array
     {
         $salida = [];
         foreach ($filas as $i => $fila) {
@@ -282,17 +255,15 @@ class HojaNecesidadesController extends Controller
             $atributos = [];
 
             if (isset($fila['bodega_id']) && (int) $fila['bodega_id'] !== (int) $actual->bodega_id) {
-                if (! BodegaDestino::whereKey((int) $fila['bodega_id'])->where('is_active', true)->exists()) {
-                    throw ValidationException::withMessages(["$ruta.bodega_id" => 'La bodega no existe o está desactivada.']);
-                }
+                $validador->exigirBodegaActiva((int) $fila['bodega_id'], "$ruta.bodega_id");
                 $atributos['bodega_id'] = (int) $fila['bodega_id'];
             }
 
             if (array_key_exists('tipo_empaque_id', $fila)) {
                 $empaque = $fila['tipo_empaque_id'] !== null ? (int) $fila['tipo_empaque_id'] : null;
                 if ($empaque !== ($actual->tipo_empaque_id !== null ? (int) $actual->tipo_empaque_id : null)) {
-                    if ($empaque !== null && ! TipoEmpaque::whereKey($empaque)->where('is_active', true)->exists()) {
-                        throw ValidationException::withMessages(["$ruta.tipo_empaque_id" => 'El tipo de empaque no existe o está desactivado.']);
+                    if ($empaque !== null) {
+                        $validador->exigirTipoEmpaqueActivo($empaque, "$ruta.tipo_empaque_id");
                     }
                     $atributos['tipo_empaque_id'] = $empaque;
                 }
@@ -301,10 +272,7 @@ class HojaNecesidadesController extends Controller
             $cultivoId = (int) $actual->cultivo_id;
             $cultivoCambio = false;
             if (isset($fila['presentacion_id']) && (int) $fila['presentacion_id'] !== (int) $actual->presentacion_id) {
-                $presentacion = $presentaciones->get((int) $fila['presentacion_id']);
-                if (! $presentacion || ! $presentacion->is_active) {
-                    throw ValidationException::withMessages(["$ruta.presentacion_id" => 'La presentación no existe o está desactivada.']);
-                }
+                $presentacion = $validador->presentacionActiva($presentaciones, (int) $fila['presentacion_id'], "$ruta.presentacion_id");
                 $atributos['presentacion_id'] = (int) $fila['presentacion_id'];
                 $cultivoCambio = (int) $presentacion->cultivo_id !== $cultivoId;
                 $cultivoId = (int) $presentacion->cultivo_id;
@@ -318,8 +286,8 @@ class HojaNecesidadesController extends Controller
             if ($mandaColor || $cultivoCambio) {
                 $actuales = DB::table('programa_necesidad_variedad')->where('necesidad_id', $actual->id)->pluck('variedad_id')->map(fn ($v) => (int) $v)->sort()->values()->all();
                 $variedades = $mandaColor
-                    ? $this->resolverVariedades($fila, $cultivoId, $servicio, $ruta)
-                    : $this->exigirMismoGrupo($actuales, $cultivoId, $servicio, "$ruta.presentacion_id");
+                    ? $validador->resolverVariedades($fila, $cultivoId, $ruta)
+                    : $validador->exigirMismoGrupo($actuales, $cultivoId, "$ruta.presentacion_id");
                 if ($variedades === $actuales) {
                     $variedades = null;
                 }
@@ -344,22 +312,15 @@ class HojaNecesidadesController extends Controller
             // temporada del cultivo arrastraría su negativo al inventario de las
             // siguientes. Bajar, quitar o cambiar solo datos de venta, no.
             if ($cultivoCambio) {
-                $this->exigirTemporadaAbierta($programa, $cultivoId, $servicio, "$ruta.presentacion_id");
+                $validador->exigirTemporadaAbierta($programa, $cultivoId, "$ruta.presentacion_id");
             } elseif ($subeCajas) {
-                $this->exigirTemporadaAbierta($programa, $cultivoId, $servicio, "$ruta.cajas");
+                $validador->exigirTemporadaAbierta($programa, $cultivoId, "$ruta.cajas");
             }
 
             $salida[] = ['necesidad' => $actual, 'atributos' => $atributos, 'variedades' => $variedades];
         }
 
         return $salida;
-    }
-
-    private function exigirTemporadaAbierta(ProgramaSemanal $programa, int $cultivoId, ProgramaSemanalService $servicio, string $campo): void
-    {
-        if (! $servicio->temporadasDeSemana($programa)->contains(fn ($t) => (int) $t->cultivo_id === $cultivoId)) {
-            throw ValidationException::withMessages([$campo => self::MENSAJE_TEMPORADA]);
-        }
     }
 
     private function mandaCliente(array $fila): bool
@@ -401,61 +362,6 @@ class HojaNecesidadesController extends Controller
         $coincide = $clientes->buscarPorNombre($nombre);
 
         return $coincide ? [$coincide['id'], $coincide['nombre']] : [null, $nombre];
-    }
-
-    /**
-     * Variedades del color de la fila: las que manda, o las de su grupo de
-     * balance, comprobadas contra el cultivo y que caigan en un solo grupo.
-     *
-     * @return list<int>
-     */
-    private function resolverVariedades(array $fila, int $cultivoId, ProgramaSemanalService $servicio, string $ruta): array
-    {
-        if (! empty($fila['variedad_ids'])) {
-            return $this->exigirMismoGrupo(array_map('intval', $fila['variedad_ids']), $cultivoId, $servicio, "$ruta.variedad_ids");
-        }
-
-        $clave = (string) $fila['grupo_id'];
-        if (str_starts_with($clave, 'v')) {
-            $ids = [(int) substr($clave, 1)];
-        } else {
-            $grupo = GrupoBalance::with('variedades:id')->find((int) $clave);
-            if (! $grupo || (int) $grupo->cultivo_id !== $cultivoId) {
-                throw ValidationException::withMessages(["$ruta.grupo_id" => 'El grupo no existe en el cultivo de la presentación.']);
-            }
-            $ids = $grupo->variedades->pluck('id')->map(fn ($id) => (int) $id)->all();
-            if ($ids === []) {
-                throw ValidationException::withMessages(["$ruta.grupo_id" => 'El grupo no tiene variedades.']);
-            }
-        }
-
-        return $this->exigirMismoGrupo($ids, $cultivoId, $servicio, "$ruta.grupo_id");
-    }
-
-    /**
-     * Todas las variedades deben existir, ser del cultivo de la presentación
-     * y caer en el mismo grupo de balance.
-     *
-     * @param  list<int>  $variedadIds
-     * @return list<int> ordenadas
-     */
-    private function exigirMismoGrupo(array $variedadIds, int $cultivoId, ProgramaSemanalService $servicio, string $campo): array
-    {
-        $grupos = [];
-        foreach ($variedadIds as $variedadId) {
-            if ($servicio->cultivoDeVariedad($variedadId) !== $cultivoId) {
-                throw ValidationException::withMessages([$campo => self::MENSAJE_GRUPO]);
-            }
-            $grupos[$servicio->grupoDeVariedad($variedadId)] = true;
-        }
-
-        if (count($grupos) !== 1) {
-            throw ValidationException::withMessages([$campo => self::MENSAJE_GRUPO]);
-        }
-
-        sort($variedadIds);
-
-        return array_values($variedadIds);
     }
 
     // ── Escritura ───────────────────────────────────────
