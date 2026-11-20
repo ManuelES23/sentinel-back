@@ -8,13 +8,17 @@ use App\Models\SfEmployee;
 use App\Models\SfPosition;
 use App\Models\SfPositionAssignment;
 use App\Services\AttendanceSpreadsheetService;
-use Carbon\Carbon;
+use App\Services\SplendidFarms\SfAttendanceImportService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class SfAttendanceController extends Controller
 {
-    public function __construct(private readonly AttendanceSpreadsheetService $spreadsheetService)
+    public function __construct(
+        private readonly AttendanceSpreadsheetService $spreadsheetService,
+        private readonly SfAttendanceImportService $importService,
+    )
     {
     }
 
@@ -74,86 +78,45 @@ class SfAttendanceController extends Controller
         ]);
     }
 
+    /**
+     * Importa el Excel del checador (export «Transaction» o archivo con entrada/salida)
+     * sin generar corte de nómina. Si el empleado ya tiene registro ese día, se reemplaza.
+     */
     public function importExcel(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'file' => 'required|file|mimes:xlsx,xls,csv,txt|max:10240',
+            'file' => 'required|file|max:10240',
             'enterprise_id' => 'required|exists:enterprises,id',
         ]);
 
-        $rows = $this->spreadsheetService->parse($request->file('file'));
-
-        $created = 0;
-        $updated = 0;
-        $notMatched = 0;
-        $invalidRows = 0;
-
-        foreach ($rows as $row) {
-            $employee = SfEmployee::query()
-                ->where('enterprise_id', $validated['enterprise_id'])
-                ->where('checker_key', $row['checker_key'])
-                ->first();
-
-            if (! $employee) {
-                $notMatched++;
-                continue;
-            }
-
-            try {
-                $checkIn = $row['check_in'] ? Carbon::parse($row['date'] . ' ' . $row['check_in']) : null;
-                $checkOut = $row['check_out'] ? Carbon::parse($row['date'] . ' ' . $row['check_out']) : null;
-                if ($checkIn && $checkOut && $checkOut->lessThan($checkIn)) {
-                    $checkOut->addDay();
-                }
-            } catch (\Throwable) {
-                $invalidRows++;
-                continue;
-            }
-
-            $payload = [
-                'check_in' => $checkIn,
-                'check_out' => $checkOut,
-                'status' => in_array($row['status'], [
-                    'present',
-                    'absent',
-                    'late',
-                    'early_leave',
-                    'half_day',
-                    'holiday',
-                    'sick_leave',
-                ], true) ? $row['status'] : 'present',
-                'source_file' => $request->file('file')->getClientOriginalName(),
-                'source_device' => $row['device'],
-                'notes' => $row['notes'],
-                'imported_by_user_id' => $request->user()?->id,
-            ];
-
-            if ($checkIn && $checkOut) {
-                $payload['hours_worked'] = $checkIn->diffInMinutes($checkOut) / 60;
-            }
-
-            $record = SfAttendanceRecord::updateOrCreate(
-                ['sf_employee_id' => $employee->id, 'date' => $row['date']],
-                $payload
-            );
-
-            if ($record->wasRecentlyCreated) {
-                $created++;
-            } else {
-                $updated++;
-            }
+        $file = $request->file('file');
+        $allowedExtensions = ['xlsx', 'xls', 'csv', 'txt', 'ods'];
+        if (! in_array(strtolower($file->getClientOriginalExtension()), $allowedExtensions, true)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'El archivo debe ser: ' . implode(', ', $allowedExtensions),
+            ], 422);
         }
+
+        $rows = $this->spreadsheetService->parse($file);
+        if (empty($rows)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No se encontraron marcaciones en el archivo. Revisa que tenga las columnas ID, Date y Time del checador.',
+            ], 422);
+        }
+
+        $summary = DB::transaction(fn () => $this->importService->import(
+            $rows,
+            (int) $validated['enterprise_id'],
+            $file->getClientOriginalName(),
+            $request->user()?->id,
+        ));
 
         return response()->json([
             'success' => true,
             'message' => 'Importación de asistencias SF completada',
-            'data' => [
-                'total_rows' => count($rows),
-                'created' => $created,
-                'updated' => $updated,
-                'not_matched' => $notMatched,
-                'invalid_rows' => $invalidRows,
-            ],
+            'data' => $summary,
         ]);
     }
 

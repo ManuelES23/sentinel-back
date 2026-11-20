@@ -7,14 +7,17 @@ use App\Models\SfAttendanceRecord;
 use App\Models\SfEmployee;
 use App\Models\SfPayrollRun;
 use App\Services\AttendanceSpreadsheetService;
-use Carbon\Carbon;
+use App\Services\SplendidFarms\SfAttendanceImportService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class SfPayrollController extends Controller
 {
-    public function __construct(private readonly AttendanceSpreadsheetService $spreadsheetService)
+    public function __construct(
+        private readonly AttendanceSpreadsheetService $spreadsheetService,
+        private readonly SfAttendanceImportService $importService,
+    )
     {
     }
 
@@ -88,92 +91,13 @@ class SfPayrollController extends Controller
 
         $rows = $this->spreadsheetService->parse($request->file('file'));
 
-        // Pre-cargar empleados para matching tolerante a ceros a la izquierda.
-        // El checador puede exportar "0000000003" y el empleado estar guardado como "3".
-        $employees = SfEmployee::query()
-            ->where('enterprise_id', $validated['enterprise_id'])
-            ->get();
-
-        $employeeMap = [];
-        foreach ($employees as $emp) {
-            $keys = array_filter([
-                $emp->checker_key,
-                $emp->code,
-                ltrim((string) $emp->checker_key, '0'),
-                ltrim((string) $emp->code, '0'),
-            ]);
-            foreach ($keys as $k) {
-                $normalized = strtoupper((string) $k);
-                if ($normalized !== '') {
-                    $employeeMap[$normalized] = $emp;
-                }
-            }
-        }
-
-        $created = 0;
-        $updated = 0;
-        $notMatched = 0;
-        $invalidRows = 0;
-        $unmatchedKeys = [];
-
-        foreach ($rows as $row) {
-            $rawKey = strtoupper((string) $row['checker_key']);
-            $trimmedKey = ltrim($rawKey, '0');
-
-            $employee = $employeeMap[$rawKey]
-                ?? $employeeMap[$trimmedKey]
-                ?? null;
-
-            if (! $employee) {
-                $notMatched++;
-                $unmatchedKeys[$rawKey] = true;
-                continue;
-            }
-
-            try {
-                $checkIn = $row['check_in'] ? Carbon::parse($row['date'] . ' ' . $row['check_in']) : null;
-                $checkOut = $row['check_out'] ? Carbon::parse($row['date'] . ' ' . $row['check_out']) : null;
-                if ($checkIn && $checkOut && $checkOut->lessThan($checkIn)) {
-                    $checkOut->addDay();
-                }
-            } catch (\Throwable) {
-                $invalidRows++;
-                continue;
-            }
-
-            $payload = [
-                'check_in' => $checkIn,
-                'check_out' => $checkOut,
-                'status' => in_array($row['status'], [
-                    'present',
-                    'absent',
-                    'late',
-                    'early_leave',
-                    'half_day',
-                    'holiday',
-                    'sick_leave',
-                ], true) ? $row['status'] : 'present',
-                'source_file' => $request->file('file')->getClientOriginalName(),
-                'source_device' => $row['device'],
-                'notes' => $row['notes'],
-                'imported_by_user_id' => $request->user()?->id,
-            ];
-
-            if ($checkIn && $checkOut) {
-                $payload['hours_worked'] = $checkIn->diffInMinutes($checkOut) / 60;
-            }
-
-            $record = SfAttendanceRecord::updateOrCreate(
-                ['sf_employee_id' => $employee->id, 'date' => $row['date']],
-                $payload
-            );
-
-            if ($record->wasRecentlyCreated) {
-                $created++;
-            } else {
-                $updated++;
-            }
-        }
+        // Mismo reconocimiento tolerante que Asistencia SF (clave con/sin ceros, código).
+        $importSummary = $this->importService->import(
+            $rows,
+            (int) $validated['enterprise_id'],
+            $request->file('file')->getClientOriginalName(),
+            $request->user()?->id,
+        );
 
         $payrollRows = $this->buildPayrollRows(
             $validated['enterprise_id'],
@@ -194,14 +118,7 @@ class SfPayrollController extends Controller
             'success' => true,
             'message' => 'Archivo procesado y nómina guardada en histórico.',
             'data' => [
-                'import' => [
-                    'total_rows' => count($rows),
-                    'created' => $created,
-                    'updated' => $updated,
-                    'not_matched' => $notMatched,
-                    'invalid_rows' => $invalidRows,
-                    'unmatched_keys' => array_values(array_slice(array_keys($unmatchedKeys), 0, 50)),
-                ],
+                'import' => $importSummary,
                 'payroll_run' => [
                     'id' => $run->id,
                     'start_date' => $run->start_date?->format('Y-m-d'),
