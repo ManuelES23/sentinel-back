@@ -76,7 +76,7 @@ class ProgramaSemanalTest extends TestCase
 
         $this->assertSame('2026-11-23', $d['programa']['lunes']);
         $this->assertSame(48, $d['programa']['semana_iso']);
-        $this->assertSame(['2026-11-23', '2026-11-24', '2026-11-25', '2026-11-26', '2026-11-27', '2026-11-28'], $d['programa']['dias']);
+        $this->assertSame(['2026-11-23', '2026-11-24', '2026-11-25', '2026-11-26', '2026-11-27', '2026-11-28', '2026-11-29'], $d['programa']['dias']);
         $this->assertNull($d['programa']['notas']);
         $this->assertArrayNotHasKey('junta_registrada_at', $d['programa']);
         $this->assertTrue($d['permisos']['tablero']['view']);
@@ -101,14 +101,19 @@ class ProgramaSemanalTest extends TestCase
         $this->assertSame('falta', $blanco['estado']);
         $this->assertSame(2, $blanco['primer_dia_falta']);
         $this->assertSame(-3334, $blanco['acumulado'][2]);
+        // El domingo va en cero: el acumulado del domingo es el del sábado.
+        $this->assertCount(7, $blanco['acumulado']);
+        $this->assertSame(0, $blanco['produccion'][6]);
+        $this->assertSame(0, $blanco['necesidad'][6]);
+        $this->assertSame(-2893, $blanco['acumulado'][6]);
         $this->assertSame(3, $blanco['peor_dia']);
         $this->assertSame(-4882, $blanco['peor_valor']);
-        $this->assertSame([2100, 1400, 2450, 0, 2800, 2800], $blanco['produccion_por_temporada'][$this->temporada->id]);
+        $this->assertSame([2100, 1400, 2450, 0, 2800, 2800, 0], $blanco['produccion_por_temporada'][$this->temporada->id]);
 
         $caruso = collect($d['necesidades'])->firstWhere('cliente_nombre', 'Caruso');
         $this->assertFalse($caruso['en_crm']);
         $this->assertSame($this->idAb(), (string) $caruso['grupo_id']);
-        $this->assertSame([1000, 0, 0, 0, 0, 0], $caruso['cajas']);
+        $this->assertSame([1000, 0, 0, 0, 0, 0, 0], $caruso['cajas']);
     }
 
     public function test_wk48_sin_acuerdos_da_los_valores_del_excel(): void
@@ -239,13 +244,13 @@ class ProgramaSemanalTest extends TestCase
             && $r['tipo_empaque_id'] === $this->tipoEmpaque('RPC')->id);
         $this->assertNotNull($renglon);
         $this->assertSame('ok', $renglon['clase']);
-        $this->assertSame([3460, 0, 0, 0, 0, 0], $renglon['cajas']);
+        $this->assertSame([3460, 0, 0, 0, 0, 0, 0], $renglon['cajas']);
 
         $sinClasificar = collect($empaque)->where('clase', 'sin_clasificar')->values();
         $this->assertCount(1, $sinClasificar);
         $this->assertNull($sinClasificar[0]['tipo_empaque_id']);
         $this->assertSame($texas, $sinClasificar[0]['bodega_id']);
-        $this->assertSame([1000, 0, 0, 0, 0, 0], $sinClasificar[0]['cajas']);
+        $this->assertSame([1000, 0, 0, 0, 0, 0, 0], $sinClasificar[0]['cajas']);
         $this->assertSame($sinClasificar[0], collect($empaque)->last());
 
         // Los totales por destino suman las necesidades de cada bodega.
@@ -363,7 +368,7 @@ class ProgramaSemanalTest extends TestCase
         for ($i = 0; $i < 12; $i++) {
             $p = ProgramaSemanal::create(['lunes' => $lunes->copy()->addWeeks($i)->toDateString()]);
             $this->corte($p, 'Blanco', 0, 1);
-            $this->necesidad($p, 'Nogales', 'Vallarta', 'Bulk', ['Blanco'], 'Cartón', [100, 0, 0, 0, 0, 0]);
+            $this->necesidad($p, 'Nogales', 'Vallarta', 'Bulk', ['Blanco'], 'Cartón', [100, 0, 0, 0, 0, 0, 0]);
         }
 
         $consultas = function (string $fecha): array {
@@ -462,7 +467,7 @@ class ProgramaSemanalTest extends TestCase
     {
         $propia = $this->crearEtapa('Blanco', 4, ['fecha_cosecha_estimada' => '2026-11-30']);
 
-        // Otra temporada del elote, abierta, que empieza después del sábado: no toca WK48.
+        // Otra temporada del elote, abierta, que empieza después del domingo: no toca WK48.
         $bajio = Temporada::create([
             'cultivo_id' => $this->cultivo->id,
             'nombre' => 'Bajío 2026-2027',
@@ -495,7 +500,7 @@ class ProgramaSemanalTest extends TestCase
     {
         $this->wk48();
         $wk49 = ProgramaSemanal::create(['lunes' => '2026-11-30']);
-        $this->necesidad($wk49, 'Nogales', 'Vallarta', 'Bulk', ['Blanco'], 'Cartón', [0, 0, 3000, 0, 0, 0]);
+        $this->necesidad($wk49, 'Nogales', 'Vallarta', 'Bulk', ['Blanco'], 'Cartón', [0, 0, 3000, 0, 0, 0, 0]);
 
         $previos = collect($this->semana('2026-11-30')->assertOk()->json('data.clientes_previos'));
 

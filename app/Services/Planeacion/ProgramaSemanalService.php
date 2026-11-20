@@ -105,12 +105,12 @@ class ProgramaSemanalService
         return $this->etapas->enTemporada($etapaId, $temporadaId);
     }
 
-    /** Temporadas abiertas que tocan la semana del programa (lunes a sábado). */
+    /** Temporadas abiertas que tocan la semana del programa (lunes a domingo). */
     public function temporadasDeSemana(ProgramaSemanal $programa): Collection
     {
         $lunes = $programa->lunes->toDateString();
 
-        return $this->catalogo->temporadasQueTocan($lunes, $this->masDias($lunes, 5));
+        return $this->catalogo->temporadasQueTocan($lunes, $this->masDias($lunes, 6));
     }
 
     /** Cultivo de una variedad que existe (no borrada); null si no existe. */
@@ -137,7 +137,7 @@ class ProgramaSemanalService
         ['plan' => $plan, 'balance' => $balance] = $this->calcular($programa);
 
         $lunes = $plan->lunes;
-        $temporadas = $this->catalogo->temporadasQueTocan($lunes, $this->masDias($lunes, 5));
+        $temporadas = $this->catalogo->temporadasQueTocan($lunes, $this->masDias($lunes, 6));
         $embarques = ProgramaEmbarque::where('programa_id', $programa->id)
             ->orderBy('cultivo_id')->orderBy('bodega_id')->orderBy('tipo')->orderBy('dia')
             ->get(['cultivo_id', 'bodega_id', 'tipo', 'dia', 'cargas']);
@@ -264,7 +264,7 @@ class ProgramaSemanalService
 
         // Grupos explícitos de los cultivos de la semana, más los que traen inventario.
         $cultivoIds = array_values(array_unique(array_merge(
-            $this->catalogo->temporadasQueTocan($lunes, $this->masDias($lunes, 5))
+            $this->catalogo->temporadasQueTocan($lunes, $this->masDias($lunes, 6))
                 ->pluck('cultivo_id')->map(fn ($id) => (int) $id)->all(),
             $plan->cultivosCitados(),
         )));

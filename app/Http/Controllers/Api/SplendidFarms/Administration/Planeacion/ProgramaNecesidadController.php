@@ -62,7 +62,7 @@ class ProgramaNecesidadController extends Controller
             }],
             "{$p}variedad_ids.*" => ['required', 'integer'],
             "{$p}grupo_id" => ['nullable', "required_without:{$p}variedad_ids", 'regex:/^v?\d{1,10}$/'],
-            "{$p}cajas" => ['required', 'array', 'size:6'],
+            "{$p}cajas" => ['required', 'array', 'size:7'],
             "{$p}cajas.*" => ['required', 'integer', 'min:0', 'max:'.self::MAX_CAJAS],
         ];
     }

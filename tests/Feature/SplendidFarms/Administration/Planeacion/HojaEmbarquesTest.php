@@ -241,7 +241,7 @@ class HojaEmbarquesTest extends TestCase
 
         $this->guardar([array_merge($this->celda('Texas', 'full', 0, 1), ['tipo' => 'doble'])])
             ->assertUnprocessable()->assertJsonValidationErrors(['celdas.0.tipo']);
-        $this->guardar([$this->celda('Texas', 'full', 6, 1)])
+        $this->guardar([$this->celda('Texas', 'full', 7, 1)])
             ->assertUnprocessable()->assertJsonValidationErrors(['celdas.0.dia']);
         $this->guardar([$this->celda('Texas', 'full', -1, 1)])
             ->assertUnprocessable()->assertJsonValidationErrors(['celdas.0.dia']);
@@ -254,6 +254,25 @@ class HojaEmbarquesTest extends TestCase
         $this->putJson($this->urlHoja(), ['celdas' => [['cultivo_id' => $this->cultivo->id, 'bodega_id' => $this->bodega('Texas')->id, 'tipo' => 'full', 'dia' => 0]]])
             ->assertUnprocessable()->assertJsonValidationErrors(['celdas.0.cargas']);
 
+        $this->assertSame([], $this->guardadas());
+    }
+
+    public function test_guarda_un_embarque_en_domingo(): void
+    {
+        $this->comoLogistica();
+
+        $respuesta = $this->guardar([$this->celda('Texas', 'full', 6, 3)])->assertOk();
+
+        $this->assertSame([['Texas', 'full', 6, 3]], $this->guardadas());
+        $embarques = $respuesta->json('data.embarques');
+        $this->assertCount(1, $embarques);
+        $this->assertSame(6, $embarques[0]['dia']);
+        $this->assertSame(3, $embarques[0]['cargas']);
+
+        // Cambiar y borrar el domingo funciona igual que cualquier otro día.
+        $this->guardar([$this->celda('Texas', 'full', 6, 5)])->assertOk();
+        $this->assertSame([['Texas', 'full', 6, 5]], $this->guardadas());
+        $this->guardar([$this->celda('Texas', 'full', 6, 0)])->assertOk();
         $this->assertSame([], $this->guardadas());
     }
 

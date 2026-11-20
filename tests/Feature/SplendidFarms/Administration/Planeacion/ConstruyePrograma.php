@@ -218,7 +218,7 @@ trait ConstruyePrograma
 
     /**
      * @param  string[]  $variedades
-     * @param  int[]  $cajas  Seis cantidades, de lunes a sábado.
+     * @param  int[]  $cajas  Siete cantidades, de lunes a domingo.
      */
     protected function necesidad(ProgramaSemanal $p, string $bodega, string $cliente, string $presentacion, array $variedades, ?string $empaque, array $cajas): ProgramaNecesidad
     {
@@ -273,18 +273,18 @@ trait ConstruyePrograma
         }
 
         $necesidades = [
-            ['Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [1480, 0, 0, 0, 0, 0]],
-            ['Texas', 'Walmart', 'Tray', ['Amarillo'], 'RPC', [2500, 0, 0, 0, 0, 0]],
-            ['Texas', 'Walmart', 'Minicobs', ['Amarillo'], 'RPC', [150, 0, 0, 0, 0, 0]],
-            ['Texas', 'Walmart', 'Tray', ['Blanco'], 'RPC', [160, 0, 0, 0, 0, 0]],
-            ['Texas', 'Twin Garden', 'Bulk', ['Amarillo'], 'RPC', [1980, 0, 0, 0, 0, 0]],
-            ['Texas', 'Caruso', 'Bulk', ['Amarillo'], null, [1000, 0, 0, 0, 0, 0]],
-            ['Nogales', 'El Super', 'Bulk', ['Blanco'], 'Cartón', [960, 0, 0, 0, 0, 0]],
-            ['Nogales', 'Vallarta', 'Bulk', ['Blanco'], 'Cartón', [0, 0, 6584, 0, 0, 0]],
-            ['Nogales', 'Shapiro', 'Bulk', ['Blanco'], 'Cartón', [0, 0, 0, 1548, 0, 2500]],
-            ['Nogales', 'Vesta', 'Bulk', ['Blanco'], 'Cartón', [0, 1580, 0, 0, 1111, 0]],
-            ['Nogales', 'Vesta', 'Bulk', ['Amarillo'], 'Cartón', [0, 0, 560, 0, 0, 3500]],
-            ['Nogales', 'Walmart', 'Bulk', ['Amarillo', 'Bicolor'], 'RPC', [0, 850, 0, 8500, 1520, 0]],
+            ['Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [1480, 0, 0, 0, 0, 0, 0]],
+            ['Texas', 'Walmart', 'Tray', ['Amarillo'], 'RPC', [2500, 0, 0, 0, 0, 0, 0]],
+            ['Texas', 'Walmart', 'Minicobs', ['Amarillo'], 'RPC', [150, 0, 0, 0, 0, 0, 0]],
+            ['Texas', 'Walmart', 'Tray', ['Blanco'], 'RPC', [160, 0, 0, 0, 0, 0, 0]],
+            ['Texas', 'Twin Garden', 'Bulk', ['Amarillo'], 'RPC', [1980, 0, 0, 0, 0, 0, 0]],
+            ['Texas', 'Caruso', 'Bulk', ['Amarillo'], null, [1000, 0, 0, 0, 0, 0, 0]],
+            ['Nogales', 'El Super', 'Bulk', ['Blanco'], 'Cartón', [960, 0, 0, 0, 0, 0, 0]],
+            ['Nogales', 'Vallarta', 'Bulk', ['Blanco'], 'Cartón', [0, 0, 6584, 0, 0, 0, 0]],
+            ['Nogales', 'Shapiro', 'Bulk', ['Blanco'], 'Cartón', [0, 0, 0, 1548, 0, 2500, 0]],
+            ['Nogales', 'Vesta', 'Bulk', ['Blanco'], 'Cartón', [0, 1580, 0, 0, 1111, 0, 0]],
+            ['Nogales', 'Vesta', 'Bulk', ['Amarillo'], 'Cartón', [0, 0, 560, 0, 0, 3500, 0]],
+            ['Nogales', 'Walmart', 'Bulk', ['Amarillo', 'Bicolor'], 'RPC', [0, 850, 0, 8500, 1520, 0, 0]],
         ];
         foreach ($necesidades as [$bodega, $cliente, $presentacion, $variedades, $empaque, $cajas]) {
             $this->necesidad($p, $bodega, $cliente, $presentacion, $variedades, $empaque, $cajas);

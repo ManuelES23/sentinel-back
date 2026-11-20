@@ -320,13 +320,42 @@ class HojaCorteTest extends TestCase
         $this->comoCapturista();
         $etapa = $this->crearEtapa('Amarillo', 10);
 
-        foreach ([6, -1] as $dia) {
+        foreach ([7, -1] as $dia) {
             $this->putJson($this->urlHoja(), ['celdas' => [$this->celda($etapa, $dia, 1)]])
                 ->assertUnprocessable()->assertJsonValidationErrors('celdas.0.dia');
         }
 
         $this->putJson($this->urlHoja(), ['celdas' => [$this->celda($etapa, 2, 1), $this->celda($etapa, 2, 2)]])
             ->assertUnprocessable()->assertJsonValidationErrors('celdas.1.dia');
+        $this->assertSame(0, ProgramaCorte::count());
+    }
+
+    public function test_guarda_una_celda_de_corte_en_domingo(): void
+    {
+        $this->comoCapturista();
+        $etapa = $this->crearEtapa('Amarillo', 10);
+
+        $respuesta = $this->putJson($this->urlHoja(), ['celdas' => [$this->celda($etapa, 6, 4)]])->assertOk();
+
+        $this->assertSame(1, ProgramaCorte::count());
+        $this->assertSame(6, (int) ProgramaCorte::first()->dia);
+        $this->assertSame('4.00', ProgramaCorte::first()->hectareas);
+
+        // Se ve en el payload de la respuesta y en el del GET: 4 ha × 550 cj/ha.
+        foreach ([$respuesta->json('data.cortes'), $this->semana()['cortes']] as $cortes) {
+            $this->assertCount(1, $cortes);
+            $this->assertSame(6, $cortes[0]['dia']);
+            $this->assertEqualsWithDelta(4.0, $cortes[0]['hectareas'], 0.001);
+            $this->assertSame(2200, $cortes[0]['cajas']);
+        }
+
+        // La producción del domingo entra al balance del grupo, en el día 6.
+        $balance = $this->semana()['balance'][(string) $this->grupo('Amarillo / Bicolor')->id];
+        $this->assertSame(2200, $balance['produccion'][6]);
+        $this->assertSame(2200, $balance['final']);
+
+        // Y se puede borrar con cero.
+        $this->putJson($this->urlHoja(), ['celdas' => [$this->celda($etapa, 6, 0)]])->assertOk();
         $this->assertSame(0, ProgramaCorte::count());
     }
 

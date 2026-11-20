@@ -145,10 +145,10 @@ class HojaNecesidadesController extends Controller
             'cambios.*' => ['array'],
             'cambios.*.id' => ['required', 'integer', 'distinct'],
         ] + $parcial + [
-            'cambios.*.cajas' => ['sometimes', 'array', 'min:1', 'max:6', function ($atributo, $valor, $falla) {
+            'cambios.*.cajas' => ['sometimes', 'array', 'min:1', 'max:7', function ($atributo, $valor, $falla) {
                 foreach (array_keys((array) $valor) as $dia) {
-                    if (! in_array((string) $dia, ['0', '1', '2', '3', '4', '5'], true)) {
-                        $falla('Los días de las cajas van de 0 (lunes) a 5 (sábado).');
+                    if (! in_array((string) $dia, ['0', '1', '2', '3', '4', '5', '6'], true)) {
+                        $falla('Los días de las cajas van de 0 (lunes) a 6 (domingo).');
 
                         return;
                     }

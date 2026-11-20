@@ -7,7 +7,7 @@ use PHPUnit\Framework\TestCase;
 
 class CalculadoraBalanceTest extends TestCase
 {
-    /** Convierte una serie de 6 días en renglones de necesidad. */
+    /** Convierte una serie de 7 días en renglones de necesidad. */
     private function necesidad(string|int $grupo, array $cajas): array
     {
         $filas = [];
@@ -17,7 +17,7 @@ class CalculadoraBalanceTest extends TestCase
         return $filas;
     }
 
-    /** Convierte una serie de 6 días en renglones de producción de una temporada. */
+    /** Convierte una serie de 7 días en renglones de producción de una temporada. */
     private function produccion(string|int $grupo, array $cajas, ?int $temporadaId = null): array
     {
         $filas = [];
@@ -27,18 +27,58 @@ class CalculadoraBalanceTest extends TestCase
         return $filas;
     }
 
+    public function test_la_semana_tiene_siete_dias_de_lunes_a_domingo(): void
+    {
+        $this->assertSame(7, CalculadoraBalance::DIAS);
+
+        $r = CalculadoraBalance::calcular(['a' => ['cultivo_id' => 1]], [], [], ['a' => 0]);
+        $this->assertCount(7, $r['a']['produccion']);
+        $this->assertCount(7, $r['a']['necesidad']);
+        $this->assertCount(7, $r['a']['acumulado']);
+    }
+
+    public function test_el_domingo_cuenta_en_produccion_necesidad_y_acumulado(): void
+    {
+        $r = CalculadoraBalance::calcular(
+            ['a' => ['cultivo_id' => 1]],
+            [['grupo' => 'a', 'temporada_id' => 1, 'dia' => 6, 'cajas' => 500]],
+            [['grupo' => 'a', 'dia' => 6, 'cajas' => 800]],
+            ['a' => 400]
+        );
+
+        $g = $r['a'];
+        $this->assertSame([0, 0, 0, 0, 0, 0, 500], $g['produccion']);
+        $this->assertSame([0, 0, 0, 0, 0, 0, 800], $g['necesidad']);
+        $this->assertSame([400, 400, 400, 400, 400, 400, 100], $g['acumulado']);
+        $this->assertSame(100, $g['final']);
+        $this->assertSame('cubre_inventario', $g['estado']);
+
+        // Si la falta cae el domingo, ese es el primer y el peor día.
+        $r = CalculadoraBalance::calcular(
+            ['a' => ['cultivo_id' => 1]],
+            [],
+            [['grupo' => 'a', 'dia' => 6, 'cajas' => 50]],
+            ['a' => 0]
+        );
+        $this->assertSame('falta', $r['a']['estado']);
+        $this->assertSame(6, $r['a']['primer_dia_falta']);
+        $this->assertSame(6, $r['a']['peor_dia']);
+        $this->assertSame(-50, $r['a']['peor_valor']);
+        $this->assertSame(-50, $r['a']['final']);
+    }
+
     public function test_wk48_amarillo_bicolor_se_cubre_con_inventario(): void
     {
         $r = CalculadoraBalance::calcular(
             ['ab' => ['cultivo_id' => 1]],
-            $this->produccion('ab', [10350, 4700, 3725, 6500, 3600, 3800], 1),
-            $this->necesidad('ab', [7110, 850, 560, 8500, 1520, 3500]),
+            $this->produccion('ab', [10350, 4700, 3725, 6500, 3600, 3800, 0], 1),
+            $this->necesidad('ab', [7110, 850, 560, 8500, 1520, 3500, 0]),
             ['ab' => 0]
         );
 
         $g = $r['ab'];
-        $this->assertSame([3240, 3850, 3165, -2000, 2080, 300], $g['del_dia']);
-        $this->assertSame([3240, 7090, 10255, 8255, 10335, 10635], $g['acumulado']);
+        $this->assertSame([3240, 3850, 3165, -2000, 2080, 300, 0], $g['del_dia']);
+        $this->assertSame([3240, 7090, 10255, 8255, 10335, 10635, 10635], $g['acumulado']);
         $this->assertSame(10635, $g['final']);
         $this->assertSame(0, $g['inicial']);
         $this->assertSame('cubre_inventario', $g['estado']);
@@ -51,13 +91,13 @@ class CalculadoraBalanceTest extends TestCase
     {
         $r = CalculadoraBalance::calcular(
             ['bl' => ['cultivo_id' => 1]],
-            $this->produccion('bl', [2100, 1400, 2450, 0, 2800, 2800], 1),
-            $this->necesidad('bl', [1120, 1580, 6584, 1548, 1111, 2500]),
+            $this->produccion('bl', [2100, 1400, 2450, 0, 2800, 2800, 0], 1),
+            $this->necesidad('bl', [1120, 1580, 6584, 1548, 1111, 2500, 0]),
             ['bl' => 0]
         );
 
         $g = $r['bl'];
-        $this->assertSame([980, 800, -3334, -4882, -3193, -2893], $g['acumulado']);
+        $this->assertSame([980, 800, -3334, -4882, -3193, -2893, -2893], $g['acumulado']);
         $this->assertSame(-2893, $g['final']);
         $this->assertSame('falta', $g['estado']);
         $this->assertSame(2, $g['primer_dia_falta']);
@@ -67,13 +107,13 @@ class CalculadoraBalanceTest extends TestCase
 
     public function test_adelanto_de_2800_el_miercoles_deja_blanco_en_menos_93(): void
     {
-        $produccion = $this->produccion('bl', [2100, 1400, 2450, 0, 2800, 2800], 1);
+        $produccion = $this->produccion('bl', [2100, 1400, 2450, 0, 2800, 2800, 0], 1);
         $produccion[] = ['grupo' => 'bl', 'temporada_id' => 1, 'dia' => 2, 'cajas' => 2800];
 
         $r = CalculadoraBalance::calcular(
             ['bl' => ['cultivo_id' => 1]],
             $produccion,
-            $this->necesidad('bl', [1120, 1580, 6584, 1548, 1111, 2500]),
+            $this->necesidad('bl', [1120, 1580, 6584, 1548, 1111, 2500, 0]),
             ['bl' => 0]
         );
 
@@ -93,9 +133,9 @@ class CalculadoraBalanceTest extends TestCase
         );
 
         $g = $r['x'];
-        $this->assertSame([500, 500, 500, 500, 500, 500], $g['acumulado']);
-        $this->assertSame([0, 0, 0, 0, 0, 0], $g['produccion']);
-        $this->assertSame([0, 0, 0, 0, 0, 0], $g['necesidad']);
+        $this->assertSame([500, 500, 500, 500, 500, 500, 500], $g['acumulado']);
+        $this->assertSame([0, 0, 0, 0, 0, 0, 0], $g['produccion']);
+        $this->assertSame([0, 0, 0, 0, 0, 0, 0], $g['necesidad']);
         $this->assertSame(500, $g['inicial']);
         $this->assertSame(500, $g['final']);
         $this->assertSame('cubierto', $g['estado']);
@@ -127,7 +167,7 @@ class CalculadoraBalanceTest extends TestCase
             ['a' => 400]
         );
 
-        $this->assertSame([400, 100, 100, 100, 100, 100], $r['a']['acumulado']);
+        $this->assertSame([400, 100, 100, 100, 100, 100, 100], $r['a']['acumulado']);
         // Del día negativo pero el acumulado nunca: se cubre con inventario.
         $this->assertSame('cubre_inventario', $r['a']['estado']);
     }
@@ -141,7 +181,7 @@ class CalculadoraBalanceTest extends TestCase
             ['a' => 0]
         );
 
-        // acumulado = [-100, -100, -50, -50, -50, -50]
+        // acumulado = [-100, -100, -50, -50, -50, -50, -50]
         $this->assertSame(0, $r['a']['primer_dia_falta']);
         $this->assertSame(0, $r['a']['peor_dia']);
         $this->assertSame(-100, $r['a']['peor_valor']);
@@ -150,19 +190,19 @@ class CalculadoraBalanceTest extends TestCase
     public function test_produccion_por_temporada_separa_aportes(): void
     {
         $produccion = array_merge(
-            $this->produccion('a', [100, 0, 50, 0, 0, 10], 1),
-            $this->produccion('a', [20, 30, 0, 0, 5, 0], 2),
+            $this->produccion('a', [100, 0, 50, 0, 0, 10, 7], 1),
+            $this->produccion('a', [20, 30, 0, 0, 5, 0, 0], 2),
             // Sin temporada: va bajo la llave 'sin_temporada'.
-            $this->produccion('a', [1, 1, 1, 1, 1, 1], null)
+            $this->produccion('a', [1, 1, 1, 1, 1, 1, 1], null)
         );
 
         $r = CalculadoraBalance::calcular(['a' => ['cultivo_id' => 1]], $produccion, [], ['a' => 0]);
         $pt = $r['a']['produccion_por_temporada'];
 
-        $this->assertSame([100, 0, 50, 0, 0, 10], $pt[1]);
-        $this->assertSame([20, 30, 0, 0, 5, 0], $pt[2]);
-        $this->assertSame([1, 1, 1, 1, 1, 1], $pt['sin_temporada']);
-        $this->assertSame([121, 31, 51, 1, 6, 11], $r['a']['produccion']);
+        $this->assertSame([100, 0, 50, 0, 0, 10, 7], $pt[1]);
+        $this->assertSame([20, 30, 0, 0, 5, 0, 0], $pt[2]);
+        $this->assertSame([1, 1, 1, 1, 1, 1, 1], $pt['sin_temporada']);
+        $this->assertSame([121, 31, 51, 1, 6, 11, 8], $r['a']['produccion']);
     }
 
     public function test_las_claves_de_grupo_se_conservan_enteras_o_texto(): void
