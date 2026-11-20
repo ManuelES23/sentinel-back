@@ -4,6 +4,7 @@ namespace Tests\Feature\SplendidFarms\Administration\Planeacion;
 
 use App\Events\ProgramaSemanalUpdated;
 use App\Models\Planeacion\ProgramaInventarioInicial;
+use App\Models\Planeacion\ProgramaRendimiento;
 use App\Models\Planeacion\ProgramaSemanal;
 use App\Services\Planeacion\RegistroCambiosPrograma;
 use Illuminate\Broadcasting\Broadcasters\NullBroadcaster;
@@ -124,6 +125,29 @@ class TiempoRealYInventarioTest extends TestCase
         $this->putJson($url, ['grupo_clave' => $blanco])->assertStatus(422);
         Sanctum::actingAs($this->usuarioCon(['configuracion' => ['view'], 'plan-corte' => ['view', 'capturar']]));
         $this->putJson($url, ['grupo_clave' => $blanco, 'cajas' => null])->assertForbidden();
+    }
+
+    public function test_el_sobrante_de_la_semana_anterior_baja_el_inventario_arrastrado(): void
+    {
+        Sanctum::actingAs($this->usuarioCon(['tablero-semanal' => ['view']]));
+        $wk47 = ProgramaSemanal::create(['lunes' => '2026-11-16']);
+        // 4 ha de Amarillo al mínimo (500 cj/ha) = 2,000 cajas el lunes.
+        ProgramaRendimiento::create(['programa_id' => $wk47->id, 'temporada_id' => $this->temporada->id, 'variedad_id' => $this->variedades['Amarillo']->id, 'modo' => 'minimo']);
+        $this->corte($wk47, 'Amarillo', 0, 4);
+        $attrs = [
+            'bodega_id' => $this->bodega('Texas')->id,
+            'presentacion_id' => $this->presentacion('Bulk')->id,
+            'tipo_empaque_id' => $this->tipoEmpaque('RPC')->id,
+            'cajas_0' => 500,
+        ];
+        $this->crearSobrante($wk47, $attrs, [$this->variedades['Amarillo']->id]);
+
+        $ab = (string) $this->grupo('Amarillo / Bicolor')->id;
+        $balance = $this->getJson(self::URL.'?lunes=2026-11-23')->assertOk()->json('data.balance');
+
+        $this->assertSame(1500, $balance[$ab]['inicial']);
+        $this->assertSame('arrastrado', $balance[$ab]['inicial_origen']);
+        $this->assertSame(1500 + 10635, $balance[$ab]['final']);
     }
 
     public function test_inventario_inicial_rechaza_variedad_con_grupo(): void

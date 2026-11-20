@@ -100,6 +100,42 @@ class ResumenTemporadaTest extends TestCase
         $this->assertContains('Nogales', array_column($datos['bodegas'], 'nombre'));
     }
 
+    public function test_el_resumen_trae_el_sobrante_en_su_linea(): void
+    {
+        $p = ProgramaSemanal::create(['lunes' => '2026-11-23']);
+        $this->cargarWk48($p);
+        $nogales = $this->bodega('Nogales')->id;
+        $this->crearSobrante($p, [
+            'bodega_id' => $nogales,
+            'presentacion_id' => $this->presentacion('Bulk')->id,
+            'tipo_empaque_id' => $this->tipoEmpaque('Cartón')->id,
+            'cajas_0' => 300,
+        ], [$this->variedades['Blanco']->id]);
+        $this->comoPlaneacion();
+
+        $datos = $this->getJson($this->url())->assertOk()->json('data');
+        $s = $this->semanaDe($datos['semanas'], '2026-11-23');
+
+        $this->assertSame(300, $s['sobrante_por_bodega'][$nogales]);
+        $this->assertSame(0, $s['sobrante_por_bodega'][$this->bodega('Texas')->id]);
+        $this->assertSame(300, $s['sobrante_total']);
+        $this->assertSame(36483, $s['necesidad_total']);
+        $this->assertSame(29213, $s['necesidad_por_bodega'][$nogales]);
+        $this->assertSame(7742 - 300, $s['disponible']);
+        $this->assertSame(-2893 - 300, $s['disponible_por_grupo'][$this->grupo('Blanco')->id]);
+        $this->assertSame(7742 - 300, $s['inventario_final']);
+
+        $w49 = $this->semanaDe($datos['semanas'], '2026-11-30');
+        $this->assertSame(0, $w49['sobrante_total']);
+        $this->assertSame(0, $w49['sobrante_por_bodega'][$nogales]);
+
+        $t = $datos['totales'];
+        $this->assertSame(300, $t['sobrante_total']);
+        $this->assertSame(300, $t['sobrante_por_bodega'][$nogales]);
+        $this->assertSame(36483, $t['necesidad_total']);
+        $this->assertSame(7742 - 300, $t['disponible']);
+    }
+
     public function test_totales_suman_las_semanas_y_el_inventario_es_el_de_la_ultima(): void
     {
         $this->cargarWk48(ProgramaSemanal::create(['lunes' => '2026-11-23']));
