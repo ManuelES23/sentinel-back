@@ -263,6 +263,82 @@ class ExportarProgramaTest extends TestCase
         $this->assertEquals([0, 0, 0, 0, 0, 0, 3, 3], $this->dias($hoja, $this->fila($hoja, 'Total embarques')));
     }
 
+    /** Sobrante de Texas · Bulk · Amarillo · RPC: misma llave que un renglón de venta de la semana. */
+    private function sobranteDeTexas(ProgramaSemanal $programa, array $cajas = [1000, 0, 0, 0, 0, 0, 0]): void
+    {
+        $attrs = [
+            'bodega_id' => $this->bodega('Texas')->id,
+            'presentacion_id' => $this->presentacion('Bulk')->id,
+            'tipo_empaque_id' => $this->tipoEmpaque('RPC')->id,
+        ];
+        foreach ($cajas as $dia => $valor) {
+            $attrs["cajas_{$dia}"] = $valor;
+        }
+        $this->crearSobrante($programa, $attrs, [$this->variedades['Amarillo']->id]);
+    }
+
+    public function test_el_excel_trae_el_sobrante_en_empaque_y_balance(): void
+    {
+        $this->sobranteDeTexas($this->wk48());
+
+        $hoja = $this->libroDe($this->descargar()->assertOk())->getSheetByName('WK48');
+        $empaque = $this->fila($hoja, 'PROGRAMA DE EMPAQUE (se calcula de las necesidades)', 1, ['B']);
+        $texas = $this->fila($hoja, 'TEXAS', $empaque, ['B']);
+
+        // Dentro de su destino: «Sobrante · RPC» con 1,000 el lunes y en el total.
+        $sobrante = $this->fila($hoja, 'Sobrante · RPC', $texas, ['F']);
+        $this->assertSame('Bulk', $hoja->getCell('D'.$sobrante)->getValue());
+        $this->assertSame('Amarillo / Bicolor', $hoja->getCell('E'.$sobrante)->getValue());
+        $this->assertEquals([1000, 0, 0, 0, 0, 0, 0, 1000], $this->dias($hoja, $sobrante));
+        $this->assertLessThan($this->fila($hoja, 'Total empaque Texas', $texas), $sobrante);
+
+        // Suma al total del destino (6,270 de venta + 1,000) y no a «Sin clasificar».
+        $this->assertEquals(7270, $hoja->getCell('N'.$this->fila($hoja, 'Total empaque Texas'))->getValue());
+        $this->assertEquals(1000, $hoja->getCell('N'.$this->fila($hoja, 'Sin clasificar (debe ser 0)'))->getValue());
+        $this->assertEquals(35483 + 1000, $hoja->getCell('N'.$this->fila($hoja, 'Total empaque'))->getValue());
+
+        // Balance: «Sobrante asignado» justo debajo de «Necesidad» y antes de «Disponible del día».
+        $balance = $this->fila($hoja, 'BALANCE PRODUCCIÓN vs NECESIDAD', 1, ['B']);
+        $necesidad = $this->fila($hoja, 'Necesidad', $balance);
+        $this->assertSame('Sobrante asignado', $hoja->getCell('C'.($necesidad + 1))->getValue());
+        $this->assertSame('Disponible del día', $hoja->getCell('C'.($necesidad + 2))->getValue());
+        $this->assertEquals([1000, 0, 0, 0, 0, 0, 0, 1000], $this->dias($hoja, $necesidad + 1));
+        // La necesidad sigue siendo solo de ventas.
+        $this->assertEquals([8230, 2430, 7144, 10048, 2631, 6000, 0, 36483], $this->dias($hoja, $necesidad));
+    }
+
+    public function test_el_total_de_empaque_no_junta_el_sobrante_con_la_venta_de_misma_llave(): void
+    {
+        $this->sobranteDeTexas($this->wk48(), [1000, 0, 0, 0, 0, 0, 400]);
+        $payload = $this->getJson('/api/splendidfarms/administration/planeacion/programa?lunes=2026-11-23')->assertOk()->json('data');
+        $bulk = $this->presentacion('Bulk')->id;
+        $rpc = $this->tipoEmpaque('RPC')->id;
+        $ventas = collect($payload['empaque'])->filter(fn ($r) => $r['clase'] === 'ok' && $r['presentacion_id'] === $bulk
+            && $r['tipo_empaque_id'] === $rpc && (string) $r['grupo_id'] === (string) $this->grupo('Amarillo / Bicolor')->id);
+        $ventaCajas = $ventas->map(fn ($r) => array_sum($r['cajas']))->sum();
+        $this->assertGreaterThan(0, $ventaCajas);
+
+        $hoja = $this->libroDe($this->descargar()->assertOk())->getSheetByName('WK48');
+        $total = $this->fila($hoja, 'TOTAL', $this->fila($hoja, 'PROGRAMA DE EMPAQUE (se calcula de las necesidades)', 1, ['B']), ['B']);
+
+        // En el bloque TOTAL hay un renglón de venta (solo ventas) y uno de sobrante aparte.
+        $sobrante = $this->fila($hoja, 'Sobrante · RPC', $total, ['F']);
+        $this->assertEquals([1000, 0, 0, 0, 0, 0, 400, 1400], $this->dias($hoja, $sobrante));
+
+        $venta = null;
+        for ($f = $total; $f < $sobrante; $f++) {
+            if ($hoja->getCell('D'.$f)->getValue() === 'Bulk' && $hoja->getCell('E'.$f)->getValue() === 'Amarillo / Bicolor' && $hoja->getCell('F'.$f)->getValue() === 'RPC') {
+                $venta = $f;
+            }
+        }
+        $this->assertNotNull($venta, 'Falta el renglón de venta Bulk · Amarillo / Bicolor · RPC en el TOTAL.');
+        $this->assertEquals($ventaCajas, $hoja->getCell('N'.$venta)->getValue());
+
+        // 35,483 de venta clasificada + 1,400 de sobrante (el sin clasificar no entra).
+        $this->assertEquals(35483 + 1400,$hoja->getCell('N'.$this->fila($hoja, 'Total empaque'))->getValue());
+        $this->assertEquals(1000, $hoja->getCell('N'.$this->fila($hoja, 'Sin clasificar (debe ser 0)', $total))->getValue());
+    }
+
     public function test_cultivo_elegido_y_cultivo_inexistente(): void
     {
         $this->wk48();
