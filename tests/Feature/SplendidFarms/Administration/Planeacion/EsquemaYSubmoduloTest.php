@@ -10,13 +10,16 @@ use App\Models\Planeacion\ConfiguracionPlaneacion;
 use App\Models\Planeacion\GrupoBalance;
 use App\Models\Planeacion\Presentacion;
 use App\Models\Planeacion\ProgramaSemanal;
+use App\Models\Planeacion\ProgramaSobrante;
 use App\Models\Planeacion\TipoEmpaque;
 use App\Models\Temporada;
 use App\Models\User;
 use App\Models\Variedad;
 use App\Support\PermisoSubmodulo;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Tests\TestCase;
 
 /**
@@ -274,5 +277,48 @@ class EsquemaYSubmoduloTest extends TestCase
         $this->assertSame([100, 0, 0, 40, 0, 0, 25], $programa->necesidades[0]->cajasPorDia());
         $this->assertEqualsCanonicalizing(['Amarillo', 'Bicolor'], $programa->necesidades[0]->variedades->pluck('nombre')->all());
         $this->assertTrue($programa->acuerdos[0]->activo);
+    }
+
+    public function test_esquema_de_programa_sobrantes(): void
+    {
+        $usuario = User::factory()->create();
+        $cultivo = $this->sembrarElote();
+        $this->correr(self::MIGRACION_CATALOGOS);
+        $amarillo = Variedad::where('nombre', 'Amarillo')->first();
+        $bicolor = Variedad::where('nombre', 'Bicolor')->first();
+        $bodega = BodegaDestino::where('nombre', 'Texas')->first();
+        $presentacion = Presentacion::where('nombre', 'Bulk')->first();
+        $empaque = TipoEmpaque::where('nombre', 'RPC')->first();
+
+        foreach (range(0, 6) as $dia) {
+            $this->assertTrue(Schema::hasColumn('programa_sobrantes', "cajas_{$dia}"), "cajas_{$dia}");
+        }
+        $columnas = collect(Schema::getColumns('programa_sobrantes'))->keyBy('name');
+        $this->assertFalse($columnas['tipo_empaque_id']['nullable']);
+        $this->assertTrue(Schema::hasTable('programa_sobrante_variedad'));
+
+        $programa = ProgramaSemanal::create(['lunes' => '2026-11-23']);
+        $sobrante = $programa->sobrantes()->create([
+            'bodega_id' => $bodega->id, 'cultivo_id' => $cultivo->id,
+            'presentacion_id' => $presentacion->id, 'tipo_empaque_id' => $empaque->id,
+            'cajas_0' => 10, 'cajas_6' => 5, 'created_by' => $usuario->id,
+        ]);
+        $sobrante->variedades()->sync([$amarillo->id, $bicolor->id]);
+
+        $sobrante = ProgramaSobrante::findOrFail($sobrante->id);
+        $this->assertSame([10, 0, 0, 0, 0, 0, 5], $sobrante->cajasPorDia());
+        $this->assertEqualsCanonicalizing(['Amarillo', 'Bicolor'], $sobrante->variedades->pluck('nombre')->all());
+        $this->assertSame($programa->id, $sobrante->programa->id);
+        $this->assertSame('Texas', $sobrante->bodega->nombre);
+        $this->assertSame($cultivo->id, $sobrante->cultivo->id);
+        $this->assertSame('Bulk', $sobrante->presentacion->nombre);
+        $this->assertSame('RPC', $sobrante->tipoEmpaque->nombre);
+        $this->assertCount(1, $programa->fresh()->sobrantes);
+
+        // El tipo de empaque es obligatorio.
+        $this->expectException(QueryException::class);
+        $programa->sobrantes()->create([
+            'bodega_id' => $bodega->id, 'cultivo_id' => $cultivo->id, 'presentacion_id' => $presentacion->id,
+        ]);
     }
 }

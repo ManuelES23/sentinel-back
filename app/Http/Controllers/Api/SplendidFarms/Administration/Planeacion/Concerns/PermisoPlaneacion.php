@@ -10,8 +10,8 @@ use Illuminate\Support\Facades\Auth;
 
 /**
  * Permisos de los submódulos de Splendid Farms → Administración → Planeación
- * (Tablero semanal, Plan de corte, Necesidades de venta, Embarques, Resumen de
- * temporada y Configuración). Cada endpoint exige el par submódulo + permiso
+ * (Tablero semanal, Plan de corte, Necesidades de venta, Programa de empaque,
+ * Embarques, Resumen de temporada y Configuración). Cada endpoint exige el par submódulo + permiso
  * que le toca.
  */
 trait PermisoPlaneacion
@@ -26,6 +26,7 @@ trait PermisoPlaneacion
         'tablero-semanal' => ['tablero', ['view' => 'view', 'editar-notas' => 'editar_notas']],
         'plan-corte' => ['plan_corte', ['view' => 'view', 'capturar' => 'capturar']],
         'necesidades-venta' => ['necesidades', ['view' => 'view', 'capturar' => 'capturar']],
+        'programa-empaque' => ['programa_empaque', ['view' => 'view', 'capturar' => 'capturar']],
         'embarques' => ['embarques', ['view' => 'view', 'capturar' => 'capturar']],
         'resumen-temporada' => ['resumen', ['view' => 'view']],
         'configuracion' => ['configuracion', ['view' => 'view', 'editar' => 'editar']],

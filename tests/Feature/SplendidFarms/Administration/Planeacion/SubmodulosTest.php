@@ -11,6 +11,7 @@ use App\Models\User;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
 /**
@@ -20,11 +21,13 @@ use Tests\TestCase;
  */
 class SubmodulosTest extends TestCase
 {
+    use ConstruyePrograma;
     use RefreshDatabase;
 
     private const MIGRACION_VIEJA = '2026_10_28_100200_add_planeacion_programa_semanal_submodule.php';
     private const MIGRACION_MOVER = '2026_10_30_100000_mover_planeacion_a_administracion.php';
     private const MIGRACION_DIVIDIR = '2026_11_11_100100_dividir_planeacion_en_submodulos.php';
+    private const MIGRACION_EMPAQUE = '2026_11_20_110100_add_programa_empaque_submodulo.php';
 
     private const SUBMODULOS = [
         'tablero-semanal' => ['view', 'editar-notas'],
@@ -247,6 +250,81 @@ class SubmodulosTest extends TestCase
         $this->assertSame(['programa-semanal'], $slugs);
         $this->assertTrue((bool) DB::table('submodules')->where('slug', 'programa-semanal')->value('is_active'));
         $this->assertSame(0, DB::table('submodule_permission_types')->whereIn('slug', ['editar-notas', 'capturar', 'editar'])->count());
+    }
+
+    public function test_crea_el_submodulo_programa_empaque_despues_de_necesidades(): void
+    {
+        $moduloId = $this->sembrarEstructura();
+        $admin = User::factory()->create(['email' => 'admin@sentinel.com']);
+        $demo = User::factory()->create(['email' => 'demo@sentinel.com']);
+        $this->correr(self::MIGRACION_DIVIDIR);
+        $ordenNecesidades = (int) DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'necesidades-venta')->value('order');
+        $ordenEmbarquesAntes = (int) DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'embarques')->value('order');
+
+        $this->correr(self::MIGRACION_EMPAQUE);
+        $this->correr(self::MIGRACION_EMPAQUE);
+
+        $submodulos = DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'programa-empaque')->get();
+        $this->assertCount(1, $submodulos);
+        $empaque = $submodulos[0];
+        $this->assertSame('Programa de empaque', $empaque->name);
+        $this->assertSame('Empaque y destino del sobrante de la semana', $empaque->description);
+        $this->assertSame('PackageOpen', $empaque->icon);
+        $this->assertTrue((bool) $empaque->is_active);
+        $this->assertSame($ordenNecesidades + 1, (int) $empaque->order);
+
+        // Los siguientes se recorren una posición, una sola vez aunque se corra dos veces.
+        $this->assertSame($ordenEmbarquesAntes + 1, (int) DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'embarques')->value('order'));
+        $this->assertSame(
+            ['tablero-semanal', 'plan-corte', 'necesidades-venta', 'programa-empaque', 'embarques', 'resumen-temporada', 'configuracion'],
+            DB::table('submodules')->where('module_id', $moduloId)->where('is_active', true)->orderBy('order')->pluck('slug')->all(),
+        );
+
+        $permisos = DB::table('submodule_permission_types')->where('submodule_id', $empaque->id)->orderBy('order')->get();
+        $this->assertSame(['view', 'capturar'], $permisos->pluck('slug')->all());
+        $this->assertSame(['Ver', 'Capturar'], $permisos->pluck('name')->all());
+        $this->assertSame(['Ver el programa de empaque', 'Capturar el empaque del sobrante'], $permisos->pluck('description')->all());
+
+        foreach ([$admin, $demo] as $usuario) {
+            $this->assertEqualsCanonicalizing(['view', 'capturar'], $this->concedidos($usuario, 'programa-empaque'));
+            $this->assertTrue($this->conAcceso($usuario, 'programa-empaque'));
+        }
+    }
+
+    public function test_programa_empaque_sin_planeacion_no_falla(): void
+    {
+        $this->correr(self::MIGRACION_EMPAQUE);
+
+        $this->assertSame(0, DB::table('submodules')->where('slug', 'programa-empaque')->count());
+    }
+
+    public function test_down_de_programa_empaque_lo_quita_y_recorre_los_siguientes(): void
+    {
+        $moduloId = $this->sembrarEstructura();
+        $admin = User::factory()->create(['email' => 'admin@sentinel.com']);
+        $this->correr(self::MIGRACION_DIVIDIR);
+        $ordenEmbarquesAntes = (int) DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'embarques')->value('order');
+
+        $this->correr(self::MIGRACION_EMPAQUE);
+        (require base_path('database/migrations/'.self::MIGRACION_EMPAQUE))->down();
+
+        $this->assertSame(0, DB::table('submodules')->where('slug', 'programa-empaque')->count());
+        $this->assertSame([], $this->concedidos($admin, 'programa-empaque'));
+        $this->assertFalse($this->conAcceso($admin, 'programa-empaque'));
+        $this->assertSame($ordenEmbarquesAntes, (int) DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'embarques')->value('order'));
+        $this->assertSame(0, DB::table('submodule_permission_types')->where('description', 'Ver el programa de empaque')->count());
+    }
+
+    public function test_payload_trae_permisos_de_programa_empaque(): void
+    {
+        $this->crearElote();
+        Sanctum::actingAs($this->usuarioCon(['programa-empaque' => ['view']]));
+
+        $respuesta = $this->getJson('/api/splendidfarms/administration/planeacion/programa?lunes=2026-11-23');
+
+        $respuesta->assertOk();
+        $this->assertTrue($respuesta->json('data.permisos.programa_empaque.view'));
+        $this->assertFalse($respuesta->json('data.permisos.programa_empaque.capturar'));
     }
 
     public function test_programa_embarques_rechaza_celda_duplicada(): void

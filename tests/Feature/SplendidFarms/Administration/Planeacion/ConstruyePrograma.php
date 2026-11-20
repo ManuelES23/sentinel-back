@@ -169,6 +169,11 @@ trait ConstruyePrograma
             $this->correrMigracion('2026_11_11_100100_dividir_planeacion_en_submodulos.php');
         }
 
+        // El submódulo «Programa de empaque» (después de Necesidades de venta) lo agrega otra migración.
+        if (! DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'programa-empaque')->exists()) {
+            $this->correrMigracion('2026_11_20_110100_add_programa_empaque_submodulo.php');
+        }
+
         $usuario = User::factory()->create();
 
         foreach ($permisosPorSubmodulo as $submodulo => $permisos) {

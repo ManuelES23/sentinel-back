@@ -33,6 +33,11 @@ class ProgramaSemanal extends Model
         return $this->hasMany(ProgramaNecesidad::class, 'programa_id');
     }
 
+    public function sobrantes(): HasMany
+    {
+        return $this->hasMany(ProgramaSobrante::class, 'programa_id');
+    }
+
     public function viajes(): HasMany
     {
         return $this->hasMany(ProgramaViaje::class, 'programa_id');

@@ -27,6 +27,7 @@ class ProgramaSemanalController extends Controller
             ['tablero-semanal', 'view'],
             ['plan-corte', 'view'],
             ['necesidades-venta', 'view'],
+            ['programa-empaque', 'view'],
             ['embarques', 'view'],
         ]);
 
