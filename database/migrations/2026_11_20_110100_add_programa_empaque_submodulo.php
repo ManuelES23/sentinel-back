@@ -9,7 +9,8 @@ use Illuminate\Support\Facades\DB;
  * recorren una posición. admin@ y demo@ reciben acceso y los dos permisos.
  *
  * Es idempotente (el recorrido de orden solo ocurre al crear el submódulo) y no
- * hace nada si Planeación no existe todavía.
+ * hace nada si Planeación no existe todavía o si aún no existe «Necesidades de
+ * venta» (debe correr después de 2026_11_11_100100_dividir_planeacion_en_submodulos).
  */
 return new class extends Migration
 {
@@ -31,11 +32,14 @@ return new class extends Migration
 
         $submoduloId = DB::table('submodules')->where('module_id', $moduloId)->where('slug', self::SLUG)->value('id');
         if (! $submoduloId) {
-            // Orden de «Necesidades de venta»; sin él, al final de los activos.
+            // Debe correr DESPUÉS de 2026_11_11_100100_dividir_planeacion_en_submodulos: sin «Necesidades
+            // de venta» el submódulo caería al final del menú y la división, al insertar sus seis con
+            // order 1..6, dejaría órdenes repetidos. Sin él no se hace nada (se vuelve a correr después).
             $orden = DB::table('submodules')->where('module_id', $moduloId)->where('slug', self::DESPUES_DE)->value('order');
-            $orden = $orden !== null
-                ? (int) $orden + 1
-                : (int) DB::table('submodules')->where('module_id', $moduloId)->max('order') + 1;
+            if ($orden === null) {
+                return;
+            }
+            $orden = (int) $orden + 1;
 
             DB::table('submodules')
                 ->where('module_id', $moduloId)

@@ -13,6 +13,7 @@ use App\Models\Planeacion\Presentacion;
 use App\Models\Planeacion\ProgramaEmbarque;
 use App\Models\Planeacion\ProgramaNecesidad;
 use App\Models\Planeacion\ProgramaSemanal;
+use App\Models\Planeacion\ProgramaSobrante;
 use App\Models\Planeacion\ProgramaViaje;
 use App\Models\Planeacion\RecetaCombinacion;
 use App\Models\Planeacion\RendimientoVariedad;
@@ -545,6 +546,48 @@ class ConfiguracionTest extends TestCase
 
         $this->assertSame(1, RecetaCombinacion::count());
         $this->assertSame(1, ProgramaNecesidad::count());
+    }
+
+    /**
+     * @return array<string, array{0: string, 1: string}> catálogo en la URL y columna del sobrante que lo usa
+     */
+    public static function catalogosDeSobrante(): array
+    {
+        return [
+            'bodega' => ['bodegas', 'bodega_id'],
+            'presentación' => ['presentaciones', 'presentacion_id'],
+            'tipo de empaque' => ['tipos-empaque', 'tipo_empaque_id'],
+        ];
+    }
+
+    /**
+     * @dataProvider catalogosDeSobrante
+     */
+    public function test_borrar_un_catalogo_que_solo_usa_un_sobrante_es_422(string $catalogo, string $columna): void
+    {
+        $this->conPermisos();
+        $programa = ProgramaSemanal::create(['lunes' => '2026-11-23']);
+
+        // Un elemento nuevo del catálogo que solo ocupa un sobrante (las FK son restrictOnDelete).
+        $cuerpo = ['nombre' => 'Solo sobrante'] + ($catalogo === 'presentaciones' ? ['cultivo_id' => $this->cultivo->id] : []);
+        $id = $this->postJson(self::URL.'/configuracion/'.$catalogo, $cuerpo)->assertCreated()->json('data.id');
+
+        $attrs = [
+            'bodega_id' => $this->bodega('Texas')->id,
+            'presentacion_id' => $this->presentacion('Bulk')->id,
+            'tipo_empaque_id' => $this->tipoEmpaque('RPC')->id,
+            'cajas_0' => 100,
+        ];
+        $attrs[$columna] = $id;
+        $this->crearSobrante($programa, $attrs, [$this->variedades['Amarillo']->id]);
+
+        $this->deleteJson(self::URL.'/configuracion/'.$catalogo.'/'.$id)
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Está en uso; desactívalo');
+
+        $tabla = ['bodegas' => 'plan_bodegas_destino', 'presentaciones' => 'plan_presentaciones', 'tipos-empaque' => 'plan_tipos_empaque'][$catalogo];
+        $this->assertDatabaseHas($tabla, ['id' => $id]);
+        $this->assertSame(1, ProgramaSobrante::count());
     }
 
     public function test_la_configuracion_no_emite_evento(): void

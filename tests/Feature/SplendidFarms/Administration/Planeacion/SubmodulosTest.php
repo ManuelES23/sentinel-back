@@ -298,6 +298,29 @@ class SubmodulosTest extends TestCase
         $this->assertSame(0, DB::table('submodules')->where('slug', 'programa-empaque')->count());
     }
 
+    public function test_programa_empaque_espera_a_que_exista_necesidades_de_venta(): void
+    {
+        $moduloId = $this->sembrarEstructura();
+        User::factory()->create(['email' => 'admin@sentinel.com']);
+
+        // Planeación sin los seis submódulos (la división todavía no corrió): no hace nada ni falla.
+        $this->correr(self::MIGRACION_EMPAQUE);
+
+        $this->assertSame(0, DB::table('submodules')->where('slug', 'programa-empaque')->count());
+        $this->assertSame(['programa-semanal'], DB::table('submodules')->where('module_id', $moduloId)->pluck('slug')->all());
+
+        // Con la división ya corrida y vuelta a correr, lo crea justo después de «Necesidades de venta».
+        $this->correr(self::MIGRACION_DIVIDIR);
+        $ordenNecesidades = (int) DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'necesidades-venta')->value('order');
+        $this->correr(self::MIGRACION_EMPAQUE);
+
+        $empaque = DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'programa-empaque')->first();
+        $this->assertNotNull($empaque);
+        $this->assertSame($ordenNecesidades + 1, (int) $empaque->order);
+        $ordenes = DB::table('submodules')->where('module_id', $moduloId)->where('is_active', true)->pluck('order')->all();
+        $this->assertSame(count($ordenes), count(array_unique($ordenes)), 'Los órdenes no se repiten.');
+    }
+
     public function test_down_de_programa_empaque_lo_quita_y_recorre_los_siguientes(): void
     {
         $moduloId = $this->sembrarEstructura();

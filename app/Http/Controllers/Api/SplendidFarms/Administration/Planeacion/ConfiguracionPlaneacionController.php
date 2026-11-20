@@ -52,15 +52,15 @@ class ConfiguracionPlaneacionController extends Controller
     private const CATALOGOS = [
         'bodegas' => [
             'modelo' => BodegaDestino::class,
-            'usos' => [['programa_necesidades', 'bodega_id'], ['programa_embarques', 'bodega_id'], ['programa_viajes', 'bodega_id']],
+            'usos' => [['programa_necesidades', 'bodega_id'], ['programa_sobrantes', 'bodega_id'], ['programa_embarques', 'bodega_id'], ['programa_viajes', 'bodega_id']],
         ],
         'presentaciones' => [
             'modelo' => Presentacion::class,
-            'usos' => [['programa_necesidades', 'presentacion_id'], ['plan_recetas_combinacion', 'presentacion_id']],
+            'usos' => [['programa_necesidades', 'presentacion_id'], ['programa_sobrantes', 'presentacion_id'], ['plan_recetas_combinacion', 'presentacion_id']],
         ],
         'tipos-empaque' => [
             'modelo' => TipoEmpaque::class,
-            'usos' => [['programa_necesidades', 'tipo_empaque_id'], ['plan_recetas_combinacion', 'tipo_empaque_id']],
+            'usos' => [['programa_necesidades', 'tipo_empaque_id'], ['programa_sobrantes', 'tipo_empaque_id'], ['plan_recetas_combinacion', 'tipo_empaque_id']],
         ],
     ];
 
