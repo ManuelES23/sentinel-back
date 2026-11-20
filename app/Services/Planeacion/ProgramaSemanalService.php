@@ -18,8 +18,8 @@ use Illuminate\Validation\ValidationException;
 
 /**
  * Arma el Programa semanal: el payload completo de `GET planeacion/programa`
- * (corte, etapas, necesidades, empaque por destino, embarques, balance por
- * grupo y clientes previos) y el balance de cualquier semana, con el
+ * (corte, etapas, necesidades, sobrante asignado, empaque por destino,
+ * embarques, balance por grupo y clientes previos) y el balance de cualquier semana, con el
  * inventario inicial arrastrado en cadena desde las semanas anteriores.
  *
  * Una instancia vive lo que dura la petición: los catálogos y los balances
@@ -142,6 +142,7 @@ class ProgramaSemanalService
             ->orderBy('cultivo_id')->orderBy('bodega_id')->orderBy('tipo')->orderBy('dia')
             ->get(['cultivo_id', 'bodega_id', 'tipo', 'dia', 'cargas']);
         $necesidades = $plan->necesidades();
+        $sobrantes = $plan->sobrantes();
 
         $cultivoIds = array_values(array_unique(array_merge(
             $temporadas->pluck('cultivo_id')->map(fn ($id) => (int) $id)->all(),
@@ -187,6 +188,7 @@ class ProgramaSemanalService
                 'notas' => $c->notas,
             ])->values()->all(),
             'necesidades' => array_map(fn ($n) => $this->necesidadPayload($n), $necesidades),
+            'sobrantes' => array_map(fn ($s) => $this->sobrantePayload($s), $sobrantes),
             'embarques' => $embarques->map(fn (ProgramaEmbarque $e) => [
                 'cultivo_id' => $e->cultivo_id,
                 'bodega_id' => $e->bodega_id,
@@ -195,7 +197,7 @@ class ProgramaSemanalService
                 'cargas' => $e->cargas,
             ])->values()->all(),
             'balance' => $balance,
-            'empaque' => $this->secciones->empaque($necesidades),
+            'empaque' => $this->secciones->empaque($necesidades, $sobrantes),
             'clientes_previos' => $this->secciones->clientesPrevios($lunes, $necesidades),
         ];
     }
@@ -285,6 +287,7 @@ class ProgramaSemanalService
             $plan->produccion(),
             PlanSemana::renglonesNecesidad($plan->necesidades()),
             $inicial,
+            PlanSemana::renglonesNecesidad($plan->sobrantes()),
         );
         foreach ($balance as $clave => $g) {
             // Capturado a mano o arrastrado del programa anterior; con el valor
@@ -407,6 +410,22 @@ class ProgramaSemanalService
             'presentacion_id' => $n->presentacion_id,
             'tipo_empaque_id' => $n->tipo_empaque_id,
             'variedad_ids' => $n->variedades->pluck('id')->map(fn ($id) => (int) $id)->sort()->values()->all(),
+            'grupo_id' => $renglon['grupo'] !== null ? CatalogoPlaneacion::idPublico($renglon['grupo']) : null,
+            'cajas' => $renglon['cajas'],
+        ];
+    }
+
+    private function sobrantePayload(array $renglon): array
+    {
+        $s = $renglon['sobrante'];
+
+        return [
+            'id' => $renglon['id'],
+            'bodega_id' => $s->bodega_id,
+            'cultivo_id' => $s->cultivo_id,
+            'presentacion_id' => $s->presentacion_id,
+            'tipo_empaque_id' => $s->tipo_empaque_id,
+            'variedad_ids' => $s->variedades->pluck('id')->map(fn ($id) => (int) $id)->sort()->values()->all(),
             'grupo_id' => $renglon['grupo'] !== null ? CatalogoPlaneacion::idPublico($renglon['grupo']) : null,
             'cajas' => $renglon['cajas'],
         ];

@@ -4,6 +4,7 @@ namespace App\Services\Planeacion;
 
 use App\Models\Planeacion\ProgramaNecesidad;
 use App\Models\Planeacion\ProgramaSemanal;
+use App\Models\Planeacion\ProgramaSobrante;
 use Illuminate\Support\Carbon;
 
 /**
@@ -14,39 +15,49 @@ class SeccionesSemana
 {
     private const SEMANAS_CLIENTES_PREVIOS = 4;
 
-    /** Orden de las clases de empaque: las clasificadas primero, «sin_clasificar» al final. */
-    private const ORDEN_CLASE = ['ok' => 0, 'sin_clasificar' => 1];
+    /** Orden de las clases de empaque: ventas clasificadas, sobrante y «sin_clasificar» al final. */
+    private const ORDEN_CLASE = ['ok' => 0, 'sobrante' => 1, 'sin_clasificar' => 2];
 
     /**
      * Programa de empaque: necesidades por destino (bodega), presentación,
      * grupo de balance y tipo de empaque. Los renglones sin empaque caen en
      * «sin_clasificar» con `tipo_empaque_id` null (en el Excel deben dar 0).
+     * El sobrante asignado sale en sus propios renglones (`clase = sobrante`),
+     * nunca juntos con los de venta aunque compartan la llave.
      *
      * @param  list<array{necesidad: ProgramaNecesidad, grupo: ?string, cajas: int[]}>  $necesidades  Salida de PlanSemana::necesidades().
+     * @param  list<array{sobrante: ProgramaSobrante, grupo: ?string, cajas: int[]}>  $sobrantes  Salida de PlanSemana::sobrantes().
      * @return list<array{bodega_id: int, presentacion_id: int, grupo_id: int|string|null, tipo_empaque_id: ?int, clase: string, cajas: int[]}>
      */
-    public function empaque(array $necesidades): array
+    public function empaque(array $necesidades, array $sobrantes = []): array
     {
         $renglones = [];
-        foreach ($necesidades as $renglon) {
-            if (array_sum($renglon['cajas']) === 0) {
-                continue;
+        $agregar = function (string $origen, ProgramaNecesidad|ProgramaSobrante $n, ?string $grupo, array $cajasPorDia, string $clase) use (&$renglones) {
+            if (array_sum($cajasPorDia) === 0) {
+                return;
             }
 
-            $n = $renglon['necesidad'];
-            $llave = implode('|', [$n->bodega_id, $n->presentacion_id, $renglon['grupo'], $n->tipo_empaque_id]);
+            $llave = implode('|', [$origen, $n->bodega_id, $n->presentacion_id, $grupo, $n->tipo_empaque_id]);
 
             $renglones[$llave] ??= [
                 'bodega_id' => $n->bodega_id,
                 'presentacion_id' => $n->presentacion_id,
-                'grupo_id' => $renglon['grupo'] !== null ? CatalogoPlaneacion::idPublico($renglon['grupo']) : null,
+                'grupo_id' => $grupo !== null ? CatalogoPlaneacion::idPublico($grupo) : null,
                 'tipo_empaque_id' => $n->tipo_empaque_id,
-                'clase' => $n->tipo_empaque_id === null ? 'sin_clasificar' : 'ok',
+                'clase' => $clase,
                 'cajas' => array_fill(0, CalculadoraBalance::DIAS, 0),
             ];
-            foreach ($renglon['cajas'] as $dia => $cajas) {
+            foreach ($cajasPorDia as $dia => $cajas) {
                 $renglones[$llave]['cajas'][$dia] += $cajas;
             }
+        };
+
+        foreach ($necesidades as $renglon) {
+            $n = $renglon['necesidad'];
+            $agregar('venta', $n, $renglon['grupo'], $renglon['cajas'], $n->tipo_empaque_id === null ? 'sin_clasificar' : 'ok');
+        }
+        foreach ($sobrantes as $renglon) {
+            $agregar('sobrante', $renglon['sobrante'], $renglon['grupo'], $renglon['cajas'], 'sobrante');
         }
 
         $salida = array_values($renglones);

@@ -13,6 +13,7 @@ use App\Models\Planeacion\Presentacion;
 use App\Models\Planeacion\ProgramaCorte;
 use App\Models\Planeacion\ProgramaNecesidad;
 use App\Models\Planeacion\ProgramaSemanal;
+use App\Models\Planeacion\ProgramaSobrante;
 use App\Models\Planeacion\RendimientoVariedad;
 use App\Models\Planeacion\TipoEmpaque;
 use App\Models\Productor;
@@ -169,6 +170,11 @@ trait ConstruyePrograma
             $this->correrMigracion('2026_11_11_100100_dividir_planeacion_en_submodulos.php');
         }
 
+        // El submódulo «Programa de empaque» (después de Necesidades de venta) lo agrega otra migración.
+        if (! DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'programa-empaque')->exists()) {
+            $this->correrMigracion('2026_11_20_110100_add_programa_empaque_submodulo.php');
+        }
+
         $usuario = User::factory()->create();
 
         foreach ($permisosPorSubmodulo as $submodulo => $permisos) {
@@ -239,6 +245,21 @@ trait ConstruyePrograma
         $necesidad->variedades()->attach(array_map(fn ($n) => $this->variedades[$n]->id, $variedades));
 
         return $necesidad;
+    }
+
+    /**
+     * Renglón de sobrante del Programa de empaque. `$attrs` trae las columnas
+     * (bodega_id, presentacion_id, tipo_empaque_id, cajas_0…cajas_6); el
+     * cultivo es el elote si no se indica.
+     *
+     * @param  int[]  $variedadIds
+     */
+    protected function crearSobrante(ProgramaSemanal $p, array $attrs, array $variedadIds): ProgramaSobrante
+    {
+        $sobrante = ProgramaSobrante::create(array_merge(['cultivo_id' => $this->cultivo->id], $attrs, ['programa_id' => $p->id]));
+        $sobrante->variedades()->attach($variedadIds);
+
+        return $sobrante;
     }
 
     protected function corte(ProgramaSemanal $p, string $variedad, int $dia, float $hectareas, ?Etapa $etapa = null): ProgramaCorte

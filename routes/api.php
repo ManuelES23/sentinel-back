@@ -247,6 +247,9 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::put('programa/{programa}/necesidades/hoja', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\HojaNecesidadesController::class, 'guardar']);
                 Route::post('programa/{programa}/necesidades/copiar-anterior', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ProgramaNecesidadController::class, 'copiarAnterior']);
 
+                // Hoja de sobrantes del Programa de empaque (guardado en lote; programa-empaque.capturar)
+                Route::put('programa/{programa}/sobrantes/hoja', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\HojaSobrantesController::class, 'guardar']);
+
                 // Hoja de embarques por cargas (embarques.capturar) y notas de la semana (tablero-semanal.editar-notas)
                 Route::put('programa/{programa}/embarques/hoja', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\HojaEmbarquesController::class, 'guardar']);
                 Route::put('programa/{programa}/notas', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\NotasProgramaController::class, 'guardar']);

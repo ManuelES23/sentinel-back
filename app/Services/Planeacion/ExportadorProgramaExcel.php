@@ -272,7 +272,9 @@ class ExportadorProgramaExcel
 
     /**
      * 4. PROGRAMA DE EMPAQUE — presentación × color × empaque por destino y en
-     * total. Lo que no tiene empaque va aparte en «Sin clasificar (debe ser 0)».
+     * total. El sobrante asignado sale dentro de su destino como «Sobrante · empaque»
+     * y suma al total del destino. Lo que no tiene empaque va aparte en
+     * «Sin clasificar (debe ser 0)».
      */
     private function escribirEmpaque(array $semana, array $grupos, ?int $cultivoId, array $dias): void
     {
@@ -294,10 +296,11 @@ class ExportadorProgramaExcel
             $bloques[] = [mb_strtoupper($bodega['nombre']), $bodega['nombre'], $porBodega[$bodega['id']] ?? []];
         }
 
-        // Total de todos los destinos: mismos renglones sumados por presentación, color y empaque.
+        // Total de todos los destinos: mismos renglones sumados por presentación, color, empaque y clase
+        // (un sobrante nunca se junta con la venta de la misma llave).
         $juntos = [];
         foreach ($renglones as $r) {
-            $llave = implode('|', [$r['presentacion_id'], $r['grupo_id'], $r['tipo_empaque_id']]);
+            $llave = implode('|', [$r['clase'], $r['presentacion_id'], $r['grupo_id'], $r['tipo_empaque_id']]);
             $juntos[$llave] ??= ['cajas' => array_fill(0, 7, 0)] + $r;
             foreach ($r['cajas'] as $d => $valor) {
                 $juntos[$llave]['cajas'][$d] += $valor;
@@ -308,22 +311,28 @@ class ExportadorProgramaExcel
         foreach ($bloques as [$titulo, $nombreBodega, $filas]) {
             $this->encabezado(['B' => $titulo, 'D' => 'PRESENT', 'E' => 'COLOR', 'F' => 'EMPAQUE'] + $this->fechasComoEncabezado($dias));
 
-            $clasificadas = array_values(array_filter($filas, fn ($r) => $r['clase'] === 'ok'));
-            usort($clasificadas, fn ($a, $b) => [
-                $ordenPresentacion[$a['presentacion_id']] ?? 0,
-                $ordenGrupo[$a['grupo_id']] ?? 0,
-                $ordenEmpaque[$a['tipo_empaque_id']] ?? 0,
-            ] <=> [
-                $ordenPresentacion[$b['presentacion_id']] ?? 0,
-                $ordenGrupo[$b['grupo_id']] ?? 0,
-                $ordenEmpaque[$b['tipo_empaque_id']] ?? 0,
-            ]);
+            // Ventas (ok) primero y después los sobrantes, cada grupo en el orden del catálogo.
+            $clasificadas = [];
+            foreach (['ok', 'sobrante'] as $clase) {
+                $deClase = array_values(array_filter($filas, fn ($r) => $r['clase'] === $clase));
+                usort($deClase, fn ($a, $b) => [
+                    $ordenPresentacion[$a['presentacion_id']] ?? 0,
+                    $ordenGrupo[$a['grupo_id']] ?? 0,
+                    $ordenEmpaque[$a['tipo_empaque_id']] ?? 0,
+                ] <=> [
+                    $ordenPresentacion[$b['presentacion_id']] ?? 0,
+                    $ordenGrupo[$b['grupo_id']] ?? 0,
+                    $ordenEmpaque[$b['tipo_empaque_id']] ?? 0,
+                ]);
+                array_push($clasificadas, ...$deClase);
+            }
 
             $total = array_fill(0, 7, 0);
             foreach ($clasificadas as $r) {
+                $empaque = $this->tiposEmpaque[$r['tipo_empaque_id']]['nombre'] ?? '';
                 $this->texto('D'.$this->fila, $this->presentaciones[$r['presentacion_id']]['nombre'] ?? '');
                 $this->texto('E'.$this->fila, $nombreGrupo[$r['grupo_id']] ?? '');
-                $this->texto('F'.$this->fila, $this->tiposEmpaque[$r['tipo_empaque_id']]['nombre'] ?? '');
+                $this->texto('F'.$this->fila, $r['clase'] === 'sobrante' ? 'Sobrante'.($empaque !== '' ? ' · '.$empaque : '') : $empaque);
                 $this->filaDeDias($r['cajas']);
                 foreach ($r['cajas'] as $d => $valor) {
                     $total[$d] += $valor;
@@ -333,7 +342,7 @@ class ExportadorProgramaExcel
 
             $sinClasificar = array_fill(0, 7, 0);
             foreach ($filas as $r) {
-                if ($r['clase'] !== 'ok') {
+                if (! in_array($r['clase'], ['ok', 'sobrante'], true)) {
                     foreach ($r['cajas'] as $d => $valor) {
                         $sinClasificar[$d] += $valor;
                     }
@@ -355,13 +364,13 @@ class ExportadorProgramaExcel
         }
     }
 
-    /** 5. BALANCE — producción, necesidad, disponible del día e inventario acumulado, más el acumulado por grupo. */
+    /** 5. BALANCE — producción, necesidad (solo ventas), sobrante asignado, disponible del día e inventario acumulado, más el acumulado por grupo. */
     private function escribirBalance(array $semana, array $grupos, array $dias): void
     {
         $this->titulo(self::SECCIONES['balance']);
         $this->encabezado(['C' => 'CONCEPTO'] + $this->fechasComoEncabezado($dias));
 
-        $produccion = $necesidad = $delDia = $acumulado = array_fill(0, 7, 0);
+        $produccion = $necesidad = $sobrante = $delDia = $acumulado = array_fill(0, 7, 0);
         $inicial = 0;
         $balances = [];
         foreach ($grupos as $g) {
@@ -374,12 +383,13 @@ class ExportadorProgramaExcel
             foreach (range(0, 6) as $d) {
                 $produccion[$d] += $b['produccion'][$d];
                 $necesidad[$d] += $b['necesidad'][$d];
+                $sobrante[$d] += $b['sobrante_asignado'][$d] ?? 0;
                 $delDia[$d] += $b['del_dia'][$d];
                 $acumulado[$d] += $b['acumulado'][$d];
             }
         }
 
-        foreach (['Producción' => $produccion, 'Necesidad' => $necesidad, 'Disponible del día' => $delDia] as $concepto => $valores) {
+        foreach (['Producción' => $produccion, 'Necesidad' => $necesidad, 'Sobrante asignado' => $sobrante, 'Disponible del día' => $delDia] as $concepto => $valores) {
             $this->texto('C'.$this->fila, $concepto);
             $this->filaDeDias($valores);
             $this->fila++;
@@ -407,23 +417,25 @@ class ExportadorProgramaExcel
     private function escribirPorColor(array $semana, array $grupos, int $cajasPorCarga): void
     {
         $this->titulo(self::SECCIONES['color']);
-        $this->encabezado(['C' => 'COLOR', 'D' => 'PRODUCCIÓN', 'E' => 'NECESIDAD', 'F' => 'DISPONIBLE', 'G' => 'CARGAS EQ.']);
-        $this->texto('H'.($this->fila - 1), 'Cargas eq. = disponible ÷ cajas por carga ('.number_format($cajasPorCarga).')');
-        $this->hoja->getStyle('H'.($this->fila - 1))->getFont()->setItalic(true);
+        $this->encabezado(['C' => 'COLOR', 'D' => 'PRODUCCIÓN', 'E' => 'NECESIDAD', 'F' => 'SOBRANTE', 'G' => 'DISPONIBLE', 'H' => 'CARGAS EQ.']);
+        $this->texto('I'.($this->fila - 1), 'Necesidad = solo ventas · Disponible = producción − necesidad − sobrante asignado · Cargas eq. = disponible ÷ cajas por carga ('.number_format($cajasPorCarga).')');
+        $this->hoja->getStyle('I'.($this->fila - 1))->getFont()->setItalic(true);
 
-        $total = ['produccion' => 0, 'necesidad' => 0];
+        $total = ['produccion' => 0, 'necesidad' => 0, 'sobrante' => 0];
         foreach ($grupos as $g) {
             if (! isset($semana['balance'][$g['id']])) {
                 continue;
             }
             $b = $semana['balance'][$g['id']];
-            $this->filaDeColor($g['nombre'], array_sum($b['produccion']), array_sum($b['necesidad']), $cajasPorCarga);
+            $sobrante = array_sum($b['sobrante_asignado'] ?? []);
+            $this->filaDeColor($g['nombre'], array_sum($b['produccion']), array_sum($b['necesidad']), $sobrante, $cajasPorCarga);
             $total['produccion'] += array_sum($b['produccion']);
             $total['necesidad'] += array_sum($b['necesidad']);
+            $total['sobrante'] += $sobrante;
         }
 
-        $this->filaDeColor('Total', $total['produccion'], $total['necesidad'], $cajasPorCarga);
-        $this->negritas('C'.($this->fila - 1).':G'.($this->fila - 1), true);
+        $this->filaDeColor('Total', $total['produccion'], $total['necesidad'], $total['sobrante'], $cajasPorCarga);
+        $this->negritas('C'.($this->fila - 1).':H'.($this->fila - 1), true);
         $this->fila++;
     }
 
@@ -617,15 +629,16 @@ class ExportadorProgramaExcel
         $this->celdaNumerica(self::COLUMNA_TOTAL.$this->fila, $total ?? array_sum($valores), $enteros);
     }
 
-    private function filaDeColor(string $nombre, int $produccion, int $necesidad, int $cajasPorCarga): void
+    private function filaDeColor(string $nombre, int $produccion, int $necesidad, int $sobrante, int $cajasPorCarga): void
     {
-        $disponible = $produccion - $necesidad;
+        $disponible = $produccion - $necesidad - $sobrante;
         $this->texto('C'.$this->fila, $nombre);
         $this->cajas('D'.$this->fila, $produccion);
         $this->cajas('E'.$this->fila, $necesidad);
-        $this->cajas('F'.$this->fila, $disponible);
-        $this->hoja->setCellValue('G'.$this->fila, round($disponible / max(1, $cajasPorCarga), 2));
-        $this->hoja->getStyle('G'.$this->fila)->getNumberFormat()->setFormatCode('0.00;[Red]-0.00');
+        $this->cajas('F'.$this->fila, $sobrante);
+        $this->cajas('G'.$this->fila, $disponible);
+        $this->hoja->setCellValue('H'.$this->fila, round($disponible / max(1, $cajasPorCarga), 2));
+        $this->hoja->getStyle('H'.$this->fila)->getNumberFormat()->setFormatCode('0.00;[Red]-0.00');
         $this->fila++;
     }
 

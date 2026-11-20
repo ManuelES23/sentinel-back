@@ -6,6 +6,7 @@ use App\Models\Planeacion\ProgramaCorte;
 use App\Models\Planeacion\ProgramaNecesidad;
 use App\Models\Planeacion\ProgramaRendimiento;
 use App\Models\Planeacion\ProgramaSemanal;
+use App\Models\Planeacion\ProgramaSobrante;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Collection;
 
@@ -21,6 +22,7 @@ class PlanSemana
      * @param  Collection<int, ProgramaNecesidad>  $necesidades
      * @param  array<string, ProgramaRendimiento>  $elecciones  "temporada-variedad" => elección.
      * @param  array<string, int>  $inventariosManuales  grupo_clave => cajas.
+     * @param  Collection<int, ProgramaSobrante>  $sobrantes  Sobrante asignado (Programa de empaque).
      */
     public function __construct(
         public readonly ProgramaSemanal $programa,
@@ -30,6 +32,7 @@ class PlanSemana
         public readonly array $elecciones,
         public readonly array $inventariosManuales,
         private readonly CatalogoPlaneacion $catalogo,
+        public readonly Collection $sobrantes = new Collection,
     ) {}
 
     /**
@@ -51,6 +54,8 @@ class PlanSemana
             'cortes.etapa.lote:id,nombre',
             'necesidades' => fn ($q) => $q->orderBy('id'),
             'necesidades.variedades:id',
+            'sobrantes' => fn ($q) => $q->orderBy('id'),
+            'sobrantes.variedades:id',
             'rendimientos',
             'inventariosIniciales',
         ]);
@@ -75,6 +80,7 @@ class PlanSemana
                 $elecciones,
                 $manuales,
                 $catalogo,
+                $programa->sobrantes,
             );
         }
 
@@ -99,7 +105,8 @@ class PlanSemana
         return $valor === null ? 0 : (int) round((float) $corte->hectareas * $valor);
     }
 
-    public function grupoDeNecesidad(ProgramaNecesidad $necesidad): ?string
+    /** Grupo de balance de un renglón de venta o de sobrante: el de su primera variedad. */
+    public function grupoDeNecesidad(ProgramaNecesidad|ProgramaSobrante $necesidad): ?string
     {
         $variedad = $necesidad->variedades->first();
 
@@ -149,9 +156,30 @@ class PlanSemana
     }
 
     /**
-     * Renglones de necesidad para CalculadoraBalance (uno por día con cajas).
+     * Sobrante asignado de la semana con su grupo de balance y las cajas de
+     * cada día. Va siempre aparte de las necesidades, que son solo ventas.
      *
-     * @param  list<array{grupo: ?string, cajas: int[]}>  $necesidades  Salida de necesidades().
+     * @return list<array{id: int, sobrante: ProgramaSobrante, grupo: ?string, cajas: int[]}>
+     */
+    public function sobrantes(): array
+    {
+        $renglones = [];
+        foreach ($this->sobrantes as $sobrante) {
+            $renglones[] = [
+                'id' => $sobrante->id,
+                'sobrante' => $sobrante,
+                'grupo' => $this->grupoDeNecesidad($sobrante),
+                'cajas' => $sobrante->cajasPorDia(),
+            ];
+        }
+
+        return $renglones;
+    }
+
+    /**
+     * Renglones de necesidad (o de sobrante) para CalculadoraBalance (uno por día con cajas).
+     *
+     * @param  list<array{grupo: ?string, cajas: int[]}>  $necesidades  Salida de necesidades() o de sobrantes().
      * @return list<array{grupo: string, dia: int, cajas: int}>
      */
     public static function renglonesNecesidad(array $necesidades): array
@@ -174,7 +202,10 @@ class PlanSemana
     /** @return int[] Cultivos que citan los renglones de la semana. */
     public function cultivosCitados(): array
     {
-        $ids = $this->necesidades->pluck('cultivo_id')->all();
+        $ids = array_merge(
+            $this->necesidades->pluck('cultivo_id')->all(),
+            $this->sobrantes->pluck('cultivo_id')->all(),
+        );
         foreach ($this->cortes as $corte) {
             $variedad = $this->catalogo->variedades()->get($corte->variedad_id);
             if ($variedad) {

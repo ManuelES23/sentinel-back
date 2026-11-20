@@ -28,7 +28,7 @@ class ResumenTemporada
     private const MESES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
 
     /** Columnas que se suman en los totales (las de inventario final toman la última semana). */
-    private const SUMABLES = ['ha_por_variedad', 'ha_total', 'cajas_por_grupo', 'cajas_total', 'necesidad_por_bodega', 'necesidad_total', 'disponible', 'disponible_por_grupo', 'cargas_eq', 'cargas_por_bodega'];
+    private const SUMABLES = ['ha_por_variedad', 'ha_total', 'cajas_por_grupo', 'cajas_total', 'necesidad_por_bodega', 'necesidad_total', 'sobrante_por_bodega', 'sobrante_total', 'disponible', 'disponible_por_grupo', 'cargas_eq', 'cargas_por_bodega'];
 
     public function __construct(private readonly CatalogoPlaneacion $catalogo) {}
 
@@ -84,8 +84,16 @@ class ResumenTemporada
                 PlanSemana::renglonesNecesidad($necesidades),
                 fn ($r) => isset($gruposBalance[(string) $r['grupo']]),
             ));
+            $sobrantes = array_values(array_filter(
+                $plan->sobrantes(),
+                fn ($s) => (int) $s['sobrante']->cultivo_id === $cultivoId,
+            ));
+            $renglonesSobrante = array_values(array_filter(
+                PlanSemana::renglonesNecesidad($sobrantes),
+                fn ($r) => isset($gruposBalance[(string) $r['grupo']]),
+            ));
 
-            $balance = CalculadoraBalance::calcular($gruposBalance, $produccion, $renglonesNecesidad, $inicial);
+            $balance = CalculadoraBalance::calcular($gruposBalance, $produccion, $renglonesNecesidad, $inicial, $renglonesSobrante);
 
             $final = [];
             foreach ($balance as $clave => $g) {
@@ -99,7 +107,7 @@ class ResumenTemporada
             }
 
             $filas[$plan->lunes] = $this->fila(
-                Carbon::parse($plan->lunes), $plan, $produccion, $necesidades, $balance, $final,
+                Carbon::parse($plan->lunes), $plan, $produccion, $necesidades, $sobrantes, $balance, $final,
                 $grupos, $variedades, $bodegas, $embarques[$programa->id] ?? [], $cajasPorCarga,
             );
         }
@@ -112,7 +120,7 @@ class ResumenTemporada
                 $arrastre = $fila['_final'];
             } else {
                 // Sin programa esa semana: ceros y el inventario que venía.
-                $fila = $this->fila($lunes->copy(), null, [], [], [], $arrastre, $grupos, $variedades, $bodegas, [], $cajasPorCarga);
+                $fila = $this->fila($lunes->copy(), null, [], [], [], [], $arrastre, $grupos, $variedades, $bodegas, [], $cajasPorCarga);
             }
             $semanas[] = $fila;
         }
@@ -134,10 +142,11 @@ class ResumenTemporada
     /**
      * Una semana. Sin $plan sale en cero (con el inventario $final arrastrado).
      *
+     * @param  list<array>  $sobrantes  Salida de PlanSemana::sobrantes() del cultivo.
      * @param  array<string, int>  $final  grupo_clave => cajas al cierre de la semana.
      * @param  array<int, int>  $cargas  bodega_id => cargas embarcadas.
      */
-    private function fila(Carbon $lunes, ?PlanSemana $plan, array $produccion, array $necesidades, array $balance, array $final, array $grupos, Collection $variedades, Collection $bodegas, array $cargas, int $cajasPorCarga): array
+    private function fila(Carbon $lunes, ?PlanSemana $plan, array $produccion, array $necesidades, array $sobrantes, array $balance, array $final, array $grupos, Collection $variedades, Collection $bodegas, array $cargas, int $cajasPorCarga): array
     {
         $haPorVariedad = [];
         foreach ($variedades as $v) {
@@ -163,19 +172,25 @@ class ResumenTemporada
             $disponiblePorGrupo[CatalogoPlaneacion::idPublico((string) $clave)] = array_sum($g['del_dia']);
         }
 
-        $necesidadPorBodega = $cargasPorBodega = [];
+        $necesidadPorBodega = $sobrantePorBodega = $cargasPorBodega = [];
         foreach ($bodegas as $b) {
             $necesidadPorBodega[$b->id] = 0;
+            $sobrantePorBodega[$b->id] = 0;
             $cargasPorBodega[$b->id] = (int) ($cargas[$b->id] ?? 0);
         }
         foreach ($necesidades as $n) {
             $bodegaId = (int) $n['necesidad']->bodega_id;
             $necesidadPorBodega[$bodegaId] = ($necesidadPorBodega[$bodegaId] ?? 0) + array_sum($n['cajas']);
         }
+        foreach ($sobrantes as $s) {
+            $bodegaId = (int) $s['sobrante']->bodega_id;
+            $sobrantePorBodega[$bodegaId] = ($sobrantePorBodega[$bodegaId] ?? 0) + array_sum($s['cajas']);
+        }
 
         $cajasTotal = array_sum($cajasPorGrupo);
         $necesidadTotal = array_sum($necesidadPorBodega);
-        $disponible = $cajasTotal - $necesidadTotal;
+        $sobranteTotal = array_sum($sobrantePorBodega);
+        $disponible = $cajasTotal - $necesidadTotal - $sobranteTotal;
 
         return [
             'lunes' => $lunes->toDateString(),
@@ -187,6 +202,8 @@ class ResumenTemporada
             'cajas_total' => $cajasTotal,
             'necesidad_por_bodega' => $necesidadPorBodega,
             'necesidad_total' => $necesidadTotal,
+            'sobrante_por_bodega' => $sobrantePorBodega,
+            'sobrante_total' => $sobranteTotal,
             'disponible' => $disponible,
             'disponible_por_grupo' => $disponiblePorGrupo,
             'inventario_final' => array_sum($inventarioPorGrupo),
@@ -228,7 +245,8 @@ class ResumenTemporada
     private function bodegaConDatos(int $bodegaId, array $semanas): bool
     {
         foreach ($semanas as $s) {
-            if (($s['necesidad_por_bodega'][$bodegaId] ?? 0) !== 0 || ($s['cargas_por_bodega'][$bodegaId] ?? 0) !== 0) {
+            if (($s['necesidad_por_bodega'][$bodegaId] ?? 0) !== 0 || ($s['sobrante_por_bodega'][$bodegaId] ?? 0) !== 0
+                || ($s['cargas_por_bodega'][$bodegaId] ?? 0) !== 0) {
                 return true;
             }
         }

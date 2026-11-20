@@ -19,7 +19,7 @@ class CalculadoraBalance
      * y se conservan tal cual en la salida.
      *
      * Todo grupo de $grupos aparece en la salida aunque no tenga renglones.
-     * Un grupo referenciado por algún renglón de producción o necesidad pero
+     * Un grupo referenciado por algún renglón de producción, necesidad o sobrante pero
      * ausente de $grupos TAMBIÉN se incluye (después de los de $grupos, en
      * orden de aparición) para no perder cajas en silencio; no se lanza error.
      *
@@ -27,19 +27,22 @@ class CalculadoraBalance
      * @param array<int, array{grupo:int|string, temporada_id:?int, dia:int, cajas:int}>      $produccion
      * @param array<int, array{grupo:int|string, dia:int, cajas:int}>                         $necesidad
      * @param array<int|string, int>                                                          $inicial  Faltante = 0.
+     * @param array<int, array{grupo:int|string, dia:int, cajas:int}>                         $sobrante Sobrante asignado (misma forma
+     *        que $necesidad). NO es necesidad de venta: va en su propia línea y resta
+     *        de lo disponible del día igual que una venta.
      * @return array<int|string, array{
-     *   produccion:int[], necesidad:int[], del_dia:int[], acumulado:int[],
+     *   produccion:int[], necesidad:int[], sobrante_asignado:int[], del_dia:int[], acumulado:int[],
      *   inicial:int, final:int, estado:string,
      *   primer_dia_falta:?int, peor_dia:?int, peor_valor:?int,
      *   produccion_por_temporada:array<int|string, int[]>
      * }>
      */
-    public static function calcular(array $grupos, array $produccion, array $necesidad, array $inicial): array
+    public static function calcular(array $grupos, array $produccion, array $necesidad, array $inicial, array $sobrante = []): array
     {
         $claves = array_keys($grupos);
         $conocidas = array_flip($claves);
 
-        foreach ([$produccion, $necesidad] as $renglones) {
+        foreach ([$produccion, $necesidad, $sobrante] as $renglones) {
             foreach ($renglones as $r) {
                 if (! array_key_exists($r['grupo'], $conocidas)) {
                     $conocidas[$r['grupo']] = true;
@@ -51,10 +54,12 @@ class CalculadoraBalance
         $ceros = array_fill(0, self::DIAS, 0);
         $prod = [];
         $nec = [];
+        $sob = [];
         $porTemporada = [];
         foreach ($claves as $clave) {
             $prod[$clave] = $ceros;
             $nec[$clave] = $ceros;
+            $sob[$clave] = $ceros;
             $porTemporada[$clave] = [];
         }
 
@@ -74,6 +79,10 @@ class CalculadoraBalance
             $nec[$r['grupo']][(int) $r['dia']] += (int) $r['cajas'];
         }
 
+        foreach ($sobrante as $r) {
+            $sob[$r['grupo']][(int) $r['dia']] += (int) $r['cajas'];
+        }
+
         $salida = [];
         foreach ($claves as $clave) {
             $inicio = (int) ($inicial[$clave] ?? 0);
@@ -82,7 +91,7 @@ class CalculadoraBalance
             $acumulado = [];
             $corrido = $inicio;
             for ($d = 0; $d < self::DIAS; $d++) {
-                $delDia[$d] = $prod[$clave][$d] - $nec[$clave][$d];
+                $delDia[$d] = $prod[$clave][$d] - $nec[$clave][$d] - $sob[$clave][$d];
                 $corrido += $delDia[$d];
                 $acumulado[$d] = $corrido;
             }
@@ -112,6 +121,7 @@ class CalculadoraBalance
             $salida[$clave] = [
                 'produccion' => $prod[$clave],
                 'necesidad' => $nec[$clave],
+                'sobrante_asignado' => $sob[$clave],
                 'del_dia' => $delDia,
                 'acumulado' => $acumulado,
                 'inicial' => $inicio,

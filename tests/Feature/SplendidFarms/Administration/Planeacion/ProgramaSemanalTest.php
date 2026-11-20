@@ -8,6 +8,7 @@ use App\Models\Planeacion\ProgramaEmbarque;
 use App\Models\Planeacion\ProgramaInventarioInicial;
 use App\Models\Planeacion\ProgramaRendimiento;
 use App\Models\Planeacion\ProgramaSemanal;
+use App\Models\Planeacion\ProgramaSobrante;
 use App\Models\Planeacion\RendimientoVariedad;
 use App\Models\Temporada;
 use App\Services\Planeacion\ProgramaSemanalService;
@@ -174,6 +175,7 @@ class ProgramaSemanalTest extends TestCase
             'tablero' => ['view' => true, 'editar_notas' => false],
             'plan_corte' => ['view' => false, 'capturar' => false],
             'necesidades' => ['view' => true, 'capturar' => true],
+            'programa_empaque' => ['view' => false, 'capturar' => false],
             'embarques' => ['view' => false, 'capturar' => false],
             'resumen' => ['view' => false],
             'configuracion' => ['view' => false, 'editar' => false],
@@ -262,6 +264,98 @@ class ProgramaSemanalTest extends TestCase
         foreach ($empaque as $r) {
             $this->assertArrayNotHasKey('receta_id', $r);
         }
+    }
+
+    /** @param  int[]  $cajas  Siete cantidades, de lunes a domingo. */
+    private function sobrante(ProgramaSemanal $p, string $bodega, string $presentacion, array $variedades, string $empaque, array $cajas): ProgramaSobrante
+    {
+        $attrs = [
+            'bodega_id' => $this->bodega($bodega)->id,
+            'presentacion_id' => $this->presentacion($presentacion)->id,
+            'tipo_empaque_id' => $this->tipoEmpaque($empaque)->id,
+        ];
+        foreach (array_values($cajas) as $dia => $valor) {
+            $attrs["cajas_{$dia}"] = $valor;
+        }
+
+        return $this->crearSobrante($p, $attrs, array_map(fn ($n) => $this->variedades[$n]->id, $variedades));
+    }
+
+    public function test_sobrante_asignado_baja_el_balance_sin_tocar_la_necesidad(): void
+    {
+        $p = $this->wk48();
+        $sin = $this->semana('2026-11-23')->assertOk()->json('data.balance');
+
+        $this->sobrante($p, 'Texas', 'Bulk', ['Amarillo'], 'RPC', [1000, 0, 0, 0, 0, 0, 0]);
+        $con = $this->semana('2026-11-23')->assertOk()->json('data.balance');
+
+        $ab = $con[$this->idAb()];
+        $this->assertSame(1000, $ab['sobrante_asignado'][0]);
+        $this->assertSame([1000, 0, 0, 0, 0, 0, 0], $ab['sobrante_asignado']);
+        $this->assertSame($sin[$this->idAb()]['necesidad'], $ab['necesidad']);
+        $this->assertSame(10635 - 1000, $ab['final']);
+        $this->assertSame([0, 0, 0, 0, 0, 0, 0], $con[$this->idBlanco()]['sobrante_asignado']);
+        $this->assertSame(-2893, $con[$this->idBlanco()]['final']);
+    }
+
+    public function test_sobrante_con_variedad_suelta_descuenta_de_su_grupo(): void
+    {
+        $p = $this->wk48();
+
+        $this->sobrante($p, 'Nogales', 'Bulk', ['Bicolor'], 'Cartón', [0, 0, 400, 0, 0, 0, 0]);
+        $d = $this->semana('2026-11-23')->assertOk()->json('data');
+
+        $ab = $d['balance'][$this->idAb()];
+        $this->assertSame([0, 0, 400, 0, 0, 0, 0], $ab['sobrante_asignado']);
+        $this->assertSame(10635 - 400, $ab['final']);
+        $this->assertArrayNotHasKey('v'.$this->variedades['Bicolor']->id, $d['balance']);
+        $this->assertSame($this->idAb(), (string) $d['sobrantes'][0]['grupo_id']);
+    }
+
+    public function test_sobrantes_salen_aparte_de_las_necesidades(): void
+    {
+        $p = $this->wk48();
+        // Una semana previa con solo sobrante: no aporta clientes previos.
+        $wk47 = ProgramaSemanal::create(['lunes' => '2026-11-16']);
+        $this->sobrante($wk47, 'Nogales', 'Bulk', ['Blanco'], 'Cartón', [10, 0, 0, 0, 0, 0, 0]);
+        $antes = $this->semana('2026-11-23')->assertOk()->json('data');
+
+        $s = $this->sobrante($p, 'Texas', 'Bulk', ['Amarillo', 'Bicolor'], 'RPC', [0, 300, 0, 0, 0, 0, 200]);
+        $d = $this->semana('2026-11-23')->assertOk()->json('data');
+
+        $this->assertCount(1, $d['sobrantes']);
+        $this->assertSame([
+            'id' => $s->id,
+            'bodega_id' => $this->bodega('Texas')->id,
+            'cultivo_id' => $this->cultivo->id,
+            'presentacion_id' => $this->presentacion('Bulk')->id,
+            'tipo_empaque_id' => $this->tipoEmpaque('RPC')->id,
+            'variedad_ids' => [$this->variedades['Amarillo']->id, $this->variedades['Bicolor']->id],
+            'grupo_id' => $this->grupo('Amarillo / Bicolor')->id,
+            'cajas' => [0, 300, 0, 0, 0, 0, 200],
+        ], $d['sobrantes'][0]);
+
+        $this->assertSame($antes['necesidades'], $d['necesidades']);
+        $this->assertSame($antes['clientes_previos'], $d['clientes_previos']);
+        $this->assertSame($antes['sobrantes'], []);
+
+        $empaque = collect($d['empaque']);
+        $sobrantes = $empaque->where('clase', 'sobrante')->values();
+        $this->assertCount(1, $sobrantes);
+        $this->assertSame([0, 300, 0, 0, 0, 0, 200], $sobrantes[0]['cajas']);
+        $this->assertSame($this->bodega('Texas')->id, $sobrantes[0]['bodega_id']);
+        $this->assertSame($this->idAb(), (string) $sobrantes[0]['grupo_id']);
+        $this->assertSame($this->tipoEmpaque('RPC')->id, $sobrantes[0]['tipo_empaque_id']);
+        // Misma llave que el renglón de venta Texas · Bulk · A/B · RPC, pero no se juntan.
+        $venta = $empaque->first(fn ($r) => $r['clase'] === 'ok' && $r['bodega_id'] === $this->bodega('Texas')->id
+            && $r['presentacion_id'] === $this->presentacion('Bulk')->id && $r['tipo_empaque_id'] === $this->tipoEmpaque('RPC')->id);
+        $this->assertSame([3460, 0, 0, 0, 0, 0, 0], $venta['cajas']);
+
+        // Orden: ok, sobrante, sin_clasificar.
+        $clases = $empaque->pluck('clase')->all();
+        $posicion = array_search('sobrante', $clases, true);
+        $this->assertSame(['ok'], array_values(array_unique(array_slice($clases, 0, $posicion))));
+        $this->assertSame(['sin_clasificar'], array_values(array_unique(array_slice($clases, $posicion + 1))));
     }
 
     public function test_embarques_y_notas_en_el_payload(): void

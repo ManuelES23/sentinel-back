@@ -233,4 +233,76 @@ class CalculadoraBalanceTest extends TestCase
         $this->assertSame(-15, $r['otro']['final']);
         $this->assertSame('falta', $r['otro']['estado']);
     }
+
+    public function test_el_sobrante_asignado_va_en_su_linea_y_baja_el_disponible(): void
+    {
+        $b = CalculadoraBalance::calcular(
+            ['5' => ['cultivo_id' => 1]],
+            [['grupo' => '5', 'temporada_id' => 1, 'dia' => 0, 'cajas' => 3000]],
+            [['grupo' => '5', 'dia' => 0, 'cajas' => 1000]],
+            ['5' => 500],
+            [['grupo' => '5', 'dia' => 0, 'cajas' => 1500], ['grupo' => '5', 'dia' => 6, 'cajas' => 200]]
+        );
+
+        $this->assertSame([1000, 0, 0, 0, 0, 0, 0], $b['5']['necesidad']);
+        $this->assertSame([1500, 0, 0, 0, 0, 0, 200], $b['5']['sobrante_asignado']);
+        $this->assertSame([500, 0, 0, 0, 0, 0, -200], $b['5']['del_dia']);
+        $this->assertSame(800, $b['5']['final']);
+    }
+
+    public function test_asignar_de_mas_deja_el_grupo_en_falta(): void
+    {
+        $b = CalculadoraBalance::calcular(
+            ['a' => ['cultivo_id' => 1]],
+            [['grupo' => 'a', 'temporada_id' => 1, 'dia' => 2, 'cajas' => 1000]],
+            [],
+            ['a' => 0],
+            [['grupo' => 'a', 'dia' => 2, 'cajas' => 1200]]
+        );
+
+        $this->assertSame('falta', $b['a']['estado']);
+        $this->assertSame(2, $b['a']['primer_dia_falta']);
+        $this->assertSame(2, $b['a']['peor_dia']);
+        $this->assertSame(-200, $b['a']['peor_valor']);
+        $this->assertSame([0, 0, -200, -200, -200, -200, -200], $b['a']['acumulado']);
+    }
+
+    public function test_sin_sobrante_el_vector_es_de_ceros_y_nada_cambia(): void
+    {
+        $sin = CalculadoraBalance::calcular(
+            ['ab' => ['cultivo_id' => 1]],
+            $this->produccion('ab', [10350, 4700, 3725, 6500, 3600, 3800, 0], 1),
+            $this->necesidad('ab', [7110, 850, 560, 8500, 1520, 3500, 0]),
+            ['ab' => 0]
+        );
+        $con = CalculadoraBalance::calcular(
+            ['ab' => ['cultivo_id' => 1]],
+            $this->produccion('ab', [10350, 4700, 3725, 6500, 3600, 3800, 0], 1),
+            $this->necesidad('ab', [7110, 850, 560, 8500, 1520, 3500, 0]),
+            ['ab' => 0],
+            []
+        );
+
+        $this->assertSame([0, 0, 0, 0, 0, 0, 0], $sin['ab']['sobrante_asignado']);
+        $this->assertSame($sin, $con);
+        $this->assertSame([3240, 3850, 3165, -2000, 2080, 300, 0], $sin['ab']['del_dia']);
+        $this->assertSame(10635, $sin['ab']['final']);
+        $this->assertSame('cubre_inventario', $sin['ab']['estado']);
+    }
+
+    public function test_grupo_citado_solo_por_el_sobrante_aparece(): void
+    {
+        $b = CalculadoraBalance::calcular(
+            ['a' => ['cultivo_id' => 1]],
+            [],
+            [],
+            ['sobra' => 300],
+            [['grupo' => 'sobra', 'dia' => 1, 'cajas' => 100]]
+        );
+
+        $this->assertSame(['a', 'sobra'], array_keys($b));
+        $this->assertSame([0, 100, 0, 0, 0, 0, 0], $b['sobra']['sobrante_asignado']);
+        $this->assertSame([0, 0, 0, 0, 0, 0, 0], $b['sobra']['necesidad']);
+        $this->assertSame(200, $b['sobra']['final']);
+    }
 }
