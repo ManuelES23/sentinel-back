@@ -85,6 +85,7 @@ class SfAttendanceImportTest extends TestCase
         $this->assertSame('05:30', $record->check_in->format('H:i'));
         $this->assertSame('17:57', $record->check_out->format('H:i'));
         $this->assertSame('Transaction (5).xlsx', $record->source_file);
+        $this->assertNull($record->notes, 'El "--" de Remarks no es una nota');
     }
 
     public function test_devuelve_rango_y_claves_sin_coincidencia(): void

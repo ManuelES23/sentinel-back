@@ -72,7 +72,8 @@ class SfAttendanceImportService
                 'status' => in_array($row['status'], self::VALID_STATUSES, true) ? $row['status'] : 'present',
                 'source_file' => $sourceFile,
                 'source_device' => $row['device'],
-                'notes' => $row['notes'],
+                // El export «Transaction» pone "--" en Remarks cuando no hay nada.
+                'notes' => in_array(trim((string) $row['notes']), ['', '--', '-'], true) ? null : $row['notes'],
                 'imported_by_user_id' => $userId,
             ];
 
