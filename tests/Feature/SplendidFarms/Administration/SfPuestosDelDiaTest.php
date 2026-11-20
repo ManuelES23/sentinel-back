@@ -169,6 +169,39 @@ class SfPuestosDelDiaTest extends TestCase
         $this->assertFalse($lunes->has($perm->id));
     }
 
+    public function test_copiar_ignora_un_dia_en_que_solo_se_movio_a_permanentes(): void
+    {
+        [, $e] = $this->createAuthenticatedUserWithEnterprise();
+        $sel = $this->position($e->id, 'SELECCIONADOR', 355, 'B');
+        $temp = $this->createSfEmployee($e->id, ['employee_type' => 'temporary']);
+        $perm = $this->createSfEmployee($e->id, ['employee_type' => 'permanent']);
+
+        SfPositionAssignment::create(['sf_employee_id' => $temp->id, 'sf_position_id' => $sel->id, 'assignment_date' => '2026-11-17']);
+        SfPositionAssignment::create(['sf_employee_id' => $perm->id, 'sf_position_id' => $sel->id, 'assignment_date' => '2026-11-18']);
+
+        $this->postJson(self::URL . '/copiar-anterior', ['enterprise_id' => $e->id, 'date' => '2026-11-19'])
+            ->assertOk()
+            ->assertJsonPath('data.copied', 1)
+            ->assertJsonPath('data.source_date', '2026-11-17');
+    }
+
+    public function test_puesto_dado_de_baja_sigue_en_la_hoja_y_paga_su_grupo(): void
+    {
+        [, $e] = $this->createAuthenticatedUserWithEnterprise();
+        $sel = $this->position($e->id, 'SELECCIONADOR', 355, 'B');
+        $temp = $this->createSfEmployee($e->id, ['employee_type' => 'temporary']);
+        SfPositionAssignment::create(['sf_employee_id' => $temp->id, 'sf_position_id' => $sel->id, 'assignment_date' => '2026-11-19']);
+        $sel->group->delete();
+        $sel->delete();
+
+        $res = $this->getJson(self::URL . "?enterprise_id={$e->id}&date=2026-11-19")->assertOk();
+
+        $pos = collect($res->json('data.positions'))->firstWhere('id', $sel->id);
+        $this->assertTrue($pos['retired']);
+        $row = $this->row($res->json('data.employees'), $temp->id);
+        $this->assertSame(['amount' => 355, 'kind' => 'grupo'], $row['pay']);
+    }
+
     public function test_copiar_sin_dias_previos_no_copia(): void
     {
         [, $e] = $this->createAuthenticatedUserWithEnterprise();

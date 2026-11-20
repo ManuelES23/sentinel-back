@@ -6,6 +6,8 @@ use App\Models\SfAttendanceRecord;
 use App\Models\SfEmployee;
 use App\Models\SfPosition;
 use App\Models\SfPositionAssignment;
+use Carbon\Carbon;
+use Illuminate\Database\Eloquent\Builder;
 
 /**
  * Pago de Nómina SF día por día.
@@ -48,6 +50,18 @@ class SfPayrollCalculator
             : ['amount' => 0.0, 'kind' => self::KIND_NO_RATE];
     }
 
+    /**
+     * Carga puesto y grupo aunque se hayan dado de baja después (borrado suave): el
+     * día ya trabajado se sigue pagando con el grupo que tenía el puesto.
+     */
+    public static function withPositionAndGroup(Builder $query): Builder
+    {
+        return $query->with([
+            'position' => fn ($q) => $q->withTrashed(),
+            'position.group' => fn ($q) => $q->withTrashed(),
+        ]);
+    }
+
     /** Salario diario del alta, con el respaldo por salario y frecuencia de siempre. */
     public function altaRate(SfEmployee $employee): float
     {
@@ -77,18 +91,21 @@ class SfPayrollCalculator
 
         $ids = $employees->pluck('id');
 
+        // Rango semiabierto [inicio, fin + 1 día): usa el índice de la columna DATE en
+        // MySQL y también cubre el «Y-m-d 00:00:00» que guarda SQLite en las pruebas.
+        $endExclusive = Carbon::parse($endDate)->addDay()->toDateString();
+
         $records = SfAttendanceRecord::query()
             ->whereIn('sf_employee_id', $ids)
-            ->whereDate('date', '>=', $startDate)
-            ->whereDate('date', '<=', $endDate)
+            ->where('date', '>=', $startDate)
+            ->where('date', '<', $endExclusive)
             ->get()
             ->groupBy('sf_employee_id');
 
-        $assignments = SfPositionAssignment::query()
-            ->with('position.group')
+        $assignments = self::withPositionAndGroup(SfPositionAssignment::query())
             ->whereIn('sf_employee_id', $ids)
-            ->whereDate('assignment_date', '>=', $startDate)
-            ->whereDate('assignment_date', '<=', $endDate)
+            ->where('assignment_date', '>=', $startDate)
+            ->where('assignment_date', '<', $endExclusive)
             ->get()
             ->keyBy(fn (SfPositionAssignment $a) => $a->sf_employee_id . '|' . $a->assignment_date->toDateString());
 
