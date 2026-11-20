@@ -43,7 +43,7 @@ class HojaCorteController extends Controller
             'celdas.*' => ['array'],
             'celdas.*.temporada_id' => ['required', 'integer'],
             'celdas.*.etapa_id' => ['required', 'integer'],
-            'celdas.*.dia' => ['required', 'integer', 'between:0,5'],
+            'celdas.*.dia' => ['required', 'integer', 'between:0,6'],
             'celdas.*.hectareas' => ['present', 'nullable', 'numeric', 'min:0', 'max:999999.99', 'decimal:0,2'],
             'sin_etapa' => ['sometimes', 'array', 'max:200'],
             'sin_etapa.*' => ['array'],

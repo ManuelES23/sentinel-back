@@ -10,8 +10,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 /**
- * Renglón de necesidad (ventas): cajas por día, de lunes (cajas_0) a sábado
- * (cajas_5), que pide un cliente en una bodega, con una o más variedades
+ * Renglón de necesidad (ventas): cajas por día, de lunes (cajas_0) a domingo
+ * (cajas_6), que pide un cliente en una bodega, con una o más variedades
  * aceptadas del mismo grupo de balance.
  */
 class ProgramaNecesidad extends Model
@@ -32,6 +32,7 @@ class ProgramaNecesidad extends Model
         'cajas_3',
         'cajas_4',
         'cajas_5',
+        'cajas_6',
         'created_by',
         'updated_by',
     ];
@@ -49,6 +50,7 @@ class ProgramaNecesidad extends Model
         'cajas_3' => 'integer',
         'cajas_4' => 'integer',
         'cajas_5' => 'integer',
+        'cajas_6' => 'integer',
     ];
 
     public function programa(): BelongsTo
@@ -87,12 +89,12 @@ class ProgramaNecesidad extends Model
     }
 
     /**
-     * Las seis cantidades de la semana como arreglo [lunes … sábado].
+     * Las siete cantidades de la semana como arreglo [lunes … domingo].
      *
      * @return array<int, int>
      */
     public function cajasPorDia(): array
     {
-        return array_map(fn (int $dia) => (int) $this->{"cajas_{$dia}"}, range(0, 5));
+        return array_map(fn (int $dia) => (int) $this->{"cajas_{$dia}"}, range(0, 6));
     }
 }

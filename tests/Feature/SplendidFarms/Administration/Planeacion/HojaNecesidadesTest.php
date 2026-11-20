@@ -69,7 +69,7 @@ class HojaNecesidadesTest extends TestCase
             'presentacion_id' => $this->presentacion('Bulk')->id,
             'tipo_empaque_id' => $this->tipoEmpaque('RPC')->id,
             'variedad_ids' => [$this->variedades['Amarillo']->id, $this->variedades['Bicolor']->id],
-            'cajas' => [0, 850, 0, 8500, 1520, 0],
+            'cajas' => [0, 850, 0, 8500, 1520, 0, 0],
         ], $cambios);
     }
 
@@ -91,14 +91,14 @@ class HojaNecesidadesTest extends TestCase
     public function test_crea_cambia_y_borra_en_una_peticion(): void
     {
         $this->comoVendedor();
-        $cambiada = $this->necesidad($this->programa, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [100, 200, 300, 400, 500, 600]);
-        $borrada = $this->necesidad($this->programa, 'Texas', 'Caruso', 'Bulk', ['Amarillo'], null, [1000, 0, 0, 0, 0, 0]);
+        $cambiada = $this->necesidad($this->programa, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [100, 200, 300, 400, 500, 600, 0]);
+        $borrada = $this->necesidad($this->programa, 'Texas', 'Caruso', 'Bulk', ['Amarillo'], null, [1000, 0, 0, 0, 0, 0, 0]);
         Event::fake([ProgramaSemanalUpdated::class]);
 
         $respuesta = $this->guardar([
             'nuevas' => [
                 $this->nueva('a'),
-                $this->nueva('b', ['cliente_nombre' => 'El Super', 'cajas' => [960, 0, 0, 0, 0, 0]]),
+                $this->nueva('b', ['cliente_nombre' => 'El Super', 'cajas' => [960, 0, 0, 0, 0, 0, 0]]),
             ],
             'cambios' => [['id' => $cambiada->id, 'cajas' => ['2' => 5584]]],
             'borradas' => [$borrada->id],
@@ -107,14 +107,14 @@ class HojaNecesidadesTest extends TestCase
         // Dos renglones nuevos, uno cambiado, uno borrado.
         $this->assertSame(3, ProgramaNecesidad::count());
         $this->assertNull(ProgramaNecesidad::find($borrada->id));
-        $this->assertSame([100, 200, 5584, 400, 500, 600], $cambiada->fresh()->cajasPorDia());
+        $this->assertSame([100, 200, 5584, 400, 500, 600, 0], $cambiada->fresh()->cajasPorDia());
 
         $claves = $respuesta->json('claves');
         $this->assertSame(['a', 'b'], array_keys($claves));
         $a = ProgramaNecesidad::findOrFail($claves['a']);
         $b = ProgramaNecesidad::findOrFail($claves['b']);
         $this->assertSame('Walmart', $a->cliente_nombre);
-        $this->assertSame([0, 850, 0, 8500, 1520, 0], $a->cajasPorDia());
+        $this->assertSame([0, 850, 0, 8500, 1520, 0, 0], $a->cajasPorDia());
         $this->assertSame($this->programa->id, $a->programa_id);
         $this->assertSame($this->cultivo->id, $a->cultivo_id);
         $this->assertSame('El Super', $b->cliente_nombre);
@@ -127,7 +127,7 @@ class HojaNecesidadesTest extends TestCase
         $this->assertCount(3, $respuesta->json('data.necesidades'));
         $grupoAb = (string) $this->grupo('Amarillo / Bicolor')->id;
         // Suma las dos nuevas y la que ya estaba (100…600 con el miércoles en 5584).
-        $this->assertSame([1060, 1050, 5584, 8900, 2020, 600], $respuesta->json("data.balance.$grupoAb.necesidad"));
+        $this->assertSame([1060, 1050, 5584, 8900, 2020, 600, 0], $respuesta->json("data.balance.$grupoAb.necesidad"));
 
         // Un solo aviso por la petición completa.
         Event::assertDispatchedTimes(ProgramaSemanalUpdated::class, 1);
@@ -137,11 +137,11 @@ class HojaNecesidadesTest extends TestCase
     public function test_cambio_parcial_no_pisa_otros_dias(): void
     {
         $this->comoVendedor();
-        $n = $this->necesidad($this->programa, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [1480, 0, 0, 0, 0, 0]);
+        $n = $this->necesidad($this->programa, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [1480, 0, 0, 0, 0, 0, 0]);
 
         $this->guardar(['cambios' => [['id' => $n->id, 'cajas' => ['2' => 500]]]])->assertOk();
 
-        $this->assertSame([1480, 0, 500, 0, 0, 0], $n->fresh()->cajasPorDia());
+        $this->assertSame([1480, 0, 500, 0, 0, 0, 0], $n->fresh()->cajasPorDia());
     }
 
     public function test_renglon_sin_empaque_se_guarda_y_queda_sin_clasificar(): void
@@ -156,7 +156,7 @@ class HojaNecesidadesTest extends TestCase
         $this->assertNull($renglon['tipo_empaque_id']);
 
         // También se puede quitar el empaque de un renglón que ya lo tenía.
-        $otro = $this->necesidad($this->programa, 'Texas', 'Walmart', 'Tray', ['Amarillo'], 'RPC', [10, 0, 0, 0, 0, 0]);
+        $otro = $this->necesidad($this->programa, 'Texas', 'Walmart', 'Tray', ['Amarillo'], 'RPC', [10, 0, 0, 0, 0, 0, 0]);
         $this->guardar(['cambios' => [['id' => $otro->id, 'tipo_empaque_id' => null]]])->assertOk();
         $this->assertNull($otro->fresh()->tipo_empaque_id);
     }
@@ -173,7 +173,7 @@ class HojaNecesidadesTest extends TestCase
         $this->assertSame(0, ProgramaNecesidad::count());
 
         // Subir cajas de un renglón que ya estaba ahí tampoco se acepta.
-        $viejo = $this->necesidad($wk47, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [1, 0, 0, 0, 0, 0]);
+        $viejo = $this->necesidad($wk47, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [1, 0, 0, 0, 0, 0, 0]);
         $this->guardar(['cambios' => [['id' => $viejo->id, 'cajas' => ['0' => 5]]]], $wk47)
             ->assertUnprocessable()
             ->assertJsonValidationErrors(['cambios.0.cajas' => self::MENSAJE_TEMPORADA]);
@@ -185,16 +185,16 @@ class HojaNecesidadesTest extends TestCase
             'cambios' => [['id' => $viejo->id, 'cajas' => ['1' => 9]]],
         ], $wk47)->assertUnprocessable();
         $this->assertSame(1, ProgramaNecesidad::count());
-        $this->assertSame([1, 0, 0, 0, 0, 0], $viejo->fresh()->cajasPorDia());
+        $this->assertSame([1, 0, 0, 0, 0, 0, 0], $viejo->fresh()->cajasPorDia());
     }
 
     public function test_borrar_y_bajar_cajas_se_puede_aunque_ya_no_haya_temporada_abierta(): void
     {
         $this->comoVendedor();
         $wk47 = ProgramaSemanal::create(['lunes' => '2026-11-16']);
-        $baja = $this->necesidad($wk47, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [10, 20, 0, 0, 0, 0]);
-        $cero = $this->necesidad($wk47, 'Texas', 'Walmart', 'Tray', ['Amarillo'], 'RPC', [5, 0, 0, 0, 0, 0]);
-        $borrada = $this->necesidad($wk47, 'Texas', 'Caruso', 'Bulk', ['Amarillo'], null, [1000, 0, 0, 0, 0, 0]);
+        $baja = $this->necesidad($wk47, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [10, 20, 0, 0, 0, 0, 0]);
+        $cero = $this->necesidad($wk47, 'Texas', 'Walmart', 'Tray', ['Amarillo'], 'RPC', [5, 0, 0, 0, 0, 0, 0]);
+        $borrada = $this->necesidad($wk47, 'Texas', 'Caruso', 'Bulk', ['Amarillo'], null, [1000, 0, 0, 0, 0, 0, 0]);
         // Un catálogo desactivado después tampoco estorba al borrar ni al bajar.
         $this->bodega('Texas')->update(['is_active' => false]);
 
@@ -206,8 +206,8 @@ class HojaNecesidadesTest extends TestCase
             'borradas' => [$borrada->id],
         ], $wk47)->assertOk();
 
-        $this->assertSame([4, 20, 0, 0, 0, 0], $baja->fresh()->cajasPorDia());
-        $this->assertSame([0, 0, 0, 0, 0, 0], $cero->fresh()->cajasPorDia());
+        $this->assertSame([4, 20, 0, 0, 0, 0, 0], $baja->fresh()->cajasPorDia());
+        $this->assertSame([0, 0, 0, 0, 0, 0, 0], $cero->fresh()->cajasPorDia());
         $this->assertNull(ProgramaNecesidad::find($borrada->id));
     }
 
@@ -272,7 +272,7 @@ class HojaNecesidadesTest extends TestCase
     {
         $this->comoVendedor();
         $cliente = CrmCliente::create(['empresa_id' => $this->empresaSbp()->id, 'nombre' => 'Vallarta']);
-        $n = $this->necesidad($this->programa, 'Texas', 'Walmart', 'Bulk', ['Blanco'], 'RPC', [1, 2, 3, 4, 5, 6]);
+        $n = $this->necesidad($this->programa, 'Texas', 'Walmart', 'Bulk', ['Blanco'], 'RPC', [1, 2, 3, 4, 5, 6, 0]);
 
         $this->guardar(['cambios' => [[
             'id' => $n->id,
@@ -292,7 +292,7 @@ class HojaNecesidadesTest extends TestCase
             $fresca->variedades()->pluck('variedades.id')->all(),
         );
         // Las cajas no se tocaron.
-        $this->assertSame([1, 2, 3, 4, 5, 6], $fresca->cajasPorDia());
+        $this->assertSame([1, 2, 3, 4, 5, 6, 0], $fresca->cajasPorDia());
     }
 
     // ── Color: variedades o grupo de balance ────────────
@@ -368,7 +368,7 @@ class HojaNecesidadesTest extends TestCase
     public function test_error_de_negocio_en_el_segundo_renglon_no_guarda_el_primero(): void
     {
         $this->comoVendedor();
-        $existente = $this->necesidad($this->programa, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [1, 0, 0, 0, 0, 0]);
+        $existente = $this->necesidad($this->programa, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [1, 0, 0, 0, 0, 0, 0]);
 
         $this->guardar([
             'nuevas' => [
@@ -393,14 +393,14 @@ class HojaNecesidadesTest extends TestCase
         $this->guardar(['nuevas' => [$this->nueva('a', ['cliente_nombre' => str_repeat('a', 151)])]])
             ->assertUnprocessable()->assertJsonValidationErrors('nuevas.0.cliente_nombre');
 
-        // Exactamente seis enteros no negativos.
-        foreach ([[1, 2, 3], [1, 2, 3, 4, 5, 6, 7]] as $cajas) {
+        // Exactamente siete enteros no negativos (de lunes a domingo): 3, 6 y 8 valores son inválidos.
+        foreach ([[1, 2, 3], [1, 2, 3, 4, 5, 6], [1, 2, 3, 4, 5, 6, 7, 8]] as $cajas) {
             $this->guardar(['nuevas' => [$this->nueva('a', ['cajas' => $cajas])]])
                 ->assertUnprocessable()->assertJsonValidationErrors('nuevas.0.cajas');
         }
-        foreach ([[1, 2, 3, 4, 5, -1], [1, 2, 3, 4, 5, 1.5], [1, 2, 3, 4, 5, 1000000]] as $cajas) {
+        foreach ([[1, 2, 3, 4, 5, 6, -1], [1, 2, 3, 4, 5, 6, 1.5], [1, 2, 3, 4, 5, 6, 1000000]] as $cajas) {
             $this->guardar(['nuevas' => [$this->nueva('a', ['cajas' => $cajas])]])
-                ->assertUnprocessable()->assertJsonValidationErrors('nuevas.0.cajas.5');
+                ->assertUnprocessable()->assertJsonValidationErrors('nuevas.0.cajas.6');
         }
 
         // Variedades: al menos una, sin repetir.
@@ -440,13 +440,39 @@ class HojaNecesidadesTest extends TestCase
         $this->assertSame(0, ProgramaNecesidad::count());
     }
 
+    public function test_guarda_cajas_en_domingo_y_el_balance_las_cuenta(): void
+    {
+        $this->comoVendedor();
+        $grupoAb = (string) $this->grupo('Amarillo / Bicolor')->id;
+
+        // Renglón nuevo con cajas solo el domingo.
+        $respuesta = $this->guardar(['nuevas' => [$this->nueva('dom', ['cajas' => [0, 0, 0, 0, 0, 0, 2000]])]])->assertOk();
+
+        $n = ProgramaNecesidad::findOrFail($respuesta->json('claves.dom'));
+        $this->assertSame(2000, $n->cajas_6);
+        $this->assertSame([0, 0, 0, 0, 0, 0, 2000], $n->cajasPorDia());
+        $this->assertSame([0, 0, 0, 0, 0, 0, 2000], $respuesta->json("data.balance.$grupoAb.necesidad"));
+        $this->assertSame([0, 0, 0, 0, 0, 0, 2000], collect($respuesta->json('data.necesidades'))->firstWhere('id', $n->id)['cajas']);
+        $this->assertSame(-2000, $respuesta->json("data.balance.$grupoAb.final"));
+
+        // Cambio parcial del domingo: no pisa los demás días.
+        $otro = $this->necesidad($this->programa, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [100, 0, 0, 0, 0, 0, 0]);
+        $respuesta = $this->guardar(['cambios' => [['id' => $otro->id, 'cajas' => ['6' => 300]]]])->assertOk();
+        $this->assertSame([100, 0, 0, 0, 0, 0, 300], $otro->fresh()->cajasPorDia());
+        $this->assertSame([100, 0, 0, 0, 0, 0, 2300], $respuesta->json("data.balance.$grupoAb.necesidad"));
+
+        // Bajarlo a cero también se puede.
+        $this->guardar(['cambios' => [['id' => $otro->id, 'cajas' => ['6' => 0]]]])->assertOk();
+        $this->assertSame([100, 0, 0, 0, 0, 0, 0], $otro->fresh()->cajasPorDia());
+    }
+
     public function test_validaciones_de_cambios_y_borradas(): void
     {
         $this->comoVendedor();
-        $n = $this->necesidad($this->programa, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [1, 2, 3, 4, 5, 6]);
+        $n = $this->necesidad($this->programa, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [1, 2, 3, 4, 5, 6, 0]);
 
         // Día fuera de rango, cajas inválidas.
-        foreach ([['6' => 1], ['x' => 1], ['1' => -3], ['1' => 1.5], ['1' => 1000000]] as $cajas) {
+        foreach ([['7' => 1], ['x' => 1], ['1' => -3], ['1' => 1.5], ['1' => 1000000]] as $cajas) {
             $this->guardar(['cambios' => [['id' => $n->id, 'cajas' => $cajas]]])->assertUnprocessable();
         }
         // Id repetido en cambios, o a la vez cambiado y borrado.
@@ -459,7 +485,7 @@ class HojaNecesidadesTest extends TestCase
 
         // Un renglón de otra semana o que ya no existe no se cambia; uno que ya no existe sí se puede «borrar».
         $otra = ProgramaSemanal::create(['lunes' => '2026-11-30']);
-        $ajeno = $this->necesidad($otra, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [1, 0, 0, 0, 0, 0]);
+        $ajeno = $this->necesidad($otra, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [1, 0, 0, 0, 0, 0, 0]);
         $this->guardar(['cambios' => [['id' => $ajeno->id, 'cajas' => ['0' => 1]]]])
             ->assertUnprocessable()->assertJsonValidationErrors('cambios.0.id');
         $this->guardar(['cambios' => [['id' => 999999, 'cajas' => ['0' => 1]]]])
@@ -467,7 +493,7 @@ class HojaNecesidadesTest extends TestCase
         $this->guardar(['borradas' => [$ajeno->id]])->assertUnprocessable()->assertJsonValidationErrors('borradas.0');
         $this->guardar(['borradas' => [999999]])->assertOk();
 
-        $this->assertSame([1, 2, 3, 4, 5, 6], $n->fresh()->cajasPorDia());
+        $this->assertSame([1, 2, 3, 4, 5, 6, 0], $n->fresh()->cajasPorDia());
         $this->assertNotNull(ProgramaNecesidad::find($ajeno->id));
     }
 
@@ -476,7 +502,7 @@ class HojaNecesidadesTest extends TestCase
         $this->comoVendedor();
         $otro = Cultivo::create(['nombre' => 'Tomate']);
         $presentacionAjena = \App\Models\Planeacion\Presentacion::create(['cultivo_id' => $otro->id, 'nombre' => 'Caja 25', 'is_active' => true]);
-        $n = $this->necesidad($this->programa, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [1, 0, 0, 0, 0, 0]);
+        $n = $this->necesidad($this->programa, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [1, 0, 0, 0, 0, 0, 0]);
 
         // Las variedades del renglón son de elote: la presentación nueva ya no cuadra.
         $this->guardar(['cambios' => [['id' => $n->id, 'presentacion_id' => $presentacionAjena->id]]])
@@ -487,7 +513,7 @@ class HojaNecesidadesTest extends TestCase
     public function test_cambio_sin_diferencia_real_no_avisa(): void
     {
         $this->comoVendedor();
-        $n = $this->necesidad($this->programa, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [1, 2, 3, 4, 5, 6]);
+        $n = $this->necesidad($this->programa, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [1, 2, 3, 4, 5, 6, 0]);
         Event::fake([ProgramaSemanalUpdated::class]);
 
         $this->guardar(['cambios' => [[
@@ -505,7 +531,7 @@ class HojaNecesidadesTest extends TestCase
     {
         // Ver las necesidades y capturar cortes no basta para capturar necesidades.
         Sanctum::actingAs($this->usuarioCon(['necesidades-venta' => ['view'], 'plan-corte' => ['view', 'capturar']]));
-        $necesidad = $this->necesidad($this->programa, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [1, 0, 0, 0, 0, 0]);
+        $necesidad = $this->necesidad($this->programa, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [1, 0, 0, 0, 0, 0, 0]);
 
         $this->guardar(['nuevas' => [$this->nueva('a')]])
             ->assertForbidden()
@@ -520,7 +546,7 @@ class HojaNecesidadesTest extends TestCase
     public function test_las_rutas_sueltas_de_necesidades_ya_no_existen(): void
     {
         $this->comoVendedor();
-        $n = $this->necesidad($this->programa, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [1, 0, 0, 0, 0, 0]);
+        $n = $this->necesidad($this->programa, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [1, 0, 0, 0, 0, 0, 0]);
 
         $this->postJson(self::BASE.'/programa/'.$this->programa->id.'/necesidades', $this->nueva())->assertNotFound();
         $this->putJson(self::BASE.'/necesidades/'.$n->id, ['dia' => 0, 'cajas' => 5])->assertNotFound();
@@ -536,7 +562,7 @@ class HojaNecesidadesTest extends TestCase
         $anterior = ProgramaSemanal::create(['lunes' => '2026-11-16']);
         $this->cargarWk48($anterior); // 12 renglones
         $cliente = CrmCliente::create(['empresa_id' => $this->empresaSbp()->id, 'nombre' => 'Cliente CRM']);
-        ProgramaNecesidad::where('programa_id', $anterior->id)->first()->update(['cliente_id' => $cliente->id, 'cliente_nombre' => 'Cliente CRM']);
+        ProgramaNecesidad::where('programa_id', $anterior->id)->first()->update(['cliente_id' => $cliente->id, 'cliente_nombre' => 'Cliente CRM', 'cajas_6' => 40]);
         $this->assertSame(12, ProgramaNecesidad::where('programa_id', $anterior->id)->count());
 
         $this->postJson($this->urlCopiar())
@@ -557,6 +583,9 @@ class HojaNecesidadesTest extends TestCase
             $this->assertSame($o->cajasPorDia(), $c->cajasPorDia());
             $this->assertEqualsCanonicalizing($o->variedades->pluck('id')->all(), $c->variedades->pluck('id')->all());
         }
+
+        // El domingo también se copia.
+        $this->assertSame(40, $copias[0]->cajas_6);
 
         // La semana anterior no se toca y la segunda vez ya no copia.
         $this->assertSame(12, ProgramaNecesidad::where('programa_id', $anterior->id)->count());
@@ -589,7 +618,7 @@ class HojaNecesidadesTest extends TestCase
         $this->comoVendedor();
         $wk47 = ProgramaSemanal::create(['lunes' => '2026-11-16']);
         $wk46 = ProgramaSemanal::create(['lunes' => '2026-11-09']);
-        $this->necesidad($wk46, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [1, 0, 0, 0, 0, 0]);
+        $this->necesidad($wk46, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [1, 0, 0, 0, 0, 0, 0]);
 
         $this->postJson($this->urlCopiar($wk47))
             ->assertUnprocessable()

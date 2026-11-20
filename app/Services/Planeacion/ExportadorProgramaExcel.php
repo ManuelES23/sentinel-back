@@ -13,7 +13,7 @@ use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 /**
  * Descarga de una semana del Programa semanal como .xlsx, con la distribución
  * de la hoja WK del Excel «PROGRAMA CORN OI 2026-2027» (ocho secciones, días de
- * lunes a sábado y total) y solo valores, sin fórmulas.
+ * lunes a domingo y total) y solo valores, sin fórmulas.
  *
  * No calcula nada: todas las cifras salen del payload que arma
  * ProgramaSemanalService::semana() para el Tablero; aquí solo se agrupan y se
@@ -35,12 +35,12 @@ class ExportadorProgramaExcel
 
     public const TIPO_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
-    private const DIAS_LETRA = ['L', 'M', 'X', 'J', 'V', 'S'];
+    private const DIAS_LETRA = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
 
-    /** Columnas de los seis días (G a L); la M lleva el total. */
-    private const COLUMNAS_DIA = ['G', 'H', 'I', 'J', 'K', 'L'];
+    /** Columnas de los siete días (G a M); la N lleva el total. */
+    private const COLUMNAS_DIA = ['G', 'H', 'I', 'J', 'K', 'L', 'M'];
 
-    private const COLUMNA_TOTAL = 'M';
+    private const COLUMNA_TOTAL = 'N';
 
     private const TIPOS_EMBARQUE = ['full' => 'Full', 'sencillo' => 'Sencillo'];
 
@@ -169,9 +169,9 @@ class ExportadorProgramaExcel
         $this->encabezado(['C' => 'COLOR', 'D' => 'REND cj/ha'] + array_combine(self::COLUMNAS_DIA, self::DIAS_LETRA) + [self::COLUMNA_TOTAL => 'HA TOTAL']);
 
         $porDia = [];
-        $totalDia = array_fill(0, 6, 0.0);
+        $totalDia = array_fill(0, 7, 0.0);
         foreach ($variedades as $v) {
-            $ha = array_fill(0, 6, 0.0);
+            $ha = array_fill(0, 7, 0.0);
             foreach ($semana['cortes'] as $c) {
                 if ((int) $c['variedad_id'] === (int) $v['id'] && isset($ha[$c['dia']])) {
                     $ha[$c['dia']] += $c['hectareas'];
@@ -204,9 +204,9 @@ class ExportadorProgramaExcel
     {
         $this->titulo(self::SECCIONES['produccion']);
 
-        $totalDia = array_fill(0, 6, 0);
+        $totalDia = array_fill(0, 7, 0);
         foreach ($variedades as $v) {
-            $cajas = array_fill(0, 6, 0);
+            $cajas = array_fill(0, 7, 0);
             foreach ($semana['cortes'] as $c) {
                 if ((int) $c['variedad_id'] === (int) $v['id'] && isset($cajas[$c['dia']])) {
                     $cajas[$c['dia']] += $c['cajas'];
@@ -235,11 +235,11 @@ class ExportadorProgramaExcel
         $this->titulo(self::SECCIONES['necesidades']);
 
         $nombreVariedad = array_column($variedades, 'nombre', 'id');
-        $totalDia = array_fill(0, 6, 0);
+        $totalDia = array_fill(0, 7, 0);
         foreach ($this->bodegasConDatos($semana['necesidades'], $cultivoId) as $bodega) {
             $this->encabezado(['B' => mb_strtoupper($bodega['nombre']), 'C' => 'CLIENTE', 'D' => 'PRESENT', 'E' => 'COLOR', 'F' => 'EMPAQUE'] + $this->fechasComoEncabezado($dias));
 
-            $subtotal = array_fill(0, 6, 0);
+            $subtotal = array_fill(0, 7, 0);
             foreach ($semana['necesidades'] as $n) {
                 if ((int) $n['cultivo_id'] !== $cultivoId || (int) $n['bodega_id'] !== (int) $bodega['id'] || array_sum($n['cajas']) === 0) {
                     continue;
@@ -298,7 +298,7 @@ class ExportadorProgramaExcel
         $juntos = [];
         foreach ($renglones as $r) {
             $llave = implode('|', [$r['presentacion_id'], $r['grupo_id'], $r['tipo_empaque_id']]);
-            $juntos[$llave] ??= ['cajas' => array_fill(0, 6, 0)] + $r;
+            $juntos[$llave] ??= ['cajas' => array_fill(0, 7, 0)] + $r;
             foreach ($r['cajas'] as $d => $valor) {
                 $juntos[$llave]['cajas'][$d] += $valor;
             }
@@ -319,7 +319,7 @@ class ExportadorProgramaExcel
                 $ordenEmpaque[$b['tipo_empaque_id']] ?? 0,
             ]);
 
-            $total = array_fill(0, 6, 0);
+            $total = array_fill(0, 7, 0);
             foreach ($clasificadas as $r) {
                 $this->texto('D'.$this->fila, $this->presentaciones[$r['presentacion_id']]['nombre'] ?? '');
                 $this->texto('E'.$this->fila, $nombreGrupo[$r['grupo_id']] ?? '');
@@ -331,7 +331,7 @@ class ExportadorProgramaExcel
                 $this->fila++;
             }
 
-            $sinClasificar = array_fill(0, 6, 0);
+            $sinClasificar = array_fill(0, 7, 0);
             foreach ($filas as $r) {
                 if ($r['clase'] !== 'ok') {
                     foreach ($r['cajas'] as $d => $valor) {
@@ -361,7 +361,7 @@ class ExportadorProgramaExcel
         $this->titulo(self::SECCIONES['balance']);
         $this->encabezado(['C' => 'CONCEPTO'] + $this->fechasComoEncabezado($dias));
 
-        $produccion = $necesidad = $delDia = $acumulado = array_fill(0, 6, 0);
+        $produccion = $necesidad = $delDia = $acumulado = array_fill(0, 7, 0);
         $inicial = 0;
         $balances = [];
         foreach ($grupos as $g) {
@@ -371,7 +371,7 @@ class ExportadorProgramaExcel
             $b = $semana['balance'][$g['id']];
             $balances[] = [$g['nombre'], $b];
             $inicial += $b['inicial'];
-            foreach (range(0, 5) as $d) {
+            foreach (range(0, 6) as $d) {
                 $produccion[$d] += $b['produccion'][$d];
                 $necesidad[$d] += $b['necesidad'][$d];
                 $delDia[$d] += $b['del_dia'][$d];
@@ -388,7 +388,7 @@ class ExportadorProgramaExcel
         $this->texto('C'.$this->fila, 'Inventario acumulado');
         $this->texto('D'.$this->fila, 'Inicial:');
         $this->cajas('E'.$this->fila, $inicial);
-        $this->filaDeDias($acumulado, true, $acumulado[5]);
+        $this->filaDeDias($acumulado, true, $acumulado[6]);
         $this->negritas('C'.$this->fila.':'.self::COLUMNA_TOTAL.$this->fila, true);
         $this->fila++;
 
@@ -440,10 +440,10 @@ class ExportadorProgramaExcel
             }
         }
 
-        $total = array_fill(0, 6, 0);
+        $total = array_fill(0, 7, 0);
         foreach ($this->bodegasActivasOCon(array_keys($cargas)) as $bodega) {
             foreach (self::TIPOS_EMBARQUE as $tipo => $etiqueta) {
-                $porDia = array_fill(0, 6, 0);
+                $porDia = array_fill(0, 7, 0);
                 foreach ($cargas[$bodega['id']][$tipo] ?? [] as $dia => $valor) {
                     if (isset($porDia[$dia])) {
                         $porDia[$dia] = $valor;
@@ -593,18 +593,18 @@ class ExportadorProgramaExcel
         return $celdas + [self::COLUMNA_TOTAL => 'TOTAL'];
     }
 
-    /** Renglón de fechas de los días sobre el encabezado de «Campo» (en el Excel va arriba de L M X J V S). */
+    /** Renglón de fechas de los días sobre el encabezado de «Campo» (en el Excel va arriba de L M X J V S D). */
     private function fechasDeDias(array $dias): void
     {
         foreach (self::COLUMNAS_DIA as $i => $columna) {
             $this->fecha($columna.$this->fila, $dias[$i]);
         }
-        $this->hoja->getStyle('G'.$this->fila.':L'.$this->fila)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
+        $this->hoja->getStyle('G'.$this->fila.':M'.$this->fila)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
         $this->fila++;
     }
 
     /**
-     * Seis valores en G a L y el total en M. Si $enteros es false se escriben
+     * Siete valores en G a M y el total en N. Si $enteros es false se escriben
      * tal cual (hectáreas, con decimales); `$total` fuerza el valor de M.
      *
      * @param  array<int, int|float>  $valores

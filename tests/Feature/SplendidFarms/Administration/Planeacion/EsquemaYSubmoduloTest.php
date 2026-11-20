@@ -244,7 +244,7 @@ class EsquemaYSubmoduloTest extends TestCase
         ]);
         $necesidad = $programa->necesidades()->create([
             'bodega_id' => $bodega->id, 'cliente_nombre' => 'Cliente libre', 'cultivo_id' => $cultivo->id,
-            'presentacion_id' => $presentacion->id, 'cajas_0' => 100, 'cajas_3' => 40,
+            'presentacion_id' => $presentacion->id, 'cajas_0' => 100, 'cajas_3' => 40, 'cajas_6' => 25,
         ]);
         $necesidad->variedades()->sync([$amarillo->id, $bicolor->id]);
         $programa->viajes()->create([
@@ -271,7 +271,7 @@ class EsquemaYSubmoduloTest extends TestCase
         $this->assertCount(1, $programa->cambios);
         $this->assertNotNull($programa->cambios[0]->created_at);
         $this->assertSame(['pizarron.jpg'], $programa->juntas[0]->foto);
-        $this->assertSame([100, 0, 0, 40, 0, 0], $programa->necesidades[0]->cajasPorDia());
+        $this->assertSame([100, 0, 0, 40, 0, 0, 25], $programa->necesidades[0]->cajasPorDia());
         $this->assertEqualsCanonicalizing(['Amarillo', 'Bicolor'], $programa->necesidades[0]->variedades->pluck('nombre')->all());
         $this->assertTrue($programa->acuerdos[0]->activo);
     }

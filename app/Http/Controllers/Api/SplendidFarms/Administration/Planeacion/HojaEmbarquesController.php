@@ -54,7 +54,7 @@ class HojaEmbarquesController extends Controller
             'celdas.*.cultivo_id' => ['required', 'integer'],
             'celdas.*.bodega_id' => ['required', 'integer'],
             'celdas.*.tipo' => ['required', 'in:full,sencillo'],
-            'celdas.*.dia' => ['required', 'integer', 'between:0,5'],
+            'celdas.*.dia' => ['required', 'integer', 'between:0,6'],
             'celdas.*.cargas' => ['present', 'nullable', 'integer', "between:0,$max"],
         ]);
 

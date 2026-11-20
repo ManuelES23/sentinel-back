@@ -6,11 +6,11 @@ namespace App\Services\Planeacion;
  * Calculador del balance semanal por grupo de variedades.
  *
  * Es una clase pura: solo recibe arreglos y no toca la base de datos.
- * La semana va de lunes (día 0) a sábado (día 5).
+ * La semana va de lunes (día 0) a domingo (día 6).
  */
 class CalculadoraBalance
 {
-    public const DIAS = 6;
+    public const DIAS = 7;
 
     /**
      * Calcula producción, necesidad y acumulado por grupo y por día.
