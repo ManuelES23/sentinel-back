@@ -135,10 +135,16 @@ class ExportarProgramaTest extends TestCase
 
         // Por color: disponible ÷ 1,040 cajas por carga.
         $color = $this->fila($hoja, 'POR COLOR', 1, ['B']);
-        $this->assertSame('CARGAS EQ.', $hoja->getCell('G'.($color + 1))->getValue());
-        $this->assertEqualsWithDelta(10.23, $hoja->getCell('G'.$this->fila($hoja, 'Amarillo / Bicolor', $color, ['C']))->getValue(), 0.0001);
-        $this->assertEqualsWithDelta(-2.78, $hoja->getCell('G'.$this->fila($hoja, 'Blanco', $color, ['C']))->getValue(), 0.0001);
-        $this->assertEqualsWithDelta(7.44, $hoja->getCell('G'.$this->fila($hoja, 'Total', $color, ['C']))->getValue(), 0.0001);
+        $this->assertSame('SOBRANTE', $hoja->getCell('F'.($color + 1))->getValue());
+        $this->assertSame('DISPONIBLE', $hoja->getCell('G'.($color + 1))->getValue());
+        $this->assertSame('CARGAS EQ.', $hoja->getCell('H'.($color + 1))->getValue());
+        $this->assertEqualsWithDelta(10.23, $hoja->getCell('H'.$this->fila($hoja, 'Amarillo / Bicolor', $color, ['C']))->getValue(), 0.0001);
+        $this->assertEqualsWithDelta(-2.78, $hoja->getCell('H'.$this->fila($hoja, 'Blanco', $color, ['C']))->getValue(), 0.0001);
+        $total = $this->fila($hoja, 'Total', $color, ['C']);
+        $this->assertEqualsWithDelta(7.44, $hoja->getCell('H'.$total)->getValue(), 0.0001);
+        // Sin sobrantes: la columna SOBRANTE es 0 y DISPONIBLE no cambia (producción − necesidad).
+        $this->assertSame(0, (int) $hoja->getCell('F'.$total)->getValue());
+        $this->assertSame(44225 - 36483, (int) $hoja->getCell('G'.$total)->getValue());
     }
 
     public function test_el_archivo_trae_valores_y_no_formulas(): void
@@ -305,6 +311,27 @@ class ExportarProgramaTest extends TestCase
         $this->assertEquals([1000, 0, 0, 0, 0, 0, 0, 1000], $this->dias($hoja, $necesidad + 1));
         // La necesidad sigue siendo solo de ventas.
         $this->assertEquals([8230, 2430, 7144, 10048, 2631, 6000, 0, 36483], $this->dias($hoja, $necesidad));
+    }
+
+    public function test_por_color_resta_el_sobrante_asignado_del_disponible(): void
+    {
+        $this->sobranteDeTexas($this->wk48());
+
+        $hoja = $this->libroDe($this->descargar()->assertOk())->getSheetByName('WK48');
+        $color = $this->fila($hoja, 'POR COLOR', 1, ['B']);
+        $total = $this->fila($hoja, 'Total', $color, ['C']);
+        $amarillo = $this->fila($hoja, 'Amarillo / Bicolor', $color, ['C']);
+
+        $this->assertSame('SOBRANTE', $hoja->getCell('F'.($color + 1))->getValue());
+        $this->assertSame(1000, (int) $hoja->getCell('F'.$total)->getValue());
+        $this->assertSame(1000, (int) $hoja->getCell('F'.$amarillo)->getValue());
+
+        // Igual que el balance y el Tablero: el DISPONIBLE total es el «Disponible del día» de la semana.
+        $balance = $this->fila($hoja, 'BALANCE PRODUCCIÓN vs NECESIDAD', 1, ['B']);
+        $delDia = (int) $hoja->getCell('N'.$this->fila($hoja, 'Disponible del día', $balance))->getValue();
+        $this->assertSame(7742 - 1000, $delDia);
+        $this->assertSame($delDia, (int) $hoja->getCell('G'.$total)->getValue());
+        $this->assertEqualsWithDelta(round($delDia / 1040, 2), $hoja->getCell('H'.$total)->getValue(), 0.0001);
     }
 
     public function test_el_total_de_empaque_no_junta_el_sobrante_con_la_venta_de_misma_llave(): void

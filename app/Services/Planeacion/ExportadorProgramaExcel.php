@@ -417,23 +417,25 @@ class ExportadorProgramaExcel
     private function escribirPorColor(array $semana, array $grupos, int $cajasPorCarga): void
     {
         $this->titulo(self::SECCIONES['color']);
-        $this->encabezado(['C' => 'COLOR', 'D' => 'PRODUCCIÓN', 'E' => 'NECESIDAD', 'F' => 'DISPONIBLE', 'G' => 'CARGAS EQ.']);
-        $this->texto('H'.($this->fila - 1), 'Cargas eq. = disponible ÷ cajas por carga ('.number_format($cajasPorCarga).')');
-        $this->hoja->getStyle('H'.($this->fila - 1))->getFont()->setItalic(true);
+        $this->encabezado(['C' => 'COLOR', 'D' => 'PRODUCCIÓN', 'E' => 'NECESIDAD', 'F' => 'SOBRANTE', 'G' => 'DISPONIBLE', 'H' => 'CARGAS EQ.']);
+        $this->texto('I'.($this->fila - 1), 'Necesidad = solo ventas · Disponible = producción − necesidad − sobrante asignado · Cargas eq. = disponible ÷ cajas por carga ('.number_format($cajasPorCarga).')');
+        $this->hoja->getStyle('I'.($this->fila - 1))->getFont()->setItalic(true);
 
-        $total = ['produccion' => 0, 'necesidad' => 0];
+        $total = ['produccion' => 0, 'necesidad' => 0, 'sobrante' => 0];
         foreach ($grupos as $g) {
             if (! isset($semana['balance'][$g['id']])) {
                 continue;
             }
             $b = $semana['balance'][$g['id']];
-            $this->filaDeColor($g['nombre'], array_sum($b['produccion']), array_sum($b['necesidad']), $cajasPorCarga);
+            $sobrante = array_sum($b['sobrante_asignado'] ?? []);
+            $this->filaDeColor($g['nombre'], array_sum($b['produccion']), array_sum($b['necesidad']), $sobrante, $cajasPorCarga);
             $total['produccion'] += array_sum($b['produccion']);
             $total['necesidad'] += array_sum($b['necesidad']);
+            $total['sobrante'] += $sobrante;
         }
 
-        $this->filaDeColor('Total', $total['produccion'], $total['necesidad'], $cajasPorCarga);
-        $this->negritas('C'.($this->fila - 1).':G'.($this->fila - 1), true);
+        $this->filaDeColor('Total', $total['produccion'], $total['necesidad'], $total['sobrante'], $cajasPorCarga);
+        $this->negritas('C'.($this->fila - 1).':H'.($this->fila - 1), true);
         $this->fila++;
     }
 
@@ -627,15 +629,16 @@ class ExportadorProgramaExcel
         $this->celdaNumerica(self::COLUMNA_TOTAL.$this->fila, $total ?? array_sum($valores), $enteros);
     }
 
-    private function filaDeColor(string $nombre, int $produccion, int $necesidad, int $cajasPorCarga): void
+    private function filaDeColor(string $nombre, int $produccion, int $necesidad, int $sobrante, int $cajasPorCarga): void
     {
-        $disponible = $produccion - $necesidad;
+        $disponible = $produccion - $necesidad - $sobrante;
         $this->texto('C'.$this->fila, $nombre);
         $this->cajas('D'.$this->fila, $produccion);
         $this->cajas('E'.$this->fila, $necesidad);
-        $this->cajas('F'.$this->fila, $disponible);
-        $this->hoja->setCellValue('G'.$this->fila, round($disponible / max(1, $cajasPorCarga), 2));
-        $this->hoja->getStyle('G'.$this->fila)->getNumberFormat()->setFormatCode('0.00;[Red]-0.00');
+        $this->cajas('F'.$this->fila, $sobrante);
+        $this->cajas('G'.$this->fila, $disponible);
+        $this->hoja->setCellValue('H'.$this->fila, round($disponible / max(1, $cajasPorCarga), 2));
+        $this->hoja->getStyle('H'.$this->fila)->getNumberFormat()->setFormatCode('0.00;[Red]-0.00');
         $this->fila++;
     }
 
