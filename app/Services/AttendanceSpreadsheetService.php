@@ -158,6 +158,11 @@ class AttendanceSpreadsheetService
                 'device_serial_no',
             ]),
             'notes' => $this->firstString($row, ['notes', 'notas', 'observaciones', 'remarks']),
+            // Nombre tal como lo trae el checador; solo informativo (p. ej. para
+            // decirle al usuario a quién le falta capturar la clave del checador).
+            'name' => $this->firstString($row, ['nombre', 'name', 'employee_name', 'nombre_empleado'])
+                ?? (trim(($this->firstString($row, ['first_name', 'nombres']) ?? '') . ' '
+                    . ($this->firstString($row, ['last_name', 'apellidos']) ?? '')) ?: null),
         ];
     }
 
@@ -184,6 +189,7 @@ class AttendanceSpreadsheetService
                     'status' => $row['status'],
                     'device' => $row['device'],
                     'notes' => $row['notes'],
+                    'name' => $row['name'],
                     'times' => [],
                 ];
             }
