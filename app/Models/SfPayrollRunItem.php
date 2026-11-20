@@ -20,6 +20,8 @@ class SfPayrollRunItem extends Model
         'salary',
         'daily_rate',
         'effective_days',
+        'destajo_days',
+        'days_without_rate',
         'gross_pay',
     ];
 
@@ -27,6 +29,8 @@ class SfPayrollRunItem extends Model
         'salary' => 'decimal:2',
         'daily_rate' => 'decimal:4',
         'effective_days' => 'decimal:2',
+        'destajo_days' => 'decimal:2',
+        'days_without_rate' => 'decimal:2',
         'gross_pay' => 'decimal:2',
     ];
 

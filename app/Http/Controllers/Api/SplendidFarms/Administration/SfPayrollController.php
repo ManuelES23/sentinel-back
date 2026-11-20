@@ -3,11 +3,10 @@
 namespace App\Http\Controllers\Api\SplendidFarms\Administration;
 
 use App\Http\Controllers\Controller;
-use App\Models\SfAttendanceRecord;
-use App\Models\SfEmployee;
 use App\Models\SfPayrollRun;
 use App\Services\AttendanceSpreadsheetService;
 use App\Services\SplendidFarms\SfAttendanceImportService;
+use App\Services\SplendidFarms\SfPayrollCalculator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -17,6 +16,7 @@ class SfPayrollController extends Controller
     public function __construct(
         private readonly AttendanceSpreadsheetService $spreadsheetService,
         private readonly SfAttendanceImportService $importService,
+        private readonly SfPayrollCalculator $payrollCalculator,
     )
     {
     }
@@ -99,8 +99,8 @@ class SfPayrollController extends Controller
             $request->user()?->id,
         );
 
-        $payrollRows = $this->buildPayrollRows(
-            $validated['enterprise_id'],
+        $payrollRows = $this->payrollCalculator->rows(
+            (int) $validated['enterprise_id'],
             $validated['start_date'],
             $validated['end_date']
         );
@@ -129,56 +129,6 @@ class SfPayrollController extends Controller
                 ],
             ],
         ]);
-    }
-
-    private function buildPayrollRows(int $enterpriseId, string $startDate, string $endDate): array
-    {
-        $employees = SfEmployee::query()
-            ->where('enterprise_id', $enterpriseId)
-            ->where('status', SfEmployee::STATUS_ACTIVE)
-            ->get();
-
-        $rows = [];
-
-        foreach ($employees as $employee) {
-            $records = SfAttendanceRecord::query()
-                ->where('sf_employee_id', $employee->id)
-                ->whereBetween('date', [$startDate, $endDate])
-                ->get();
-
-            $effectiveDays = $records->sum(function (SfAttendanceRecord $record) {
-                return match ($record->status) {
-                    'present', 'late', 'early_leave' => 1,
-                    'half_day' => 0.5,
-                    default => 0,
-                };
-            });
-
-            $dailyRate = (float) ($employee->daily_rate ?? 0);
-            if ($dailyRate <= 0 && $employee->salary) {
-                $dailyRate = match ($employee->payment_frequency) {
-                    'weekly' => ((float) $employee->salary) / 7,
-                    'monthly' => ((float) $employee->salary) / 30,
-                    default => ((float) $employee->salary) / 15,
-                };
-            }
-
-            $gross = round($effectiveDays * $dailyRate, 2);
-
-            $rows[] = [
-                'sf_employee_id' => $employee->id,
-                'code' => $employee->code,
-                'checker_key' => $employee->checker_key,
-                'full_name' => $employee->full_name,
-                'payment_frequency' => $employee->payment_frequency,
-                'salary' => (float) ($employee->salary ?? 0),
-                'daily_rate' => round($dailyRate, 4),
-                'effective_days' => round($effectiveDays, 2),
-                'gross_pay' => $gross,
-            ];
-        }
-
-        return $rows;
     }
 
     private function persistPayrollRun(

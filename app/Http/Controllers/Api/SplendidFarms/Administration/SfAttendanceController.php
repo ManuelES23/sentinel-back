@@ -5,10 +5,11 @@ namespace App\Http\Controllers\Api\SplendidFarms\Administration;
 use App\Http\Controllers\Controller;
 use App\Models\SfAttendanceRecord;
 use App\Models\SfEmployee;
-use App\Models\SfPosition;
 use App\Models\SfPositionAssignment;
 use App\Services\AttendanceSpreadsheetService;
 use App\Services\SplendidFarms\SfAttendanceImportService;
+use App\Services\SplendidFarms\SfDailyPositionService;
+use App\Services\SplendidFarms\SfPayrollCalculator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -18,6 +19,8 @@ class SfAttendanceController extends Controller
     public function __construct(
         private readonly AttendanceSpreadsheetService $spreadsheetService,
         private readonly SfAttendanceImportService $importService,
+        private readonly SfDailyPositionService $dailyPositions,
+        private readonly SfPayrollCalculator $payrollCalculator,
     )
     {
     }
@@ -59,11 +62,25 @@ class SfAttendanceController extends Controller
             }
         }
 
+        // Sin asignación ese día, el permanente muestra su puesto fijo del alta.
+        $fixedMap = [];
+        if ($employeeIds->isNotEmpty()) {
+            $employees = SfEmployee::query()
+                ->whereIn('id', $employeeIds)
+                ->get(['id', 'enterprise_id', 'employee_type', 'position']);
+            foreach ($employees->groupBy('enterprise_id') as $enterpriseId => $group) {
+                $positions = $this->dailyPositions->positions((int) $enterpriseId);
+                foreach ($this->dailyPositions->fixedPositions($group, $positions) as $employeeId => $position) {
+                    $fixedMap[$employeeId] = ['code' => $position->code, 'name' => $position->name];
+                }
+            }
+        }
+
         $records->setCollection(
-            $collection->map(function (SfAttendanceRecord $record) use ($assignmentMap) {
+            $collection->map(function (SfAttendanceRecord $record) use ($assignmentMap, $fixedMap) {
                 $dateKey = $record->date?->toDateString();
                 $mapKey = $record->sf_employee_id . '|' . $dateKey;
-                $position = $assignmentMap[$mapKey] ?? null;
+                $position = $assignmentMap[$mapKey] ?? $fixedMap[$record->sf_employee_id] ?? null;
 
                 $record->setAttribute('assigned_position_code', $position['code'] ?? null);
                 $record->setAttribute('assigned_position_name', $position['name'] ?? null);
@@ -128,50 +145,11 @@ class SfAttendanceController extends Controller
             'enterprise_id' => 'required|exists:enterprises,id',
         ]);
 
-        $employees = SfEmployee::query()
-            ->where('enterprise_id', $validated['enterprise_id'])
-            ->where('status', SfEmployee::STATUS_ACTIVE)
-            ->get();
-
-        $rows = [];
-
-        foreach ($employees as $employee) {
-            $records = SfAttendanceRecord::query()
-                ->where('sf_employee_id', $employee->id)
-                ->whereBetween('date', [$validated['start_date'], $validated['end_date']])
-                ->get();
-
-            $effectiveDays = $records->sum(function (SfAttendanceRecord $record) {
-                return match ($record->status) {
-                    'present', 'late', 'early_leave' => 1,
-                    'half_day' => 0.5,
-                    default => 0,
-                };
-            });
-
-            $dailyRate = (float) ($employee->daily_rate ?? 0);
-            if ($dailyRate <= 0 && $employee->salary) {
-                $dailyRate = match ($employee->payment_frequency) {
-                    'weekly' => ((float) $employee->salary) / 7,
-                    'monthly' => ((float) $employee->salary) / 30,
-                    default => ((float) $employee->salary) / 15,
-                };
-            }
-
-            $gross = round($effectiveDays * $dailyRate, 2);
-
-            $rows[] = [
-                'sf_employee_id' => $employee->id,
-                'code' => $employee->code,
-                'checker_key' => $employee->checker_key,
-                'full_name' => $employee->full_name,
-                'payment_frequency' => $employee->payment_frequency,
-                'salary' => (float) ($employee->salary ?? 0),
-                'daily_rate' => round($dailyRate, 2),
-                'effective_days' => $effectiveDays,
-                'gross_pay' => $gross,
-            ];
-        }
+        $rows = $this->payrollCalculator->rows(
+            (int) $validated['enterprise_id'],
+            $validated['start_date'],
+            $validated['end_date'],
+        );
 
         return response()->json([
             'success' => true,
@@ -190,103 +168,68 @@ class SfAttendanceController extends Controller
     }
 
     /**
-     * Listar asignaciones de puesto por fecha (operativa diaria de personal temporal).
+     * Hoja de puestos del día: personal activo con su puesto, pago y si ya checó.
      */
-    public function positionAssignments(Request $request): JsonResponse
+    public function dailyPositions(Request $request): JsonResponse
     {
         $validated = $request->validate([
             'enterprise_id' => 'required|exists:enterprises,id',
-            'assignment_date' => 'nullable|date',
+            'date' => 'required|date_format:Y-m-d',
         ]);
-
-        $assignmentDate = $validated['assignment_date'] ?? now()->toDateString();
-
-        $items = SfPositionAssignment::query()
-            ->with([
-                'employee:id,enterprise_id,code,checker_key,first_name,last_name,second_last_name',
-                'position:id,enterprise_id,code,name,department',
-                'assignedBy:id,name',
-            ])
-            ->where('assignment_date', $assignmentDate)
-            ->whereHas('employee', fn($q) => $q->where('enterprise_id', $validated['enterprise_id']))
-            ->orderByDesc('assigned_at')
-            ->orderByDesc('id')
-            ->get();
 
         return response()->json([
             'success' => true,
-            'data' => $items,
+            'data' => $this->dailyPositions->sheet((int) $validated['enterprise_id'], $validated['date']),
         ]);
     }
 
     /**
-     * Escanear QR/llave de checador y asignar puesto del día.
+     * Asigna (o quita, con sf_position_id null) el puesto del día a uno o varios empleados.
      */
-    public function assignPositionByQr(Request $request): JsonResponse
+    public function assignDailyPositions(Request $request): JsonResponse
     {
         $validated = $request->validate([
             'enterprise_id' => 'required|exists:enterprises,id',
-            'sf_position_id' => 'required|exists:sf_positions,id',
-            'qr_code' => 'required|string|max:120',
-            'assignment_date' => 'nullable|date',
-            'source_device' => 'nullable|string|max:100',
+            'date' => 'required|date_format:Y-m-d',
+            'employee_ids' => 'required|array|min:1|max:1000',
+            'employee_ids.*' => 'integer',
+            'sf_position_id' => 'nullable|integer',
         ]);
 
-        $position = SfPosition::query()
-            ->where('id', $validated['sf_position_id'])
-            ->where('enterprise_id', $validated['enterprise_id'])
-            ->first();
-
-        if (! $position) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'El puesto seleccionado no pertenece a la empresa activa',
-            ], 422);
-        }
-
-        $qrCode = strtoupper(trim($validated['qr_code']));
-
-        $employee = SfEmployee::query()
-            ->where('enterprise_id', $validated['enterprise_id'])
-            ->where(function ($query) use ($qrCode) {
-                $query->whereRaw('UPPER(checker_key) = ?', [$qrCode])
-                    ->orWhereRaw('UPPER(code) = ?', [$qrCode]);
-            })
-            ->first();
-
-        if (! $employee) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'No se encontró personal con ese QR/ID checador en la empresa seleccionada',
-            ], 404);
-        }
-
-        $assignmentDate = $validated['assignment_date'] ?? now()->toDateString();
-
-        $assignment = SfPositionAssignment::updateOrCreate(
-            [
-                'sf_employee_id' => $employee->id,
-                'assignment_date' => $assignmentDate,
-            ],
-            [
-                'sf_position_id' => $position->id,
-                'assigned_at' => now(),
-                'assigned_by_user_id' => $request->user()?->id,
-                'source_device' => $validated['source_device'] ?? null,
-                'qr_code_raw' => $qrCode,
-            ]
+        $rows = $this->dailyPositions->assign(
+            (int) $validated['enterprise_id'],
+            $validated['date'],
+            $validated['employee_ids'],
+            isset($validated['sf_position_id']) ? (int) $validated['sf_position_id'] : null,
+            $request->user()?->id,
         );
-
-        $assignment->load([
-            'employee:id,enterprise_id,code,checker_key,first_name,last_name,second_last_name',
-            'position:id,enterprise_id,code,name,department',
-            'assignedBy:id,name',
-        ]);
 
         return response()->json([
             'success' => true,
-            'message' => 'Asignación de puesto registrada correctamente',
-            'data' => $assignment,
+            'message' => 'Puesto del día actualizado',
+            'data' => ['employees' => $rows],
+        ]);
+    }
+
+    /**
+     * Copia a los temporales sin puesto el puesto del día anterior con asignaciones.
+     */
+    public function copyPreviousDailyPositions(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'enterprise_id' => 'required|exists:enterprises,id',
+            'date' => 'required|date_format:Y-m-d',
+        ]);
+
+        $result = $this->dailyPositions->copyPrevious(
+            (int) $validated['enterprise_id'],
+            $validated['date'],
+            $request->user()?->id,
+        );
+
+        return response()->json([
+            'success' => true,
+            'data' => $result,
         ]);
     }
 }

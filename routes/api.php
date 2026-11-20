@@ -428,8 +428,9 @@ Route::middleware('auth:sanctum')->group(function () {
                     Route::get('/', [App\Http\Controllers\Api\SplendidFarms\Administration\SfAttendanceController::class, 'index']);
                     Route::post('importar-excel', [App\Http\Controllers\Api\SplendidFarms\Administration\SfAttendanceController::class, 'importExcel']);
                     Route::get('nomina-resumen', [App\Http\Controllers\Api\SplendidFarms\Administration\SfAttendanceController::class, 'payrollSummary']);
-                    Route::get('asignacion-puestos', [App\Http\Controllers\Api\SplendidFarms\Administration\SfAttendanceController::class, 'positionAssignments']);
-                    Route::post('asignacion-puestos/scan', [App\Http\Controllers\Api\SplendidFarms\Administration\SfAttendanceController::class, 'assignPositionByQr']);
+                    Route::get('puestos-del-dia', [App\Http\Controllers\Api\SplendidFarms\Administration\SfAttendanceController::class, 'dailyPositions']);
+                    Route::post('puestos-del-dia/asignar', [App\Http\Controllers\Api\SplendidFarms\Administration\SfAttendanceController::class, 'assignDailyPositions']);
+                    Route::post('puestos-del-dia/copiar-anterior', [App\Http\Controllers\Api\SplendidFarms\Administration\SfAttendanceController::class, 'copyPreviousDailyPositions']);
                 });
 
                 // Nómina SF (submódulo histórico)
