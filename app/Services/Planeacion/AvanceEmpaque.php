@@ -22,6 +22,9 @@ use Carbon\CarbonInterface;
  * cubre faltantes anteriores, pero no deja saldo a favor para días después).
  * `para_hoy` = programado de hoy + atraso, solo si hoy cae en la semana. En una
  * semana futura no hay atraso; en una pasada, es el de toda la semana.
+ *
+ * Real: solo los pallets de las plantas que cuentan (`PlantasAvance::ids()`,
+ * por omisión las propias); `plantas` las lista en orden de nombre.
  */
 final class AvanceEmpaque
 {
@@ -29,6 +32,7 @@ final class AvanceEmpaque
         private ProgramaSemanalService $programas,
         private RealEmpacado $real,
         private CatalogoPlaneacion $catalogo,
+        private PlantasAvance $plantas = new PlantasAvance,
     ) {}
 
     public function de(string $lunes, ?int $cultivoId, CarbonInterface $hoy): array
@@ -43,7 +47,8 @@ final class AvanceEmpaque
         $hoyEnSemana = $indiceHoy >= 0 && $indiceHoy < $dias;
 
         $empaque = $this->programas->empaqueDeSemana($lunes);
-        $real = $this->real->deLaSemana($lunes, $cultivoId);
+        $plantaIds = $this->plantas->ids();
+        $real = $this->real->deLaSemana($lunes, $cultivoId, $plantaIds);
 
         // Presentaciones citadas por el programa y por el real, de una vez.
         $presentacionIds = array_values(array_unique(array_merge(
@@ -162,6 +167,7 @@ final class AvanceEmpaque
             'sin_programa' => $sinPrograma,
             'sin_clasificar' => $real['sin_clasificar'],
             'programado_sin_clasificar' => $programadoSinClasificar,
+            'plantas' => PlantasAvance::conNombre($plantaIds),
             'totales' => [
                 'programado' => $sumaFilas($renglones, 'programado') + array_sum($programadoSinClasificar),
                 'real' => $sumaFilas($renglones, 'real') + $sumaFilas($sinPrograma, 'real') + array_sum($real['sin_clasificar']['cajas']),

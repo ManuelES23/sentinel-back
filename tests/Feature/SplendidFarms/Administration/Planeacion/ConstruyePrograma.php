@@ -57,6 +57,8 @@ trait ConstruyePrograma
 
     private ?int $plantaEmpaqueId = null;
 
+    private int $contadorPlantas = 0;
+
     private function correrMigracion(string $archivo): void
     {
         (require base_path('database/migrations/'.$archivo))->up();
@@ -327,7 +329,8 @@ trait ConstruyePrograma
 
         $pallet = ProduccionEmpaque::create(array_merge([
             'temporada_id' => $this->temporada->id,
-            'entity_id' => $this->plantaEmpaqueId(),
+            // Con `entity_id` en `$extra` no se crea la planta por omisión.
+            'entity_id' => array_key_exists('entity_id', $extra) ? $extra['entity_id'] : $this->plantaEmpaqueId(),
             'recipe_id' => $receta?->id,
             'folio_produccion' => "PDN-PLAN-{$this->contadorPallets}",
             'fecha_produccion' => $fecha,
@@ -351,34 +354,42 @@ trait ConstruyePrograma
         return $pallet;
     }
 
+    /** Planta de pruebas por omisión: propia (`is_external = 0`), así cuenta en el Avance. */
     private function plantaEmpaqueId(): int
     {
         if ($this->plantaEmpaqueId === null) {
-            $branch = Branch::create([
-                'enterprise_id' => $this->empresaSfId(),
-                'code' => 'SF-PLAN',
-                'name' => 'Casa Matriz',
-                'slug' => 'casa-matriz-plan',
-                'is_active' => true,
-                'is_main' => true,
-            ]);
-            $tipo = EntityType::create([
-                'code' => 'PLANTA-PLAN',
-                'name' => 'Planta Empacadora',
-                'slug' => 'planta-empacadora-plan',
-                'is_active' => true,
-            ]);
-            $this->plantaEmpaqueId = Entity::create([
-                'branch_id' => $branch->id,
-                'entity_type_id' => $tipo->id,
-                'code' => 'EMP-PLAN',
-                'name' => 'Empaque Principal',
-                'slug' => 'empaque-principal-plan',
-                'is_active' => true,
-            ])->id;
+            $this->plantaEmpaqueId = $this->planta('Empaque Principal')->id;
         }
 
         return $this->plantaEmpaqueId;
+    }
+
+    /** Planta (entidad) de pruebas, propia o externa, en la sucursal de pruebas. */
+    protected function planta(string $nombre, bool $externa = false): Entity
+    {
+        $this->contadorPlantas++;
+        $branch = Branch::firstOrCreate(['code' => 'SF-PLAN'], [
+            'enterprise_id' => $this->empresaSfId(),
+            'name' => 'Casa Matriz',
+            'slug' => 'casa-matriz-plan',
+            'is_active' => true,
+            'is_main' => true,
+        ]);
+        $tipo = EntityType::firstOrCreate(['code' => 'PLANTA-PLAN'], [
+            'name' => 'Planta Empacadora',
+            'slug' => 'planta-empacadora-plan',
+            'is_active' => true,
+        ]);
+
+        return Entity::create([
+            'branch_id' => $branch->id,
+            'entity_type_id' => $tipo->id,
+            'code' => $this->contadorPlantas === 1 ? 'EMP-PLAN' : "EMP-PLAN-{$this->contadorPlantas}",
+            'name' => $nombre,
+            'slug' => $this->contadorPlantas === 1 ? 'empaque-principal-plan' : "planta-plan-{$this->contadorPlantas}",
+            'is_active' => true,
+            'is_external' => $externa,
+        ]);
     }
 
     protected function corte(ProgramaSemanal $p, string $variedad, int $dia, float $hectareas, ?Etapa $etapa = null): ProgramaCorte

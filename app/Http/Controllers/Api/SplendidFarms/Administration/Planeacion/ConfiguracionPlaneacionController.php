@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion;
 use App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\Concerns\PermisoPlaneacion;
 use App\Http\Controllers\Controller;
 use App\Models\Cultivo;
+use App\Models\Entity;
 use App\Models\Planeacion\BodegaDestino;
 use App\Models\Planeacion\ConfiguracionPlaneacion;
 use App\Models\Planeacion\GrupoBalance;
@@ -17,6 +18,7 @@ use App\Models\Planeacion\TipoEmpaque;
 use App\Models\Recipe;
 use App\Models\Temporada;
 use App\Models\Variedad;
+use App\Services\Planeacion\PlantasAvance;
 use App\Services\Planeacion\ProgramaSemanalService;
 use App\Services\Planeacion\RegistroCambiosPrograma;
 use Illuminate\Database\Eloquent\Model;
@@ -71,7 +73,7 @@ class ConfiguracionPlaneacionController extends Controller
     ];
 
     /** Toda la configuración en una sola lectura. */
-    public function show(): JsonResponse
+    public function show(PlantasAvance $plantas): JsonResponse
     {
         $this->exigirPermiso('configuracion', 'view');
 
@@ -114,6 +116,7 @@ class ConfiguracionPlaneacionController extends Controller
                     ->all(),
                 'rendimientos' => $this->rendimientos(),
                 'cajas_por_carga' => (int) ConfiguracionPlaneacion::valor('cajas_por_carga', 1040),
+                'avance_plantas' => $plantas->paraConfiguracion(),
             ],
         ]);
     }
@@ -390,6 +393,37 @@ class ConfiguracionPlaneacionController extends Controller
             'success' => true,
             'message' => 'Cajas por carga guardadas.',
             'data' => ['cajas_por_carga' => (int) $datos['valor']],
+        ]);
+    }
+
+    /**
+     * Plantas cuyos pallets cuentan en el Avance de empaque. Lista vacía =
+     * ninguna (el real queda en ceros); los ids se guardan únicos y ordenados.
+     */
+    public function avancePlantas(Request $request, PlantasAvance $plantas): JsonResponse
+    {
+        $this->exigirPermiso('configuracion', 'editar');
+
+        $datos = $request->validate(['entity_ids' => ['present', 'array']], [
+            'entity_ids.present' => 'Elige las plantas que cuentan en el avance.',
+            'entity_ids.array' => 'Elige las plantas que cuentan en el avance.',
+        ]);
+
+        // Un solo error en `entity_ids` (no por posición) y una sola consulta.
+        $ids = $datos['entity_ids'];
+        $enteros = array_filter($ids, fn ($id) => is_int($id) || (is_string($id) && ctype_digit($id)));
+        $ids = PlantasAvance::normalizar($enteros);
+        if (count($enteros) !== count($datos['entity_ids'])
+            || ($ids && Entity::withTrashed()->whereIn('id', $ids)->count() !== count($ids))) {
+            throw ValidationException::withMessages(['entity_ids' => 'Hay plantas que no existen.']);
+        }
+
+        $plantas->guardar($ids);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Plantas del avance guardadas.',
+            'data' => ['avance_plantas' => $plantas->paraConfiguracion()],
         ]);
     }
 

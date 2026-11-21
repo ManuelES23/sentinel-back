@@ -32,6 +32,11 @@ use Carbon\CarbonImmutable;
  * Con cultivo: un renglón cuenta si la presentación de su combinación es del
  * cultivo; una parte sin clasificar, si la variedad del pallet es del cultivo
  * (sin variedad no se sabe el cultivo y se cuenta, para no perderla).
+ *
+ * Con plantas (`$plantaIds`): solo cuentan los pallets de esas entidades
+ * (`produccion_empaque.entity_id`); una lista vacía no cuenta ninguno y un
+ * pallet sin planta no cuenta. Null = todas las plantas (las que cuentan en el
+ * Avance las decide `PlantasAvance`).
  */
 final class RealEmpacado
 {
@@ -53,7 +58,7 @@ final class RealEmpacado
      *     sin_clasificar: array{cajas: int[], pallets: int, recetas: list<array{recipe_id: ?int, nombre: ?string, cajas: int}>}
      * }
      */
-    public function deLaSemana(string $lunes, ?int $cultivoId): array
+    public function deLaSemana(string $lunes, ?int $cultivoId, ?array $plantaIds = null): array
     {
         $inicio = CarbonImmutable::parse($lunes)->startOfDay();
         $dias = [];
@@ -66,6 +71,7 @@ final class RealEmpacado
         $pallets = ProduccionEmpaque::query()
             ->where('fecha_produccion', '>=', $inicio->toDateString())
             ->where('fecha_produccion', '<', $inicio->addDays(CalculadoraBalance::DIAS)->toDateString())
+            ->when($plantaIds !== null, fn ($q) => $plantaIds === [] ? $q->whereRaw('1 = 0') : $q->whereIn('entity_id', $plantaIds))
             ->with('detalles:id,produccion_id,numero_entrada,recipe_id,total_cajas')
             ->get(['id', 'fecha_produccion', 'variedad_id', 'recipe_id', 'total_cajas']);
 
