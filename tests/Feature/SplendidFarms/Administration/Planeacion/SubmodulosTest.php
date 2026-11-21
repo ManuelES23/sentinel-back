@@ -28,6 +28,7 @@ class SubmodulosTest extends TestCase
     private const MIGRACION_MOVER = '2026_10_30_100000_mover_planeacion_a_administracion.php';
     private const MIGRACION_DIVIDIR = '2026_11_11_100100_dividir_planeacion_en_submodulos.php';
     private const MIGRACION_EMPAQUE = '2026_11_20_110100_add_programa_empaque_submodulo.php';
+    private const MIGRACION_AVANCE = '2026_11_20_130000_add_avance_empaque_submodulo.php';
 
     private const SUBMODULOS = [
         'tablero-semanal' => ['view', 'editar-notas'],
@@ -348,6 +349,189 @@ class SubmodulosTest extends TestCase
         $respuesta->assertOk();
         $this->assertTrue($respuesta->json('data.permisos.programa_empaque.view'));
         $this->assertFalse($respuesta->json('data.permisos.programa_empaque.capturar'));
+    }
+
+    /** Concede permisos de un submódulo de Planeación con su acceso (sin pasar por la migración). */
+    private function conceder(User $usuario, string $submodulo, array $slugs, bool $granted = true, bool $accesoActivo = true): void
+    {
+        $submoduloId = DB::table('submodules')->where('slug', $submodulo)->value('id');
+        DB::table('user_submodule_access')->updateOrInsert(
+            ['user_id' => $usuario->id, 'submodule_id' => $submoduloId],
+            ['is_active' => $accesoActivo, 'granted_at' => now(), 'created_at' => now(), 'updated_at' => now()],
+        );
+        foreach ($slugs as $slug) {
+            $tipoId = DB::table('submodule_permission_types')->where('submodule_id', $submoduloId)->where('slug', $slug)->value('id');
+            DB::table('user_submodule_permissions')->insert([
+                'user_id' => $usuario->id, 'submodule_id' => $submoduloId, 'permission_type_id' => $tipoId,
+                'is_granted' => $granted, 'created_at' => now(), 'updated_at' => now(),
+            ]);
+        }
+    }
+
+    private function conAccesoAlModulo(User $usuario, int $moduloId): bool
+    {
+        return DB::table('user_module_access')->where('user_id', $usuario->id)->where('module_id', $moduloId)->where('is_active', true)->exists();
+    }
+
+    /** Planeación con los siete submódulos de antes de «Avance de empaque». */
+    private function sembrarHastaEmpaque(): int
+    {
+        $moduloId = $this->sembrarEstructura();
+        $this->correr(self::MIGRACION_DIVIDIR);
+        $this->correr(self::MIGRACION_EMPAQUE);
+
+        return $moduloId;
+    }
+
+    public function test_crea_el_submodulo_avance_empaque_despues_de_programa_empaque(): void
+    {
+        $moduloId = $this->sembrarHastaEmpaque();
+        $admin = User::factory()->create(['email' => 'admin@sentinel.com']);
+        $demo = User::factory()->create(['email' => 'demo@sentinel.com']);
+        $ordenEmpaque = (int) DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'programa-empaque')->value('order');
+        $ordenEmbarquesAntes = (int) DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'embarques')->value('order');
+
+        $this->correr(self::MIGRACION_AVANCE);
+        $this->correr(self::MIGRACION_AVANCE);
+
+        $submodulos = DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'avance-empaque')->get();
+        $this->assertCount(1, $submodulos);
+        $avance = $submodulos[0];
+        $this->assertSame('Avance de empaque', $avance->name);
+        $this->assertSame('Empaque real contra el programa', $avance->description);
+        $this->assertSame('ClipboardCheck', $avance->icon);
+        $this->assertTrue((bool) $avance->is_active);
+        $this->assertSame($ordenEmpaque + 1, (int) $avance->order);
+
+        // Los siguientes se recorren una posición, una sola vez aunque se corra dos veces.
+        $this->assertSame($ordenEmbarquesAntes + 1, (int) DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'embarques')->value('order'));
+        $this->assertSame(
+            ['tablero-semanal', 'plan-corte', 'necesidades-venta', 'programa-empaque', 'avance-empaque', 'embarques', 'resumen-temporada', 'configuracion'],
+            DB::table('submodules')->where('module_id', $moduloId)->where('is_active', true)->orderBy('order')->pluck('slug')->all(),
+        );
+
+        $permisos = DB::table('submodule_permission_types')->where('submodule_id', $avance->id)->orderBy('order')->get();
+        $this->assertSame(['view'], $permisos->pluck('slug')->all());
+        $this->assertSame(['Ver'], $permisos->pluck('name')->all());
+        $this->assertSame(['Ver el avance de empaque'], $permisos->pluck('description')->all());
+
+        foreach ([$admin, $demo] as $usuario) {
+            $this->assertSame(['view'], $this->concedidos($usuario, 'avance-empaque'));
+            $this->assertTrue($this->conAcceso($usuario, 'avance-empaque'));
+            $this->assertTrue($this->conAccesoAlModulo($usuario, $moduloId));
+        }
+    }
+
+    public function test_avance_empaque_sin_planeacion_no_falla(): void
+    {
+        $this->correr(self::MIGRACION_AVANCE);
+
+        $this->assertSame(0, DB::table('submodules')->where('slug', 'avance-empaque')->count());
+    }
+
+    public function test_avance_empaque_falla_claro_si_falta_programa_empaque(): void
+    {
+        $moduloId = $this->sembrarEstructura();
+        User::factory()->create(['email' => 'admin@sentinel.com']);
+        $this->correr(self::MIGRACION_DIVIDIR);
+
+        // Con Planeación pero sin «Programa de empaque» NO puede quedar como corrida sin crear nada
+        // (en producción `migrate --path` no la repetiría): falla con un mensaje claro y no escribe.
+        try {
+            $this->correr(self::MIGRACION_AVANCE);
+            $this->fail('Debió lanzar RuntimeException.');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('2026_11_20_110100_add_programa_empaque_submodulo', $e->getMessage());
+        }
+        $this->assertSame(0, DB::table('submodules')->where('slug', 'avance-empaque')->count());
+
+        // Ya corrida la de Programa de empaque, se puede volver a correr y lo crea en su lugar.
+        $this->correr(self::MIGRACION_EMPAQUE);
+        $this->correr(self::MIGRACION_AVANCE);
+
+        $ordenEmpaque = (int) DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'programa-empaque')->value('order');
+        $this->assertSame($ordenEmpaque + 1, (int) DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'avance-empaque')->value('order'));
+        $ordenes = DB::table('submodules')->where('module_id', $moduloId)->where('is_active', true)->pluck('order')->all();
+        $this->assertSame(count($ordenes), count(array_unique($ordenes)), 'Los órdenes no se repiten.');
+    }
+
+    public function test_avance_empaque_se_concede_a_quien_ya_tenia_tablero_view(): void
+    {
+        $moduloId = $this->sembrarHastaEmpaque();
+        $conTablero = User::factory()->create();
+        $sinTablero = User::factory()->create();
+        $tableroRevocado = User::factory()->create();
+        $tableroSinAcceso = User::factory()->create();
+        $soloNotas = User::factory()->create();
+        $this->conceder($conTablero, 'tablero-semanal', ['view']);
+        $this->conceder($sinTablero, 'plan-corte', ['view', 'capturar']);
+        $this->conceder($tableroRevocado, 'tablero-semanal', ['view'], granted: false);
+        $this->conceder($tableroSinAcceso, 'tablero-semanal', ['view'], accesoActivo: false);
+        $this->conceder($soloNotas, 'tablero-semanal', ['editar-notas']);
+
+        $this->correr(self::MIGRACION_AVANCE);
+        $this->correr(self::MIGRACION_AVANCE);
+
+        $this->assertSame(['view'], $this->concedidos($conTablero, 'avance-empaque'));
+        $this->assertTrue($this->conAcceso($conTablero, 'avance-empaque'));
+        $this->assertTrue($this->conAccesoAlModulo($conTablero, $moduloId));
+        // Sus permisos de antes no cambian.
+        $this->assertSame(['view'], $this->concedidos($conTablero, 'tablero-semanal'));
+
+        foreach ([$sinTablero, $tableroRevocado, $tableroSinAcceso, $soloNotas] as $usuario) {
+            $this->assertSame([], $this->concedidos($usuario, 'avance-empaque'));
+            $this->assertFalse($this->conAcceso($usuario, 'avance-empaque'));
+        }
+        $this->assertFalse($this->conAccesoAlModulo($sinTablero, $moduloId));
+    }
+
+    public function test_avance_empaque_no_reactiva_lo_revocado_a_mano(): void
+    {
+        $this->sembrarHastaEmpaque();
+        $usuario = User::factory()->create();
+        $this->conceder($usuario, 'tablero-semanal', ['view']);
+        $this->correr(self::MIGRACION_AVANCE);
+
+        // El panel revoca a mano el acceso y el permiso de Avance de empaque.
+        $avanceId = DB::table('submodules')->where('slug', 'avance-empaque')->value('id');
+        DB::table('user_submodule_access')->where('user_id', $usuario->id)->where('submodule_id', $avanceId)->update(['is_active' => false]);
+        DB::table('user_submodule_permissions')->where('user_id', $usuario->id)->where('submodule_id', $avanceId)->update(['is_granted' => false]);
+
+        $this->correr(self::MIGRACION_AVANCE);
+
+        $this->assertFalse($this->conAcceso($usuario, 'avance-empaque'));
+        $this->assertSame([], $this->concedidos($usuario, 'avance-empaque'));
+    }
+
+    public function test_down_de_avance_empaque_lo_quita_y_recorre_los_siguientes(): void
+    {
+        $moduloId = $this->sembrarHastaEmpaque();
+        $admin = User::factory()->create(['email' => 'admin@sentinel.com']);
+        $ordenEmbarquesAntes = (int) DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'embarques')->value('order');
+
+        $this->correr(self::MIGRACION_AVANCE);
+        (require base_path('database/migrations/'.self::MIGRACION_AVANCE))->down();
+
+        $this->assertSame(0, DB::table('submodules')->where('slug', 'avance-empaque')->count());
+        $this->assertSame([], $this->concedidos($admin, 'avance-empaque'));
+        $this->assertFalse($this->conAcceso($admin, 'avance-empaque'));
+        $this->assertSame($ordenEmbarquesAntes, (int) DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'embarques')->value('order'));
+        $this->assertSame(0, DB::table('submodule_permission_types')->where('description', 'Ver el avance de empaque')->count());
+    }
+
+    public function test_payload_trae_permisos_de_avance_empaque(): void
+    {
+        $this->crearElote();
+        Sanctum::actingAs($this->usuarioCon(['avance-empaque' => ['view'], 'tablero-semanal' => ['view']]));
+
+        $respuesta = $this->getJson('/api/splendidfarms/administration/planeacion/programa?lunes=2026-11-23');
+
+        $respuesta->assertOk();
+        $this->assertSame(['view' => true], $respuesta->json('data.permisos.avance_empaque'));
+
+        Sanctum::actingAs($this->usuarioCon(['tablero-semanal' => ['view']]));
+        $sin = $this->getJson('/api/splendidfarms/administration/planeacion/programa?lunes=2026-11-23');
+        $this->assertSame(['view' => false], $sin->json('data.permisos.avance_empaque'));
     }
 
     public function test_programa_embarques_rechaza_celda_duplicada(): void

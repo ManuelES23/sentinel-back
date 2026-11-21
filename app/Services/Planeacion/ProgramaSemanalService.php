@@ -203,6 +203,25 @@ class ProgramaSemanalService
         ];
     }
 
+    /**
+     * Programa de empaque de la semana que empieza en $lunes (AAAA-MM-DD), con
+     * la misma forma que la sección `empaque` de `GET planeacion/programa`. A
+     * diferencia de programaDe(), no crea el programa: sin programa devuelve [].
+     *
+     * @return list<array{bodega_id: int, presentacion_id: int, grupo_id: int|string|null, tipo_empaque_id: ?int, clase: string, cajas: int[]}>
+     */
+    public function empaqueDeSemana(string $lunes): array
+    {
+        $programa = ProgramaSemanal::whereDate('lunes', $lunes)->first();
+        if (! $programa) {
+            return [];
+        }
+
+        $plan = $this->calcular($programa)['plan'];
+
+        return $this->secciones->empaque($plan->necesidadesPorEmpaque(), $plan->sobrantes());
+    }
+
     // ── Balance en cadena ───────────────────────────────
 
     /**

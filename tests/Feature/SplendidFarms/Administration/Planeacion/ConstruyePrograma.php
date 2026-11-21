@@ -3,8 +3,11 @@
 namespace Tests\Feature\SplendidFarms\Administration\Planeacion;
 
 use App\Models\Application;
+use App\Models\Branch;
 use App\Models\Cultivo;
 use App\Models\Enterprise;
+use App\Models\Entity;
+use App\Models\EntityType;
 use App\Models\Etapa;
 use App\Models\Lote;
 use App\Models\Planeacion\BodegaDestino;
@@ -14,9 +17,13 @@ use App\Models\Planeacion\ProgramaCorte;
 use App\Models\Planeacion\ProgramaNecesidad;
 use App\Models\Planeacion\ProgramaSemanal;
 use App\Models\Planeacion\ProgramaSobrante;
+use App\Models\Planeacion\RecetaCombinacion;
 use App\Models\Planeacion\RendimientoVariedad;
 use App\Models\Planeacion\TipoEmpaque;
+use App\Models\ProduccionEmpaque;
+use App\Models\ProduccionEmpaqueDetalle;
 use App\Models\Productor;
+use App\Models\Recipe;
 use App\Models\Temporada;
 use App\Models\User;
 use App\Models\Variedad;
@@ -43,6 +50,12 @@ trait ConstruyePrograma
     protected User $autor;
 
     private int $contadorEtapas = 0;
+
+    private int $contadorRecetas = 0;
+
+    private int $contadorPallets = 0;
+
+    private ?int $plantaEmpaqueId = null;
 
     private function correrMigracion(string $archivo): void
     {
@@ -175,6 +188,11 @@ trait ConstruyePrograma
             $this->correrMigracion('2026_11_20_110100_add_programa_empaque_submodulo.php');
         }
 
+        // «Avance de empaque» (después de Programa de empaque) también sale de su propia migración.
+        if (! DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'avance-empaque')->exists()) {
+            $this->correrMigracion('2026_11_20_130000_add_avance_empaque_submodulo.php');
+        }
+
         $usuario = User::factory()->create();
 
         foreach ($permisosPorSubmodulo as $submodulo => $permisos) {
@@ -266,6 +284,101 @@ trait ConstruyePrograma
         $sobrante->variedades()->attach($variedadIds);
 
         return $sobrante;
+    }
+
+    /** Receta de empaque de Splendid Farms con el nombre dado. */
+    protected function recetaEmpaque(string $nombre): Recipe
+    {
+        $this->contadorRecetas++;
+
+        return Recipe::create([
+            'enterprise_id' => $this->empresaSfId(),
+            'code' => "REC-PLAN-{$this->contadorRecetas}",
+            'name' => $nombre,
+            'recipe_type' => 'empaque',
+        ]);
+    }
+
+    /**
+     * Combinación de `plan_recetas_combinacion`: la receta da esa presentación
+     * y ese tipo de empaque, para una variedad concreta o para cualquiera (null).
+     */
+    protected function combinacion(Recipe $receta, Presentacion|string $presentacion, string $empaque, Variedad|string|null $variedad = null): RecetaCombinacion
+    {
+        return RecetaCombinacion::create([
+            'presentacion_id' => is_string($presentacion) ? $this->presentacion($presentacion)->id : $presentacion->id,
+            'tipo_empaque_id' => $this->tipoEmpaque($empaque)->id,
+            'variedad_id' => is_string($variedad) ? $this->variedades[$variedad]->id : $variedad?->id,
+            'recipe_id' => $receta->id,
+        ]);
+    }
+
+    /**
+     * Pallet de `produccion_empaque` en la planta de pruebas. Con `$detalles`
+     * (pares [receta|null, cajas]) es un pallet mixto: sus cajas son la suma
+     * de los renglones.
+     *
+     * @param  list<array{0: ?Recipe, 1: int}>  $detalles
+     */
+    protected function pallet(string $fecha, ?Recipe $receta, int $cajas, Variedad|string|null $variedad, array $extra = [], array $detalles = []): ProduccionEmpaque
+    {
+        $this->contadorPallets++;
+        $variedadId = is_string($variedad) ? $this->variedades[$variedad]->id : $variedad?->id;
+
+        $pallet = ProduccionEmpaque::create(array_merge([
+            'temporada_id' => $this->temporada->id,
+            'entity_id' => $this->plantaEmpaqueId(),
+            'recipe_id' => $receta?->id,
+            'folio_produccion' => "PDN-PLAN-{$this->contadorPallets}",
+            'fecha_produccion' => $fecha,
+            'variedad_id' => $variedadId,
+            'total_cajas' => $detalles ? array_sum(array_column($detalles, 1)) : $cajas,
+            'peso_neto_kg' => 0,
+            'status' => 'empacado',
+            'is_mixto' => (bool) $detalles,
+        ], $extra));
+
+        foreach (array_values($detalles) as $i => [$recetaDetalle, $cajasDetalle]) {
+            ProduccionEmpaqueDetalle::create([
+                'produccion_id' => $pallet->id,
+                'numero_entrada' => $i + 1,
+                'recipe_id' => $recetaDetalle?->id,
+                'fecha_produccion' => $fecha,
+                'total_cajas' => $cajasDetalle,
+            ]);
+        }
+
+        return $pallet;
+    }
+
+    private function plantaEmpaqueId(): int
+    {
+        if ($this->plantaEmpaqueId === null) {
+            $branch = Branch::create([
+                'enterprise_id' => $this->empresaSfId(),
+                'code' => 'SF-PLAN',
+                'name' => 'Casa Matriz',
+                'slug' => 'casa-matriz-plan',
+                'is_active' => true,
+                'is_main' => true,
+            ]);
+            $tipo = EntityType::create([
+                'code' => 'PLANTA-PLAN',
+                'name' => 'Planta Empacadora',
+                'slug' => 'planta-empacadora-plan',
+                'is_active' => true,
+            ]);
+            $this->plantaEmpaqueId = Entity::create([
+                'branch_id' => $branch->id,
+                'entity_type_id' => $tipo->id,
+                'code' => 'EMP-PLAN',
+                'name' => 'Empaque Principal',
+                'slug' => 'empaque-principal-plan',
+                'is_active' => true,
+            ])->id;
+        }
+
+        return $this->plantaEmpaqueId;
     }
 
     protected function corte(ProgramaSemanal $p, string $variedad, int $dia, float $hectareas, ?Etapa $etapa = null): ProgramaCorte

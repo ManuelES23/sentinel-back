@@ -179,6 +179,7 @@ class ProgramaSemanalTest extends TestCase
             'plan_corte' => ['view' => false, 'capturar' => false],
             'necesidades' => ['view' => true, 'capturar' => true],
             'programa_empaque' => ['view' => false, 'capturar' => false],
+            'avance_empaque' => ['view' => false],
             'embarques' => ['view' => false, 'capturar' => false],
             'resumen' => ['view' => false],
             'configuracion' => ['view' => false, 'editar' => false],

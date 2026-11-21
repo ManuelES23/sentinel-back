@@ -220,6 +220,8 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::get('programa', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ProgramaSemanalController::class, 'show']);
                 // Descarga de la semana en Excel (tablero-semanal.view); ninguna ruta GET programa/{programa} la tapa.
                 Route::get('programa/exportar', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ExportarProgramaController::class, 'exportar']);
+                // Avance de empaque: programado contra real (avance-empaque.view); no crea el programa.
+                Route::get('programa/avance', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\AvanceEmpaqueController::class, 'show']);
                 Route::put('programa/{programa}/inventario-inicial', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'inventarioInicial']);
 
                 // Configuración (las rutas fijas van antes que {catalogo})
