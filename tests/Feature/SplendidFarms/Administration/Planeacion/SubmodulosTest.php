@@ -429,16 +429,23 @@ class SubmodulosTest extends TestCase
         $this->assertSame(0, DB::table('submodules')->where('slug', 'avance-empaque')->count());
     }
 
-    public function test_avance_empaque_espera_a_que_exista_programa_empaque(): void
+    public function test_avance_empaque_falla_claro_si_falta_programa_empaque(): void
     {
         $moduloId = $this->sembrarEstructura();
         User::factory()->create(['email' => 'admin@sentinel.com']);
         $this->correr(self::MIGRACION_DIVIDIR);
 
-        // Sin «Programa de empaque» no hace nada (caería en un lugar equivocado del menú).
-        $this->correr(self::MIGRACION_AVANCE);
+        // Con Planeación pero sin «Programa de empaque» NO puede quedar como corrida sin crear nada
+        // (en producción `migrate --path` no la repetiría): falla con un mensaje claro y no escribe.
+        try {
+            $this->correr(self::MIGRACION_AVANCE);
+            $this->fail('Debió lanzar RuntimeException.');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('2026_11_20_110100_add_programa_empaque_submodulo', $e->getMessage());
+        }
         $this->assertSame(0, DB::table('submodules')->where('slug', 'avance-empaque')->count());
 
+        // Ya corrida la de Programa de empaque, se puede volver a correr y lo crea en su lugar.
         $this->correr(self::MIGRACION_EMPAQUE);
         $this->correr(self::MIGRACION_AVANCE);
 

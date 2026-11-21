@@ -15,8 +15,10 @@ use Illuminate\Support\Facades\DB;
  * is_granted = 0 sobre «Avance de empaque»).
  *
  * Es idempotente (el recorrido de orden solo ocurre al crear el submódulo) y no
- * hace nada si Planeación no existe todavía o si aún no existe «Programa de
- * empaque» (debe correr después de 2026_11_20_110100_add_programa_empaque_submodulo).
+ * hace nada si Planeación no existe todavía. Si Planeación existe pero aún no
+ * existe «Programa de empaque» lanza una excepción (debe correr después de
+ * 2026_11_20_110100_add_programa_empaque_submodulo): así no queda anotada como
+ * corrida sin haber creado nada.
  */
 return new class extends Migration
 {
@@ -38,10 +40,13 @@ return new class extends Migration
         $submoduloId = DB::table('submodules')->where('module_id', $moduloId)->where('slug', self::SLUG)->value('id');
         if (! $submoduloId) {
             // Sin «Programa de empaque» el submódulo caería al final del menú y los órdenes
-            // quedarían repetidos cuando aquel se cree. Sin él no se hace nada (se vuelve a correr después).
+            // quedarían repetidos cuando aquel se cree. Un `return` silencioso dejaría esta migración
+            // anotada como corrida sin crear nada (`migrate --path` ya no la repetiría), así que falla.
             $orden = DB::table('submodules')->where('module_id', $moduloId)->where('slug', self::DESPUES_DE)->value('order');
             if ($orden === null) {
-                return;
+                throw new RuntimeException(
+                    'Corre primero 2026_11_20_110100_add_programa_empaque_submodulo: Avance de empaque va después de Programa de empaque.'
+                );
             }
             $orden = (int) $orden + 1;
 
