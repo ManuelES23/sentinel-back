@@ -451,6 +451,65 @@ class ConfiguracionTest extends TestCase
         $this->assertSame($r2->id, RecetaCombinacion::first()->recipe_id);
     }
 
+    public function test_recetas_combinacion_una_receta_no_ocupa_dos_combinaciones_para_la_misma_variedad(): void
+    {
+        $this->conPermisos();
+        $r1 = $this->receta('R-1', 'Bulk RPC');
+        $viejo = $this->receta('R-0', 'Vieja');
+        $bulk = $this->presentacion('Bulk')->id;
+        $tray = $this->presentacion('Tray')->id;
+        $rpc = $this->tipoEmpaque('RPC')->id;
+        $carton = $this->tipoEmpaque('Cartón')->id;
+        $am = $this->variedades['Amarillo']->id;
+        RecetaCombinacion::create(['presentacion_id' => $bulk, 'tipo_empaque_id' => $rpc, 'variedad_id' => null, 'recipe_id' => $viejo->id]);
+
+        // Misma receta, ambas «cualquiera», distinto par presentación|empaque: el Avance no sabría en cuál contarla.
+        $this->putJson(self::URL.'/configuracion/recetas-combinacion', ['filas' => [
+            ['presentacion_id' => $bulk, 'tipo_empaque_id' => $rpc, 'recipe_id' => $r1->id],
+            ['presentacion_id' => $tray, 'tipo_empaque_id' => $carton, 'variedad_id' => null, 'recipe_id' => $r1->id],
+        ]])->assertStatus(422)->assertJsonValidationErrors(['filas.1']);
+        $mensaje = $this->putJson(self::URL.'/configuracion/recetas-combinacion', ['filas' => [
+            ['presentacion_id' => $bulk, 'tipo_empaque_id' => $rpc, 'recipe_id' => $r1->id],
+            ['presentacion_id' => $tray, 'tipo_empaque_id' => $carton, 'variedad_id' => null, 'recipe_id' => $r1->id],
+        ]])->json('errors')['filas.1'][0];
+        $this->assertSame('Esa receta ya se usa en otra fila para la misma variedad; el Avance de empaque no sabría en cuál contarla.', $mensaje);
+
+        // Misma receta, misma variedad específica, distinto par.
+        $this->putJson(self::URL.'/configuracion/recetas-combinacion', ['filas' => [
+            ['presentacion_id' => $bulk, 'tipo_empaque_id' => $rpc, 'variedad_id' => $am, 'recipe_id' => $r1->id],
+            ['presentacion_id' => $tray, 'tipo_empaque_id' => $rpc, 'variedad_id' => $am, 'recipe_id' => $r1->id],
+        ]])->assertStatus(422)->assertJsonValidationErrors(['filas.1']);
+
+        // No se tocó lo que había.
+        $this->assertSame(1, RecetaCombinacion::count());
+        $this->assertSame($viejo->id, RecetaCombinacion::first()->recipe_id);
+    }
+
+    public function test_recetas_combinacion_misma_receta_con_variedades_distintas_o_generica_y_especifica_es_valida(): void
+    {
+        $this->conPermisos();
+        $r1 = $this->receta('R-1', 'Bulk RPC');
+        $bulk = $this->presentacion('Bulk')->id;
+        $tray = $this->presentacion('Tray')->id;
+        $rpc = $this->tipoEmpaque('RPC')->id;
+        $am = $this->variedades['Amarillo']->id;
+        $bl = $this->variedades['Blanco']->id;
+
+        // Variedades distintas con la misma receta (Amarillo → Bulk, Blanco → Tray).
+        $this->putJson(self::URL.'/configuracion/recetas-combinacion', ['filas' => [
+            ['presentacion_id' => $bulk, 'tipo_empaque_id' => $rpc, 'variedad_id' => $am, 'recipe_id' => $r1->id],
+            ['presentacion_id' => $tray, 'tipo_empaque_id' => $rpc, 'variedad_id' => $bl, 'recipe_id' => $r1->id],
+        ]])->assertOk();
+        $this->assertSame(2, RecetaCombinacion::count());
+
+        // Una genérica y una específica de la misma receta (la específica gana).
+        $this->putJson(self::URL.'/configuracion/recetas-combinacion', ['filas' => [
+            ['presentacion_id' => $bulk, 'tipo_empaque_id' => $rpc, 'recipe_id' => $r1->id],
+            ['presentacion_id' => $tray, 'tipo_empaque_id' => $rpc, 'variedad_id' => $am, 'recipe_id' => $r1->id],
+        ]])->assertOk();
+        $this->assertSame(2, RecetaCombinacion::count());
+    }
+
     public function test_recetas_combinacion_solo_acepta_recetas_de_empaque(): void
     {
         $this->conPermisos();

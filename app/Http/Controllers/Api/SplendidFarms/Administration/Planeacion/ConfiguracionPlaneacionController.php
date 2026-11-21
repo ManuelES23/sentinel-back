@@ -258,6 +258,10 @@ class ConfiguracionPlaneacionController extends Controller
 
         // El índice único de la base no frena los duplicados con variedad nula.
         $vistas = [];
+        // El Avance resuelve por (receta, variedad) → un solo par presentación|empaque: una misma receta no
+        // puede ocupar dos combinaciones para la misma variedad (nulo = «cualquiera»); con variedades
+        // distintas, o una genérica y una específica, sí.
+        $recetasVistas = [];
         foreach ($datos['filas'] as $i => $fila) {
             $llave = $fila['presentacion_id'].'-'.$fila['tipo_empaque_id'].'-'.($fila['variedad_id'] ?? '*');
             if (isset($vistas[$llave])) {
@@ -266,6 +270,14 @@ class ConfiguracionPlaneacionController extends Controller
                 ]);
             }
             $vistas[$llave] = true;
+
+            $llaveReceta = $fila['recipe_id'].'-'.($fila['variedad_id'] ?? '*');
+            if (isset($recetasVistas[$llaveReceta])) {
+                throw ValidationException::withMessages([
+                    "filas.$i" => 'Esa receta ya se usa en otra fila para la misma variedad; el Avance de empaque no sabría en cuál contarla.',
+                ]);
+            }
+            $recetasVistas[$llaveReceta] = true;
         }
 
         DB::transaction(function () use ($datos) {
