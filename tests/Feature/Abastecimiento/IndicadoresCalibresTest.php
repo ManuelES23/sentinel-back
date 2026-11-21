@@ -294,4 +294,254 @@ class IndicadoresCalibresTest extends TestCase
 
         $this->get("/api/splendidbyporvenir/administration/abastecimiento/tablero/exportar?temporada_id={$convenio->temporada_id}")->assertOk();
     }
+
+    /**
+     * Escenario del total propio: caja, 4 semanas (1 al 28 de junio), total 7000, apartados Jumbo 1000 y
+     * Grande 1000, un tercer calibre sin apartado; precio $100 por calibre y $90 general (salvo `$general` nulo).
+     *
+     * @return array{0: Convenio, 1: CrmProductoCalibre}
+     */
+    private function conTotal(array $over = [], ?float $general = 90, ?float $apartadoA = 1000, ?float $apartadoB = 1000): array
+    {
+        $cultivo = Cultivo::where('enterprise_id', $this->sbp->id)->where('nombre', 'Mango')->firstOrFail();
+        $variedad = Variedad::where('cultivo_id', $cultivo->id)->orderBy('id')->firstOrFail();
+        $chico = CrmProductoCalibre::where('nombre', 'Chico')->first() ?? $this->crearCalibre($variedad, 'Chico');
+
+        $convenio = $this->crearConvenioPorCalibre($this->sbp, [
+            ['calibre' => $this->jumbo, 'volumen' => $apartadoA, 'precio' => 100],
+            ['calibre' => $this->grande, 'volumen' => $apartadoB, 'precio' => 100],
+            ['calibre' => $chico, 'volumen' => null, 'precio' => 100],
+        ], array_merge(['volumen_total' => 7000], $over));
+
+        if ($general !== null) {
+            ConvenioPrecio::create([
+                'convenio_id' => $convenio->id,
+                'tipo_carga_id' => $convenio->precios->first()->tipo_carga_id,
+                'calibre_id' => null,
+                'precio' => $general,
+                'vigencia_inicio' => $convenio->fecha_inicio->format('Y-m-d'),
+                'es_principal' => true,
+            ]);
+        }
+
+        return [$convenio->fresh(['precios', 'metas', 'calibres']), $chico];
+    }
+
+    public function test_total_propio_sin_recepciones_mide_contra_el_total_y_calcula_el_libre(): void
+    {
+        [$convenio, $chico] = $this->conTotal();
+
+        $i = IndicadoresConvenio::de($convenio);
+
+        $this->assertEquals(7000, $i['pactado']);
+        $this->assertEquals(0, $i['recibido']);
+        $this->assertEquals([
+            'total' => 7000, 'apartado' => 2000, 'libre' => 5000, 'libre_usado' => 0,
+            'libre_restante' => 5000, 'comprometido' => 450000,
+        ], $i['libre']);
+        // 1000 × 100 + 1000 × 100 + 5000 × 90.
+        $this->assertEquals(650000, $i['comprometido']);
+
+        $porCalibre = collect($i['calibres'])->keyBy('calibre_id');
+        $this->assertCount(3, $porCalibre);
+        $this->assertEquals(1000, $porCalibre[$this->jumbo->id]['pactado']);
+        $this->assertEquals(100000, $porCalibre[$this->jumbo->id]['comprometido']);
+        $this->assertEquals(0, $porCalibre[$chico->id]['pactado']);
+        $this->assertEquals(0, $porCalibre[$chico->id]['comprometido']);
+        $this->assertNull($porCalibre[$chico->id]['avance']);
+
+        // El agregado (ponderado entre convenios) suma lo comprometido.
+        $g = IndicadoresConvenio::agregado(collect([$convenio]));
+        $this->assertEquals(650000, $g['comprometido']);
+    }
+
+    public function test_total_propio_con_recepciones_consume_libre_por_el_exceso_y_por_calibres_sin_apartado(): void
+    {
+        [$convenio, $chico] = $this->conTotal();
+        $this->crearRecepcionConRenglones($convenio, [$this->renglon($this->jumbo, 1200), $this->renglon($chico, 500)], ['fecha' => '2026-06-01']);
+
+        $i = IndicadoresConvenio::de($convenio);
+
+        $this->assertEquals(1700, $i['recibido']);
+        $this->assertEqualsWithDelta(1700 / 7000, $i['avance'], 0.0001);
+        // 200 de exceso de Jumbo + 500 de Chico.
+        $this->assertEquals(700, $i['libre']['libre_usado']);
+        $this->assertEquals(4300, $i['libre']['libre_restante']);
+        $porCalibre = collect($i['calibres'])->keyBy('calibre_id');
+        $this->assertEquals(1.2, $porCalibre[$this->jumbo->id]['avance']);
+        $this->assertNull($porCalibre[$chico->id]['avance']);
+        $this->assertEquals(500, $porCalibre[$chico->id]['recibido']);
+    }
+
+    public function test_total_propio_con_recepcion_menor_a_los_apartados_no_consume_libre(): void
+    {
+        [$convenio] = $this->conTotal();
+        $this->crearRecepcionConRenglones($convenio, [$this->renglon($this->jumbo, 400), $this->renglon($this->grande, 1000)], ['fecha' => '2026-06-01']);
+
+        $i = IndicadoresConvenio::de($convenio);
+
+        $this->assertEquals(0, $i['libre']['libre_usado']);
+        $this->assertEquals(5000, $i['libre']['libre_restante']);
+    }
+
+    public function test_libre_restante_puede_ser_negativo(): void
+    {
+        [$convenio, $chico] = $this->conTotal();
+        $this->crearRecepcionConRenglones($convenio, [$this->renglon($chico, 5200)], ['fecha' => '2026-06-01']);
+
+        $i = IndicadoresConvenio::de($convenio);
+
+        $this->assertEquals(5200, $i['libre']['libre_usado']);
+        $this->assertEquals(-200, $i['libre']['libre_restante']);
+    }
+
+    public function test_total_propio_cumplimiento_y_estado_se_miden_contra_la_serie_total(): void
+    {
+        [$convenio, $chico] = $this->conTotal();
+        // «Hoy» es el martes 16: cerradas las semanas del 1 y del 8 (meta total 1750 cada una).
+        $hoy = CarbonImmutable::parse('2026-06-16 10:00', 'America/Mazatlan');
+        $this->crearRecepcionConRenglones($convenio, [$this->renglon($chico, 3500)], ['fecha' => '2026-06-01']);
+
+        $i = IndicadoresConvenio::de($convenio, $hoy);
+
+        $this->assertEquals(3500, $i['meta_a_la_fecha']);
+        $this->assertEquals(3500, $i['recibido_a_la_fecha']);
+        $this->assertEquals(1.0, $i['cumplimiento']);
+        $this->assertSame('en_meta', $i['estado']);
+        $this->assertSame([1750.0, 1750.0, 1750.0, 1750.0], array_map('floatval', array_column($i['semanas'], 'meta')));
+
+        // Con la mitad recibida va atrasado contra el total (contra los apartados iría adelantado).
+        [$atrasado, $chico2] = $this->conTotal();
+        $this->crearRecepcionConRenglones($atrasado, [$this->renglon($chico2, 1750)], ['fecha' => '2026-06-01']);
+        $j = IndicadoresConvenio::de($atrasado, $hoy);
+        $this->assertEquals(0.5, $j['cumplimiento']);
+        $this->assertSame('atrasado', $j['estado']);
+    }
+
+    public function test_apartados_iguales_al_total_dejan_libre_en_cero(): void
+    {
+        [$convenio] = $this->conTotal([], 90, 3500, 3500);
+
+        $i = IndicadoresConvenio::de($convenio);
+
+        $this->assertEquals(0, $i['libre']['libre']);
+        $this->assertEquals(0, $i['libre']['comprometido']);
+        $this->assertEquals(7000, $i['libre']['apartado']);
+        $this->assertEquals(700000, $i['comprometido']);
+    }
+
+    public function test_sin_precio_general_el_libre_queda_sin_comprometido(): void
+    {
+        [$convenio] = $this->conTotal([], null);
+
+        $i = IndicadoresConvenio::de($convenio);
+
+        $this->assertEquals(5000, $i['libre']['libre']);
+        $this->assertNull($i['libre']['comprometido']);
+        // Solo suman los apartados.
+        $this->assertEquals(200000, $i['comprometido']);
+    }
+
+    public function test_sin_precio_general_pero_sin_libre_el_comprometido_es_cero(): void
+    {
+        [$convenio] = $this->conTotal([], null, 3500, 3500);
+
+        $i = IndicadoresConvenio::de($convenio);
+
+        $this->assertEquals(0, $i['libre']['comprometido']);
+        $this->assertEquals(700000, $i['comprometido']);
+    }
+
+    public function test_el_comprometido_del_libre_aplica_el_porcentaje_del_productor(): void
+    {
+        [$convenio] = $this->conTotal();
+        ConvenioPrecio::where('convenio_id', $convenio->id)->update(['porcentaje_productor' => 50]);
+
+        $i = IndicadoresConvenio::de($convenio->fresh(['precios', 'metas', 'calibres']));
+
+        // 5000 × 90 × 50 %.
+        $this->assertEquals(225000, $i['libre']['comprometido']);
+        $this->assertEquals(50000 + 50000 + 225000, $i['comprometido']);
+    }
+
+    public function test_el_ultimo_calibre_absorbe_el_redondeo_del_reparto_del_total(): void
+    {
+        [$convenio] = $this->conTotal(['volumen_total' => 10, 'fecha_fin' => '2026-06-21'], 90, 5, 5);
+
+        $i = IndicadoresConvenio::de($convenio);
+
+        $this->assertSame([3.0, 3.0, 4.0], array_map('floatval', array_column($i['semanas'], 'meta')));
+        $this->assertEquals(10, $i['pactado']);
+        $this->assertEquals(0, $i['libre']['libre']);
+    }
+
+    public function test_total_propio_semanal_usa_las_metas_sin_calibre_como_total(): void
+    {
+        $semanas = ['2026-06-01', '2026-06-08', '2026-06-15', '2026-06-22'];
+        $convenio = $this->crearConvenioPorCalibre($this->sbp, [
+            ['calibre' => $this->jumbo, 'precio' => 100],
+            ['calibre' => $this->grande, 'precio' => 100],
+        ], [
+            'modo_volumen' => 'semanal',
+            'metas_total' => array_fill_keys($semanas, 1750),
+            'metas_calibre' => [$this->jumbo->id => array_fill_keys($semanas, 250)],
+        ]);
+        ConvenioPrecio::create([
+            'convenio_id' => $convenio->id,
+            'tipo_carga_id' => $convenio->precios->first()->tipo_carga_id,
+            'calibre_id' => null,
+            'precio' => 90,
+            'vigencia_inicio' => '2026-06-01',
+            'es_principal' => true,
+        ]);
+
+        $i = IndicadoresConvenio::de($convenio->fresh(['precios', 'metas', 'calibres']));
+
+        $this->assertEquals(7000, $i['pactado']);
+        $this->assertEquals(1000, $i['libre']['apartado']);
+        $this->assertEquals(6000, $i['libre']['libre']);
+        $this->assertEquals(540000, $i['libre']['comprometido']);
+        $this->assertEquals(100000 + 540000, $i['comprometido']);
+    }
+
+    public function test_sin_total_propio_el_libre_es_null_y_pactado_es_la_suma(): void
+    {
+        $convenio = $this->porCalibre();
+
+        $i = IndicadoresConvenio::de($convenio);
+
+        $this->assertArrayHasKey('libre', $i);
+        $this->assertNull($i['libre']);
+        $this->assertEquals(150, $i['pactado']);
+        $this->assertEquals(100, collect($i['calibres'])->firstWhere('calibre_id', $this->jumbo->id)['pactado']);
+    }
+
+    public function test_el_tablero_trae_el_bloque_libre_y_no_multiplica_consultas(): void
+    {
+        [$primero] = $this->conTotal();
+        $temporada = $primero->temporada_id;
+
+        $contar = function () use ($temporada): int {
+            DB::flushQueryLog();
+            DB::enableQueryLog();
+            $this->getJson($this->tableroUrl($temporada))->assertOk();
+            $n = count(DB::getQueryLog());
+            DB::disableQueryLog();
+
+            return $n;
+        };
+
+        $con1 = $contar();
+
+        $data = $this->getJson($this->tableroUrl($temporada))->assertOk()->json('data');
+        $fila = collect($data['convenios'])->firstWhere('id', $primero->id);
+        $this->assertEquals(5000, $fila['indicadores']['libre']['libre']);
+
+        for ($n = 0; $n < 4; $n++) {
+            $productor = Productor::create(['enterprise_id' => $this->sbp->id, 'tipo' => 'productor', 'nombre' => "Productor {$n}", 'is_active' => true]);
+            $this->conTotal(['productor_id' => $productor->id]);
+        }
+
+        $this->assertSame($con1, $contar(), 'El número de consultas no debe crecer con los convenios con total propio.');
+    }
 }
