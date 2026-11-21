@@ -43,17 +43,27 @@ class CalibresConvenio
     }
 
     /**
-     * Calibres del cuerpo ya normalizados: el volumen vive en cada calibre (solo en volumen total).
+     * Calibres del cuerpo ya normalizados: el volumen vive en cada calibre (solo en volumen total) y, con
+     * total propio, es su apartado. Vacío es siempre nulo (sin apartado). Un 0 también es «sin apartado»
+     * cuando hay total propio (`$volumenTotal` con valor); sin total propio se conserva para que
+     * ReglasConvenio::validarVolumen siga exigiendo volumen mayor a cero en cada calibre.
      *
      * @param  array<int, array{calibre_id: mixed, volumen_total?: mixed}>  $calibres
+     * @param  mixed  $volumenTotal  el `volumen_total` del convenio ya normalizado (nulo = sin total propio)
      * @return array<int, array{calibre_id: int, volumen_total: mixed}>
      */
-    public static function normalizar(array $calibres, string $modoVolumen): array
+    public static function normalizar(array $calibres, string $modoVolumen, mixed $volumenTotal = null): array
     {
-        return array_map(fn (array $c) => [
-            'calibre_id' => (int) $c['calibre_id'],
-            'volumen_total' => $modoVolumen === 'total' ? ($c['volumen_total'] ?? null) : null,
-        ], $calibres);
+        $totalPropio = $modoVolumen === 'total' && $volumenTotal !== null && $volumenTotal !== '';
+
+        return array_map(function (array $c) use ($modoVolumen, $totalPropio) {
+            $apartado = $modoVolumen === 'total' ? ($c['volumen_total'] ?? null) : null;
+            if ($apartado === '' || ($totalPropio && is_numeric($apartado) && (float) $apartado === 0.0)) {
+                $apartado = null;
+            }
+
+            return ['calibre_id' => (int) $c['calibre_id'], 'volumen_total' => $apartado];
+        }, $calibres);
     }
 
     /**
@@ -106,7 +116,8 @@ class CalibresConvenio
 
     /**
      * Calibres pactados con su volumen y lo pactado (en volumen total, el reparto; en semanal, la suma de
-     * sus metas). Salen todos los del convenio, aunque no tengan metas. Requiere `calibres.calibre` cargado.
+     * sus metas). Con total propio es el apartado del calibre (`volumen_total` nulo y pactado 0 si no tiene).
+     * Salen todos los del convenio, aunque no tengan metas. Requiere `calibres.calibre` cargado.
      */
     public static function presentar(Convenio $c): array
     {
@@ -129,7 +140,8 @@ class CalibresConvenio
 
     /**
      * Activar un convenio por calibre: cada calibre necesita precio del tipo de carga principal
-     * (el general o uno especial) y volumen pactado mayor a cero (spec C12).
+     * (el general o uno especial) y volumen pactado mayor a cero (spec C12). Con total propio basta un
+     * total mayor a cero (los calibres pueden ir sin apartado), siempre con al menos un calibre.
      */
     public static function validarActivacion(Convenio $convenio): void
     {
@@ -140,6 +152,17 @@ class CalibresConvenio
         $sinPrecio = $calibres->contains(fn (int $id) => PrecioVigente::principalEnColeccion($precios, $inicio, $id) === null);
         if ($sinPrecio) {
             throw ValidationException::withMessages(['status' => 'Agrega el precio general del tipo de carga principal (o uno especial en cada calibre) antes de activar el convenio.']);
+        }
+
+        if (MetasConvenio::totalPropio($convenio)) {
+            if ($calibres->isEmpty()) {
+                throw ValidationException::withMessages(['status' => 'Elige al menos un calibre antes de activar el convenio.']);
+            }
+            if (MetasConvenio::pactado($convenio) <= 0) {
+                throw ValidationException::withMessages(['status' => 'Define el volumen total pactado antes de activar el convenio.']);
+            }
+
+            return;
         }
 
         // Sin calibres no hay volumen pactado.
@@ -194,7 +217,8 @@ class CalibresConvenio
 
     /**
      * Metas guardadas que cuentan en el modo final (cuando la petición no trae `metas`): sin calibre en un
-     * clásico; en uno por calibre, las de los calibres que se quedan.
+     * clásico; en uno por calibre, las de los calibres que se quedan más las sin calibre (el total propio de
+     * la semana).
      *
      * @param  array<int, int>  $idsCalibres  calibres que se quedan
      * @return array<int, array{semana: string, cantidad: mixed, calibre_id: mixed}>
@@ -203,7 +227,7 @@ class CalibresConvenio
     {
         return $convenio->metas
             ->filter(fn (ConvenioMeta $m) => $usaCalibres
-                ? $m->calibre_id !== null && in_array((int) $m->calibre_id, $idsCalibres, true)
+                ? $m->calibre_id === null || in_array((int) $m->calibre_id, $idsCalibres, true)
                 : $m->calibre_id === null)
             ->map(fn (ConvenioMeta $m) => [
                 'semana' => $m->semana->format('Y-m-d'),
@@ -213,7 +237,8 @@ class CalibresConvenio
     }
 
     /**
-     * Conserva las metas del modo final; se van las del otro modo y las de calibres quitados.
+     * Conserva las metas del modo final; se van las del otro modo y las de calibres quitados. En un convenio
+     * por calibre las metas sin calibre son el total propio y se conservan; en un clásico, las de calibre se van.
      *
      * @param  array<int, int>  $idsCalibres  calibres que se quedan
      */
@@ -222,7 +247,7 @@ class CalibresConvenio
         $convenio->metas()
             ->when(
                 $usaCalibres,
-                fn ($q) => $q->where(fn ($q) => $q->whereNull('calibre_id')->orWhereNotIn('calibre_id', $idsCalibres)),
+                fn ($q) => $q->whereNotNull('calibre_id')->whereNotIn('calibre_id', $idsCalibres),
                 fn ($q) => $q->whereNotNull('calibre_id'),
             )
             ->delete();
