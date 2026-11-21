@@ -15,8 +15,10 @@ use Illuminate\Support\Facades\DB;
  * filas que faltan: nunca reactiva un permiso `enviar` que alguien revocó a
  * mano (is_granted = 0) ni toca los accesos de los demás.
  *
- * Es idempotente y no hace nada si Planeación o «Tablero semanal» no existen
- * todavía.
+ * Es idempotente y no hace nada si el módulo Planeación no existe todavía. Si
+ * Planeación existe pero aún no existe «Tablero semanal» lanza una excepción
+ * (debe correr después de 2026_11_11_100100_dividir_planeacion_en_submodulos): así
+ * no queda anotada como corrida sin haber creado nada.
  */
 return new class extends Migration
 {
@@ -33,7 +35,11 @@ return new class extends Migration
 
         $tableroId = DB::table('submodules')->where('module_id', $moduloId)->where('slug', self::SUBMODULO)->value('id');
         if (! $tableroId) {
-            return;
+            // Un `return` silencioso dejaría esta migración anotada como corrida sin crear el permiso
+            // (`migrate --path` ya no la repetiría), así que falla con un mensaje claro y no escribe.
+            throw new RuntimeException(
+                'Corre primero 2026_11_11_100100_dividir_planeacion_en_submodulos: el permiso «Enviar por correo» va en el Tablero semanal.'
+            );
         }
         $tableroId = (int) $tableroId;
 

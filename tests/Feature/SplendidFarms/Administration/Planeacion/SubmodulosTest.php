@@ -595,15 +595,33 @@ class SubmodulosTest extends TestCase
         $this->assertSame(['enviar'], $this->concedidos($admin, 'tablero-semanal'), 'admin@ se reafirma.');
     }
 
-    public function test_enviar_sin_planeacion_o_sin_tablero_no_hace_nada(): void
+    public function test_enviar_sin_el_modulo_planeacion_no_hace_nada(): void
     {
         $this->correr(self::MIGRACION_ENVIAR);
-        $this->assertSame(0, DB::table('submodule_permission_types')->where('slug', 'enviar')->count());
 
+        $this->assertSame(0, DB::table('submodule_permission_types')->where('slug', 'enviar')->count());
+    }
+
+    public function test_enviar_falla_claro_si_planeacion_existe_pero_falta_el_tablero_semanal(): void
+    {
+        // Antes era un `return` silencioso: `migrate --path` la anotaba como corrida sin crear nada
+        // y el permiso nunca existía. Ahora lanza (como Avance de empaque) y no escribe.
         $moduloId = $this->sembrarEstructura();
         DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'tablero-semanal')->delete();
-        $this->correr(self::MIGRACION_ENVIAR);
+
+        try {
+            $this->correr(self::MIGRACION_ENVIAR);
+            $this->fail('Debió lanzar RuntimeException.');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('2026_11_11_100100', $e->getMessage());
+            $this->assertStringContainsString('Enviar por correo', $e->getMessage());
+        }
         $this->assertSame(0, DB::table('submodule_permission_types')->where('slug', 'enviar')->count());
+
+        // Ya corrida la que crea el Tablero semanal, se puede volver a correr y crea el permiso.
+        $this->correr(self::MIGRACION_DIVIDIR);
+        $this->correr(self::MIGRACION_ENVIAR);
+        $this->assertSame(1, DB::table('submodule_permission_types')->where('slug', 'enviar')->count());
     }
 
     public function test_down_de_enviar_quita_el_permiso_y_sus_concesiones(): void

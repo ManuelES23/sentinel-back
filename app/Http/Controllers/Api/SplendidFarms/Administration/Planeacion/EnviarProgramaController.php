@@ -130,17 +130,18 @@ class EnviarProgramaController extends Controller
         $numeros = array_map(fn ($s) => (int) $s['programa']['semana_iso'], $semanas);
         $correo = new ProgramaSemanalMail(
             contenidoExcel: $contenido,
-            nombreArchivo: $this->nombreArchivo($semanas, $exportador),
+            nombreArchivo: $this->nombreArchivo($semanas, $exportador, $lunes, $numeros),
             asunto: 'Programa semanal '.$this->semanasDelAsunto($lunes, $numeros).($cultivoNombre ? ' · '.$cultivoNombre : ''),
             semanas: array_map(fn ($s) => $this->etiqueta($s['programa']), $semanas),
             cultivo: $cultivoNombre,
             nota: isset($datos['nota']) && trim($datos['nota']) !== '' ? trim($datos['nota']) : null,
             remitente: (string) Auth::user()->name,
         );
-        $ocultos = array_map(fn ($c) => new Address($c, $nombres[$c] !== '' ? $nombres[$c] : null), $datos['destinatarios']);
-        $enviados = count($ocultos);
+        $enviados = count($datos['destinatarios']);
 
         try {
+            // Las direcciones se arman dentro del try: una que el validador de Symfony no acepte da el 422 amable, no un 500.
+            $ocultos = array_map(fn ($c) => new Address($c, $nombres[$c] !== '' ? $nombres[$c] : null), $datos['destinatarios']);
             Mail::to(new Address((string) config('mail.from.address'), config('mail.from.name')))->bcc($ocultos)->send($correo);
         } catch (Throwable $e) {
             Log::error('No se pudo enviar el programa semanal por correo.', [
@@ -167,7 +168,7 @@ class EnviarProgramaController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => "Programa enviado a {$enviados} destinatarios.",
+            'message' => $enviados === 1 ? 'Programa enviado a 1 destinatario.' : "Programa enviado a {$enviados} destinatarios.",
             'data' => ['enviados' => $enviados, 'semanas' => $lunes],
         ]);
     }
@@ -217,29 +218,46 @@ class EnviarProgramaController extends Controller
     /** «WK48» con una semana; «WK48–WK50» si son seguidas; «WK48, WK50» si no. */
     private function semanasDelAsunto(array $lunes, array $numeros): string
     {
-        $etiquetas = array_map(fn ($n) => sprintf('WK%02d', $n), $numeros);
-        if (count($etiquetas) === 1) {
-            return $etiquetas[0];
-        }
-        foreach (array_slice($lunes, 1, null, true) as $i => $l) {
-            if (Carbon::createFromFormat('!Y-m-d', $lunes[$i - 1])->addWeek()->format('Y-m-d') !== $l) {
-                return implode(', ', $etiquetas);
-            }
-        }
+        $etiquetas = $this->etiquetasDeSemanas($numeros);
 
-        return $etiquetas[0].'–'.end($etiquetas);
+        return $this->sonSeguidas($lunes)
+            ? (count($etiquetas) === 1 ? $etiquetas[0] : $etiquetas[0].'–'.end($etiquetas))
+            : implode(', ', $etiquetas);
     }
 
-    /** `Programa_WK48_2026-11-23.xlsx` con una semana; `Programa_WK48-WK49_2026-11-23.xlsx` con varias. */
-    private function nombreArchivo(array $semanas, ExportadorProgramaExcel $exportador): string
+    /**
+     * `Programa_WK48_2026-11-23.xlsx` con una semana; `Programa_WK48-WK49_2026-11-23.xlsx` con varias
+     * seguidas; `Programa_WK48_WK51_2026-11-23.xlsx` si no lo son (misma regla que el asunto).
+     */
+    private function nombreArchivo(array $semanas, ExportadorProgramaExcel $exportador, array $lunes, array $numeros): string
     {
         if (count($semanas) === 1) {
             return $exportador->nombreArchivo($semanas[0]);
         }
-        $primera = $semanas[0]['programa'];
-        $ultima = end($semanas)['programa'];
+        $etiquetas = $this->etiquetasDeSemanas($numeros);
+        $semanasDelNombre = $this->sonSeguidas($lunes)
+            ? $etiquetas[0].'-'.end($etiquetas)
+            : implode('_', $etiquetas);
 
-        return sprintf('Programa_WK%02d-WK%02d_%s.xlsx', $primera['semana_iso'], $ultima['semana_iso'], $primera['lunes']);
+        return sprintf('Programa_%s_%s.xlsx', $semanasDelNombre, $semanas[0]['programa']['lunes']);
+    }
+
+    /** @return list<string> «WK48», «WK49»… */
+    private function etiquetasDeSemanas(array $numeros): array
+    {
+        return array_map(fn ($n) => sprintf('WK%02d', $n), $numeros);
+    }
+
+    /** ¿Cada lunes (ya ordenados) es exactamente una semana después del anterior? */
+    private function sonSeguidas(array $lunes): bool
+    {
+        foreach (array_slice($lunes, 1, null, true) as $i => $l) {
+            if (Carbon::createFromFormat('!Y-m-d', $lunes[$i - 1])->addWeek()->format('Y-m-d') !== $l) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /** «WK48 · 23–29 nov» o, si cambia de mes, «WK49 · 30 nov–6 dic». */

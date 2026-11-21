@@ -154,12 +154,38 @@ class EnviarProgramaTest extends TestCase
         Mail::fake();
         $this->dosSemanas();
 
-        $this->enviar([])->assertOk()->assertJsonPath('message', 'Programa enviado a 1 destinatarios.');
+        $this->enviar([])->assertOk()->assertJsonPath('message', 'Programa enviado a 1 destinatario.');
 
         $correo = $this->correoEnviado();
         $correo->assertHasSubject('Programa semanal WK48 · Elote Dulce');
         $this->assertSame(['WK48'], $this->libroDe($correo)->getSheetNames());
         $correo->assertHasAttachedData($correo->contenidoExcel, 'Programa_WK48_2026-11-23.xlsx', ['mime' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']);
+    }
+
+    public function test_el_archivo_lleva_rango_con_semanas_seguidas_y_lista_con_las_que_no(): void
+    {
+        Mail::fake();
+        $this->dosSemanas();
+        ProgramaSemanal::create(['lunes' => '2026-12-14']); // WK51: no es seguida de WK49
+
+        // Seguidas (WK48, WK49): rango, igual que el asunto.
+        $this->enviar(['lunes' => ['2026-11-23', '2026-11-30']])->assertOk();
+        $correo = Mail::sent(ProgramaSemanalMail::class)->first();
+        $correo->assertHasSubject('Programa semanal WK48–WK49 · Elote Dulce');
+        $correo->assertHasAttachedData($correo->contenidoExcel, 'Programa_WK48-WK49_2026-11-23.xlsx', ['mime' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']);
+
+        // No seguidas (WK48, WK51): lista en el asunto y en el nombre del archivo.
+        Mail::fake();
+        $this->enviar(['lunes' => ['2026-11-23', '2026-12-14']])->assertOk();
+        $correo = $this->correoEnviado();
+        $correo->assertHasSubject('Programa semanal WK48, WK51 · Elote Dulce');
+        $correo->assertHasAttachedData($correo->contenidoExcel, 'Programa_WK48_WK51_2026-11-23.xlsx', ['mime' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']);
+
+        // Tres semanas con hueco (WK48, WK49, WK51): lista completa.
+        Mail::fake();
+        $this->enviar(['lunes' => ['2026-11-23', '2026-11-30', '2026-12-14']])->assertOk();
+        $correo = $this->correoEnviado();
+        $correo->assertHasAttachedData($correo->contenidoExcel, 'Programa_WK48_WK49_WK51_2026-11-23.xlsx', ['mime' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']);
     }
 
     public function test_dos_semanas_con_el_mismo_numero_llevan_el_anio_en_la_hoja(): void
