@@ -99,7 +99,8 @@ class ConveniosCalibresTest extends TestCase
         return $this->cuerpo(array_merge([
             'modo_volumen' => 'total',
             'usa_calibres' => true,
-            'volumen_total' => 999,
+            // Sin total propio: el front viejo (y el que no lo captura) manda el total nulo y el volumen en cada calibre.
+            'volumen_total' => null,
             'metas' => [],
             'calibres' => array_map(fn ($c) => ['calibre_id' => $c[0]->id, 'volumen_total' => $c[1]], $calibres),
             'precios' => array_map(fn ($c) => [
@@ -547,6 +548,323 @@ class ConveniosCalibresTest extends TestCase
         $this->putJson($this->url("convenios/{$convenio->id}"), $this->cuerpo(['precios' => $precios]))->assertOk();
         $this->assertNotSoftDeleted($segundo);
         $this->assertSame(2, ConvenioPrecio::withTrashed()->where('convenio_id', $convenio->id)->count());
+    }
+
+    // ---- Total propio del convenio por calibre (apartados) ----
+
+    /** Filas de «Total de la semana» (calibre nulo) y, si se pasan, los apartados por calibre. */
+    private function metasConTotales(array $totales, array $apartados = []): array
+    {
+        $metas = [];
+        foreach ($totales as $semana => $cantidad) {
+            $metas[] = ['semana' => $semana, 'cantidad' => $cantidad, 'calibre_id' => null];
+        }
+        foreach ($apartados as [$calibre, $semana, $cantidad]) {
+            $metas[] = ['semana' => $semana, 'cantidad' => $cantidad, 'calibre_id' => $calibre->id];
+        }
+
+        return $metas;
+    }
+
+    public function test_alta_en_modo_total_con_total_propio_guarda_el_total_y_los_apartados(): void
+    {
+        $jumbo = $this->calibre('Jumbo', 1);
+        $grande = $this->calibre('Grande', 2);
+        $chico = $this->calibre('Chico', 3);
+
+        // Cambio de contrato: el `volumen_total` enviado ya no se descarta, se guarda.
+        $res = $this->postJson($this->url('convenios'), $this->cuerpoCalibres(
+            [[$jumbo, 1000], [$grande, 1000], [$chico, null]],
+            ['volumen_total' => 7000],
+        ))->assertCreated();
+
+        $res->assertJsonPath('data.volumen_total', '7000.00')
+            ->assertJsonPath('data.indicadores.pactado', 7000)
+            ->assertJsonPath('data.calibres.0.volumen_total', '1000.00')
+            ->assertJsonPath('data.calibres.0.pactado', 1000)
+            ->assertJsonPath('data.calibres.2.calibre_id', $chico->id)
+            ->assertJsonPath('data.calibres.2.volumen_total', null)
+            ->assertJsonPath('data.calibres.2.pactado', 0)
+            ->assertJsonCount(0, 'data.metas');
+        $convenio = Convenio::findOrFail($res->json('data.id'));
+        $this->assertSame('7000.00', $convenio->volumen_total);
+        $this->assertSame(3, ConvenioCalibre::where('convenio_id', $convenio->id)->count());
+        $this->assertNull(ConvenioCalibre::where('convenio_id', $convenio->id)->where('calibre_id', $chico->id)->value('volumen_total'));
+    }
+
+    public function test_alta_sin_total_propio_con_volumen_en_cada_calibre_es_igual_que_hoy(): void
+    {
+        $jumbo = $this->calibre('Jumbo', 1);
+        $grande = $this->calibre('Grande', 2);
+
+        // Front viejo: `volumen_total` nulo (o vacío) y volumen en cada calibre.
+        foreach ([null, ''] as $vacio) {
+            $this->postJson($this->url('convenios'), $this->cuerpoCalibres([[$jumbo, 100], [$grande, 101]], ['volumen_total' => $vacio]))
+                ->assertCreated()
+                ->assertJsonPath('data.volumen_total', null)
+                ->assertJsonPath('data.indicadores.pactado', 201)
+                ->assertJsonPath('data.calibres.1.pactado', 101);
+        }
+
+        // Sin total propio cada calibre sigue exigiendo volumen mayor a cero.
+        $this->postJson($this->url('convenios'), $this->cuerpoCalibres([[$jumbo, 100], [$grande, null]]))
+            ->assertStatus(422)->assertJsonValidationErrors(['calibres.1.volumen_total']);
+        $this->postJson($this->url('convenios'), $this->cuerpoCalibres([[$jumbo, 100], [$grande, 0]]))
+            ->assertStatus(422)->assertJsonValidationErrors(['calibres.1.volumen_total']);
+    }
+
+    public function test_apartados_mayores_al_total_o_total_no_positivo_dan_422(): void
+    {
+        $jumbo = $this->calibre('Jumbo', 1);
+        $grande = $this->calibre('Grande', 2);
+
+        $this->postJson($this->url('convenios'), $this->cuerpoCalibres([[$jumbo, 1000], [$grande, 1000]], ['volumen_total' => 1500]))
+            ->assertStatus(422)
+            ->assertJsonPath('errors.volumen_total.0', 'Los apartados suman 2000 y el total es 1500.');
+
+        // Un total de cero (o negativo) no se vuelve «sin total»: falla en `volumen_total`.
+        foreach ([0, '0', -5] as $total) {
+            $this->postJson($this->url('convenios'), $this->cuerpoCalibres([[$jumbo, 100], [$grande, 100]], ['volumen_total' => $total]))
+                ->assertStatus(422)->assertJsonValidationErrors(['volumen_total']);
+        }
+        $this->assertSame(0, Convenio::count());
+    }
+
+    public function test_apartado_en_cero_con_total_propio_se_guarda_como_sin_apartado(): void
+    {
+        $jumbo = $this->calibre('Jumbo', 1);
+        $grande = $this->calibre('Grande', 2);
+
+        $res = $this->postJson($this->url('convenios'), $this->cuerpoCalibres([[$jumbo, 0], [$grande, '']], ['volumen_total' => 500]))
+            ->assertCreated();
+
+        $res->assertJsonPath('data.calibres.0.volumen_total', null)
+            ->assertJsonPath('data.calibres.1.volumen_total', null)
+            ->assertJsonPath('data.indicadores.pactado', 500);
+        $this->assertSame(2, ConvenioCalibre::whereNull('volumen_total')->count());
+    }
+
+    public function test_alta_en_modo_semanal_con_totales_guarda_las_metas_sin_calibre_y_descarta_el_volumen_total(): void
+    {
+        $jumbo = $this->calibre('Jumbo', 1);
+        $grande = $this->calibre('Grande', 2);
+        $body = $this->cuerpoCalibres([[$jumbo, null], [$grande, null]], [
+            'modo_volumen' => 'semanal',
+            'volumen_total' => 5000, // en semanal el total propio son las metas sin calibre
+            'metas' => $this->metasConTotales(['2026-06-01' => 500, '2026-06-08' => 600], [[$jumbo, '2026-06-01', 100]]),
+        ]);
+
+        $res = $this->postJson($this->url('convenios'), $body)->assertCreated();
+
+        $res->assertJsonPath('data.volumen_total', null)
+            ->assertJsonPath('data.indicadores.pactado', 1100)
+            ->assertJsonCount(3, 'data.metas')
+            ->assertJsonPath('data.calibres.0.pactado', 100)
+            ->assertJsonPath('data.calibres.1.pactado', 0);
+        // Orden de la ficha: por semana y, dentro de ella, el total (sin calibre) antes que los calibres.
+        $this->assertSame([null, $jumbo->id, null], array_column($res->json('data.metas'), 'calibre_id'));
+        $this->assertSame(2, ConvenioMeta::whereNull('calibre_id')->count());
+        $this->assertNull(Convenio::findOrFail($res->json('data.id'))->volumen_total);
+    }
+
+    public function test_semanal_con_apartados_mayores_al_total_de_la_semana_da_422(): void
+    {
+        $jumbo = $this->calibre('Jumbo', 1);
+        $body = $this->cuerpoCalibres([[$jumbo, null]], [
+            'modo_volumen' => 'semanal',
+            'metas' => $this->metasConTotales(['2026-06-01' => 50], [[$jumbo, '2026-06-01', 80]]),
+        ]);
+
+        $this->postJson($this->url('convenios'), $body)
+            ->assertStatus(422)->assertJsonValidationErrors(['metas.1.cantidad']);
+    }
+
+    public function test_editar_un_convenio_semanal_con_totales_con_y_sin_metas_conserva_los_totales(): void
+    {
+        $jumbo = $this->calibre('Jumbo', 1);
+        $convenio = $this->crear($this->cuerpoCalibres([[$jumbo, null]], [
+            'modo_volumen' => 'semanal',
+            'metas' => $this->metasConTotales(['2026-06-01' => 500, '2026-06-08' => 600], [[$jumbo, '2026-06-01', 100]]),
+        ]));
+
+        // Enviando metas: se reemplazan por las enviadas (un total nuevo y sin apartados).
+        $this->putJson($this->url("convenios/{$convenio->id}"), $this->cuerpoCalibres([[$jumbo, null]], [
+            'modo_volumen' => 'semanal',
+            'metas' => $this->metasConTotales(['2026-06-01' => 700]),
+        ]))->assertOk()->assertJsonPath('data.indicadores.pactado', 700)->assertJsonPath('data.volumen_total', null);
+        $this->assertSame(1, ConvenioMeta::where('convenio_id', $convenio->id)->whereNull('calibre_id')->count());
+
+        // Sin `metas` (solo cambian las notas): las metas sin calibre siguen en la base y siguen siendo el total.
+        $body = $this->cuerpoCalibres([[$jumbo, null]], ['modo_volumen' => 'semanal', 'notas' => 'solo notas']);
+        unset($body['metas']);
+        $this->putJson($this->url("convenios/{$convenio->id}"), $body)
+            ->assertOk()->assertJsonPath('data.notas', 'solo notas')->assertJsonPath('data.indicadores.pactado', 700);
+        $this->assertSame(1, ConvenioMeta::where('convenio_id', $convenio->id)->whereNull('calibre_id')->count());
+
+        // Quitar el calibre sin enviar metas borra sus apartados pero no el total.
+        $conApartado = $this->crear($this->cuerpoCalibres([[$jumbo, null]], [
+            'modo_volumen' => 'semanal',
+            'metas' => $this->metasConTotales(['2026-06-01' => 500], [[$jumbo, '2026-06-01', 100]]),
+        ]));
+        $grande = $this->calibre('Grande', 2);
+        $body = $this->cuerpoCalibres([[$grande, null]], ['modo_volumen' => 'semanal']);
+        unset($body['metas']);
+        $this->putJson($this->url("convenios/{$conApartado->id}"), $body)->assertOk()->assertJsonPath('data.indicadores.pactado', 500);
+        $this->assertSame([null], ConvenioMeta::where('convenio_id', $conApartado->id)->pluck('calibre_id')->all());
+    }
+
+    public function test_encender_calibres_sin_enviar_metas_conserva_las_metas_clasicas_como_total_semanal(): void
+    {
+        $jumbo = $this->calibre('Jumbo', 1);
+        $grande = $this->calibre('Grande', 2);
+        $convenio = $this->crearConvenio($this->sbp, [
+            'temporada_id' => $this->temporada->id, 'productor_id' => $this->productor->id, 'variedad_id' => $this->variedad->id,
+            'status' => 'borrador', 'metas' => ['2026-06-01' => 100, '2026-06-08' => 120],
+        ]);
+
+        // El front manda el cuerpo completo menos `metas`: calibres elegidos, sin apartados, y el precio general de siempre.
+        $body = $this->cuerpo([
+            'modo_volumen' => 'semanal',
+            'usa_calibres' => true,
+            'calibres' => [['calibre_id' => $jumbo->id, 'volumen_total' => null], ['calibre_id' => $grande->id, 'volumen_total' => null]],
+        ]);
+        unset($body['metas']);
+
+        $res = $this->putJson($this->url("convenios/{$convenio->id}"), $body)
+            ->assertOk()
+            ->assertJsonPath('data.usa_calibres', true)
+            ->assertJsonPath('data.indicadores.pactado', 220)
+            ->assertJsonPath('data.indicadores.libre.total', 220)
+            ->assertJsonPath('data.indicadores.libre.apartado', 0)
+            ->assertJsonPath('data.indicadores.libre.libre', 220);
+        $this->assertNotNull($res->json('data.indicadores.libre'));
+
+        // Las metas de siempre siguen en la base, sin calibre: ahora son el total de cada semana.
+        $this->assertSame([null, null], ConvenioMeta::where('convenio_id', $convenio->id)->orderBy('semana')->pluck('calibre_id')->all());
+        $this->assertSame([100.0, 120.0], ConvenioMeta::where('convenio_id', $convenio->id)->orderBy('semana')->pluck('cantidad')->map(fn ($c) => (float) $c)->all());
+
+        // Y el convenio se puede activar con ese total y sin volumen por calibre.
+        $this->patchJson($this->url("convenios/{$convenio->id}/estado"), ['status' => 'activo'])
+            ->assertOk()->assertJsonPath('data.status', 'activo')->assertJsonPath('data.indicadores.pactado', 220);
+    }
+
+    public function test_apagar_calibres_sin_enviar_metas_deja_los_totales_como_metas_clasicas_y_borra_las_de_calibre(): void
+    {
+        $jumbo = $this->calibre('Jumbo', 1);
+        $convenio = $this->crearConvenioPorCalibre($this->sbp, [['calibre' => $jumbo, 'volumen' => null, 'precio' => 100.0]], [
+            'temporada_id' => $this->temporada->id, 'productor_id' => $this->productor->id, 'variedad_id' => $this->variedad->id,
+            'status' => 'borrador',
+            'modo_volumen' => 'semanal',
+            'metas_total' => ['2026-06-01' => 500, '2026-06-08' => 600],
+            'metas_calibre' => [$jumbo->id => ['2026-06-01' => 100]],
+        ]);
+
+        $body = $this->cuerpo(['usa_calibres' => false]);
+        unset($body['metas']);
+
+        $this->putJson($this->url("convenios/{$convenio->id}"), $body)
+            ->assertOk()
+            ->assertJsonPath('data.usa_calibres', false)
+            ->assertJsonPath('data.calibres', [])
+            ->assertJsonPath('data.indicadores.libre', null)
+            ->assertJsonPath('data.indicadores.pactado', 1100)
+            ->assertJsonCount(2, 'data.metas');
+
+        $this->assertSame([null, null], ConvenioMeta::where('convenio_id', $convenio->id)->orderBy('semana')->pluck('calibre_id')->all());
+        $this->assertSame([500.0, 600.0], ConvenioMeta::where('convenio_id', $convenio->id)->orderBy('semana')->pluck('cantidad')->map(fn ($c) => (float) $c)->all());
+        $this->assertSame(0, ConvenioCalibre::where('convenio_id', $convenio->id)->count());
+    }
+
+    public function test_editar_el_total_y_los_apartados_de_un_convenio_en_modo_total(): void
+    {
+        $jumbo = $this->calibre('Jumbo', 1);
+        $grande = $this->calibre('Grande', 2);
+        $convenio = $this->crear($this->cuerpoCalibres([[$jumbo, 1000], [$grande, null]], ['volumen_total' => 7000]));
+
+        $this->putJson($this->url("convenios/{$convenio->id}"), $this->cuerpoCalibres([[$jumbo, 1000], [$grande, 500]], ['volumen_total' => 9000]))
+            ->assertOk()->assertJsonPath('data.volumen_total', '9000.00')->assertJsonPath('data.indicadores.pactado', 9000);
+
+        // Quitar el total regresa al camino de hoy: el volumen vuelve a ser obligatorio en cada calibre.
+        $this->putJson($this->url("convenios/{$convenio->id}"), $this->cuerpoCalibres([[$jumbo, 1000], [$grande, null]], ['volumen_total' => null]))
+            ->assertStatus(422)->assertJsonValidationErrors(['calibres.1.volumen_total']);
+        $this->putJson($this->url("convenios/{$convenio->id}"), $this->cuerpoCalibres([[$jumbo, 1000], [$grande, 500]], ['volumen_total' => null]))
+            ->assertOk()->assertJsonPath('data.volumen_total', null)->assertJsonPath('data.indicadores.pactado', 1500);
+
+        // Un total que ya no alcanza para los apartados da 422 y no toca lo guardado.
+        $this->putJson($this->url("convenios/{$convenio->id}"), $this->cuerpoCalibres([[$jumbo, 1000], [$grande, 500]], ['volumen_total' => 1200]))
+            ->assertStatus(422)->assertJsonValidationErrors(['volumen_total']);
+        $this->assertNull($convenio->refresh()->volumen_total);
+    }
+
+    public function test_cambio_de_modo_con_total_propio(): void
+    {
+        $jumbo = $this->calibre('Jumbo', 1);
+        $convenio = $this->crear($this->cuerpoCalibres([[$jumbo, null]], [
+            'modo_volumen' => 'semanal',
+            'metas' => $this->metasConTotales(['2026-06-01' => 500, '2026-06-08' => 600], [[$jumbo, '2026-06-01', 100]]),
+        ]));
+
+        // Semanal con totales -> total: se borran todas las metas y el total propio es `volumen_total`.
+        $this->putJson($this->url("convenios/{$convenio->id}"), $this->cuerpoCalibres([[$jumbo, null]], ['modo_volumen' => 'total', 'volumen_total' => 7000]))
+            ->assertOk()->assertJsonPath('data.volumen_total', '7000.00')->assertJsonPath('data.indicadores.pactado', 7000)->assertJsonCount(0, 'data.metas');
+        $this->assertSame(0, ConvenioMeta::where('convenio_id', $convenio->id)->count());
+
+        // Total -> semanal: `volumen_total` queda nulo (aunque el cuerpo lo traiga) y rigen las metas.
+        $this->putJson($this->url("convenios/{$convenio->id}"), $this->cuerpoCalibres([[$jumbo, null]], [
+            'modo_volumen' => 'semanal',
+            'volumen_total' => 7000,
+            'metas' => $this->metasConTotales(['2026-06-01' => 300]),
+        ]))->assertOk()->assertJsonPath('data.volumen_total', null)->assertJsonPath('data.indicadores.pactado', 300);
+        $this->assertNull($convenio->refresh()->volumen_total);
+    }
+
+    public function test_activar_con_total_propio_basta_el_total_sin_apartados(): void
+    {
+        $jumbo = $this->calibre('Jumbo', 1);
+        $grande = $this->calibre('Grande', 2);
+        $convenio = $this->crear($this->cuerpoCalibres([[$jumbo, null], [$grande, null]], ['volumen_total' => 7000]));
+
+        $this->patchJson($this->url("convenios/{$convenio->id}/estado"), ['status' => 'activo'])
+            ->assertOk()->assertJsonPath('data.status', 'activo')->assertJsonPath('data.indicadores.pactado', 7000);
+
+        // Semanal con totales y sin apartados también.
+        $semanal = $this->crear($this->cuerpoCalibres([[$jumbo, null]], [
+            'modo_volumen' => 'semanal',
+            'metas' => $this->metasConTotales(['2026-06-01' => 500]),
+        ]));
+        $this->patchJson($this->url("convenios/{$semanal->id}/estado"), ['status' => 'activo'])->assertOk();
+    }
+
+    public function test_activar_sin_total_propio_sigue_exigiendo_volumen_en_cada_calibre(): void
+    {
+        $jumbo = $this->calibre('Jumbo', 1);
+        $grande = $this->calibre('Grande', 2);
+        $convenio = $this->crear($this->cuerpoCalibres([[$jumbo, 100], [$grande, 100]]));
+        ConvenioCalibre::where('convenio_id', $convenio->id)->where('calibre_id', $grande->id)->update(['volumen_total' => null]);
+
+        $this->patchJson($this->url("convenios/{$convenio->id}/estado"), ['status' => 'activo'])
+            ->assertStatus(422)
+            ->assertJsonPath('errors.status.0', 'Define el volumen pactado de cada calibre antes de activar el convenio.');
+    }
+
+    public function test_activar_con_total_propio_exige_al_menos_un_calibre_y_total_positivo(): void
+    {
+        $jumbo = $this->calibre('Jumbo', 1);
+        $convenio = $this->crear($this->cuerpoCalibres([[$jumbo, null]], ['volumen_total' => 7000]));
+
+        // Sin calibres no se activa aunque haya total.
+        ConvenioCalibre::where('convenio_id', $convenio->id)->delete();
+        $this->patchJson($this->url("convenios/{$convenio->id}/estado"), ['status' => 'activo'])
+            ->assertStatus(422)->assertJsonValidationErrors(['status']);
+        $this->assertSame('borrador', $convenio->refresh()->status);
+
+        // Semanal con un total de cero: hay total propio pero no hay volumen.
+        $semanal = $this->crear($this->cuerpoCalibres([[$jumbo, null]], [
+            'modo_volumen' => 'semanal',
+            'metas' => $this->metasConTotales(['2026-06-01' => 0]),
+        ]));
+        $this->patchJson($this->url("convenios/{$semanal->id}/estado"), ['status' => 'activo'])
+            ->assertStatus(422)->assertJsonValidationErrors(['status']);
     }
 
     // ---- Recepciones: reglas por tipo de convenio ----

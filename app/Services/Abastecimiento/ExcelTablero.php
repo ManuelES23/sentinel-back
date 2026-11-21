@@ -203,11 +203,16 @@ class ExcelTablero
 
     /**
      * Un renglón por (convenio, calibre) con los mismos números del desglose del tablero: pactado, recibido
-     * y avance; con permiso de dinero, también el comprometido y el valor recibido de cada calibre.
+     * y avance; con permiso de dinero, también el comprometido y el valor recibido de cada calibre. Los convenios
+     * con total propio rotulan el pactado como «Apartado» y cierran con un renglón «Libre (sin apartar)».
      */
     private function hojaCalibres(Worksheet $hoja, array $convenios, bool $verDinero, ?string $moneda): void
     {
-        $titulos = ['Folio', 'Productor', 'Variedad', 'Calibre', 'Unidad', 'Pactado', 'Recibido', 'Avance'];
+        // Con total propio, el «pactado» de cada calibre es su apartado. El encabezado es uno solo para toda la hoja:
+        // «Apartado» si todos los convenios tienen total propio, «Pactado / apartado» si se mezclan con convenios sin él.
+        $conLibre = count(array_filter($convenios, fn (array $c) => ($c['indicadores']['libre'] ?? null) !== null));
+        $rotuloPactado = $conLibre === 0 ? 'Pactado' : ($conLibre === count($convenios) ? 'Apartado' : 'Pactado / apartado');
+        $titulos = ['Folio', 'Productor', 'Variedad', 'Calibre', 'Unidad', $rotuloPactado, 'Recibido', 'Avance'];
         if ($verDinero) {
             $sufijo = $moneda === null ? '' : " ({$moneda})";
             array_push($titulos, "Comprometido{$sufijo}", "Valor recibido{$sufijo}");
@@ -228,6 +233,24 @@ class ExcelTablero
                 if ($verDinero) {
                     $this->numero($hoja, 9, $f, $k['comprometido'] ?? null, self::FMT_DINERO);
                     $this->numero($hoja, 10, $f, $k['valor_recibido'] ?? null, self::FMT_DINERO);
+                }
+                $f++;
+            }
+
+            // Convenio con total propio: al final, lo que no se apartó. Solo trae el libre y, con permiso de dinero,
+            // su comprometido; el recibido y el valor recibido se quedan en blanco porque ya están en los renglones
+            // de cada calibre (sumar la columna no cuenta nada dos veces) y el comprometido de los calibres es
+            // solo el de sus apartados.
+            $libre = $c['indicadores']['libre'] ?? null;
+            if ($libre !== null) {
+                $this->texto($hoja, 1, $f, $c['folio'] ?? null);
+                $this->texto($hoja, 2, $f, $c['productor']['nombre'] ?? null);
+                $this->texto($hoja, 3, $f, $c['variedad']['nombre'] ?? null);
+                $this->texto($hoja, 4, $f, 'Libre (sin apartar)');
+                $this->texto($hoja, 5, $f, self::UNIDADES[$c['unidad']] ?? $c['unidad']);
+                $this->numero($hoja, 6, $f, $libre['libre'] ?? null, self::FMT_CANTIDAD);
+                if ($verDinero) {
+                    $this->numero($hoja, 9, $f, $libre['comprometido'] ?? null, self::FMT_DINERO);
                 }
                 $f++;
             }

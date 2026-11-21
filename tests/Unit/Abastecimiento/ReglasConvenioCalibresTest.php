@@ -281,12 +281,10 @@ class ReglasConvenioCalibresTest extends TestCase
             'metas' => [
                 ['semana' => '2026-06-01', 'cantidad' => 5, 'calibre_id' => 10],
                 ['semana' => '2026-06-01', 'cantidad' => 5, 'calibre_id' => 11],
-                ['semana' => '2026-06-08', 'cantidad' => 5],
                 ['semana' => '2026-06-08', 'cantidad' => 5, 'calibre_id' => 99],
             ],
         ])));
         $this->assertArrayHasKey('metas.2.calibre_id', $e);
-        $this->assertArrayHasKey('metas.3.calibre_id', $e);
         $this->assertArrayNotHasKey('metas.0.calibre_id', $e);
     }
 
@@ -314,6 +312,213 @@ class ReglasConvenioCalibresTest extends TestCase
         ])));
         $this->assertSame('La semana debe indicarse con la fecha de su lunes.', $e['metas.0.semana']);
         $this->assertSame('En cajas la cantidad debe ser un número entero.', $e['metas.1.cantidad']);
+    }
+
+    // ---- validarVolumen con total propio y apartados ----
+
+    public function test_total_propio_con_apartados_pasa(): void
+    {
+        ReglasConvenio::validarVolumen($this->datos([
+            'volumen_total' => 7000,
+            'calibres' => [
+                ['calibre_id' => 10, 'volumen_total' => 1000],
+                ['calibre_id' => 11, 'volumen_total' => 1000],
+                ['calibre_id' => 12, 'volumen_total' => null],
+            ],
+        ]));
+        $this->assertTrue(true);
+    }
+
+    public function test_total_propio_un_apartado_vacio_o_cero_pasa(): void
+    {
+        ReglasConvenio::validarVolumen($this->datos([
+            'volumen_total' => '7000',
+            'calibres' => [
+                ['calibre_id' => 10, 'volumen_total' => ''],
+                ['calibre_id' => 11, 'volumen_total' => 0],
+            ],
+        ]));
+        $this->assertTrue(true);
+    }
+
+    public function test_total_propio_los_apartados_no_pueden_superar_el_total(): void
+    {
+        $e = $this->errores(fn () => ReglasConvenio::validarVolumen($this->datos([
+            'volumen_total' => 7000,
+            'calibres' => [
+                ['calibre_id' => 10, 'volumen_total' => 4000],
+                ['calibre_id' => 11, 'volumen_total' => 4000],
+            ],
+        ])));
+        $this->assertSame(['volumen_total' => 'Los apartados suman 8000 y el total es 7000.'], $e);
+
+        // Igual al total sí se permite (libre = 0).
+        ReglasConvenio::validarVolumen($this->datos([
+            'volumen_total' => 8000,
+            'calibres' => [
+                ['calibre_id' => 10, 'volumen_total' => 4000],
+                ['calibre_id' => 11, 'volumen_total' => 4000],
+            ],
+        ]));
+        $this->assertTrue(true);
+    }
+
+    public function test_total_propio_declarado_debe_ser_valido(): void
+    {
+        foreach ([0, '0', -5, 'abc'] as $total) {
+            $e = $this->errores(fn () => ReglasConvenio::validarVolumen($this->datos(['volumen_total' => $total])));
+            $this->assertSame('Indica el volumen total pactado (mayor a cero).', $e['volumen_total'], 'total '.var_export($total, true));
+        }
+
+        $e = $this->errores(fn () => ReglasConvenio::validarVolumen($this->datos(['volumen_total' => 10.5])));
+        $this->assertSame('En cajas la cantidad debe ser un número entero.', $e['volumen_total']);
+
+        $e = $this->errores(fn () => ReglasConvenio::validarVolumen($this->datos(['unidad' => 'kg', 'volumen_total' => 10.123])));
+        $this->assertSame('En kilos la cantidad admite hasta dos decimales.', $e['volumen_total']);
+
+        ReglasConvenio::validarVolumen($this->datos(['unidad' => 'kg', 'volumen_total' => 1010.12]));
+        $this->assertTrue(true);
+    }
+
+    public function test_total_propio_un_apartado_negativo_o_con_decimales_se_rechaza(): void
+    {
+        $e = $this->errores(fn () => ReglasConvenio::validarVolumen($this->datos([
+            'volumen_total' => 7000,
+            'calibres' => [['calibre_id' => 10, 'volumen_total' => -1], ['calibre_id' => 11, 'volumen_total' => 2.5]],
+        ])));
+        $this->assertArrayHasKey('calibres.0.volumen_total', $e);
+        $this->assertSame('En cajas la cantidad debe ser un número entero.', $e['calibres.1.volumen_total']);
+        $this->assertArrayNotHasKey('volumen_total', $e);
+    }
+
+    public function test_total_propio_no_admite_metas_y_sin_total_cada_calibre_exige_volumen(): void
+    {
+        $e = $this->errores(fn () => ReglasConvenio::validarVolumen($this->datos([
+            'volumen_total' => 7000,
+            'metas' => [['semana' => '2026-06-01', 'cantidad' => 5, 'calibre_id' => 10]],
+        ])));
+        $this->assertSame(['metas' => 'En volumen total no se capturan metas semanales.'], $e);
+
+        foreach ([null, ''] as $vacio) {
+            $e = $this->errores(fn () => ReglasConvenio::validarVolumen($this->datos([
+                'volumen_total' => $vacio,
+                'calibres' => [['calibre_id' => 10, 'volumen_total' => 1000], ['calibre_id' => 11, 'volumen_total' => null]],
+            ])));
+            $this->assertSame(['calibres.1.volumen_total' => 'Indica el volumen total pactado (mayor a cero).'], $e);
+        }
+    }
+
+    public function test_semanal_total_propio_con_apartados_pasa_aunque_un_calibre_no_tenga_meta(): void
+    {
+        ReglasConvenio::validarVolumen($this->datos([
+            'modo_volumen' => 'semanal',
+            'metas' => [
+                ['semana' => '2026-06-01', 'cantidad' => 1000, 'calibre_id' => null],
+                ['semana' => '2026-06-08', 'cantidad' => 800, 'calibre_id' => ''],
+                ['semana' => '2026-06-01', 'cantidad' => 600, 'calibre_id' => 10],
+                ['semana' => '2026-06-01', 'cantidad' => 400, 'calibre_id' => 11],
+            ],
+        ]));
+        $this->assertTrue(true);
+    }
+
+    public function test_semanal_total_propio_apartados_de_la_semana_no_superan_el_total(): void
+    {
+        $e = $this->errores(fn () => ReglasConvenio::validarVolumen($this->datos([
+            'modo_volumen' => 'semanal',
+            'metas' => [
+                ['semana' => '2026-06-01', 'cantidad' => 1000],
+                ['semana' => '2026-06-01', 'cantidad' => 600, 'calibre_id' => 10],
+                ['semana' => '2026-06-01', 'cantidad' => 600, 'calibre_id' => 11],
+            ],
+        ])));
+        $this->assertSame(['metas.2.cantidad'], array_keys($e));
+    }
+
+    public function test_semanal_total_propio_semana_con_apartado_y_sin_total(): void
+    {
+        $e = $this->errores(fn () => ReglasConvenio::validarVolumen($this->datos([
+            'modo_volumen' => 'semanal',
+            'metas' => [
+                ['semana' => '2026-06-01', 'cantidad' => 1000],
+                ['semana' => '2026-06-08', 'cantidad' => 100, 'calibre_id' => 10],
+            ],
+        ])));
+        $this->assertSame(['metas.1.cantidad'], array_keys($e));
+    }
+
+    public function test_semanal_total_propio_dos_totales_de_la_misma_semana(): void
+    {
+        $e = $this->errores(fn () => ReglasConvenio::validarVolumen($this->datos([
+            'modo_volumen' => 'semanal',
+            'metas' => [
+                ['semana' => '2026-06-01', 'cantidad' => 1000],
+                ['semana' => '2026-06-01', 'cantidad' => 500, 'calibre_id' => ''],
+            ],
+        ])));
+        $this->assertSame(['metas.1.semana' => 'Ya hay un total en esa semana.'], $e);
+    }
+
+    public function test_semanal_total_propio_aplica_reglas_de_semana_y_cantidad_al_total(): void
+    {
+        $e = $this->errores(fn () => ReglasConvenio::validarVolumen($this->datos([
+            'modo_volumen' => 'semanal',
+            'metas' => [
+                ['semana' => '2026-06-02', 'cantidad' => 1000],
+                ['semana' => '2026-06-08', 'cantidad' => 2.5],
+                ['semana' => '2026-07-06', 'cantidad' => 10],
+            ],
+        ])));
+        $this->assertSame('La semana debe indicarse con la fecha de su lunes.', $e['metas.0.semana']);
+        $this->assertSame('En cajas la cantidad debe ser un número entero.', $e['metas.1.cantidad']);
+        $this->assertSame('La semana queda fuera de las fechas del convenio.', $e['metas.2.semana']);
+    }
+
+    public function test_semanal_total_propio_apartado_de_calibre_ajeno_se_rechaza(): void
+    {
+        $e = $this->errores(fn () => ReglasConvenio::validarVolumen($this->datos([
+            'modo_volumen' => 'semanal',
+            'metas' => [
+                ['semana' => '2026-06-01', 'cantidad' => 1000],
+                ['semana' => '2026-06-01', 'cantidad' => 10, 'calibre_id' => 99],
+            ],
+        ])));
+        $this->assertSame('El calibre no está en el convenio.', $e['metas.1.calibre_id']);
+    }
+
+    public function test_semanal_sin_total_propio_y_un_calibre_sin_metas_sigue_siendo_error(): void
+    {
+        $e = $this->errores(fn () => ReglasConvenio::validarVolumen($this->datos([
+            'modo_volumen' => 'semanal',
+            'metas' => [['semana' => '2026-06-01', 'cantidad' => 5, 'calibre_id' => 10]],
+        ])));
+        $this->assertSame(['calibres.1.calibre_id' => 'Captura al menos una meta semanal para este calibre.'], $e);
+    }
+
+    public function test_semanal_guardadas_la_meta_sin_calibre_es_el_total_y_valida_fechas(): void
+    {
+        // Metas guardadas (la edición no las toca): la meta sin calibre cuenta como total.
+        ReglasConvenio::validarVolumen($this->datos([
+            'modo_volumen' => 'semanal',
+            'metas' => [['semana' => '2026-06-01', 'cantidad' => 1000, 'calibre_id' => null]],
+        ]), true);
+
+        $e = $this->errores(fn () => ReglasConvenio::validarVolumen($this->datos([
+            'modo_volumen' => 'semanal',
+            'fecha_inicio' => '2026-06-08',
+            'metas' => [['semana' => '2026-06-01', 'cantidad' => 1000, 'calibre_id' => null]],
+        ]), true));
+        $this->assertSame(['fecha_inicio' => 'Hay metas fuera de las nuevas fechas: ajústalas primero.'], $e);
+    }
+
+    public function test_clasico_con_meta_sin_calibre_sigue_siendo_la_meta_semanal_de_siempre(): void
+    {
+        ReglasConvenio::validarVolumen([
+            'modo_volumen' => 'semanal', 'volumen_total' => null, 'unidad' => 'caja',
+            'fecha_inicio' => '2026-06-01', 'fecha_fin' => '2026-06-28',
+            'metas' => [['semana' => '2026-06-01', 'cantidad' => 5, 'calibre_id' => null]],
+        ]);
+        $this->assertTrue(true);
     }
 
     public function test_volumen_clasico_sigue_igual(): void

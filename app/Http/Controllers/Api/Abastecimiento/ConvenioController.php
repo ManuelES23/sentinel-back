@@ -415,9 +415,13 @@ class ConvenioController extends AbastecimientoController
             $permitidos = CalibresConvenio::permitidos((int) $datos['variedad_id'], $convenio);
             ReglasConvenio::validarCalibres($calibres, $permitidos, $datos['precios']);
 
-            // El volumen vive en cada calibre; el del convenio no se usa.
-            $datos['calibres'] = CalibresConvenio::normalizar($calibres, $datos['modo_volumen']);
-            $datos['volumen_total'] = null;
+            // Total propio (spec 2026-11-20): en modo total el `volumen_total` del convenio es la meta y el de cada
+            // calibre un apartado opcional; en semanal el total propio son las metas sin calibre, así que el
+            // `volumen_total` se descarta. Solo vacío/nulo se vuelve nulo (sin total propio): un 0 pasa tal cual
+            // y lo rechaza ReglasConvenio::validarVolumen. La llave siempre queda puesta para que `update` no herede el guardado.
+            $total = $datos['modo_volumen'] === 'total' ? ($datos['volumen_total'] ?? null) : null;
+            $datos['volumen_total'] = $total === '' ? null : $total;
+            $datos['calibres'] = CalibresConvenio::normalizar($calibres, $datos['modo_volumen'], $datos['volumen_total']);
         } else {
             $datos['calibres'] = [];
         }

@@ -31,6 +31,7 @@ class IndicadoresConvenio
      *   semana_actual: array{lunes: string, numero: int, meta: float, recibido: float},
      *   comprometido: float, valor_recibido: float,
      *   calibres: array<int, array{calibre_id: int, nombre: string|null, pactado: float, comprometido: float|null, recibido: float, avance: float|null, valor_recibido: float}>,
+     *   libre: array{total: float, apartado: float, libre: float, libre_usado: float, libre_restante: float, comprometido: float|null}|null,
      *   semanas: array<int, array{lunes: string, numero: int, meta: float, recibido: float, cerrada: bool}>
      * }
      */
@@ -247,15 +248,25 @@ class IndicadoresConvenio
             : $recibidoFecha + ($recibidoFecha / $cerradas) * (count($lunes) - $cerradas);
 
         $calibres = [];
+        $libre = null;
         if ($convenio->usa_calibres) {
-            // Comprometido = Σ por calibre de pactado × precio del tipo principal vigente al inicio en ese calibre
-            // × % del productor; el peso es su promedio por unidad pactada (misma ponderación entre convenios).
-            // Un calibre sin precio del tipo principal no compromete nada (su comprometido va nulo).
+            // Pactado por calibre: sin total propio, la meta del calibre; con total propio, su apartado (0 sin apartado).
+            $apartados = MetasConvenio::pactadoPorCalibre($convenio);
+
+            // Comprometido = Σ por calibre de pactado (apartado) × precio del tipo principal vigente al inicio en ese
+            // calibre × % del productor, más el del libre si hay total propio; el peso es su promedio por unidad
+            // pactada (misma ponderación entre convenios). Un calibre sin precio del tipo principal no compromete
+            // nada (su comprometido va nulo).
             $comprometido = 0.0;
-            foreach (self::calibresDe($convenio, $precios, $inicio, $porCalibre) as $fila) {
+            foreach (self::calibresDe($convenio, $precios, $inicio, $porCalibre, $apartados) as $fila) {
                 $comprometido += $fila['comprometido'] ?? 0.0;
                 $fila['comprometido'] = $fila['comprometido'] === null ? null : round($fila['comprometido'], 2);
                 $calibres[] = $fila;
+            }
+
+            if (MetasConvenio::totalPropio($convenio)) {
+                $libre = self::libreDe($pactado, $apartados, $precios, $inicio, $porCalibre);
+                $comprometido += $libre['comprometido'] ?? 0.0;
             }
             $peso = $pactado > 0 ? $comprometido / $pactado : 0.0;
         } else {
@@ -286,8 +297,52 @@ class IndicadoresConvenio
                 'comprometido' => round($comprometido, 2),
                 'valor_recibido' => round($valorRecibido, 2),
                 'calibres' => $calibres,
+                'libre' => $libre,
                 'semanas' => $semanas,
             ],
+        ];
+    }
+
+    /**
+     * Bloque `libre` de un convenio por calibre con total propio: lo no apartado del total y cuánto de eso
+     * ya se recibió. `libre_usado` = Σ por calibre de max(0, recibido − apartado) (un calibre sin apartado
+     * consume solo libre; uno que rebasa su apartado, el exceso). `libre_restante` puede ser negativo.
+     * `comprometido` = libre × precio general del tipo principal vigente al inicio × % del productor; nulo
+     * si hay libre y no hay precio general principal, 0 sin libre. Sin consultas: usa lo ya calculado.
+     *
+     * @param  float  $pactado  el total propio (Σ de la serie total)
+     * @param  array<int, float>  $apartados  calibre_id => apartado
+     * @param  array<int, array{recibido?: float}>  $recibidos  calibre_id => acumulados de las líneas
+     * @return array{total: float, apartado: float, libre: float, libre_usado: float, libre_restante: float, comprometido: float|null}
+     */
+    private static function libreDe(float $pactado, array $apartados, Collection $precios, string $inicio, array $recibidos): array
+    {
+        // La fórmula refleja MetasConvenio::libre; se mantiene separada a propósito para no hacer consultas de más.
+        $apartado = round(array_sum($apartados), 2);
+        $libre = max(0.0, round($pactado - $apartado, 2));
+
+        $usado = 0.0;
+        foreach ($recibidos as $calibreId => $acumulado) {
+            $usado += max(0.0, (float) ($acumulado['recibido'] ?? 0.0) - (float) ($apartados[(int) $calibreId] ?? 0.0));
+        }
+        $usado = round($usado, 2);
+
+        $comprometido = 0.0;
+        if ($libre > 0) {
+            // Sin calibre: el precio general (sin calibre) del tipo principal.
+            $general = PrecioVigente::principalEnColeccion($precios, $inicio, null);
+            $comprometido = $general === null
+                ? null
+                : round($libre * (float) $general->precio * self::porcentaje($general->porcentaje_productor) / 100, 2);
+        }
+
+        return [
+            'total' => round($pactado, 2),
+            'apartado' => $apartado,
+            'libre' => $libre,
+            'libre_usado' => $usado,
+            'libre_restante' => round($libre - $usado, 2),
+            'comprometido' => $comprometido,
         ];
     }
 
@@ -297,18 +352,20 @@ class IndicadoresConvenio
      * calibre), lo recibido (unidad del convenio), el avance (recibido ÷ pactado; nulo sin pactado)
      * y el valor de lo recibido.
      *
+     * Con total propio el `pactado` de cada calibre es su apartado (0 y avance nulo si no tiene).
+     *
      * @param  array<int, array{recibido?: float, valor?: float}>  $recibidos  calibre_id => acumulados de las líneas
+     * @param  array<int, float>  $pactado  calibre_id => cantidad pactada (`MetasConvenio::pactadoPorCalibre`)
      * @return array<int, array{calibre_id: int, nombre: string|null, pactado: float, comprometido: float|null, recibido: float, avance: float|null, valor_recibido: float}>
      */
-    private static function calibresDe(Convenio $convenio, Collection $precios, string $inicio, array $recibidos = []): array
+    private static function calibresDe(Convenio $convenio, Collection $precios, string $inicio, array $recibidos, array $pactado): array
     {
         // Invariante: un renglón de un calibre fuera de la lista del convenio es imposible (lo rechaza
-        // ReglasRenglonesRecepcion), así que Σ calibres = total.
+        // ReglasRenglonesRecepcion), así que Σ calibres = total (con total propio, Σ apartados + libre = total).
         $filas = $convenio->relationLoaded('calibres')
             ? $convenio->calibres
             : $convenio->calibres()->get();
         $filas->loadMissing(['calibre' => fn ($q) => $q->select('id', 'nombre', 'orden')]);
-        $pactado = MetasConvenio::pactadoPorCalibre($convenio);
 
         return $filas
             ->sortBy([fn ($a, $b) => ($a->calibre?->orden ?? 0) <=> ($b->calibre?->orden ?? 0), ['calibre_id', 'asc']])
