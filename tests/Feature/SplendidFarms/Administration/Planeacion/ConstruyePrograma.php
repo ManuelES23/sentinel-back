@@ -195,6 +195,12 @@ trait ConstruyePrograma
             $this->correrMigracion('2026_11_20_130000_add_avance_empaque_submodulo.php');
         }
 
+        // El permiso `enviar` del Tablero semanal también sale de su propia migración.
+        $tableroId = DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'tablero-semanal')->value('id');
+        if (! DB::table('submodule_permission_types')->where('submodule_id', $tableroId)->where('slug', 'enviar')->exists()) {
+            $this->correrMigracion('2026_11_21_100000_add_enviar_permission_to_tablero_semanal.php');
+        }
+
         $usuario = User::factory()->create();
 
         foreach ($permisosPorSubmodulo as $submodulo => $permisos) {

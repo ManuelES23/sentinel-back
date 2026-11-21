@@ -232,6 +232,7 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::post('configuracion/rendimientos/copiar', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'copiarRendimientos']);
                 Route::put('configuracion/cajas-por-carga', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'cajasPorCarga']);
                 Route::put('configuracion/avance-plantas', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'avancePlantas']);
+                Route::put('configuracion/correos-programa', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'correosPrograma']);
                 Route::put('configuracion/cajas-por-presentacion', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'cajasPorPresentacion']);
                 Route::post('configuracion/{catalogo}', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'store']);
                 Route::put('configuracion/{catalogo}/{id}', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'update'])->whereNumber('id');
