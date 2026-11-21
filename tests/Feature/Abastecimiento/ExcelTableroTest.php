@@ -3,8 +3,11 @@
 namespace Tests\Feature\Abastecimiento;
 
 use App\Models\Abastecimiento\Convenio;
+use App\Models\Abastecimiento\ConvenioPrecio;
 use App\Models\Abastecimiento\Productor;
 use App\Models\Abastecimiento\Temporada;
+use App\Models\Abastecimiento\Variedad;
+use App\Models\CRM\CrmProductoCalibre;
 use App\Models\User;
 use App\Services\Abastecimiento\SaldoProductor;
 use Carbon\Carbon;
@@ -557,5 +560,145 @@ class ExcelTableroTest extends TestCase
         $fila = $this->filas($this->descargar($semanal->temporada_id)->getSheetByName('Calibres'))[0];
         $this->assertArrayNotHasKey('Comprometido (MXN)', $fila);
         $this->assertArrayNotHasKey('Valor recibido (MXN)', $fila);
+    }
+
+    /**
+     * Convenio por calibre con total propio de 7000 y apartados de 1000 (Jumbo) y 1000 (Grande): libre de 5000.
+     * Con `$general` crea el precio general (sin calibre) con el que se compromete el libre.
+     */
+    private function convenioConTotalPropio(?float $general = 90, string $productor = 'Rancho Total Propio'): Convenio
+    {
+        $variedad = Variedad::firstOrFail();
+        $jumbo = CrmProductoCalibre::where('nombre', 'Jumbo')->first() ?? $this->crearCalibre($variedad, 'Jumbo', true, 1);
+        $grande = CrmProductoCalibre::where('nombre', 'Grande')->first() ?? $this->crearCalibre($variedad, 'Grande', true, 2);
+        $c = $this->crearConvenioPorCalibre($this->sbp, [
+            ['calibre' => $jumbo, 'volumen' => 1000, 'precio' => 100.0],
+            ['calibre' => $grande, 'volumen' => 1000, 'precio' => 100.0],
+        ], ['variedad_id' => $variedad->id, 'productor_id' => $this->productor($productor),
+            'fecha_inicio' => $this->lunes(26), 'fecha_fin' => '2026-08-23', 'volumen_total' => 7000]);
+
+        if ($general !== null) {
+            ConvenioPrecio::create([
+                'convenio_id' => $c->id,
+                'tipo_carga_id' => $c->precios->first()->tipo_carga_id,
+                'calibre_id' => null,
+                'precio' => $general,
+                'vigencia_inicio' => $c->fecha_inicio->format('Y-m-d'),
+                'es_principal' => true,
+            ]);
+        }
+
+        return $c->fresh(['precios', 'metas', 'calibres']);
+    }
+
+    public function test_hoja_calibres_de_un_convenio_con_total_propio_rotula_apartado_y_agrega_el_libre(): void
+    {
+        $c = $this->convenioConTotalPropio();
+
+        $hoja = $this->descargar($c->temporada_id)->getSheetByName('Calibres');
+        $filas = $this->filas($hoja);
+
+        $this->assertSame('Apartado', $hoja->getCell('F1')->getValue());
+        $this->assertSame(['Jumbo', 'Grande', 'Libre (sin apartar)'], array_column($filas, 'Calibre'));
+        $this->assertSame([$c->folio, $c->folio, $c->folio], array_column($filas, 'Folio'));
+        $this->assertEqualsWithDelta(1000, $filas[0]['Apartado'], 0.001);
+        $this->assertEqualsWithDelta(1000, $filas[1]['Apartado'], 0.001);
+
+        // La fila del libre: lo no apartado y su comprometido (5000 × 90); recibido y valor recibido no se repiten.
+        $libre = $filas[2];
+        $this->assertSame('Rancho Total Propio', $libre['Productor']);
+        $this->assertSame('Cajas', $libre['Unidad']);
+        $this->assertEqualsWithDelta(5000, $libre['Apartado'], 0.001);
+        $this->assertEqualsWithDelta(450000, $libre['Comprometido (MXN)'], 0.01);
+        $this->assertNull($libre['Recibido']);
+        $this->assertNull($libre['Avance']);
+        $this->assertNull($libre['Valor recibido (MXN)']);
+
+        // Apartados + libre = total propio, y los comprometidos suman el del convenio (sin contar dos veces el libre).
+        $this->assertEqualsWithDelta(7000, array_sum(array_column($filas, 'Apartado')), 0.001);
+        $this->assertEqualsWithDelta(650000, array_sum(array_column($filas, 'Comprometido (MXN)')), 0.01);
+    }
+
+    public function test_el_recibido_de_la_hoja_calibres_no_cuenta_dos_veces_lo_consumido_del_libre(): void
+    {
+        $c = $this->convenioConTotalPropio();
+        $jumbo = CrmProductoCalibre::where('nombre', 'Jumbo')->firstOrFail();
+        // Jumbo rebasa su apartado en 200: ese exceso consume libre, pero el recibido sigue siendo 1200 una sola vez.
+        $this->crearRecepcionConRenglones($c, [['calibre_id' => $jumbo->id, 'cantidad' => 1200]], ['fecha' => '2026-07-07']);
+
+        $filas = $this->filas($this->descargar($c->temporada_id)->getSheetByName('Calibres'));
+
+        $this->assertEqualsWithDelta(1200, array_sum(array_column($filas, 'Recibido')), 0.001);
+    }
+
+    public function test_hoja_calibres_con_libre_sin_precio_general_deja_vacio_su_comprometido(): void
+    {
+        $c = $this->convenioConTotalPropio(null);
+
+        $filas = $this->filas($this->descargar($c->temporada_id)->getSheetByName('Calibres'));
+
+        $this->assertSame('Libre (sin apartar)', $filas[2]['Calibre']);
+        $this->assertEqualsWithDelta(5000, $filas[2]['Apartado'], 0.001);
+        $this->assertNull($filas[2]['Comprometido (MXN)']);
+    }
+
+    public function test_hoja_calibres_sin_total_propio_sigue_con_pactado_y_sin_fila_libre(): void
+    {
+        [$semanal] = $this->dosConvenios();
+        $variedad = Variedad::findOrFail($semanal->variedad_id);
+        $jumbo = $this->crearCalibre($variedad, 'Jumbo', true, 1);
+        $this->crearConvenioPorCalibre($this->sbp, [['calibre' => $jumbo, 'volumen' => 100, 'precio' => 180.0]], [
+            'variedad_id' => $variedad->id, 'productor_id' => $this->productor('Rancho Calibres'),
+            'fecha_inicio' => $this->lunes(26), 'fecha_fin' => '2026-08-23',
+        ]);
+
+        $hoja = $this->descargar($semanal->temporada_id)->getSheetByName('Calibres');
+
+        $this->assertSame(
+            ['Folio', 'Productor', 'Variedad', 'Calibre', 'Unidad', 'Pactado', 'Recibido', 'Avance', 'Comprometido (MXN)', 'Valor recibido (MXN)'],
+            array_values(array_filter($hoja->toArray(null, false, false, false)[0], fn ($v) => $v !== null)),
+        );
+        $this->assertSame(['Jumbo'], array_column($this->filas($hoja), 'Calibre'));
+    }
+
+    public function test_hoja_calibres_con_convenios_de_ambos_tipos_rotula_pactado_o_apartado(): void
+    {
+        $c = $this->convenioConTotalPropio();
+        $variedad = Variedad::findOrFail($c->variedad_id);
+        $chico = $this->crearCalibre($variedad, 'Chico', true, 3);
+        $clasico = $this->crearConvenioPorCalibre($this->sbp, [['calibre' => $chico, 'volumen' => 300, 'precio' => 80.0]], [
+            'variedad_id' => $variedad->id, 'productor_id' => $this->productor('Rancho Clasico'),
+            'fecha_inicio' => $this->lunes(26), 'fecha_fin' => '2026-08-23',
+        ]);
+
+        $hoja = $this->descargar($c->temporada_id)->getSheetByName('Calibres');
+        $filas = $this->filas($hoja);
+
+        // Un solo encabezado para ambos tipos: no puede llamar «Apartado» al pactado del convenio clásico.
+        $this->assertSame('Pactado / apartado', $hoja->getCell('F1')->getValue());
+        $porFolio = [];
+        foreach ($filas as $f) {
+            $porFolio[$f['Folio']][] = $f['Calibre'];
+        }
+        $this->assertSame(['Jumbo', 'Grande', 'Libre (sin apartar)'], $porFolio[$c->folio]);
+        $this->assertSame(['Chico'], $porFolio[$clasico->folio]);
+    }
+
+    public function test_sin_liquidaciones_view_la_fila_libre_no_trae_importes(): void
+    {
+        $c = $this->convenioConTotalPropio();
+        Sanctum::actingAs($this->captor);
+        $this->otorgarAbs($this->captor, $this->sbp, 'tablero', ['view']);
+
+        $hoja = $this->descargar($c->temporada_id)->getSheetByName('Calibres');
+        $filas = $this->filas($hoja);
+
+        $this->assertSame('Apartado', $hoja->getCell('F1')->getValue());
+        $this->assertNull($hoja->getCell('I1')->getValue());
+        $this->assertSame('Libre (sin apartar)', $filas[2]['Calibre']);
+        $this->assertEqualsWithDelta(5000, $filas[2]['Apartado'], 0.001);
+        $this->assertArrayNotHasKey('Comprometido (MXN)', $filas[2]);
+        $this->assertNull($hoja->getCell('I4')->getValue());
+        $this->assertNull($hoja->getCell('J4')->getValue());
     }
 }
