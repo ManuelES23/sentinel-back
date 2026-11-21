@@ -142,6 +142,102 @@ class RealEmpacadoTest extends TestCase
         $this->assertSame([0, 0, 0, 0, 0, 22, 0], $real['renglones'][$this->llave('Tray', $grupo, 'RPC')]['cajas']);
     }
 
+    public function test_un_detalle_sin_receta_hereda_la_del_pallet(): void
+    {
+        // Cola de Bulk completada con una entrada sin receta propia.
+        $bulk = $this->recetaEmpaque('Bulk RPC');
+        $this->combinacion($bulk, 'Bulk', 'RPC');
+        $this->pallet('2026-11-24', $bulk, 0, 'Amarillo', ['is_cola' => true], [[$bulk, 30], [null, 12]]);
+
+        $real = $this->real();
+
+        $this->assertSame([0, 42, 0, 0, 0, 0, 0], $real['renglones'][$this->llave('Bulk', $this->grupoId('Amarillo / Bicolor'), 'RPC')]['cajas']);
+        $this->assertSame(0, $real['sin_clasificar']['pallets']);
+    }
+
+    public function test_el_remanente_fuera_de_los_detalles_va_con_la_receta_del_pallet(): void
+    {
+        $bulk = $this->recetaEmpaque('Bulk RPC');
+        $this->combinacion($bulk, 'Bulk', 'RPC');
+        $tray = $this->recetaEmpaque('Tray RPC');
+        $this->combinacion($tray, 'Tray', 'RPC');
+
+        $this->pallet('2026-11-25', $bulk, 0, 'Amarillo', ['total_cajas' => 50], [[$tray, 20]]);
+
+        $real = $this->real();
+
+        $grupo = $this->grupoId('Amarillo / Bicolor');
+        $this->assertSame([0, 0, 20, 0, 0, 0, 0], $real['renglones'][$this->llave('Tray', $grupo, 'RPC')]['cajas']);
+        $this->assertSame([0, 0, 30, 0, 0, 0, 0], $real['renglones'][$this->llave('Bulk', $grupo, 'RPC')]['cajas']);
+    }
+
+    public function test_sin_remanente_cuando_los_detalles_suman_el_total_o_mas(): void
+    {
+        $bulk = $this->recetaEmpaque('Bulk RPC');
+        $this->combinacion($bulk, 'Bulk', 'RPC');
+        $tray = $this->recetaEmpaque('Tray RPC');
+        $this->combinacion($tray, 'Tray', 'RPC');
+
+        $this->pallet('2026-11-26', $bulk, 0, 'Amarillo', ['total_cajas' => 20], [[$tray, 20]]);   // igual
+        $this->pallet('2026-11-27', $bulk, 0, 'Amarillo', ['total_cajas' => 10], [[$tray, 25]]);   // de más
+
+        $real = $this->real();
+
+        $grupo = $this->grupoId('Amarillo / Bicolor');
+        $this->assertSame([$this->llave('Tray', $grupo, 'RPC')], array_keys($real['renglones']));
+        $this->assertSame([0, 0, 0, 20, 25, 0, 0], $real['renglones'][$this->llave('Tray', $grupo, 'RPC')]['cajas']);
+        $this->assertSame([0, 0, 0, 0, 0, 0, 0], $real['sin_clasificar']['cajas']);
+    }
+
+    public function test_lo_mostrado_cuadra_con_las_cajas_de_los_pallets(): void
+    {
+        $bulk = $this->recetaEmpaque('Bulk RPC');
+        $this->combinacion($bulk, 'Bulk', 'RPC');
+        $tray = $this->recetaEmpaque('Tray RPC');
+        $this->combinacion($tray, 'Tray', 'RPC');
+        $suelta = $this->recetaEmpaque('Sin combinación');
+
+        $esperado = 0;
+        $this->pallet('2026-11-23', $bulk, 40, 'Amarillo');
+        $esperado += 40;
+        $this->pallet('2026-11-24', null, 33, 'Blanco');
+        $esperado += 33;
+        $this->pallet('2026-11-25', $suelta, 0, 'Blanco', [], [[$tray, 10], [null, 5]]);
+        $esperado += 15;
+        $this->pallet('2026-11-26', $bulk, 0, 'Bicolor', ['total_cajas' => 60], [[$tray, 20], [$suelta, 15]]);
+        $esperado += 60;                                                  // 20 + 15 + remanente 25
+        $this->pallet('2026-11-29', $bulk, 0, 'Amarillo', ['total_cajas' => 10], [[$tray, 18]]);
+        $esperado += 18;                                                  // los detalles mandan
+        $this->pallet('2026-11-30', $bulk, 999, 'Amarillo');              // fuera de la semana
+
+        $real = $this->real();
+
+        $mostrado = array_sum($real['sin_clasificar']['cajas']);
+        foreach ($real['renglones'] as $renglon) {
+            $mostrado += array_sum($renglon['cajas']);
+        }
+        $this->assertSame($esperado, $mostrado);
+        $this->assertSame(array_sum($real['sin_clasificar']['cajas']), array_sum(array_column($real['sin_clasificar']['recetas'], 'cajas')));
+    }
+
+    public function test_combinaciones_repetidas_no_son_ambiguas(): void
+    {
+        $receta = $this->recetaEmpaque('Bulk RPC');
+        $this->combinacion($receta, 'Bulk', 'RPC');
+        $this->combinacion($receta, 'Bulk', 'RPC');
+        $otra = $this->recetaEmpaque('Bulk o Tray');
+        $this->combinacion($otra, 'Bulk', 'RPC');
+        $this->combinacion($otra, 'Bulk', 'Cartón');
+
+        $this->pallet('2026-11-23', $receta, 9, 'Amarillo');
+        $this->pallet('2026-11-23', $otra, 4, 'Amarillo');
+
+        $real = $this->real();
+
+        $this->assertSame([9, 0, 0, 0, 0, 0, 0], $real['renglones'][$this->llave('Bulk', $this->grupoId('Amarillo / Bicolor'), 'RPC')]['cajas']);
+        $this->assertSame([['recipe_id' => $otra->id, 'nombre' => 'Bulk o Tray', 'cajas' => 4]], $real['sin_clasificar']['recetas']);
+    }
+
     public function test_pallet_sin_receta_va_a_sin_clasificar_con_receta_nula(): void
     {
         $this->pallet('2026-11-23', null, 33, 'Blanco');

@@ -17,7 +17,10 @@ use Carbon\CarbonImmutable;
  * Un pallet con renglones en `produccion_empaque_detalles` (mixto) se reparte
  * por ellos, cada uno con su receta y sus cajas; si no, cuenta entero con su
  * propia receta (mismo criterio que los reportes de empaque y el dashboard de
- * cosecha). El día es siempre el de la fecha del pallet.
+ * cosecha). Un detalle sin receta hereda la del pallet, y si el pallet tiene
+ * más cajas que la suma de sus detalles, la diferencia cuenta con la receta
+ * del pallet (así lo mostrado cuadra siempre con las cajas de los pallets).
+ * El día es siempre el de la fecha del pallet.
  *
  * Traducción de (receta, variedad del pallet): las combinaciones de
  * `plan_recetas_combinacion` de esa receta con la variedad del pallet; si no
@@ -41,6 +44,10 @@ final class RealEmpacado
     }
 
     /**
+     * Real de la semana que empieza en `$lunes`. La fecha de un pallet mixto, y
+     * con ella la de todos sus detalles, es la `fecha_produccion` del pallet
+     * (igual que en los reportes por pallet): la propia del detalle no se usa.
+     *
      * @return array{
      *     renglones: array<string, array{presentacion_id: int, grupo_id: int|string, tipo_empaque_id: int, cajas: int[]}>,
      *     sin_clasificar: array{cajas: int[], pallets: int, recetas: list<array{recipe_id: ?int, nombre: ?string, cajas: int}>}
@@ -71,9 +78,20 @@ final class RealEmpacado
                 continue;
             }
             $variedadId = $pallet->variedad_id !== null ? (int) $pallet->variedad_id : null;
-            $renglones = $pallet->detalles->isNotEmpty()
-                ? $pallet->detalles->map(fn ($d) => [$d->recipe_id, (int) $d->total_cajas])->all()
-                : [[$pallet->recipe_id, (int) $pallet->total_cajas]];
+            if ($pallet->detalles->isEmpty()) {
+                $renglones = [[$pallet->recipe_id, (int) $pallet->total_cajas]];
+            } else {
+                // Un detalle sin receta es de la receta del pallet (así consume el resto del sistema).
+                $renglones = $pallet->detalles
+                    ->map(fn ($d) => [$d->recipe_id ?? $pallet->recipe_id, (int) $d->total_cajas])
+                    ->all();
+                // La «base» que quedó fuera de los detalles (p. ej. tras borrar una entrada)
+                // va con la receta del pallet, para que el real cuadre con sus cajas.
+                $remanente = (int) $pallet->total_cajas - array_sum(array_column($renglones, 1));
+                if ($remanente > 0) {
+                    $renglones[] = [$pallet->recipe_id, $remanente];
+                }
+            }
 
             foreach ($renglones as [$recetaId, $cajas]) {
                 $recetaId = $recetaId !== null ? (int) $recetaId : null;
@@ -183,6 +201,12 @@ final class RealEmpacado
         $porVariedad = $combinaciones[$recetaId];
         $candidatas = ($variedadId !== null ? ($porVariedad[$variedadId] ?? null) : null) ?? ($porVariedad['*'] ?? []);
 
-        return count($candidatas) === 1 ? $candidatas[0] : null;
+        // Dos filas con la misma presentación y el mismo empaque dicen lo mismo: no son ambiguas.
+        $distintas = [];
+        foreach ($candidatas as $c) {
+            $distintas[$c['presentacion_id'].'|'.$c['tipo_empaque_id']] = $c;
+        }
+
+        return count($distintas) === 1 ? reset($distintas) : null;
     }
 }
