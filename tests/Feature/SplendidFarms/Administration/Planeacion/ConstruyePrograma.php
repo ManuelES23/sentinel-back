@@ -175,6 +175,11 @@ trait ConstruyePrograma
             $this->correrMigracion('2026_11_20_110100_add_programa_empaque_submodulo.php');
         }
 
+        // «Avance de empaque» (después de Programa de empaque) también sale de su propia migración.
+        if (! DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'avance-empaque')->exists()) {
+            $this->correrMigracion('2026_11_20_130000_add_avance_empaque_submodulo.php');
+        }
+
         $usuario = User::factory()->create();
 
         foreach ($permisosPorSubmodulo as $submodulo => $permisos) {
