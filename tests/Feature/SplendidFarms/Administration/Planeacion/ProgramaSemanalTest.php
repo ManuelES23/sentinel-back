@@ -768,4 +768,49 @@ class ProgramaSemanalTest extends TestCase
         $this->assertSame([0, 0, 0, 0, 0, 0, 0], $this->semana('2026-11-23')->json("data.balance.{$ab}.necesidad"));
         $this->assertSame(-1800, $this->semana('2026-11-23')->json("data.balance.{$ab}.inicial"));
     }
+
+    public function test_sin_programa_la_semana_anterior_el_pedido_cuenta_el_lunes_una_vez(): void
+    {
+        $this->antelacion('Texas', 2);
+        // WK47 produce 4 ha de Amarillo el lunes (550 cj/ha = 2,200 cj); WK48 no tiene programa.
+        $wk47 = ProgramaSemanal::create(['lunes' => '2026-11-16']);
+        $this->corte($wk47, 'Amarillo', 0, 4);
+        $wk49 = ProgramaSemanal::create(['lunes' => '2026-11-30']);
+        $this->pedidoTexas($wk49, [1800, 0, 0, 0, 0, 0, 0]);
+        $ab = $this->idAb();
+
+        // WK47 no lo trae: su semana siguiente (WK48) no existe.
+        $this->assertSame(2200, $this->semana('2026-11-16')->assertOk()->json("data.balance.{$ab}.final"));
+
+        // WK49: se empacaría el sábado de WK48, que no existe; se descuenta el lunes de WK49, una sola vez.
+        $b = $this->semana('2026-11-30')->assertOk()->json("data.balance.{$ab}");
+        $this->assertSame([1800, 0, 0, 0, 0, 0, 0], $b['necesidad']);
+        $this->assertSame(2200, $b['inicial']);
+        $this->assertSame(400, $b['final']);
+        $this->assertSame(2, ProgramaSemanal::count());
+    }
+
+    public function test_primera_semana_sin_anterior_cuenta_el_pedido_el_lunes(): void
+    {
+        $this->antelacion('Texas', 2);
+        $wk48 = ProgramaSemanal::create(['lunes' => '2026-11-23']);
+        $this->pedidoTexas($wk48, [1800, 0, 0, 0, 0, 0, 0]);
+
+        $d = $this->semana('2026-11-23')->assertOk()->json('data');
+
+        $this->assertSame([1800, 0, 0, 0, 0, 0, 0], $d['balance'][$this->idAb()]['necesidad']);
+        $this->assertSame([1800, 0, 0, 0, 0, 0, 0], $this->empaqueTexasBulk($d['empaque'])['cajas']);
+    }
+
+    public function test_con_siete_dias_todo_cae_en_la_semana_anterior_el_mismo_dia(): void
+    {
+        $this->antelacion('Texas', 7);
+        ProgramaSemanal::create(['lunes' => '2026-11-16']);
+        $wk48 = ProgramaSemanal::create(['lunes' => '2026-11-23']);
+        $this->pedidoTexas($wk48, [100, 200, 0, 0, 0, 0, 300]);
+        $ab = $this->idAb();
+
+        $this->assertSame([100, 200, 0, 0, 0, 0, 300], $this->semana('2026-11-16')->assertOk()->json("data.balance.{$ab}.necesidad"));
+        $this->assertSame(0, array_sum($this->semana('2026-11-23')->assertOk()->json("data.balance.{$ab}.necesidad")));
+    }
 }
