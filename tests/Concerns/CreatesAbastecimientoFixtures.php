@@ -208,21 +208,37 @@ trait CreatesAbastecimientoFixtures
      * Convenio por calibre: `usa_calibres`, volumen total por calibre (modo `total`) y un
      * precio por calibre del tipo de carga principal vigente desde el inicio del convenio.
      * `$calibres` = [['calibre' => CrmProductoCalibre, 'volumen' => 100, 'precio' => 120.0], …].
-     * Claves especiales de `$over` como en `crearConvenio` (salvo `precio` y `metas`, que no aplican).
+     * Claves especiales de `$over` como en `crearConvenio` (salvo `precio` y `metas`, que no aplican);
+     * `modo_volumen` y `volumen_total` los puede fijar `$over` (por omisión `total` y nulo, o sea sin
+     * total propio). Con `volumen_total` el convenio tiene total propio y `'volumen' => null` en un
+     * calibre es «sin apartado». `metas_total` = [lunes => cantidad] crea metas sin calibre (el total
+     * de la semana) y `metas_calibre` = [calibre_id => [lunes => cantidad]] las metas por calibre
+     * (modo `semanal`).
      */
     protected function crearConvenioPorCalibre(Enterprise $empresa, array $calibres, array $over = []): Convenio
     {
-        unset($over['precio'], $over['metas']);
-        $convenio = $this->crearConvenio($empresa, array_merge($over, [
+        $metasTotal = $over['metas_total'] ?? [];
+        $metasCalibre = $over['metas_calibre'] ?? [];
+        unset($over['precio'], $over['metas'], $over['metas_total'], $over['metas_calibre']);
+        $convenio = $this->crearConvenio($empresa, array_merge([
+            'modo_volumen' => 'total',
+            'volumen_total' => null,
+        ], $over, [
             'precio' => null,
             'metas' => [],
             'usa_calibres' => true,
-            'modo_volumen' => 'total',
-            'volumen_total' => null,
         ]));
         $tipoCarga = TipoCarga::where('enterprise_id', $empresa->id)->orderBy('id')->firstOrFail();
 
-        DB::transaction(function () use ($convenio, $calibres, $tipoCarga) {
+        DB::transaction(function () use ($convenio, $calibres, $tipoCarga, $metasTotal, $metasCalibre) {
+            foreach ($metasTotal as $semana => $cantidad) {
+                ConvenioMeta::create(['convenio_id' => $convenio->id, 'calibre_id' => null, 'semana' => $semana, 'cantidad' => $cantidad]);
+            }
+            foreach ($metasCalibre as $calibreId => $semanas) {
+                foreach ($semanas as $semana => $cantidad) {
+                    ConvenioMeta::create(['convenio_id' => $convenio->id, 'calibre_id' => $calibreId, 'semana' => $semana, 'cantidad' => $cantidad]);
+                }
+            }
             foreach ($calibres as $c) {
                 ConvenioCalibre::create([
                     'convenio_id' => $convenio->id,

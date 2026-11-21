@@ -11,21 +11,54 @@ use Illuminate\Support\Collection;
  * el volumen entre las semanas del convenio. Los métodos son estáticos para
  * llamarlos por convenio dentro de un listado sin construir nada.
  *
- * Si el convenio usa calibres, cada calibre tiene sus propias metas y el total
- * por semana es la suma de los calibres.
+ * Si el convenio usa calibres hay dos formas de pactarlo. Sin total propio,
+ * cada calibre tiene sus propias metas y el total por semana es la suma de los
+ * calibres. Con total propio (modo total: `volumen_total` mayor a cero; modo
+ * semanal: metas sin calibre, el «total de la semana») las metas son el total y
+ * los calibres son apartados dentro de él: lo no apartado («libre») lo cubre
+ * cualquier calibre.
  */
 class MetasConvenio
 {
     /**
+     * El convenio por calibre tiene un total propio: en modo total, `volumen_total`
+     * mayor a cero; en modo semanal, al menos una meta sin calibre. Un convenio
+     * clásico nunca lo tiene (su meta sin calibre es la meta semanal de siempre).
+     */
+    public static function totalPropio(Convenio $convenio): bool
+    {
+        if (! $convenio->usa_calibres) {
+            return false;
+        }
+
+        return $convenio->modo_volumen === 'total'
+            ? self::hayVolumenTotal($convenio)
+            : self::filasMetas($convenio)->contains(fn ($fila) => $fila->calibre_id === null);
+    }
+
+    /**
      * Lunes de la semana => cantidad, en orden cronológico. Usa la relación
-     * `metas` si ya está cargada; si no, consulta una sola vez. Con calibres,
-     * es el total por semana (suma de los calibres).
+     * `metas` si ya está cargada; si no, consulta una sola vez. Con calibres
+     * sin total propio, es el total por semana (suma de los calibres); con
+     * total propio, la serie total (el total repartido o las metas sin calibre).
      *
      * @return array<string, float>
      */
     public static function metas(Convenio $convenio): array
     {
         if ($convenio->usa_calibres) {
+            if ($convenio->modo_volumen === 'total') {
+                if (self::hayVolumenTotal($convenio)) {
+                    return self::repartir($convenio, (float) $convenio->volumen_total);
+                }
+            } else {
+                $filas = self::filasMetas($convenio);
+                $totales = self::sinCalibre($filas);
+                if ($totales !== []) {
+                    return $totales;
+                }
+            }
+
             $total = [];
             foreach (self::metasPorCalibre($convenio) as $semanas) {
                 foreach ($semanas as $lunes => $cantidad) {
@@ -45,7 +78,9 @@ class MetasConvenio
     /**
      * calibre_id => (lunes => cantidad). Vacío si el convenio no usa calibres.
      * En modo total cada calibre reparte su propio volumen; en semanal se
-     * agrupan las metas guardadas por calibre.
+     * agrupan las metas guardadas por calibre. Con total propio son solo los
+     * apartados: se ignora la serie total (metas sin calibre) y un calibre sin
+     * apartado queda con serie vacía.
      *
      * @return array<int, array<string, float>>
      */
@@ -77,17 +112,37 @@ class MetasConvenio
 
         return $porCalibre;
     }
-
     /** Suma de las metas (cantidad en la unidad del convenio). */
     public static function pactado(Convenio $convenio): float
     {
         return round(array_sum(self::metas($convenio)), 2);
     }
 
-    /** @return array<int, float> calibre_id => cantidad pactada */
+    /**
+     * calibre_id => cantidad pactada. Con total propio es el apartado de cada
+     * calibre (0 si no tiene).
+     *
+     * @return array<int, float>
+     */
     public static function pactadoPorCalibre(Convenio $convenio): array
     {
         return array_map(fn (array $semanas) => round(array_sum($semanas), 2), self::metasPorCalibre($convenio));
+    }
+
+    /** Suma de los apartados por calibre. */
+    public static function apartado(Convenio $convenio): float
+    {
+        return round(array_sum(self::pactadoPorCalibre($convenio)), 2);
+    }
+
+    /** Lo no apartado del total propio (nunca negativo); null si el convenio no tiene total propio. */
+    public static function libre(Convenio $convenio): ?float
+    {
+        if (! self::totalPropio($convenio)) {
+            return null;
+        }
+
+        return max(0.0, round(self::pactado($convenio) - self::apartado($convenio), 2));
     }
 
     /** @return array<string, float> */
@@ -96,6 +151,30 @@ class MetasConvenio
         $metas = [];
         foreach (self::filasMetas($convenio) as $fila) {
             $metas[$fila->semana->format('Y-m-d')] = (float) $fila->cantidad;
+        }
+        ksort($metas);
+
+        return $metas;
+    }
+
+    /** Modo total con `volumen_total` mayor a cero (el cero o nulo es «sin total propio»). */
+    private static function hayVolumenTotal(Convenio $convenio): bool
+    {
+        return $convenio->volumen_total !== null && (float) $convenio->volumen_total > 0;
+    }
+
+    /**
+     * Metas sin calibre (el total de la semana), en orden cronológico.
+     *
+     * @return array<string, float>
+     */
+    private static function sinCalibre(Collection $filas): array
+    {
+        $metas = [];
+        foreach ($filas as $fila) {
+            if ($fila->calibre_id === null) {
+                $metas[$fila->semana->format('Y-m-d')] = (float) $fila->cantidad;
+            }
         }
         ksort($metas);
 
