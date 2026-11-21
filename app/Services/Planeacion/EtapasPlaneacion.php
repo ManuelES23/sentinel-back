@@ -67,7 +67,7 @@ class EtapasPlaneacion
      * fecha de cosecha (proyectada, o estimada si no hay; sin fecha al final).
      *
      * @param  Collection<int, Temporada>  $temporadas
-     * @return list<array{etapa_id: int, temporada_id: int, lote_id: int, lote_nombre: ?string, etapa_nombre: string, codigo: ?string, variedad_id: ?int, superficie: float, ha_disponibles: float, fecha_cosecha: ?string, proxima: bool}>
+     * @return list<array{etapa_id: int, temporada_id: int, lote_id: int, lote_nombre: ?string, productor: ?string, zona: ?string, etapa_nombre: string, codigo: ?string, variedad_id: ?int, superficie: float, ha_disponibles: float, fecha_cosecha: ?string, proxima: bool}>
      */
     public function paraSemana(Collection $temporadas, string $lunes): array
     {
@@ -89,7 +89,7 @@ class EtapasPlaneacion
             return [];
         }
 
-        $etapas = Etapa::with('lote:id,nombre,is_active')
+        $etapas = Etapa::with(['lote:id,nombre,is_active,productor_id,zona_cultivo_id', 'lote.productor:id,nombre,apellido', 'lote.zonaCultivo:id,nombre'])
             ->whereIn('lote_id', array_keys($temporadasDeLote))
             ->where('is_active', true)
             ->get(['id', 'lote_id', 'nombre', 'codigo', 'superficie', 'variedad_id', 'fecha_cosecha_estimada', 'fecha_cosecha_proyectada'])
@@ -113,6 +113,9 @@ class EtapasPlaneacion
                 'temporada_id' => $this->temporadaDeEtapa($etapa, $temporadasDeLote[$etapa->lote_id], $cultivoDeTemporada),
                 'lote_id' => (int) $etapa->lote_id,
                 'lote_nombre' => $etapa->lote->nombre,
+                // Solo informativo para elegir la etapa (como en el Plan de siembra).
+                'productor' => $etapa->lote->productor ? (trim("{$etapa->lote->productor->nombre} {$etapa->lote->productor->apellido}") ?: null) : null,
+                'zona' => $etapa->lote->zonaCultivo?->nombre,
                 'etapa_nombre' => $etapa->nombre,
                 'codigo' => $etapa->codigo,
                 'variedad_id' => $etapa->variedad_id ? (int) $etapa->variedad_id : null,

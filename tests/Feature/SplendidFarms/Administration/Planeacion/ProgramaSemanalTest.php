@@ -223,6 +223,8 @@ class ProgramaSemanalTest extends TestCase
         $this->assertSame($this->temporada->id, $e['temporada_id']);
         $this->assertSame($this->lote->id, $e['lote_id']);
         $this->assertSame('El Carrizo', $e['lote_nombre']);
+        $this->assertSame('Juan Pérez', $e['productor']);
+        $this->assertSame('Zona Norte', $e['zona']);
         $this->assertSame($proxima->nombre, $e['etapa_nombre']);
         $this->assertSame($proxima->codigo, $e['codigo']);
         $this->assertSame($this->variedades['Blanco']->id, $e['variedad_id']);
