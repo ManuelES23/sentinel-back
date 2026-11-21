@@ -2,6 +2,7 @@
 
 namespace App\Services\Planeacion;
 
+use App\Models\Planeacion\BodegaDestino;
 use App\Models\Planeacion\GrupoBalance;
 use App\Models\Planeacion\ProgramaRendimiento;
 use App\Models\Planeacion\RecetaCombinacion;
@@ -36,6 +37,9 @@ class CatalogoPlaneacion
     /** @var Collection<int, Temporada>|null */
     private ?Collection $temporadasAbiertas = null;
 
+    /** @var array<int, int>|null bodega_id => días de antelación para empacar */
+    private ?array $antelaciones = null;
+
     /** Descarta lo leído para que la siguiente consulta vuelva a la base de datos. */
     public function olvidar(): void
     {
@@ -45,6 +49,19 @@ class CatalogoPlaneacion
         $this->rangos = null;
         $this->recetas = null;
         $this->temporadasAbiertas = null;
+        $this->antelaciones = null;
+    }
+
+    /** Días de antelación con los que se empaca para un destino (0 si no existe). */
+    public function antelacionDe(int $bodegaId): int
+    {
+        if ($this->antelaciones === null) {
+            $this->antelaciones = BodegaDestino::pluck('dias_antelacion', 'id')
+                ->map(fn ($dias) => (int) $dias)
+                ->all();
+        }
+
+        return $this->antelaciones[$bodegaId] ?? 0;
     }
 
     /** @return Collection<int, Variedad> por id, incluidas las borradas (los renglones viejos las citan). */

@@ -348,7 +348,8 @@ class ProgramaSemanalService
         $fila = fn ($m) => ['id' => $m->id, 'nombre' => $m->nombre, 'orden' => $m->orden, 'is_active' => $m->is_active];
 
         return [
-            'bodegas' => BodegaDestino::orderBy('orden')->orderBy('id')->get()->map($fila)->all(),
+            'bodegas' => BodegaDestino::orderBy('orden')->orderBy('id')->get()
+                ->map(fn ($m) => $fila($m) + ['dias_antelacion' => (int) $m->dias_antelacion])->all(),
             'presentaciones' => Presentacion::orderBy('cultivo_id')->orderBy('orden')->orderBy('id')->get()
                 ->map(fn ($m) => $fila($m) + [
                     'cultivo_id' => $m->cultivo_id,

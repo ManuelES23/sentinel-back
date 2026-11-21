@@ -403,6 +403,17 @@ class ProgramaSemanalTest extends TestCase
         $this->assertNull($presentaciones->firstWhere('id', $this->presentacion('Tray')->id)['cajas_full']);
     }
 
+    public function test_catalogo_de_bodegas_del_programa_trae_dias_antelacion(): void
+    {
+        $this->bodega('Texas')->update(['dias_antelacion' => 2]);
+
+        $bodegas = collect($this->semana('2026-11-23')->assertOk()->json('data.catalogos.bodegas'));
+
+        $this->assertSame(2, $bodegas->firstWhere('id', $this->bodega('Texas')->id)['dias_antelacion']);
+        $this->assertSame(0, $bodegas->firstWhere('id', $this->bodega('Nogales')->id)['dias_antelacion']);
+        $this->assertCount(4, $bodegas->filter(fn ($b) => array_key_exists('dias_antelacion', $b)));
+    }
+
     public function test_semana_sin_temporadas_ni_renglones(): void
     {
         $d = $this->semana('2027-08-02')->assertOk()->json('data');

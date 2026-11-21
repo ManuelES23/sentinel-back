@@ -44,6 +44,12 @@ class ConfiguracionPlaneacionController extends Controller
 
     private const MENSAJE_EN_USO = 'Está en uso; desactívalo';
 
+    /** Mensajes propios de la validación de los catálogos. */
+    private const MENSAJES = [
+        'dias_antelacion.integer' => 'Los días de antelación van de 0 a 7.',
+        'dias_antelacion.between' => 'Los días de antelación van de 0 a 7.',
+    ];
+
     /**
      * Catálogos editables por la ruta {catalogo}: modelo, nombre en singular
      * para los mensajes y tablas/columnas que lo citan (si alguna lo cita, no
@@ -83,7 +89,7 @@ class ConfiguracionPlaneacionController extends Controller
             'success' => true,
             'data' => [
                 'bodegas' => BodegaDestino::orderBy('orden')->orderBy('id')->get()
-                    ->map(fn ($m) => $this->catalogo($m))->all(),
+                    ->map(fn ($m) => $this->formatear('bodegas', $m))->all(),
                 'presentaciones' => $presentaciones
                     ->map(fn ($m) => $this->formatear('presentaciones', $m))->all(),
                 'tipos_empaque' => TipoEmpaque::orderBy('orden')->orderBy('id')->get()
@@ -117,7 +123,7 @@ class ConfiguracionPlaneacionController extends Controller
         $this->exigirPermiso('configuracion', 'editar');
         $modelo = $this->modeloDe($catalogo);
 
-        $datos = $request->validate($this->reglas($catalogo, true));
+        $datos = $request->validate($this->reglas($catalogo, true), self::MENSAJES);
         $datos['nombre'] = trim($datos['nombre']);
         $datos['orden'] ??= ((int) $modelo::max('orden')) + 1;
         $datos['is_active'] ??= true;
@@ -137,7 +143,7 @@ class ConfiguracionPlaneacionController extends Controller
         $this->exigirPermiso('configuracion', 'editar');
         $fila = $this->modeloDe($catalogo)::findOrFail($id);
 
-        $datos = $request->validate($this->reglas($catalogo, false));
+        $datos = $request->validate($this->reglas($catalogo, false), self::MENSAJES);
         if (isset($datos['nombre'])) {
             $datos['nombre'] = trim($datos['nombre']);
         }
@@ -518,6 +524,9 @@ class ConfiguracionPlaneacionController extends Controller
         if ($catalogo === 'presentaciones') {
             $reglas['cultivo_id'] = [$obligatorio, 'integer', Rule::exists('cultivos', 'id')];
         }
+        if ($catalogo === 'bodegas') {
+            $reglas['dias_antelacion'] = ['sometimes', 'integer', 'between:0,7'];
+        }
 
         return $reglas;
     }
@@ -538,11 +547,15 @@ class ConfiguracionPlaneacionController extends Controller
 
     private function formatear(string $catalogo, Model $fila): array
     {
-        return $this->catalogo($fila) + ($catalogo === 'presentaciones' ? [
-            'cultivo_id' => $fila->cultivo_id,
-            'cajas_full' => $fila->cajas_full,
-            'cajas_sencillo' => $fila->cajas_sencillo,
-        ] : []);
+        return $this->catalogo($fila) + match ($catalogo) {
+            'presentaciones' => [
+                'cultivo_id' => $fila->cultivo_id,
+                'cajas_full' => $fila->cajas_full,
+                'cajas_sencillo' => $fila->cajas_sencillo,
+            ],
+            'bodegas' => ['dias_antelacion' => (int) $fila->dias_antelacion],
+            default => [],
+        };
     }
 
     private function catalogo(Model $m): array
