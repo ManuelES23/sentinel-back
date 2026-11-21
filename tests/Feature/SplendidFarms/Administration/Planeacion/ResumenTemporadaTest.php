@@ -302,6 +302,31 @@ class ResumenTemporadaTest extends TestCase
         $this->assertSame($s48['inventario_final_por_grupo'][$ab], $balance['final']);
     }
 
+    public function test_semana_sin_programa_el_pedido_siguiente_cuenta_en_su_lunes_y_cuadra(): void
+    {
+        $this->antelacion('Texas', 2);
+        $ab = $this->grupo('Amarillo / Bicolor')->id;
+        // WK48 con 2,200 cj, WK49 sin programa y WK50 con un pedido del lunes que se empacaría en WK49.
+        $wk48 = ProgramaSemanal::create(['lunes' => '2026-11-23']);
+        $this->corte($wk48, 'Amarillo', 0, 4);
+        $wk50 = ProgramaSemanal::create(['lunes' => '2026-12-07']);
+        $this->necesidad($wk50, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [1800, 0, 0, 0, 0, 0, 0]);
+        Sanctum::actingAs($this->usuarioCon(['resumen-temporada' => ['view'], 'tablero-semanal' => ['view']]));
+
+        $semanas = $this->getJson($this->url())->assertOk()->json('data.semanas');
+        $s49 = $this->semanaDe($semanas, '2026-11-30');
+        $s50 = $this->semanaDe($semanas, '2026-12-07');
+
+        $this->assertSame(0, $s49['necesidad_total']);
+        $this->assertSame(1800, $s50['necesidad_total']);
+        $this->assertSame(2200 - 1800, $s50['inventario_final_por_grupo'][$ab]);
+
+        $balance = $this->getJson('/api/splendidfarms/administration/planeacion/programa?lunes=2026-12-07')->assertOk()->json("data.balance.{$ab}");
+        $this->assertSame([1800, 0, 0, 0, 0, 0, 0], $balance['necesidad']);
+        $this->assertSame($s50['inventario_final_por_grupo'][$ab], $balance['final']);
+        $this->assertSame($s50['disponible_por_grupo'][$ab], array_sum($balance['del_dia']));
+    }
+
     public function test_sin_permiso_es_403(): void
     {
         Sanctum::actingAs($this->usuarioCon(['tablero-semanal' => ['view']]));

@@ -65,7 +65,7 @@ class ExportadorProgramaExcel
         return sprintf('Programa_WK%02d_%s.xlsx', $semana['programa']['semana_iso'], $semana['programa']['lunes']);
     }
 
-    /** Primer cultivo de la semana (por nombre) con cortes o necesidades; si no hay, el primero que haya. */
+    /** Primer cultivo de la semana (por nombre) con cortes, necesidades o empaque; si no hay, el primero que haya. */
     public function cultivoPorDefecto(array $semana): ?int
     {
         $conDatos = [];
@@ -79,6 +79,16 @@ class ExportadorProgramaExcel
         foreach ($semana['cortes'] as $c) {
             if (isset($cultivoDeVariedad[$c['variedad_id']])) {
                 $conDatos[$cultivoDeVariedad[$c['variedad_id']]] = true;
+            }
+        }
+        // Pedidos de la semana siguiente que se empacan en esta (días de antelación): solo vienen en el empaque.
+        $cultivoDePresentacion = [];
+        foreach ($semana['catalogos']['presentaciones'] as $p) {
+            $cultivoDePresentacion[$p['id']] = (int) $p['cultivo_id'];
+        }
+        foreach ($semana['empaque'] as $r) {
+            if (array_sum($r['cajas']) !== 0 && isset($cultivoDePresentacion[$r['presentacion_id']])) {
+                $conDatos[$cultivoDePresentacion[$r['presentacion_id']]] = true;
             }
         }
 

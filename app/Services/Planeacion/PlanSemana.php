@@ -26,6 +26,9 @@ class PlanSemana
      * @param  Collection<int, ProgramaSobrante>  $sobrantes  Sobrante asignado (Programa de empaque).
      * @param  Collection<int, ProgramaNecesidad>  $necesidadesSiguiente  Necesidades del programa de la
      *                                                                     semana siguiente (vacía si no existe).
+     * @param  bool  $anteriorConPrograma  Si existe el programa de la semana anterior. Sin él, lo
+     *                                     que se empacaría antes del lunes cuenta el lunes (día 0):
+     *                                     se empaca tarde pero se descuenta una vez.
      */
     public function __construct(
         public readonly ProgramaSemanal $programa,
@@ -37,6 +40,7 @@ class PlanSemana
         private readonly CatalogoPlaneacion $catalogo,
         public readonly Collection $sobrantes = new Collection,
         public readonly Collection $necesidadesSiguiente = new Collection,
+        public readonly bool $anteriorConPrograma = true,
     ) {}
 
     /**
@@ -44,7 +48,8 @@ class PlanSemana
      * número de consultas no crece con el número de semanas. También trae las
      * necesidades de la semana siguiente de cada una (las que se empacan antes
      * de su lunes): si ese programa ya está en la lista se reusa; si no, se
-     * leen todos los que faltan en una sola consulta.
+     * leen todos los que faltan en una sola consulta, que también dice si existe
+     * el programa de la semana anterior de cada una (en la base, no solo en la lista).
      *
      * @param  EloquentCollection<int, ProgramaSemanal>  $programas
      * @return array<int, self> programa_id => plan
@@ -65,27 +70,39 @@ class PlanSemana
             'inventariosIniciales',
         ]);
 
-        // Programas de la semana siguiente que no vienen en la lista (siempre una consulta,
-        // aunque no falte ninguno, para que el número de consultas no dependa de los datos).
+        // Programas vecinos que no vienen en la lista: el de la semana siguiente (sus
+        // necesidades se empacan antes de su lunes) y si existe el de la anterior. Siempre
+        // una sola consulta, aunque no falte ninguno, para que el número de consultas no
+        // dependa de los datos.
         $porLunes = [];
         foreach ($programas as $programa) {
             $porLunes[$programa->lunes->toDateString()] = $programa;
         }
-        $faltan = [];
+        $faltanSiguiente = $faltanAnterior = [];
         foreach ($porLunes as $lunes => $programa) {
-            $siguiente = self::lunesSiguiente($lunes);
+            $siguiente = self::lunesSiguiente($lunes, 1);
             if (! isset($porLunes[$siguiente])) {
-                $faltan[$siguiente] = true;
+                $faltanSiguiente[$siguiente] = true;
+            }
+            $anterior = self::lunesSiguiente($lunes, -1);
+            if (! isset($porLunes[$anterior])) {
+                $faltanAnterior[$anterior] = true;
             }
         }
-        $fechas = $faltan === [] ? array_keys($porLunes) : array_keys($faltan);
-        $extras = ProgramaSemanal::whereDate('lunes', '>=', min($fechas))
+        $fechas = array_keys($faltanSiguiente + $faltanAnterior);
+        $vecinos = ProgramaSemanal::whereDate('lunes', '>=', min($fechas))
             ->whereDate('lunes', '<=', max($fechas))
             ->whereNotIn('id', $programas->modelKeys())
-            ->get()
-            ->filter(fn (ProgramaSemanal $p) => isset($faltan[$p->lunes->toDateString()]));
-        foreach ($extras as $programa) {
-            $porLunes[$programa->lunes->toDateString()] = $programa;
+            ->get();
+        $existentes = $porLunes;
+        $extras = new EloquentCollection;
+        foreach ($vecinos as $programa) {
+            $lunes = $programa->lunes->toDateString();
+            $existentes[$lunes] = $programa;
+            if (isset($faltanSiguiente[$lunes])) {
+                $porLunes[$lunes] = $programa;
+                $extras->push($programa);
+            }
         }
 
         // Las necesidades de todos (los de la lista y los siguientes) van juntas.
@@ -115,16 +132,18 @@ class PlanSemana
                 $manuales,
                 $catalogo,
                 $programa->sobrantes,
-                ($porLunes[self::lunesSiguiente($programa->lunes->toDateString())] ?? null)?->necesidades ?? new Collection,
+                ($porLunes[self::lunesSiguiente($programa->lunes->toDateString(), 1)] ?? null)?->necesidades ?? new Collection,
+                isset($existentes[self::lunesSiguiente($programa->lunes->toDateString(), -1)]),
             );
         }
 
         return $planes;
     }
 
-    private static function lunesSiguiente(string $lunes): string
+    /** Lunes a $semanas semanas de distancia (1 = la siguiente, −1 = la anterior). */
+    private static function lunesSiguiente(string $lunes, int $semanas): string
     {
-        return Carbon::parse($lunes)->addDays(CalculadoraBalance::DIAS)->toDateString();
+        return Carbon::parse($lunes)->addDays($semanas * CalculadoraBalance::DIAS)->toDateString();
     }
 
     public function eleccion(?int $temporadaId, int $variedadId): ?ProgramaRendimiento
@@ -214,6 +233,10 @@ class PlanSemana
                 foreach ($necesidad->cajasPorDia() as $llegada => $cantidad) {
                     // Día de empaque contado desde el lunes de esta semana.
                     $empaque = $llegada - $antelacion + ($deSiguiente ? CalculadoraBalance::DIAS : 0);
+                    if ($empaque < 0 && ! $deSiguiente && ! $this->anteriorConPrograma) {
+                        // La semana anterior no tiene programa que lo descuente: cuenta el lunes.
+                        $empaque = 0;
+                    }
                     if ($this->diaValido($empaque)) {
                         $cajas[$empaque] += $cantidad;
                     }
