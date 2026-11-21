@@ -3,8 +3,11 @@
 namespace Tests\Feature\SplendidFarms\Administration\Planeacion;
 
 use App\Models\Cultivo;
+use App\Models\Planeacion\Presentacion;
 use App\Models\Planeacion\ProgramaEmbarque;
+use App\Models\Planeacion\ProgramaNecesidad;
 use App\Models\Planeacion\ProgramaSemanal;
+use App\Models\Variedad;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Testing\TestResponse;
@@ -393,6 +396,36 @@ class ExportarProgramaTest extends TestCase
         $balance = $this->fila($hoja, 'BALANCE PRODUCCIÓN vs NECESIDAD', 1, ['B']);
         $this->assertEquals(0, $hoja->getCell('N'.$this->fila($hoja, 'Necesidad', $balance))->getValue());
         $this->assertEquals(1800, $hoja->getCell('N'.$this->fila($hoja, 'TOTAL NECESIDAD'))->getValue());
+    }
+
+    public function test_el_cultivo_por_defecto_considera_el_empaque_de_pedidos_de_la_semana_siguiente(): void
+    {
+        // El elote tiene temporada que toca WK47 pero ningún dato; el otro cultivo solo tiene un pedido de
+        // WK48 en Texas (2 días) que se empaca el sábado de WK47: ese es el que debe abrir el Excel.
+        $this->temporada->update(['fecha_inicio' => '2026-11-01']);
+        $this->antelacion('Texas', 2);
+        $otro = Cultivo::create(['nombre' => 'Zarzamora']);
+        $variedad = Variedad::create(['cultivo_id' => $otro->id, 'nombre' => 'Tupy', 'user_id' => $this->autor->id]);
+        $presentacion = Presentacion::create(['cultivo_id' => $otro->id, 'nombre' => 'Canasta', 'orden' => 1, 'is_active' => true]);
+        ProgramaSemanal::create(['lunes' => '2026-11-16']);
+        $wk48 = ProgramaSemanal::create(['lunes' => '2026-11-23']);
+        $necesidad = ProgramaNecesidad::create([
+            'programa_id' => $wk48->id,
+            'bodega_id' => $this->bodega('Texas')->id,
+            'cliente_id' => null,
+            'cliente_nombre' => 'Walmart',
+            'cultivo_id' => $otro->id,
+            'presentacion_id' => $presentacion->id,
+            'tipo_empaque_id' => $this->tipoEmpaque('RPC')->id,
+            'cajas_0' => 1800,
+        ]);
+        $necesidad->variedades()->attach([$variedad->id]);
+
+        $hoja = $this->libroDe($this->descargar('lunes=2026-11-16')->assertOk())->getSheetByName('WK47');
+
+        $this->assertStringContainsString('Zarzamora', (string) $hoja->getCell('B1')->getValue());
+        $empaque = $this->fila($hoja, 'PROGRAMA DE EMPAQUE (se calcula de las necesidades)', 1, ['B']);
+        $this->assertEquals(1800, $hoja->getCell('N'.$this->fila($hoja, 'Total empaque Texas', $empaque))->getValue());
     }
 
     public function test_cultivo_elegido_y_cultivo_inexistente(): void
