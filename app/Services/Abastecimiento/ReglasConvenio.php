@@ -169,6 +169,10 @@ class ReglasConvenio
      * Las semanas repetidas ya las rechaza la validación `distinct` del controlador.
      * Con `usa_calibres` el volumen total vive en `calibres` ([calibre_id, volumen_total])
      * y cada meta lleva su `calibre_id`; el par (semana, calibre) no se repite.
+     * Total propio (solo con `usa_calibres`): en modo `total`, un `volumen_total` no vacío (el
+     * cero es un valor inválido, no «sin total») y los volúmenes de los calibres son apartados
+     * opcionales que suman a lo más el total; en modo `semanal`, las metas sin calibre son el
+     * «total de la semana» (uno por semana) y los apartados de cada semana caben en él.
      *
      * @param  array<string, mixed>  $datos
      */
@@ -182,7 +186,11 @@ class ReglasConvenio
         $elegidos = array_map(fn ($c) => (int) ($c['calibre_id'] ?? 0), $calibres);
 
         if ($datos['modo_volumen'] === 'total') {
-            if ($usaCalibres) {
+            if ($usaCalibres && self::hayValor($datos['volumen_total'] ?? null)) {
+                // Total propio declarado (cualquier valor no vacío, el cero incluido): los
+                // apartados de los calibres son opcionales y suman a lo más el total.
+                $errores = self::erroresTotalPropio($datos['volumen_total'], $calibres, $unidad);
+            } elseif ($usaCalibres) {
                 foreach ($calibres as $i => $calibre) {
                     $total = $calibre['volumen_total'] ?? null;
                     if (! is_numeric($total) || (float) $total <= 0) {
@@ -208,7 +216,13 @@ class ReglasConvenio
                 $errores["calibres.{$i}.calibre_id"] = 'Captura al menos una meta semanal para este calibre.';
             }
         } else {
-            if ($usaCalibres) {
+            // Con calibres, una meta sin calibre es el «total de la semana»: total propio.
+            $totalPropio = $usaCalibres && collect($metas)->contains(fn ($m) => ! self::hayValor($m['calibre_id'] ?? null));
+            $totales = []; // semana => índice del total (uno por semana)
+            $apartados = []; // semana => [índice => cantidad]
+            $totalesSemana = []; // semana => cantidad del total
+
+            if ($usaCalibres && ! $totalPropio) {
                 $conMeta = [];
                 foreach ($metas as $meta) {
                     if (isset($meta['calibre_id']) && $meta['calibre_id'] !== '') {
@@ -242,8 +256,14 @@ class ReglasConvenio
 
                     if ($usaCalibres) {
                         $calibreMeta = $meta['calibre_id'] ?? null;
-                        if ($calibreMeta === null || $calibreMeta === '') {
-                            $errores["metas.{$i}.calibre_id"] = 'Elige el calibre.';
+                        if (! self::hayValor($calibreMeta)) {
+                            // Total de la semana (total propio): uno por semana.
+                            if (isset($totales[$semana])) {
+                                $errores["metas.{$i}.semana"] = 'Ya hay un total en esa semana.';
+                            } else {
+                                $totales[$semana] = $i;
+                                $totalesSemana[$semana] = (float) $meta['cantidad'];
+                            }
                         } elseif (! in_array((int) $calibreMeta, $elegidos, true)) {
                             $errores["metas.{$i}.calibre_id"] = 'El calibre no está en el convenio.';
                         } else {
@@ -252,6 +272,7 @@ class ReglasConvenio
                                 $errores["metas.{$i}.semana"] = 'Ya hay una meta de ese calibre en esa semana.';
                             }
                             $pares[$par] = true;
+                            $apartados[$semana][$i] = (float) $meta['cantidad'];
                         }
                     }
 
@@ -268,11 +289,83 @@ class ReglasConvenio
                     $errores['unidad'] = 'Hay metas con cantidades que no caben en esta unidad: ajústalas primero.';
                 }
             }
+
+            // Los apartados de cada semana suman a lo más el total de esa semana (sin total cuenta 0);
+            // se señala el primer apartado que la rebasa. Las guardadas ya se validaron al capturarlas.
+            if ($totalPropio && ! $metasGuardadas) {
+                foreach ($apartados as $semana => $filas) {
+                    $total = round($totalesSemana[$semana] ?? 0.0, 2);
+                    $suma = 0.0;
+                    foreach ($filas as $i => $cantidad) {
+                        $suma = round($suma + $cantidad, 2);
+                        if ($suma > $total + 1e-9) {
+                            $errores["metas.{$i}.cantidad"] = isset($totalesSemana[$semana])
+                                ? 'Los apartados de la semana suman '.self::formatear($suma).' y el total de la semana es '.self::formatear($total).'.'
+                                : 'Esta semana tiene apartados pero no tiene total: captura el total de la semana.';
+                            break;
+                        }
+                    }
+                }
+            }
         }
 
         if ($errores !== []) {
             throw ValidationException::withMessages($errores);
         }
+    }
+
+    /**
+     * Errores del total propio en modo `total` (ya declarado): el total mayor a cero y con la
+     * unidad correcta (clave `volumen_total`); cada apartado vacío o con valor mayor o igual a cero;
+     * y Σ apartados ≤ total (clave `volumen_total`).
+     *
+     * @param  array<int, array<string, mixed>>  $calibres
+     * @return array<string, string>
+     */
+    private static function erroresTotalPropio(mixed $total, array $calibres, string $unidad): array
+    {
+        $errores = [];
+        $totalValido = true;
+        if (! is_numeric($total) || (float) $total <= 0) {
+            $errores['volumen_total'] = 'Indica el volumen total pactado (mayor a cero).';
+            $totalValido = false;
+        } elseif (! self::cantidadValida($total, $unidad)) {
+            $errores['volumen_total'] = self::mensajeCantidad($unidad);
+            $totalValido = false;
+        }
+
+        $suma = 0.0;
+        foreach ($calibres as $i => $calibre) {
+            $apartado = $calibre['volumen_total'] ?? null;
+            if (! self::hayValor($apartado)) {
+                continue;
+            }
+            if (! is_numeric($apartado) || (float) $apartado < 0) {
+                $errores["calibres.{$i}.volumen_total"] = 'El apartado debe ser un número mayor o igual a cero.';
+            } elseif (! self::cantidadValida($apartado, $unidad)) {
+                $errores["calibres.{$i}.volumen_total"] = self::mensajeCantidad($unidad);
+            } else {
+                $suma = round($suma + (float) $apartado, 2);
+            }
+        }
+
+        if ($totalValido && $suma > round((float) $total, 2) + 1e-9) {
+            $errores['volumen_total'] = 'Los apartados suman '.self::formatear($suma).' y el total es '.self::formatear((float) $total).'.';
+        }
+
+        return $errores;
+    }
+
+    /** Null y cadena vacía son «sin valor»; el cero sí es un valor. */
+    private static function hayValor(mixed $valor): bool
+    {
+        return $valor !== null && $valor !== '';
+    }
+
+    /** Cantidad para un mensaje: sin ceros sobrantes ni separador de miles (8000, 10.5). */
+    private static function formatear(float $cantidad): string
+    {
+        return rtrim(rtrim(number_format($cantidad, 2, '.', ''), '0'), '.');
     }
 
     /** Cajas: enteras. Kilos: hasta dos decimales. */
