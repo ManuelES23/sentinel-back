@@ -54,6 +54,7 @@ class CalibresConvenio
      */
     public static function normalizar(array $calibres, string $modoVolumen, mixed $volumenTotal = null): array
     {
+        // Cualquier total no vacío cuenta como declarado: uno <= 0 lo rechaza ReglasConvenio::validarVolumen antes de guardar.
         $totalPropio = $modoVolumen === 'total' && $volumenTotal !== null && $volumenTotal !== '';
 
         return array_map(function (array $c) use ($modoVolumen, $totalPropio) {

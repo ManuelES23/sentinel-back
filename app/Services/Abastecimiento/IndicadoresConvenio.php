@@ -317,6 +317,7 @@ class IndicadoresConvenio
      */
     private static function libreDe(float $pactado, array $apartados, Collection $precios, string $inicio, array $recibidos): array
     {
+        // La fórmula refleja MetasConvenio::libre; se mantiene separada a propósito para no hacer consultas de más.
         $apartado = round(array_sum($apartados), 2);
         $libre = max(0.0, round($pactado - $apartado, 2));
 

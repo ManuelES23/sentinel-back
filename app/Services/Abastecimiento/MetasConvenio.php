@@ -79,8 +79,9 @@ class MetasConvenio
      * calibre_id => (lunes => cantidad). Vacío si el convenio no usa calibres.
      * En modo total cada calibre reparte su propio volumen; en semanal se
      * agrupan las metas guardadas por calibre. Con total propio son solo los
-     * apartados: se ignora la serie total (metas sin calibre) y un calibre sin
-     * apartado queda con serie vacía.
+     * apartados: se ignora la serie total (metas sin calibre). Un calibre sin
+     * apartado en modo total aparece con serie vacía (`repartir` de 0 da `[]`);
+     * en modo semanal, sin metas propias, no aparece en el arreglo.
      *
      * @return array<int, array<string, float>>
      */
@@ -112,6 +113,7 @@ class MetasConvenio
 
         return $porCalibre;
     }
+
     /** Suma de las metas (cantidad en la unidad del convenio). */
     public static function pactado(Convenio $convenio): float
     {
