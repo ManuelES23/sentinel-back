@@ -76,8 +76,9 @@ class ResumenTemporada
                 $plan->produccion(),
                 fn ($r) => isset($gruposBalance[(string) $r['grupo']]),
             ));
+            // Por semana de empaque (llegada − antelación del destino), igual que el balance.
             $necesidades = array_values(array_filter(
-                $plan->necesidades(),
+                $plan->necesidadesPorEmpaque(),
                 fn ($n) => (int) $n['necesidad']->cultivo_id === $cultivoId,
             ));
             $renglonesNecesidad = array_values(array_filter(

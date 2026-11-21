@@ -12,10 +12,11 @@ class BodegaDestino extends Model
 {
     protected $table = 'plan_bodegas_destino';
 
-    protected $fillable = ['nombre', 'orden', 'is_active'];
+    protected $fillable = ['nombre', 'orden', 'is_active', 'dias_antelacion'];
 
     protected $casts = [
         'orden' => 'integer',
+        'dias_antelacion' => 'integer',
         'is_active' => 'boolean',
     ];
 }

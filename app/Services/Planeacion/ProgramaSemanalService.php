@@ -197,7 +197,8 @@ class ProgramaSemanalService
                 'cargas' => $e->cargas,
             ])->values()->all(),
             'balance' => $balance,
-            'empaque' => $this->secciones->empaque($necesidades, $sobrantes),
+            // NECESIDADES VENTAS va por día de llegada; el programa de empaque, por día de empaque.
+            'empaque' => $this->secciones->empaque($plan->necesidadesPorEmpaque(), $sobrantes),
             'clientes_previos' => $this->secciones->clientesPrevios($lunes, $necesidades),
         ];
     }
@@ -285,7 +286,8 @@ class ProgramaSemanalService
         $balance = CalculadoraBalance::calcular(
             $grupos,
             $plan->produccion(),
-            PlanSemana::renglonesNecesidad($plan->necesidades()),
+            // Por día de empaque (llegada − antelación del destino), no de llegada.
+            PlanSemana::renglonesNecesidad($plan->necesidadesPorEmpaque()),
             $inicial,
             PlanSemana::renglonesNecesidad($plan->sobrantes()),
         );
@@ -348,7 +350,8 @@ class ProgramaSemanalService
         $fila = fn ($m) => ['id' => $m->id, 'nombre' => $m->nombre, 'orden' => $m->orden, 'is_active' => $m->is_active];
 
         return [
-            'bodegas' => BodegaDestino::orderBy('orden')->orderBy('id')->get()->map($fila)->all(),
+            'bodegas' => BodegaDestino::orderBy('orden')->orderBy('id')->get()
+                ->map(fn ($m) => $fila($m) + ['dias_antelacion' => (int) $m->dias_antelacion])->all(),
             'presentaciones' => Presentacion::orderBy('cultivo_id')->orderBy('orden')->orderBy('id')->get()
                 ->map(fn ($m) => $fila($m) + [
                     'cultivo_id' => $m->cultivo_id,

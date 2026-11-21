@@ -25,7 +25,10 @@ class SeccionesSemana
      * El sobrante asignado sale en sus propios renglones (`clase = sobrante`),
      * nunca juntos con los de venta aunque compartan la llave.
      *
-     * @param  list<array{necesidad: ProgramaNecesidad, grupo: ?string, cajas: int[]}>  $necesidades  Salida de PlanSemana::necesidades().
+     * Las necesidades llegan por día de empaque (PlanSemana::necesidadesPorEmpaque()):
+     * incluyen las de la semana siguiente que se empacan en esta, con la misma forma.
+     *
+     * @param  list<array{necesidad: ProgramaNecesidad, grupo: ?string, cajas: int[]}>  $necesidades  Salida de PlanSemana::necesidadesPorEmpaque().
      * @param  list<array{sobrante: ProgramaSobrante, grupo: ?string, cajas: int[]}>  $sobrantes  Salida de PlanSemana::sobrantes().
      * @return list<array{bodega_id: int, presentacion_id: int, grupo_id: int|string|null, tipo_empaque_id: ?int, clase: string, cajas: int[]}>
      */

@@ -21,6 +21,7 @@ use App\Models\Planeacion\TipoEmpaque;
 use App\Models\Recipe;
 use App\Models\Temporada;
 use App\Models\Variedad;
+use App\Services\Planeacion\CatalogoPlaneacion;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Event;
 use Laravel\Sanctum\Sanctum;
@@ -458,6 +459,69 @@ class ConfiguracionTest extends TestCase
         $this->putJson(self::URL.'/configuracion/recetas-combinacion', ['filas' => [
             ['presentacion_id' => $this->presentacion('Bulk')->id, 'tipo_empaque_id' => $this->tipoEmpaque('RPC')->id, 'recipe_id' => $otra->id],
         ]])->assertStatus(422);
+    }
+
+    public function test_bodega_guarda_y_devuelve_dias_antelacion(): void
+    {
+        $this->conPermisos();
+        $texas = $this->bodega('Texas');
+        $this->assertSame(0, $texas->dias_antelacion);
+
+        $this->putJson(self::URL.'/configuracion/bodegas/'.$texas->id, ['dias_antelacion' => 2])
+            ->assertOk()
+            ->assertJsonPath('data.dias_antelacion', 2);
+        $this->assertDatabaseHas('plan_bodegas_destino', ['id' => $texas->id, 'dias_antelacion' => 2]);
+
+        $bodegas = collect($this->getJson(self::URL.'/configuracion')->assertOk()->json('data.bodegas'));
+        $this->assertSame(2, $bodegas->firstWhere('id', $texas->id)['dias_antelacion']);
+        $this->assertSame(0, $bodegas->firstWhere('id', $this->bodega('Nogales')->id)['dias_antelacion']);
+
+        $id = $this->postJson(self::URL.'/configuracion/bodegas', ['nombre' => 'Chicago', 'dias_antelacion' => 3])
+            ->assertCreated()->assertJsonPath('data.dias_antelacion', 3)->json('data.id');
+        $this->assertSame(3, BodegaDestino::find($id)->dias_antelacion);
+
+        // En los demás catálogos el campo se ignora.
+        $r = $this->postJson(self::URL.'/configuracion/tipos-empaque', ['nombre' => 'Bolsa', 'dias_antelacion' => 4])->assertCreated();
+        $this->assertArrayNotHasKey('dias_antelacion', $r->json('data'));
+    }
+
+    public function test_dias_antelacion_fuera_de_rango_es_422(): void
+    {
+        $this->conPermisos();
+        $id = $this->bodega('Texas')->id;
+
+        foreach ([8, -1] as $valor) {
+            $this->putJson(self::URL.'/configuracion/bodegas/'.$id, ['dias_antelacion' => $valor])
+                ->assertStatus(422)
+                ->assertJsonValidationErrors('dias_antelacion');
+        }
+        $this->putJson(self::URL.'/configuracion/bodegas/'.$id, ['dias_antelacion' => 8])
+            ->assertJsonPath('errors.dias_antelacion.0', 'Los días de antelación van de 0 a 7.');
+        $this->assertSame(0, BodegaDestino::find($id)->dias_antelacion);
+    }
+
+    public function test_dias_antelacion_exige_configuracion_editar(): void
+    {
+        $this->conPermisos(['configuracion' => ['view']]);
+        $id = $this->bodega('Texas')->id;
+
+        $this->putJson(self::URL.'/configuracion/bodegas/'.$id, ['dias_antelacion' => 2])->assertForbidden();
+        $this->assertSame(0, BodegaDestino::find($id)->dias_antelacion);
+    }
+
+    public function test_antelacion_de_una_bodega_se_memoiza_y_olvidar_la_limpia(): void
+    {
+        $catalogo = new CatalogoPlaneacion;
+        $texas = $this->bodega('Texas');
+        $texas->update(['dias_antelacion' => 2]);
+
+        $this->assertSame(2, $catalogo->antelacionDe($texas->id));
+        $this->assertSame(0, $catalogo->antelacionDe(999999));
+
+        $texas->update(['dias_antelacion' => 5]);
+        $this->assertSame(2, $catalogo->antelacionDe($texas->id));
+        $catalogo->olvidar();
+        $this->assertSame(5, $catalogo->antelacionDe($texas->id));
     }
 
     public function test_crea_edita_y_desactiva_catalogos(): void

@@ -212,6 +212,12 @@ trait ConstruyePrograma
         return BodegaDestino::where('nombre', $nombre)->firstOrFail();
     }
 
+    /** Días de antelación con que se empaca para un destino (día de empaque = llegada − días). */
+    protected function antelacion(string $bodega, int $dias): void
+    {
+        $this->bodega($bodega)->update(['dias_antelacion' => $dias]);
+    }
+
     protected function presentacion(string $nombre): Presentacion
     {
         return Presentacion::where('cultivo_id', $this->cultivo->id)->where('nombre', $nombre)->firstOrFail();
