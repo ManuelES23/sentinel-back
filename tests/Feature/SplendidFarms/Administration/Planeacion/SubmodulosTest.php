@@ -29,6 +29,7 @@ class SubmodulosTest extends TestCase
     private const MIGRACION_DIVIDIR = '2026_11_11_100100_dividir_planeacion_en_submodulos.php';
     private const MIGRACION_EMPAQUE = '2026_11_20_110100_add_programa_empaque_submodulo.php';
     private const MIGRACION_AVANCE = '2026_11_20_130000_add_avance_empaque_submodulo.php';
+    private const MIGRACION_ENVIAR = '2026_11_21_100000_add_enviar_permission_to_tablero_semanal.php';
 
     private const SUBMODULOS = [
         'tablero-semanal' => ['view', 'editar-notas'],
@@ -517,6 +518,123 @@ class SubmodulosTest extends TestCase
         $this->assertFalse($this->conAcceso($admin, 'avance-empaque'));
         $this->assertSame($ordenEmbarquesAntes, (int) DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'embarques')->value('order'));
         $this->assertSame(0, DB::table('submodule_permission_types')->where('description', 'Ver el avance de empaque')->count());
+    }
+
+    public function test_enviar_crea_el_permiso_en_tablero_semanal_sin_duplicar(): void
+    {
+        $this->sembrarHastaEmpaque();
+        $tableroId = DB::table('submodules')->where('slug', 'tablero-semanal')->value('id');
+        $this->assertSame(0, DB::table('submodule_permission_types')->where('submodule_id', $tableroId)->where('slug', 'enviar')->count());
+        $ordenes = DB::table('submodule_permission_types')->where('submodule_id', $tableroId)->pluck('order')->all();
+
+        $this->correr(self::MIGRACION_ENVIAR);
+        $this->correr(self::MIGRACION_ENVIAR);
+
+        $tipo = DB::table('submodule_permission_types')->where('submodule_id', $tableroId)->where('slug', 'enviar')->get();
+        $this->assertCount(1, $tipo);
+        $this->assertSame('Enviar por correo', $tipo[0]->name);
+        $this->assertSame(max($ordenes) + 1, (int) $tipo[0]->order);
+        $this->assertSame(0, DB::table('submodules')->where('slug', 'enviar')->count(), 'No crea un submódulo.');
+    }
+
+    public function test_enviar_se_concede_a_admin_demo_y_a_quien_edita_la_configuracion(): void
+    {
+        $moduloId = $this->sembrarHastaEmpaque();
+        $admin = User::factory()->create(['email' => 'admin@sentinel.com']);
+        $demo = User::factory()->create(['email' => 'demo@sentinel.com']);
+        $editor = User::factory()->create();
+        $soloVer = User::factory()->create();
+        $editorRevocado = User::factory()->create();
+        $editorSinAcceso = User::factory()->create();
+        $soloTablero = User::factory()->create();
+        $this->conceder($editor, 'configuracion', ['view', 'editar']);
+        $this->conceder($soloVer, 'configuracion', ['view']);
+        $this->conceder($editorRevocado, 'configuracion', ['editar'], granted: false);
+        $this->conceder($editorSinAcceso, 'configuracion', ['editar'], accesoActivo: false);
+        $this->conceder($soloTablero, 'tablero-semanal', ['view', 'editar-notas']);
+
+        $this->correr(self::MIGRACION_ENVIAR);
+        $this->correr(self::MIGRACION_ENVIAR);
+
+        foreach ([$admin, $demo] as $usuario) {
+            $this->assertSame(['enviar'], $this->concedidos($usuario, 'tablero-semanal'));
+            $this->assertTrue($this->conAcceso($usuario, 'tablero-semanal'));
+            $this->assertTrue($this->conAccesoAlModulo($usuario, $moduloId));
+        }
+        $this->assertSame(['enviar'], $this->concedidos($editor, 'tablero-semanal'));
+        // Lo de antes no cambia: no se le abre el Tablero ni se tocan sus otros permisos.
+        $this->assertSame(['view', 'editar'], $this->concedidos($editor, 'configuracion'));
+        $this->assertFalse($this->conAcceso($editor, 'tablero-semanal'));
+
+        foreach ([$soloVer, $editorRevocado, $editorSinAcceso] as $usuario) {
+            $this->assertNotContains('enviar', $this->concedidos($usuario, 'tablero-semanal'));
+        }
+        $this->assertSame(['view', 'editar-notas'], $this->concedidos($soloTablero, 'tablero-semanal'));
+        // Una sola fila de `enviar` por persona (idempotente).
+        $this->assertSame(1, DB::table('user_submodule_permissions')
+            ->join('submodule_permission_types', 'submodule_permission_types.id', '=', 'user_submodule_permissions.permission_type_id')
+            ->where('user_submodule_permissions.user_id', $editor->id)->where('submodule_permission_types.slug', 'enviar')->count());
+    }
+
+    public function test_enviar_no_reactiva_lo_revocado_y_reafirma_admin(): void
+    {
+        $this->sembrarHastaEmpaque();
+        $admin = User::factory()->create(['email' => 'admin@sentinel.com']);
+        $editor = User::factory()->create();
+        $this->conceder($editor, 'configuracion', ['editar']);
+        $this->correr(self::MIGRACION_ENVIAR);
+
+        // El panel revoca `enviar` a mano a los dos.
+        $tableroId = DB::table('submodules')->where('slug', 'tablero-semanal')->value('id');
+        DB::table('user_submodule_permissions')->whereIn('user_id', [$admin->id, $editor->id])
+            ->where('submodule_id', $tableroId)->update(['is_granted' => false]);
+
+        $this->correr(self::MIGRACION_ENVIAR);
+
+        $this->assertSame([], $this->concedidos($editor, 'tablero-semanal'), 'Una fila revocada no se reactiva.');
+        $this->assertSame(['enviar'], $this->concedidos($admin, 'tablero-semanal'), 'admin@ se reafirma.');
+    }
+
+    public function test_enviar_sin_el_modulo_planeacion_no_hace_nada(): void
+    {
+        $this->correr(self::MIGRACION_ENVIAR);
+
+        $this->assertSame(0, DB::table('submodule_permission_types')->where('slug', 'enviar')->count());
+    }
+
+    public function test_enviar_falla_claro_si_planeacion_existe_pero_falta_el_tablero_semanal(): void
+    {
+        // Antes era un `return` silencioso: `migrate --path` la anotaba como corrida sin crear nada
+        // y el permiso nunca existía. Ahora lanza (como Avance de empaque) y no escribe.
+        $moduloId = $this->sembrarEstructura();
+        DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'tablero-semanal')->delete();
+
+        try {
+            $this->correr(self::MIGRACION_ENVIAR);
+            $this->fail('Debió lanzar RuntimeException.');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('2026_11_11_100100', $e->getMessage());
+            $this->assertStringContainsString('Enviar por correo', $e->getMessage());
+        }
+        $this->assertSame(0, DB::table('submodule_permission_types')->where('slug', 'enviar')->count());
+
+        // Ya corrida la que crea el Tablero semanal, se puede volver a correr y crea el permiso.
+        $this->correr(self::MIGRACION_DIVIDIR);
+        $this->correr(self::MIGRACION_ENVIAR);
+        $this->assertSame(1, DB::table('submodule_permission_types')->where('slug', 'enviar')->count());
+    }
+
+    public function test_down_de_enviar_quita_el_permiso_y_sus_concesiones(): void
+    {
+        $this->sembrarHastaEmpaque();
+        $admin = User::factory()->create(['email' => 'admin@sentinel.com']);
+        $this->conceder($admin, 'tablero-semanal', ['view']);
+        $this->correr(self::MIGRACION_ENVIAR);
+
+        (require base_path('database/migrations/'.self::MIGRACION_ENVIAR))->down();
+
+        $this->assertSame(0, DB::table('submodule_permission_types')->where('slug', 'enviar')->count());
+        $this->assertSame(['view'], $this->concedidos($admin, 'tablero-semanal'));
     }
 
     public function test_payload_trae_permisos_de_avance_empaque(): void

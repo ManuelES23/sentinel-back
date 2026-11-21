@@ -23,7 +23,7 @@ trait PermisoPlaneacion
      * El orden es el del contrato de `permisos`.
      */
     private const SUBMODULOS_PLANEACION = [
-        'tablero-semanal' => ['tablero', ['view' => 'view', 'editar-notas' => 'editar_notas']],
+        'tablero-semanal' => ['tablero', ['view' => 'view', 'editar-notas' => 'editar_notas', 'enviar' => 'enviar']],
         'plan-corte' => ['plan_corte', ['view' => 'view', 'capturar' => 'capturar']],
         'necesidades-venta' => ['necesidades', ['view' => 'view', 'capturar' => 'capturar']],
         'programa-empaque' => ['programa_empaque', ['view' => 'view', 'capturar' => 'capturar']],
@@ -76,7 +76,7 @@ trait PermisoPlaneacion
 
     /**
      * Permisos del usuario en todos los submódulos de Planeación, con la forma
-     * `permisos` del payload: `{ tablero: { view, editar_notas }, plan_corte: … }`.
+     * `permisos` del payload: `{ tablero: { view, editar_notas, enviar }, plan_corte: … }`.
      *
      * @return array<string, array<string, bool>>
      */

@@ -18,6 +18,7 @@ use App\Models\Planeacion\TipoEmpaque;
 use App\Models\Recipe;
 use App\Models\Temporada;
 use App\Models\Variedad;
+use App\Services\Planeacion\DestinatariosPrograma;
 use App\Services\Planeacion\PlantasAvance;
 use App\Services\Planeacion\ProgramaSemanalService;
 use App\Services\Planeacion\RegistroCambiosPrograma;
@@ -73,7 +74,7 @@ class ConfiguracionPlaneacionController extends Controller
     ];
 
     /** Toda la configuración en una sola lectura. */
-    public function show(PlantasAvance $plantas): JsonResponse
+    public function show(PlantasAvance $plantas, DestinatariosPrograma $destinatarios): JsonResponse
     {
         $this->exigirPermiso('configuracion', 'view');
 
@@ -117,6 +118,7 @@ class ConfiguracionPlaneacionController extends Controller
                 'rendimientos' => $this->rendimientos(),
                 'cajas_por_carga' => (int) ConfiguracionPlaneacion::valor('cajas_por_carga', 1040),
                 'avance_plantas' => $plantas->paraConfiguracion(),
+                'correos_programa' => $destinatarios->todos(),
             ],
         ]);
     }
@@ -424,6 +426,60 @@ class ConfiguracionPlaneacionController extends Controller
             'success' => true,
             'message' => 'Plantas del avance guardadas.',
             'data' => ['avance_plantas' => $plantas->paraConfiguracion()],
+        ]);
+    }
+
+    /**
+     * Correos a los que se envía el programa semanal. Se reemplaza la lista
+     * completa; vacía = nadie. Correo en minúsculas, sin repetidos (ni por
+     * mayúsculas) y hasta 50. Los errores van por posición
+     * (`destinatarios.N.correo`).
+     */
+    public function correosPrograma(Request $request, DestinatariosPrograma $destinatarios): JsonResponse
+    {
+        $this->exigirPermiso('configuracion', 'editar');
+
+        $request->validate(['destinatarios' => ['present', 'array']], [
+            'destinatarios.present' => 'Escribe la lista de correos.',
+            'destinatarios.array' => 'Escribe la lista de correos.',
+        ]);
+        $enviados = $request->input('destinatarios');
+        if (count($enviados) > DestinatariosPrograma::MAXIMO) {
+            throw ValidationException::withMessages(['destinatarios' => 'Máximo '.DestinatariosPrograma::MAXIMO.' correos.']);
+        }
+
+        $errores = [];
+        $vistos = [];
+        $lista = [];
+        foreach ($enviados as $i => $fila) {
+            $correo = is_array($fila) && isset($fila['correo']) && is_string($fila['correo'])
+                ? mb_strtolower(trim($fila['correo'])) : '';
+            if ($correo === '' || mb_strlen($correo) > 190 || filter_var($correo, FILTER_VALIDATE_EMAIL) === false) {
+                $errores["destinatarios.{$i}.correo"] = 'Escribe un correo válido.';
+            } elseif (isset($vistos[$correo])) {
+                $errores["destinatarios.{$i}.correo"] = 'Ese correo ya está en la lista.';
+            } else {
+                $vistos[$correo] = true;
+            }
+
+            $nombre = is_array($fila) ? ($fila['nombre'] ?? null) : null;
+            if ($nombre !== null && ! is_string($nombre)) {
+                $errores["destinatarios.{$i}.nombre"] = 'El nombre no es válido.';
+            } elseif (is_string($nombre) && mb_strlen(trim($nombre)) > 100) {
+                $errores["destinatarios.{$i}.nombre"] = 'El nombre es muy largo (máximo 100 caracteres).';
+            }
+            $lista[] = ['correo' => $correo, 'nombre' => is_string($nombre) ? $nombre : ''];
+        }
+        if ($errores) {
+            throw ValidationException::withMessages($errores);
+        }
+
+        $destinatarios->guardar($lista);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Correos del programa guardados.',
+            'data' => ['correos_programa' => $destinatarios->todos()],
         ]);
     }
 

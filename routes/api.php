@@ -220,6 +220,9 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::get('programa', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ProgramaSemanalController::class, 'show']);
                 // Descarga de la semana en Excel (tablero-semanal.view); ninguna ruta GET programa/{programa} la tapa.
                 Route::get('programa/exportar', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ExportarProgramaController::class, 'exportar']);
+                // Enviar el programa por correo (tablero-semanal.enviar): rutas fijas, antes de cualquier programa/{programa}.
+                Route::get('programa/envio/opciones', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\EnviarProgramaController::class, 'opciones']);
+                Route::post('programa/envio', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\EnviarProgramaController::class, 'enviar'])->middleware('throttle:5,1');
                 // Avance de empaque: programado contra real (avance-empaque.view); no crea el programa.
                 Route::get('programa/avance', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\AvanceEmpaqueController::class, 'show']);
                 Route::put('programa/{programa}/inventario-inicial', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'inventarioInicial']);
@@ -232,6 +235,7 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::post('configuracion/rendimientos/copiar', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'copiarRendimientos']);
                 Route::put('configuracion/cajas-por-carga', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'cajasPorCarga']);
                 Route::put('configuracion/avance-plantas', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'avancePlantas']);
+                Route::put('configuracion/correos-programa', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'correosPrograma']);
                 Route::put('configuracion/cajas-por-presentacion', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'cajasPorPresentacion']);
                 Route::post('configuracion/{catalogo}', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'store']);
                 Route::put('configuracion/{catalogo}/{id}', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'update'])->whereNumber('id');
