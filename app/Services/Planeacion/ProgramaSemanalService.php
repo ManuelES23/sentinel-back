@@ -197,7 +197,8 @@ class ProgramaSemanalService
                 'cargas' => $e->cargas,
             ])->values()->all(),
             'balance' => $balance,
-            'empaque' => $this->secciones->empaque($necesidades, $sobrantes),
+            // NECESIDADES VENTAS va por día de llegada; el programa de empaque, por día de empaque.
+            'empaque' => $this->secciones->empaque($plan->necesidadesPorEmpaque(), $sobrantes),
             'clientes_previos' => $this->secciones->clientesPrevios($lunes, $necesidades),
         ];
     }
@@ -285,7 +286,8 @@ class ProgramaSemanalService
         $balance = CalculadoraBalance::calcular(
             $grupos,
             $plan->produccion(),
-            PlanSemana::renglonesNecesidad($plan->necesidades()),
+            // Por día de empaque (llegada − antelación del destino), no de llegada.
+            PlanSemana::renglonesNecesidad($plan->necesidadesPorEmpaque()),
             $inicial,
             PlanSemana::renglonesNecesidad($plan->sobrantes()),
         );

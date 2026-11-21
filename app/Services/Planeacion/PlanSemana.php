@@ -8,6 +8,7 @@ use App\Models\Planeacion\ProgramaRendimiento;
 use App\Models\Planeacion\ProgramaSemanal;
 use App\Models\Planeacion\ProgramaSobrante;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 
 /**
@@ -23,6 +24,8 @@ class PlanSemana
      * @param  array<string, ProgramaRendimiento>  $elecciones  "temporada-variedad" => elección.
      * @param  array<string, int>  $inventariosManuales  grupo_clave => cajas.
      * @param  Collection<int, ProgramaSobrante>  $sobrantes  Sobrante asignado (Programa de empaque).
+     * @param  Collection<int, ProgramaNecesidad>  $necesidadesSiguiente  Necesidades del programa de la
+     *                                                                     semana siguiente (vacía si no existe).
      */
     public function __construct(
         public readonly ProgramaSemanal $programa,
@@ -33,11 +36,15 @@ class PlanSemana
         public readonly array $inventariosManuales,
         private readonly CatalogoPlaneacion $catalogo,
         public readonly Collection $sobrantes = new Collection,
+        public readonly Collection $necesidadesSiguiente = new Collection,
     ) {}
 
     /**
      * Carga varias semanas a la vez (la cadena del arrastre de inventario): el
-     * número de consultas no crece con el número de semanas.
+     * número de consultas no crece con el número de semanas. También trae las
+     * necesidades de la semana siguiente de cada una (las que se empacan antes
+     * de su lunes): si ese programa ya está en la lista se reusa; si no, se
+     * leen todos los que faltan en una sola consulta.
      *
      * @param  EloquentCollection<int, ProgramaSemanal>  $programas
      * @return array<int, self> programa_id => plan
@@ -52,12 +59,39 @@ class PlanSemana
             'cortes' => fn ($q) => $q->orderBy('dia')->orderBy('id'),
             'cortes.etapa:id,lote_id,nombre,codigo',
             'cortes.etapa.lote:id,nombre',
-            'necesidades' => fn ($q) => $q->orderBy('id'),
-            'necesidades.variedades:id',
             'sobrantes' => fn ($q) => $q->orderBy('id'),
             'sobrantes.variedades:id',
             'rendimientos',
             'inventariosIniciales',
+        ]);
+
+        // Programas de la semana siguiente que no vienen en la lista (siempre una consulta,
+        // aunque no falte ninguno, para que el número de consultas no dependa de los datos).
+        $porLunes = [];
+        foreach ($programas as $programa) {
+            $porLunes[$programa->lunes->toDateString()] = $programa;
+        }
+        $faltan = [];
+        foreach ($porLunes as $lunes => $programa) {
+            $siguiente = self::lunesSiguiente($lunes);
+            if (! isset($porLunes[$siguiente])) {
+                $faltan[$siguiente] = true;
+            }
+        }
+        $fechas = $faltan === [] ? array_keys($porLunes) : array_keys($faltan);
+        $extras = ProgramaSemanal::whereDate('lunes', '>=', min($fechas))
+            ->whereDate('lunes', '<=', max($fechas))
+            ->whereNotIn('id', $programas->modelKeys())
+            ->get()
+            ->filter(fn (ProgramaSemanal $p) => isset($faltan[$p->lunes->toDateString()]));
+        foreach ($extras as $programa) {
+            $porLunes[$programa->lunes->toDateString()] = $programa;
+        }
+
+        // Las necesidades de todos (los de la lista y los siguientes) van juntas.
+        (new EloquentCollection([...$programas->all(), ...$extras->all()]))->load([
+            'necesidades' => fn ($q) => $q->orderBy('id'),
+            'necesidades.variedades:id',
         ]);
 
         $planes = [];
@@ -81,10 +115,16 @@ class PlanSemana
                 $manuales,
                 $catalogo,
                 $programa->sobrantes,
+                ($porLunes[self::lunesSiguiente($programa->lunes->toDateString())] ?? null)?->necesidades ?? new Collection,
             );
         }
 
         return $planes;
+    }
+
+    private static function lunesSiguiente(string $lunes): string
+    {
+        return Carbon::parse($lunes)->addDays(CalculadoraBalance::DIAS)->toDateString();
     }
 
     public function eleccion(?int $temporadaId, int $variedadId): ?ProgramaRendimiento
@@ -156,6 +196,45 @@ class PlanSemana
     }
 
     /**
+     * Necesidades por DÍA DE EMPAQUE (llegada − días de antelación del destino):
+     * las de esta semana que se empacan dentro de ella, más las de la semana
+     * siguiente que se empacan antes de su lunes (caen al final de esta). Lo que
+     * de esta semana se empaca antes de su lunes ya no cuenta aquí: le toca a la
+     * semana anterior. Los renglones que quedan sin cajas se omiten.
+     *
+     * @return list<array{id: int, necesidad: ProgramaNecesidad, grupo: ?string, cajas: int[], de_semana_siguiente: bool}>
+     */
+    public function necesidadesPorEmpaque(): array
+    {
+        $renglones = [];
+        foreach ([[false, $this->necesidades], [true, $this->necesidadesSiguiente]] as [$deSiguiente, $necesidades]) {
+            foreach ($necesidades as $necesidad) {
+                $antelacion = $this->catalogo->antelacionDe((int) $necesidad->bodega_id);
+                $cajas = array_fill(0, CalculadoraBalance::DIAS, 0);
+                foreach ($necesidad->cajasPorDia() as $llegada => $cantidad) {
+                    // Día de empaque contado desde el lunes de esta semana.
+                    $empaque = $llegada - $antelacion + ($deSiguiente ? CalculadoraBalance::DIAS : 0);
+                    if ($this->diaValido($empaque)) {
+                        $cajas[$empaque] += $cantidad;
+                    }
+                }
+                if (array_filter($cajas) === []) {
+                    continue;
+                }
+                $renglones[] = [
+                    'id' => $necesidad->id,
+                    'necesidad' => $necesidad,
+                    'grupo' => $this->grupoDeNecesidad($necesidad),
+                    'cajas' => $cajas,
+                    'de_semana_siguiente' => $deSiguiente,
+                ];
+            }
+        }
+
+        return $renglones;
+    }
+
+    /**
      * Sobrante asignado de la semana con su grupo de balance y las cajas de
      * cada día. Va siempre aparte de las necesidades, que son solo ventas.
      *
@@ -199,13 +278,20 @@ class PlanSemana
         return $renglones;
     }
 
-    /** @return int[] Cultivos que citan los renglones de la semana. */
+    /** @return int[] Cultivos que citan los renglones de la semana (y los de la siguiente que se empacan en ella). */
     public function cultivosCitados(): array
     {
         $ids = array_merge(
             $this->necesidades->pluck('cultivo_id')->all(),
             $this->sobrantes->pluck('cultivo_id')->all(),
         );
+        if ($this->necesidadesSiguiente->isNotEmpty()) {
+            foreach ($this->necesidadesPorEmpaque() as $renglon) {
+                if ($renglon['de_semana_siguiente']) {
+                    $ids[] = $renglon['necesidad']->cultivo_id;
+                }
+            }
+        }
         foreach ($this->cortes as $corte) {
             $variedad = $this->catalogo->variedades()->get($corte->variedad_id);
             if ($variedad) {

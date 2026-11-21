@@ -11,7 +11,10 @@ use App\Models\Planeacion\ProgramaSemanal;
 use App\Models\Planeacion\ProgramaSobrante;
 use App\Models\Planeacion\RendimientoVariedad;
 use App\Models\Temporada;
+use App\Services\Planeacion\CatalogoPlaneacion;
+use App\Services\Planeacion\PlanSemana;
 use App\Services\Planeacion\ProgramaSemanalService;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -619,5 +622,150 @@ class ProgramaSemanalTest extends TestCase
         $previos = collect($this->semana('2026-12-28')->assertOk()->json('data.clientes_previos'));
         $this->assertFalse($previos->contains(fn ($c) => $c['cliente_nombre'] === 'Shapiro'));
         $this->assertSame(['Vallarta'], $previos->pluck('cliente_nombre')->all());
+    }
+
+    // ── Día de empaque = día de llegada − días de antelación del destino ──
+
+    /** Renglón de empaque Texas · Bulk · Amarillo/Bicolor · RPC (venta), o null. */
+    private function empaqueTexasBulk(array $empaque): ?array
+    {
+        return collect($empaque)->first(fn ($r) => $r['bodega_id'] === $this->bodega('Texas')->id
+            && $r['presentacion_id'] === $this->presentacion('Bulk')->id
+            && (string) $r['grupo_id'] === $this->idAb()
+            && $r['tipo_empaque_id'] === $this->tipoEmpaque('RPC')->id
+            && $r['clase'] === 'ok');
+    }
+
+    /** Pedido de Walmart a Texas (Bulk · Amarillo · RPC) con las cajas de cada día de llegada. */
+    private function pedidoTexas(ProgramaSemanal $p, array $cajas): void
+    {
+        $this->necesidad($p, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', $cajas);
+    }
+
+    public function test_antelacion_cero_no_cambia_nada(): void
+    {
+        $this->wk48();
+        // La semana siguiente existe y tiene pedidos del lunes: con 0 días no se recorren a WK48.
+        $wk49 = ProgramaSemanal::create(['lunes' => '2026-11-30']);
+        $this->pedidoTexas($wk49, [900, 0, 0, 0, 0, 0, 0]);
+
+        $d = $this->semana('2026-11-23')->assertOk()->json('data');
+
+        $ab = $d['balance'][$this->idAb()];
+        $this->assertSame(22040, array_sum($ab['necesidad']));
+        $this->assertSame(10635, $ab['final']);
+        $this->assertSame('cubre_inventario', $ab['estado']);
+        $blanco = $d['balance'][$this->idBlanco()];
+        $this->assertSame(-2893, $blanco['final']);
+        $this->assertSame(2, $blanco['primer_dia_falta']);
+        $this->assertSame(-4882, $blanco['peor_valor']);
+        $this->assertSame(36483, $this->sumaEmpaque($d['empaque'], fn () => true));
+        $this->assertSame([3460, 0, 0, 0, 0, 0, 0], $this->empaqueTexasBulk($d['empaque'])['cajas']);
+        $this->assertCount(12, $d['necesidades']);
+        foreach ($d['empaque'] as $r) {
+            $this->assertArrayNotHasKey('de_semana_siguiente', $r);
+        }
+    }
+
+    public function test_pedido_del_lunes_con_dos_dias_se_empaca_el_sabado_anterior(): void
+    {
+        $this->antelacion('Texas', 2);
+        ProgramaSemanal::create(['lunes' => '2026-11-16']);
+        $wk48 = ProgramaSemanal::create(['lunes' => '2026-11-23']);
+        $this->pedidoTexas($wk48, [1800, 0, 0, 0, 0, 0, 0]);
+
+        // WK47 (WK48 sin abrir en pantalla): lo empaca el sábado.
+        $d47 = $this->semana('2026-11-16')->assertOk()->json('data');
+        $this->assertSame([0, 0, 0, 0, 0, 1800, 0], $d47['balance'][$this->idAb()]['necesidad']);
+        $this->assertSame(-1800, $d47['balance'][$this->idAb()]['final']);
+        $this->assertSame([0, 0, 0, 0, 0, 1800, 0], $this->empaqueTexasBulk($d47['empaque'])['cajas']);
+        // NECESIDADES VENTAS sigue por día de llegada: en WK47 no hay renglones.
+        $this->assertSame([], $d47['necesidades']);
+
+        // WK48 ya no lo descuenta el lunes, pero lo sigue mostrando por llegada.
+        $d48 = $this->semana('2026-11-23')->assertOk()->json('data');
+        $this->assertSame(0, $d48['balance'][$this->idAb()]['necesidad'][0]);
+        $this->assertSame(0, array_sum($d48['balance'][$this->idAb()]['necesidad']));
+        $this->assertNull($this->empaqueTexasBulk($d48['empaque']));
+        $this->assertCount(1, $d48['necesidades']);
+        $this->assertSame([1800, 0, 0, 0, 0, 0, 0], $d48['necesidades'][0]['cajas']);
+        // El faltante se empacó (en rojo) en WK47 y llega arrastrado.
+        $this->assertSame(-1800, $d48['balance'][$this->idAb()]['inicial']);
+    }
+
+    public function test_pedido_del_miercoles_con_dos_dias_cuenta_el_lunes(): void
+    {
+        $this->antelacion('Texas', 2);
+        $wk48 = ProgramaSemanal::create(['lunes' => '2026-11-23']);
+        $this->pedidoTexas($wk48, [0, 0, 1800, 0, 0, 0, 500]);
+
+        $d = $this->semana('2026-11-23')->assertOk()->json('data');
+
+        $this->assertSame([1800, 0, 0, 0, 500, 0, 0], $d['balance'][$this->idAb()]['necesidad']);
+        $this->assertSame([1800, 0, 0, 0, 500, 0, 0], $this->empaqueTexasBulk($d['empaque'])['cajas']);
+        $this->assertSame([0, 0, 1800, 0, 0, 0, 500], $d['necesidades'][0]['cajas']);
+        // Otro destino (Nogales, 0 días) no se recorre.
+        $this->necesidad($wk48, 'Nogales', 'Vesta', 'Bulk', ['Amarillo'], 'Cartón', [0, 0, 300, 0, 0, 0, 0]);
+        $this->assertSame([1800, 0, 300, 0, 500, 0, 0], $this->semana('2026-11-23')->json("data.balance.{$this->idAb()}.necesidad"));
+    }
+
+    public function test_el_arrastre_de_inventario_descuenta_lo_empacado_la_semana_anterior(): void
+    {
+        $this->antelacion('Texas', 2);
+        $wk47 = ProgramaSemanal::create(['lunes' => '2026-11-16']);
+        // 6 ha de Amarillo al mínimo (500 cj/ha) = 3,000 cajas el sábado.
+        ProgramaRendimiento::create(['programa_id' => $wk47->id, 'temporada_id' => $this->temporada->id, 'variedad_id' => $this->variedades['Amarillo']->id, 'modo' => 'minimo']);
+        $this->corte($wk47, 'Amarillo', 5, 6);
+        $wk48 = ProgramaSemanal::create(['lunes' => '2026-11-23']);
+        $this->pedidoTexas($wk48, [1800, 0, 0, 0, 0, 0, 0]);
+
+        $ab = $this->semana('2026-11-23')->assertOk()->json("data.balance.{$this->idAb()}");
+
+        $this->assertSame(1200, $ab['inicial']);
+        $this->assertSame('arrastrado', $ab['inicial_origen']);
+        $this->assertSame(1200, $ab['final']);
+    }
+
+    public function test_semana_siguiente_sin_programa_no_suma_ni_falla(): void
+    {
+        $this->antelacion('Texas', 2);
+        $wk48 = ProgramaSemanal::create(['lunes' => '2026-11-23']);
+        $this->pedidoTexas($wk48, [0, 0, 200, 0, 0, 0, 0]);
+
+        $this->assertSame(200, array_sum($this->semana('2026-11-23')->assertOk()->json("data.balance.{$this->idAb()}.necesidad")));
+
+        $plan = PlanSemana::cargarVarios(new EloquentCollection([$wk48->fresh()]), app(CatalogoPlaneacion::class))[$wk48->id];
+        $this->assertTrue($plan->necesidadesSiguiente->isEmpty());
+        $renglones = $plan->necesidadesPorEmpaque();
+        $this->assertCount(1, $renglones);
+        $this->assertFalse($renglones[0]['de_semana_siguiente']);
+        $this->assertSame([200, 0, 0, 0, 0, 0, 0], $renglones[0]['cajas']);
+
+        // Con WK49 (sin abrir), su pedido del lunes llega a WK48 como renglón de la semana siguiente.
+        $wk49 = ProgramaSemanal::create(['lunes' => '2026-11-30']);
+        $this->pedidoTexas($wk49, [700, 0, 0, 0, 0, 0, 0]);
+        $plan = PlanSemana::cargarVarios(new EloquentCollection([$wk48->fresh()]), app(CatalogoPlaneacion::class))[$wk48->id];
+        $siguiente = collect($plan->necesidadesPorEmpaque())->firstWhere('de_semana_siguiente', true);
+        $this->assertNotNull($siguiente);
+        $this->assertSame([0, 0, 0, 0, 0, 700, 0], $siguiente['cajas']);
+        $this->assertSame($this->bodega('Texas')->id, $siguiente['necesidad']->bodega_id);
+        $this->assertSame($this->idAb(), (string) $siguiente['grupo']);
+    }
+
+    public function test_cambiar_la_antelacion_recalcula_semanas_pasadas(): void
+    {
+        ProgramaSemanal::create(['lunes' => '2026-11-16']);
+        $wk48 = ProgramaSemanal::create(['lunes' => '2026-11-23']);
+        $this->pedidoTexas($wk48, [1800, 0, 0, 0, 0, 0, 0]);
+        $ab = $this->idAb();
+
+        $this->assertSame(0, array_sum($this->semana('2026-11-16')->json("data.balance.{$ab}.necesidad") ?? [0]));
+        $this->assertSame([1800, 0, 0, 0, 0, 0, 0], $this->semana('2026-11-23')->json("data.balance.{$ab}.necesidad"));
+
+        $this->antelacion('Texas', 2);
+
+        $this->assertSame([0, 0, 0, 0, 0, 1800, 0], $this->semana('2026-11-16')->json("data.balance.{$ab}.necesidad"));
+        $this->assertSame([0, 0, 0, 0, 0, 0, 0], $this->semana('2026-11-23')->json("data.balance.{$ab}.necesidad"));
+        $this->assertSame(-1800, $this->semana('2026-11-23')->json("data.balance.{$ab}.inicial"));
     }
 }

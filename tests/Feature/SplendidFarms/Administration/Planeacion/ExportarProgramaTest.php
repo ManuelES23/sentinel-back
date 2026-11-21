@@ -366,6 +366,35 @@ class ExportarProgramaTest extends TestCase
         $this->assertEquals(1000, $hoja->getCell('N'.$this->fila($hoja, 'Sin clasificar (debe ser 0)', $total))->getValue());
     }
 
+    public function test_el_excel_trae_empaque_y_balance_por_dia_de_empaque(): void
+    {
+        $this->antelacion('Texas', 2);
+        ProgramaSemanal::create(['lunes' => '2026-11-16']);
+        $wk48 = ProgramaSemanal::create(['lunes' => '2026-11-23']);
+        $this->necesidad($wk48, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [1800, 0, 0, 0, 0, 0, 0]);
+
+        $hoja = $this->libroDe($this->descargar('lunes=2026-11-16&cultivo_id='.$this->cultivo->id)->assertOk())->getSheetByName('WK47');
+
+        // Programa de empaque: el renglón de Texas en la columna del sábado (L).
+        $empaque = $this->fila($hoja, 'PROGRAMA DE EMPAQUE (se calcula de las necesidades)', 1, ['B']);
+        $texas = $this->fila($hoja, 'TEXAS', $empaque, ['B']);
+        $renglon = $this->fila($hoja, 'RPC', $texas, ['F']);
+        $this->assertSame('Bulk', $hoja->getCell('D'.$renglon)->getValue());
+        $this->assertEquals([0, 0, 0, 0, 0, 1800, 0, 1800], $this->dias($hoja, $renglon));
+        $this->assertEquals(1800, $hoja->getCell('N'.$this->fila($hoja, 'Total empaque Texas'))->getValue());
+
+        // Balance: la necesidad del sábado; NECESIDADES VENTAS (por día de llegada) queda en cero.
+        $balance = $this->fila($hoja, 'BALANCE PRODUCCIÓN vs NECESIDAD', 1, ['B']);
+        $this->assertEquals([0, 0, 0, 0, 0, 1800, 0, 1800], $this->dias($hoja, $this->fila($hoja, 'Necesidad', $balance)));
+        $this->assertEquals(0, $hoja->getCell('N'.$this->fila($hoja, 'TOTAL NECESIDAD'))->getValue());
+
+        // WK48 ya no lo trae en el empaque ni en el balance.
+        $hoja = $this->libroDe($this->descargar('lunes=2026-11-23&cultivo_id='.$this->cultivo->id)->assertOk())->getSheetByName('WK48');
+        $balance = $this->fila($hoja, 'BALANCE PRODUCCIÓN vs NECESIDAD', 1, ['B']);
+        $this->assertEquals(0, $hoja->getCell('N'.$this->fila($hoja, 'Necesidad', $balance))->getValue());
+        $this->assertEquals(1800, $hoja->getCell('N'.$this->fila($hoja, 'TOTAL NECESIDAD'))->getValue());
+    }
+
     public function test_cultivo_elegido_y_cultivo_inexistente(): void
     {
         $this->wk48();
