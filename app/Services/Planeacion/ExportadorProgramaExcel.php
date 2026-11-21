@@ -2,6 +2,8 @@
 
 namespace App\Services\Planeacion;
 
+use Carbon\Carbon;
+use InvalidArgumentException;
 use PhpOffice\PhpSpreadsheet\Shared\Date;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Style\Alignment;
@@ -11,7 +13,7 @@ use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 
 /**
- * Descarga de una semana del Programa semanal como .xlsx, con la distribución
+ * Una o varias semanas del Programa semanal como .xlsx (una hoja por semana), con la distribución
  * de la hoja WK del Excel «PROGRAMA CORN OI 2026-2027» (ocho secciones, días de
  * lunes a domingo y total) y solo valores, sin fórmulas.
  *
@@ -102,23 +104,68 @@ class ExportadorProgramaExcel
     }
 
     /**
-     * Escribe el libro en un archivo temporal y devuelve su ruta (quien lo
-     * descarga lo borra después de enviarlo).
+     * Escribe el libro de una semana en un archivo temporal y devuelve su ruta
+     * (quien lo descarga lo borra después de enviarlo).
      *
      * @param  array  $semana  Payload de ProgramaSemanalService::semana().
      * @param  string|null  $cultivoNombre  Nombre del cultivo del encabezado; si no hay, el del payload.
      */
     public function generar(array $semana, ?int $cultivoId, ?string $cultivoNombre = null): string
     {
+        return $this->generarVarias([$semana], $cultivoId, $cultivoNombre);
+    }
+
+    /**
+     * Un libro con una hoja por semana, en el orden recibido, cada una con el
+     * mismo contenido que generar() y titulada `WK{nn}` (más el año ISO cuando
+     * dos semanas darían el mismo título). Devuelve la ruta del .xlsx
+     * temporal; quien lo usa lo borra.
+     *
+     * @param  list<array>  $semanas  Payloads de ProgramaSemanalService::semana().
+     */
+    public function generarVarias(array $semanas, ?int $cultivoId, ?string $cultivoNombre = null): string
+    {
+        if ($semanas === []) {
+            throw new InvalidArgumentException('Se necesita al menos una semana.');
+        }
+        $semanas = array_values($semanas);
+        $numeros = array_map(fn ($s) => sprintf('%02d', $s['programa']['semana_iso']), $semanas);
+        $vecesPorNumero = array_count_values($numeros);
+
+        $libro = new Spreadsheet;
+        $libro->getDefaultStyle()->getFont()->setName('Arial')->setSize(10);
+        $libro->getProperties()->setCreator('Sentinel ERP')->setTitle(count($semanas) === 1
+            ? 'Programa semana '.$numeros[0]
+            : 'Programa semanas '.$numeros[0].'–'.end($numeros));
+
+        foreach ($semanas as $i => $semana) {
+            $hoja = $i === 0 ? $libro->getActiveSheet() : $libro->createSheet();
+            $titulo = 'WK'.$numeros[$i];
+            if ($vecesPorNumero[$numeros[$i]] > 1) {
+                $titulo .= ' '.Carbon::createFromFormat('!Y-m-d', $semana['programa']['lunes'])->isoWeekYear;
+            }
+            $hoja->setTitle($titulo);
+            $this->escribirHoja($hoja, $semana, $cultivoId, $cultivoNombre);
+        }
+        $libro->setActiveSheetIndex(0);
+
+        $temporal = tempnam(sys_get_temp_dir(), 'programa_');
+        $ruta = $temporal.'.xlsx';
+        @unlink($temporal);
+        (new Xlsx($libro))->save($ruta);
+        $libro->disconnectWorksheets();
+
+        return $ruta;
+    }
+
+    /** Escribe una semana en su hoja; el estado de instancia (hoja, fila, catálogos) se reinicia en cada una. */
+    private function escribirHoja(Worksheet $hoja, array $semana, ?int $cultivoId, ?string $cultivoNombre): void
+    {
         $programa = $semana['programa'];
         $numero = sprintf('%02d', $programa['semana_iso']);
         $cultivoNombre ??= collect($semana['cultivos'])->firstWhere('id', $cultivoId)['nombre'] ?? null;
 
-        $libro = new Spreadsheet;
-        $libro->getDefaultStyle()->getFont()->setName('Arial')->setSize(10);
-        $libro->getProperties()->setCreator('Sentinel ERP')->setTitle('Programa semana '.$numero);
-        $this->hoja = $libro->getActiveSheet();
-        $this->hoja->setTitle('WK'.$numero);
+        $this->hoja = $hoja;
         $this->fila = 1;
 
         $this->bodegas = array_column($semana['catalogos']['bodegas'], null, 'id');
@@ -144,14 +191,6 @@ class ExportadorProgramaExcel
         }
         $this->hoja->getPageSetup()->setOrientation('landscape')->setFitToWidth(1)->setFitToHeight(0);
         $this->hoja->getSheetView()->setZoomScale(90);
-
-        $temporal = tempnam(sys_get_temp_dir(), 'programa_');
-        $ruta = $temporal.'.xlsx';
-        @unlink($temporal);
-        (new Xlsx($libro))->save($ruta);
-        $libro->disconnectWorksheets();
-
-        return $ruta;
     }
 
     // ── Secciones ───────────────────────────────────────
