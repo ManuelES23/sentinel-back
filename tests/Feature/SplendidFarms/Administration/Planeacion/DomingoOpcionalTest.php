@@ -3,6 +3,9 @@
 namespace Tests\Feature\SplendidFarms\Administration\Planeacion;
 
 use App\Events\ProgramaSemanalUpdated;
+use App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\DomingoProgramaController;
+use App\Services\Planeacion\RegistroCambiosPrograma;
+use Illuminate\Http\Request;
 use App\Models\Planeacion\ProgramaEmbarque;
 use App\Models\Planeacion\ProgramaNecesidad;
 use App\Models\Planeacion\ProgramaSemanal;
@@ -150,6 +153,26 @@ class DomingoOpcionalTest extends TestCase
 
         $this->domingo(true)->assertOk();
         Event::assertDispatchedTimes(ProgramaSemanalUpdated::class, 2);
+    }
+
+    public function test_con_el_modelo_viejo_en_memoria_el_cambio_se_escribe_de_verdad(): void
+    {
+        $this->comoPlaneador();
+        // El modelo ligado por la ruta se cargó con domingo; otra petición lo apagó antes del bloqueo.
+        $viejo = ProgramaSemanal::findOrFail($this->programa->id);
+        ProgramaSemanal::whereKey($this->programa->id)->update(['trabaja_domingo' => false]);
+        Event::fake([ProgramaSemanalUpdated::class]);
+
+        $respuesta = app(DomingoProgramaController::class)->guardar(
+            Request::create('/', 'PUT', ['trabaja_domingo' => true]),
+            $viejo,
+            app(RegistroCambiosPrograma::class),
+        );
+
+        $this->assertSame(200, $respuesta->getStatusCode());
+        $this->assertTrue($respuesta->getData(true)['data']['trabaja_domingo']);
+        $this->assertTrue((bool) ProgramaSemanal::whereKey($this->programa->id)->value('trabaja_domingo'));
+        Event::assertDispatchedTimes(ProgramaSemanalUpdated::class, 1);
     }
 
     public function test_sin_editar_notas_no_cambia_el_domingo(): void

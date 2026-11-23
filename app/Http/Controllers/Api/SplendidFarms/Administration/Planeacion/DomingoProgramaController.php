@@ -40,23 +40,26 @@ class DomingoProgramaController extends Controller
             // esta misma fila bloqueada antes de guardar algo en el domingo, así
             // que una captura simultánea espera a este cambio o este conteo ve
             // lo que esa captura ya confirmó. (SQLite en pruebas no puede ejercitarlo.)
-            $actual = (bool) ProgramaSemanal::whereKey($programa->id)->lockForUpdate()->value('trabaja_domingo');
+            // Se escribe sobre la fila leída con el bloqueo y no sobre el modelo
+            // ligado por la ruta: ese se cargó antes y puede estar viejo (con su
+            // valor original igual al pedido, save() no escribiría nada).
+            $fila = ProgramaSemanal::whereKey($programa->id)->lockForUpdate()->firstOrFail();
 
             // Sin cambio de valor no hay escritura ni aviso.
-            if ($actual === $nuevo) {
+            if ($fila->trabaja_domingo === $nuevo) {
                 return;
             }
 
             if (! $nuevo) {
-                $datosDomingo = DomingoPrograma::datosDelDomingo($programa);
+                $datosDomingo = DomingoPrograma::datosDelDomingo($fila);
                 if ($datosDomingo !== null) {
                     throw ValidationException::withMessages(['trabaja_domingo' => $datosDomingo]);
                 }
             }
 
-            $programa->trabaja_domingo = $nuevo;
-            $programa->save();
-            $registro->emitir($programa);
+            $fila->trabaja_domingo = $nuevo;
+            $fila->save();
+            $registro->emitir($fila);
         });
 
         return response()->json([
