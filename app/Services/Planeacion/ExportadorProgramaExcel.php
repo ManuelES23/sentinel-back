@@ -179,7 +179,7 @@ class ExportadorProgramaExcel
         $this->fila = 1;
         // Una semana sin domingo no escribe esa columna y el total sube a la siguiente al sábado. Los arreglos
         // del payload siguen con siete posiciones (la del domingo en cero): solo se dejan de escribir.
-        $trabajaDomingo = $programa['trabaja_domingo'] ?? true;
+        $trabajaDomingo = (bool) ($programa['trabaja_domingo'] ?? true);
         $this->columnasDia = $trabajaDomingo ? self::COLUMNAS_DIA : self::COLUMNAS_DIA_SIN_DOMINGO;
         $this->columnaTotal = $trabajaDomingo ? self::COLUMNA_TOTAL : self::COLUMNA_TOTAL_SIN_DOMINGO;
 

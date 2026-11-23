@@ -4,8 +4,11 @@ namespace Tests\Feature\SplendidFarms\Administration\Planeacion;
 
 use App\Events\ProgramaSemanalUpdated;
 use App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\DomingoProgramaController;
+use App\Services\Planeacion\ExportadorProgramaExcel;
+use App\Services\Planeacion\ProgramaSemanalService;
 use App\Services\Planeacion\RegistroCambiosPrograma;
 use Illuminate\Http\Request;
+use PhpOffice\PhpSpreadsheet\IOFactory;
 use App\Models\Planeacion\ProgramaEmbarque;
 use App\Models\Planeacion\ProgramaNecesidad;
 use App\Models\Planeacion\ProgramaSemanal;
@@ -121,6 +124,54 @@ class DomingoOpcionalTest extends TestCase
         $this->sinDomingo();
 
         $this->assertFalse($this->semana()['programa']['trabaja_domingo']);
+    }
+
+    /**
+     * Entre el pull y el migrate, una semana leída de la base no trae la columna:
+     * `trabaja_domingo` llega en null y debe leerse como «con domingo».
+     */
+    private function semanaSinColumna(): ProgramaSemanal
+    {
+        $fila = ProgramaSemanal::find($this->programa->id);
+        $fila->setRawAttributes(array_diff_key($fila->getAttributes(), ['trabaja_domingo' => true]), true);
+        $this->assertNull($fila->trabaja_domingo);
+
+        return $fila;
+    }
+
+    public function test_una_semana_con_el_interruptor_en_null_se_lee_con_domingo(): void
+    {
+        $this->antelacion('Texas', 2);
+        $wk49 = ProgramaSemanal::create(['lunes' => '2026-11-30']);
+        $this->pedidoTexas($wk49, [0, 1800, 0, 0, 0, 0, 0]);
+
+        $semana = app(ProgramaSemanalService::class)->semana($this->semanaSinColumna(), []);
+
+        // Payload: con domingo.
+        $this->assertTrue($semana['programa']['trabaja_domingo']);
+        // Regla del sábado: el pedido se empaca el domingo, no el sábado.
+        $this->assertSame([0, 0, 0, 0, 0, 0, 1800], $semana['balance'][$this->idAb()]['necesidad']);
+
+        // Excel: siete días y total en la N, también si el payload trae null.
+        $semana['programa']['trabaja_domingo'] = null;
+        $ruta = app(ExportadorProgramaExcel::class)->generar($semana, $this->cultivo->id);
+        try {
+            $hoja = IOFactory::load($ruta)->getSheetByName('WK48');
+            $fila = null;
+            for ($f = 1; $f <= $hoja->getHighestRow(); $f++) {
+                if ($hoja->getCell('C'.$f)->getValue() === 'COLOR') {
+                    $fila = $f;
+                    break;
+                }
+            }
+            $this->assertNotNull($fila);
+            $this->assertSame(
+                ['L', 'M', 'X', 'J', 'V', 'S', 'D', 'HA TOTAL'],
+                array_map(fn ($c) => $hoja->getCell($c.$fila)->getValue(), ['G', 'H', 'I', 'J', 'K', 'L', 'M', 'N'])
+            );
+        } finally {
+            @unlink($ruta);
+        }
     }
 
     // ── Interruptor ─────────────────────────────────────
@@ -482,13 +533,54 @@ class DomingoOpcionalTest extends TestCase
         $this->pedidoTexas($anterior, [0, 0, 0, 0, 0, 0, 50]);
         $this->sinDomingo();
 
+        // El renglón que solo tenía domingo no se crea vacío; el mensaje cuenta lo que se dejó fuera.
         $this->postJson(self::BASE.'/programa/'.$this->programa->id.'/necesidades/copiar-anterior')
             ->assertOk()
-            ->assertJsonPath('data.copiadas', 2);
+            ->assertJsonPath('data.copiadas', 1)
+            ->assertJsonPath('message', 'Se copiaron 1 necesidades de la semana anterior (sin las 350 cajas del domingo).');
 
         $copias = ProgramaNecesidad::where('programa_id', $this->programa->id)->orderBy('id')->get();
+        $this->assertCount(1, $copias);
         $this->assertSame([100, 0, 0, 0, 0, 0, 0], array_map('intval', $copias[0]->cajasPorDia()));
-        $this->assertSame([0, 0, 0, 0, 0, 0, 0], array_map('intval', $copias[1]->cajasPorDia()));
+    }
+
+    public function test_copiar_anterior_sin_domingo_dice_caja_en_singular(): void
+    {
+        $this->comoPlaneador();
+        $anterior = ProgramaSemanal::create(['lunes' => '2026-11-16']);
+        $this->pedidoTexas($anterior, [100, 0, 0, 0, 0, 0, 1]);
+        $this->sinDomingo();
+
+        $this->postJson(self::BASE.'/programa/'.$this->programa->id.'/necesidades/copiar-anterior')
+            ->assertOk()
+            ->assertJsonPath('message', 'Se copiaron 1 necesidades de la semana anterior (sin la caja del domingo).');
+    }
+
+    public function test_copiar_anterior_sin_domingo_y_sin_cajas_en_domingo_deja_el_mensaje_de_siempre(): void
+    {
+        $this->comoPlaneador();
+        $anterior = ProgramaSemanal::create(['lunes' => '2026-11-16']);
+        $this->pedidoTexas($anterior, [100, 0, 0, 0, 0, 0, 0]);
+        $this->sinDomingo();
+
+        $this->postJson(self::BASE.'/programa/'.$this->programa->id.'/necesidades/copiar-anterior')
+            ->assertOk()
+            ->assertJsonPath('data.copiadas', 1)
+            ->assertJsonPath('message', 'Se copiaron 1 necesidades de la semana anterior.');
+    }
+
+    public function test_copiar_anterior_con_domingo_copia_todos_los_renglones_con_el_mensaje_de_siempre(): void
+    {
+        $this->comoPlaneador();
+        $anterior = ProgramaSemanal::create(['lunes' => '2026-11-16']);
+        $this->pedidoTexas($anterior, [100, 0, 0, 0, 0, 0, 300]);
+        $this->pedidoTexas($anterior, [0, 0, 0, 0, 0, 0, 50]);
+
+        $this->postJson(self::BASE.'/programa/'.$this->programa->id.'/necesidades/copiar-anterior')
+            ->assertOk()
+            ->assertJsonPath('data.copiadas', 2)
+            ->assertJsonPath('message', 'Se copiaron 2 necesidades de la semana anterior.');
+        $this->assertSame(2, ProgramaNecesidad::where('programa_id', $this->programa->id)->count());
     }
 
     public function test_copiar_anterior_con_domingo_trae_el_domingo(): void

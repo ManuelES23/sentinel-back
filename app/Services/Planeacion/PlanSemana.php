@@ -241,7 +241,7 @@ class PlanSemana
                     // Regla del sábado: si esta semana no trabaja el domingo, lo que
                     // se empacaría el domingo (propio o de la semana siguiente) se
                     // empaca un día antes. Lo decide el interruptor de ESTA semana.
-                    if ($empaque === CalculadoraBalance::DIAS - 1 && ! $this->programa->trabaja_domingo) {
+                    if ($empaque === CalculadoraBalance::DIAS - 1 && ! (bool) ($this->programa->trabaja_domingo ?? true)) {
                         $empaque--;
                     }
                     if ($this->diaValido($empaque)) {

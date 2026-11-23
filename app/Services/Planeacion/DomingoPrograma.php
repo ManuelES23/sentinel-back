@@ -39,7 +39,7 @@ class DomingoPrograma
             return;
         }
 
-        $trabaja = (bool) ProgramaSemanal::whereKey($programa->id)->lockForUpdate()->value('trabaja_domingo');
+        $trabaja = (bool) (ProgramaSemanal::whereKey($programa->id)->lockForUpdate()->value('trabaja_domingo') ?? true);
         if (! $trabaja) {
             throw ValidationException::withMessages([array_key_first($conValor) => self::MENSAJE]);
         }

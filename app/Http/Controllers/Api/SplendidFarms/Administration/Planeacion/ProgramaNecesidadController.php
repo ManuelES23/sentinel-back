@@ -77,10 +77,10 @@ class ProgramaNecesidadController extends Controller
     {
         $this->exigirPermiso('necesidades-venta', 'capturar');
 
-        $copiadas = DB::transaction(function () use ($programa, $servicio, $registro) {
+        $resultado = DB::transaction(function () use ($programa, $servicio, $registro) {
             // Se bloquea el programa para que dos copias a la vez no dupliquen
             // renglones; el interruptor del domingo se lee de la fila bloqueada.
-            $trabajaDomingo = (bool) ProgramaSemanal::whereKey($programa->id)->lockForUpdate()->value('trabaja_domingo');
+            $trabajaDomingo = (bool) (ProgramaSemanal::whereKey($programa->id)->lockForUpdate()->value('trabaja_domingo') ?? true);
 
             if (ProgramaNecesidad::where('programa_id', $programa->id)->exists()) {
                 throw ValidationException::withMessages(['semana' => 'Esta semana ya tiene necesidades']);
@@ -98,11 +98,18 @@ class ProgramaNecesidadController extends Controller
                 $this->exigirTemporadaAbierta($programa, (int) $cultivoId, $servicio);
             }
 
+            $copiadas = 0;
+            $domingoOmitido = 0;
             foreach ($origen as $o) {
                 $cajas = $o->cajasPorDia();
-                // Sin domingo en esta semana, el domingo copiado queda en cero (sin error).
+                // Sin domingo en esta semana, el domingo copiado queda en cero (sin error);
+                // el renglón que solo tenía domingo no se crea vacío.
                 if (! $trabajaDomingo) {
+                    $domingoOmitido += (int) ($cajas[DomingoPrograma::DIA] ?? 0);
                     $cajas[DomingoPrograma::DIA] = 0;
+                    if (array_sum(array_map('intval', $cajas)) === 0) {
+                        continue;
+                    }
                 }
                 $copia = ProgramaNecesidad::create([
                     'programa_id' => $programa->id,
@@ -117,14 +124,20 @@ class ProgramaNecesidadController extends Controller
                 ] + $this->atributosCajas($cajas));
                 $copia->variedades()->sync($o->variedades->pluck('id')->all());
                 $registro->emitir($programa);
+                $copiadas++;
             }
 
-            return $origen->count();
+            return [$copiadas, $domingoOmitido];
         });
+
+        [$copiadas, $domingoOmitido] = $resultado;
+        $fuera = $domingoOmitido > 0
+            ? ' (sin '.($domingoOmitido === 1 ? 'la caja' : "las {$domingoOmitido} cajas").' del domingo)'
+            : '';
 
         return response()->json([
             'success' => true,
-            'message' => "Se copiaron {$copiadas} necesidades de la semana anterior.",
+            'message' => "Se copiaron {$copiadas} necesidades de la semana anterior{$fuera}.",
             'data' => ['copiadas' => $copiadas],
         ]);
     }
