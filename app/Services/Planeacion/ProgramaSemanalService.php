@@ -360,6 +360,7 @@ class ProgramaSemanalService
             'semana_iso' => (int) $programa->lunes->isoWeek(),
             'dias' => array_map(fn ($d) => $this->masDias($lunes, $d), range(0, CalculadoraBalance::DIAS - 1)),
             'notas' => $programa->notas,
+            'trabaja_domingo' => (bool) $programa->trabaja_domingo,
         ];
     }
 

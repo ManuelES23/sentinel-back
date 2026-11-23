@@ -8,6 +8,7 @@ use App\Models\Planeacion\Presentacion;
 use App\Models\Planeacion\ProgramaSemanal;
 use App\Models\Planeacion\ProgramaSobrante;
 use App\Services\Planeacion\CalculadoraBalance;
+use App\Services\Planeacion\DomingoPrograma;
 use App\Services\Planeacion\ProgramaSemanalService;
 use App\Services\Planeacion\RegistroCambiosPrograma;
 use App\Services\Planeacion\ValidadorRenglonPlaneacion;
@@ -69,6 +70,9 @@ class HojaSobrantesController extends Controller
             $existentes = $ids === []
                 ? collect()
                 : ProgramaSobrante::whereIn('id', $ids)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+
+            // Sin domingo, cajas en el día 6 son un 422.
+            DomingoPrograma::exigirCeldas($programa, DomingoPrograma::celdasDeRenglones($nuevas, $cambios));
 
             $validador = new ValidadorRenglonPlaneacion($servicio);
             $presentaciones = $validador->presentaciones([...$nuevas, ...$cambios]);

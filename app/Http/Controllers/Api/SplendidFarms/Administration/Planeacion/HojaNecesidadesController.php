@@ -8,6 +8,7 @@ use App\Models\Planeacion\Presentacion;
 use App\Models\Planeacion\ProgramaNecesidad;
 use App\Models\Planeacion\ProgramaSemanal;
 use App\Services\Planeacion\ClientesCrmSbp;
+use App\Services\Planeacion\DomingoPrograma;
 use App\Services\Planeacion\ProgramaSemanalService;
 use App\Services\Planeacion\RegistroCambiosPrograma;
 use App\Services\Planeacion\ValidadorRenglonPlaneacion;
@@ -68,6 +69,9 @@ class HojaNecesidadesController extends Controller
             $existentes = $ids === []
                 ? collect()
                 : ProgramaNecesidad::whereIn('id', $ids)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+
+            // Sin domingo, cajas en el día 6 son un 422.
+            DomingoPrograma::exigirCeldas($programa, DomingoPrograma::celdasDeRenglones($nuevas, $cambios));
 
             $clientes = new ClientesCrmSbp;
             $validador = new ValidadorRenglonPlaneacion($servicio);

@@ -8,17 +8,25 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
- * Programa de una semana (de lunes a sábado), identificada por su lunes.
- * Los días de sus renglones van de 0 (lunes) a 5 (sábado).
+ * Programa de una semana (de lunes a domingo), identificada por su lunes.
+ * Los días de sus renglones van de 0 (lunes) a 6 (domingo). Con
+ * `trabaja_domingo = false` el día 6 queda en cero y lo que se empacaría el
+ * domingo se empaca el sábado (ver PlanSemana::necesidadesPorEmpaque).
  */
 class ProgramaSemanal extends Model
 {
     protected $table = 'programas_semanales';
 
-    protected $fillable = ['lunes', 'notas', 'junta_registrada_at', 'junta_registrada_por'];
+    protected $fillable = ['lunes', 'notas', 'trabaja_domingo', 'junta_registrada_at', 'junta_registrada_por'];
+
+    /** Igual que el default de la columna: un programa recién creado ya lo trae en memoria. */
+    protected $attributes = [
+        'trabaja_domingo' => true,
+    ];
 
     protected $casts = [
         'lunes' => 'date:Y-m-d',
+        'trabaja_domingo' => 'boolean',
         'junta_registrada_at' => 'datetime',
         'junta_registrada_por' => 'integer',
     ];

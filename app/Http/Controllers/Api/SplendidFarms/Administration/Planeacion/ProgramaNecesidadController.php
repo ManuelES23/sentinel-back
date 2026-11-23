@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\Concerns\Pe
 use App\Http\Controllers\Controller;
 use App\Models\Planeacion\ProgramaNecesidad;
 use App\Models\Planeacion\ProgramaSemanal;
+use App\Services\Planeacion\DomingoPrograma;
 use App\Services\Planeacion\ProgramaSemanalService;
 use App\Services\Planeacion\RegistroCambiosPrograma;
 use Illuminate\Http\JsonResponse;
@@ -77,8 +78,9 @@ class ProgramaNecesidadController extends Controller
         $this->exigirPermiso('necesidades-venta', 'capturar');
 
         $copiadas = DB::transaction(function () use ($programa, $servicio, $registro) {
-            // Se bloquea el programa para que dos copias a la vez no dupliquen renglones.
-            ProgramaSemanal::whereKey($programa->id)->lockForUpdate()->value('id');
+            // Se bloquea el programa para que dos copias a la vez no dupliquen
+            // renglones; el interruptor del domingo se lee de la fila bloqueada.
+            $trabajaDomingo = (bool) ProgramaSemanal::whereKey($programa->id)->lockForUpdate()->value('trabaja_domingo');
 
             if (ProgramaNecesidad::where('programa_id', $programa->id)->exists()) {
                 throw ValidationException::withMessages(['semana' => 'Esta semana ya tiene necesidades']);
@@ -97,6 +99,11 @@ class ProgramaNecesidadController extends Controller
             }
 
             foreach ($origen as $o) {
+                $cajas = $o->cajasPorDia();
+                // Sin domingo en esta semana, el domingo copiado queda en cero (sin error).
+                if (! $trabajaDomingo) {
+                    $cajas[DomingoPrograma::DIA] = 0;
+                }
                 $copia = ProgramaNecesidad::create([
                     'programa_id' => $programa->id,
                     'bodega_id' => $o->bodega_id,
@@ -107,7 +114,7 @@ class ProgramaNecesidadController extends Controller
                     'tipo_empaque_id' => $o->tipo_empaque_id,
                     'created_by' => Auth::id(),
                     'updated_by' => Auth::id(),
-                ] + $this->atributosCajas($o->cajasPorDia()));
+                ] + $this->atributosCajas($cajas));
                 $copia->variedades()->sync($o->variedades->pluck('id')->all());
                 $registro->emitir($programa);
             }
