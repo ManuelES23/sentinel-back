@@ -7,7 +7,8 @@ use App\Http\Controllers\Controller;
 use App\Models\Planeacion\Presentacion;
 use App\Models\Planeacion\ProgramaNecesidad;
 use App\Models\Planeacion\ProgramaSemanal;
-use App\Services\Planeacion\ClientesCrmSbp;
+use App\Models\Planeacion\PlanCliente;
+use App\Services\Planeacion\ClientesPlaneacion;
 use App\Services\Planeacion\DomingoPrograma;
 use App\Services\Planeacion\ProgramaSemanalService;
 use App\Services\Planeacion\RegistroCambiosPrograma;
@@ -37,7 +38,7 @@ class HojaNecesidadesController extends Controller
 {
     use PermisoPlaneacion;
 
-    public function guardar(Request $request, ProgramaSemanal $programa, ProgramaSemanalService $servicio, RegistroCambiosPrograma $registro): JsonResponse
+    public function guardar(Request $request, ProgramaSemanal $programa, ProgramaSemanalService $servicio, RegistroCambiosPrograma $registro, ClientesPlaneacion $clientes): JsonResponse
     {
         $this->exigirPermiso('necesidades-venta', 'capturar');
 
@@ -56,7 +57,7 @@ class HojaNecesidadesController extends Controller
         }
 
         $claves = [];
-        DB::transaction(function () use ($programa, $nuevas, $cambios, $borradas, $idsCambios, $servicio, $registro, &$claves) {
+        DB::transaction(function () use ($programa, $nuevas, $cambios, $borradas, $idsCambios, $servicio, $registro, $clientes, &$claves) {
             // El bloqueo de los renglones que se cambian o borran DEBE ser la
             // primera sentencia de la transacción. MySQL corre en REPEATABLE
             // READ: la «foto» se toma en la primera lectura sin bloqueo, así que
@@ -73,7 +74,8 @@ class HojaNecesidadesController extends Controller
             // Sin domingo, cajas en el día 6 son un 422.
             DomingoPrograma::exigirCeldas($programa, DomingoPrograma::celdasDeRenglones($nuevas, $cambios));
 
-            $clientes = new ClientesCrmSbp;
+            // Un cliente nuevo se registra en la lista dentro de esta transacción
+            // (después de los bloqueos): si algo falla después, no queda.
             $validador = new ValidadorRenglonPlaneacion($servicio);
             $presentaciones = $validador->presentaciones([...$nuevas, ...$cambios]);
 
@@ -207,7 +209,7 @@ class HojaNecesidadesController extends Controller
      * @param  Collection<int, Presentacion>  $presentaciones
      * @return list<array{clave: string, atributos: array<string, mixed>, variedades: list<int>}>
      */
-    private function planearNuevas(ProgramaSemanal $programa, array $filas, Collection $presentaciones, ClientesCrmSbp $clientes, ValidadorRenglonPlaneacion $validador): array
+    private function planearNuevas(ProgramaSemanal $programa, array $filas, Collection $presentaciones, ClientesPlaneacion $clientes, ValidadorRenglonPlaneacion $validador): array
     {
         $salida = [];
         foreach ($filas as $i => $fila) {
@@ -218,14 +220,15 @@ class HojaNecesidadesController extends Controller
 
             $variedades = $validador->resolverVariedades($fila, $cultivoId, $ruta);
             $validador->exigirTemporadaAbierta($programa, $cultivoId, "$ruta.presentacion_id");
-            [$clienteId, $nombre] = $this->resolverCliente($fila, $clientes, $ruta);
+            $cliente = $this->resolverCliente($fila, $clientes, $ruta);
 
             $salida[] = [
                 'clave' => (string) $fila['clave'],
                 'atributos' => [
                     'bodega_id' => (int) $fila['bodega_id'],
-                    'cliente_id' => $clienteId,
-                    'cliente_nombre' => $nombre,
+                    'cliente_id' => null,
+                    'plan_cliente_id' => $cliente->id,
+                    'cliente_nombre' => $cliente->nombre,
                     'cultivo_id' => $cultivoId,
                     'presentacion_id' => (int) $fila['presentacion_id'],
                     'tipo_empaque_id' => isset($fila['tipo_empaque_id']) ? (int) $fila['tipo_empaque_id'] : null,
@@ -246,7 +249,7 @@ class HojaNecesidadesController extends Controller
      * @param  Collection<int, Presentacion>  $presentaciones
      * @return list<array{necesidad: ProgramaNecesidad, atributos: array<string, mixed>, variedades: ?list<int>}>
      */
-    private function planearCambios(ProgramaSemanal $programa, array $filas, Collection $existentes, Collection $presentaciones, ClientesCrmSbp $clientes, ValidadorRenglonPlaneacion $validador): array
+    private function planearCambios(ProgramaSemanal $programa, array $filas, Collection $existentes, Collection $presentaciones, ClientesPlaneacion $clientes, ValidadorRenglonPlaneacion $validador): array
     {
         $salida = [];
         foreach ($filas as $i => $fila) {
@@ -298,9 +301,10 @@ class HojaNecesidadesController extends Controller
             }
 
             if ($this->mandaCliente($fila)) {
-                [$clienteId, $nombre] = $this->resolverCliente($fila, $clientes, $ruta, $actual);
-                $atributos['cliente_id'] = $clienteId;
-                $atributos['cliente_nombre'] = $nombre;
+                $cliente = $this->resolverCliente($fila, $clientes, $ruta);
+                $atributos['cliente_id'] = null;
+                $atributos['plan_cliente_id'] = $cliente->id;
+                $atributos['cliente_nombre'] = $cliente->nombre;
             }
 
             $subeCajas = false;
@@ -329,43 +333,33 @@ class HojaNecesidadesController extends Controller
 
     private function mandaCliente(array $fila): bool
     {
-        return array_key_exists('cliente_id', $fila) || array_key_exists('cliente_nombre', $fila);
+        // `cliente_id` (CRM) solo ya no cambia el cliente: se ignora.
+        return array_key_exists('plan_cliente_id', $fila) || array_key_exists('cliente_nombre', $fila);
     }
 
     /**
-     * Cliente del renglón: por id, el del CRM de Splendid by Porvenir (su
-     * nombre manda); si no, el nombre escrito se liga al cliente del CRM que
-     * se llame igual sin importar mayúsculas ni acentos, y si no hay, queda
-     * como texto libre.
-     *
-     * @return array{0: ?int, 1: string}
+     * Cliente del renglón en la lista propia de Planeación: `plan_cliente_id`
+     * válido manda; si no, el nombre escrito se resuelve por clave (sin
+     * mayúsculas, acentos ni espacios de más) y, si no existe, se registra.
+     * El renglón guarda el nombre canónico de la lista.
      */
-    private function resolverCliente(array $fila, ClientesCrmSbp $clientes, string $ruta, ?ProgramaNecesidad $actual = null): array
+    private function resolverCliente(array $fila, ClientesPlaneacion $clientes, string $ruta): PlanCliente
     {
-        $clienteId = isset($fila['cliente_id']) ? (int) $fila['cliente_id'] : null;
+        $id = isset($fila['plan_cliente_id']) ? (int) $fila['plan_cliente_id'] : null;
         $nombre = $fila['cliente_nombre'] ?? null;
 
-        if ($clienteId !== null) {
-            $deCrm = $clientes->nombreDe($clienteId);
-            if ($deCrm === null) {
-                throw ValidationException::withMessages(["$ruta.cliente_id" => 'El cliente no es del CRM de Splendid by Porvenir.']);
-            }
-
-            return [$clienteId, $deCrm];
+        if ($id === null && $nombre === null) {
+            throw ValidationException::withMessages(["$ruta.cliente_nombre" => 'El cliente es obligatorio.']);
         }
 
-        if ($nombre === null) {
-            // Solo un cambio puede llegar sin nombre: desligar del CRM conserva el que tenía.
-            if ($actual === null || ! array_key_exists('cliente_id', $fila) || array_key_exists('cliente_nombre', $fila)) {
-                throw ValidationException::withMessages(["$ruta.cliente_nombre" => 'El cliente es obligatorio.']);
+        try {
+            return $clientes->resolver((string) $nombre, $id);
+        } catch (ValidationException $e) {
+            if ($nombre === null) {
+                throw ValidationException::withMessages(["$ruta.plan_cliente_id" => 'El cliente no existe en la lista de Planeación.']);
             }
-
-            return [null, (string) $actual->cliente_nombre];
+            throw ValidationException::withMessages(["$ruta.cliente_nombre" => collect($e->errors())->flatten()->first()]);
         }
-
-        $coincide = $clientes->buscarPorNombre($nombre);
-
-        return $coincide ? [$coincide['id'], $coincide['nombre']] : [null, $nombre];
     }
 
     // ── Escritura ───────────────────────────────────────

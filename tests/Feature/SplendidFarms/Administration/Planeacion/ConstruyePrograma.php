@@ -28,6 +28,7 @@ use App\Models\Temporada;
 use App\Models\User;
 use App\Models\Variedad;
 use App\Models\ZonaCultivo;
+use App\Services\Planeacion\ClientesPlaneacion;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
@@ -260,11 +261,15 @@ trait ConstruyePrograma
      */
     protected function necesidad(ProgramaSemanal $p, string $bodega, string $cliente, string $presentacion, array $variedades, ?string $empaque, array $cajas): ProgramaNecesidad
     {
+        // Como después de la carga inicial: el renglón queda ligado a su cliente
+        // de la lista de Planeación (que se registra si falta) con su nombre canónico.
+        $planCliente = app(ClientesPlaneacion::class)->resolver($cliente);
         $datos = [
             'programa_id' => $p->id,
             'bodega_id' => $this->bodega($bodega)->id,
             'cliente_id' => null,
-            'cliente_nombre' => $cliente,
+            'plan_cliente_id' => $planCliente->id,
+            'cliente_nombre' => $planCliente->nombre,
             'cultivo_id' => $this->cultivo->id,
             'presentacion_id' => $this->presentacion($presentacion)->id,
             'tipo_empaque_id' => $empaque ? $this->tipoEmpaque($empaque)->id : null,

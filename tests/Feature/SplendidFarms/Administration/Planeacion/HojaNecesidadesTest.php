@@ -10,6 +10,7 @@ use App\Models\Planeacion\GrupoBalance;
 use App\Models\Planeacion\ProgramaNecesidad;
 use App\Models\Planeacion\ProgramaSemanal;
 use App\Models\Variedad;
+use App\Services\Planeacion\ClientesPlaneacion;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Event;
 use Laravel\Sanctum\Sanctum;
@@ -211,48 +212,44 @@ class HojaNecesidadesTest extends TestCase
         $this->assertNull(ProgramaNecesidad::find($borrada->id));
     }
 
-    public function test_cliente_del_crm_por_nombre_exacto_se_liga(): void
+    public function test_cliente_por_nombre_se_liga_a_la_lista_de_planeacion_y_no_al_crm(): void
     {
         $this->comoVendedor();
-        $cliente = CrmCliente::create(['empresa_id' => $this->empresaSbp()->id, 'nombre' => 'Walmart de México']);
-        $otro = Enterprise::create(['name' => 'Otra', 'slug' => 'otra-empresa', 'description' => 'x', 'is_active' => true]);
-        CrmCliente::create(['empresa_id' => $otro->id, 'nombre' => 'Caruso']);
+        CrmCliente::create(['empresa_id' => $this->empresaSbp()->id, 'nombre' => 'Walmart de México']);
 
         $respuesta = $this->guardar(['nuevas' => [
-            $this->nueva('a', ['cliente_nombre' => 'walmart de méxico']),
+            $this->nueva('a', ['cliente_nombre' => 'Walmart de México']),
             $this->nueva('b', ['cliente_nombre' => '  WALMART DE MEXICO  ']),
-            $this->nueva('c', ['cliente_nombre' => 'Walmart']),
-            $this->nueva('d', ['cliente_nombre' => 'Caruso']),
         ]])->assertOk();
 
+        // Lista propia de Planeación (ver ClientesPlaneacionTest): el CRM ya no liga.
         $a = ProgramaNecesidad::findOrFail($respuesta->json('claves.a'));
-        $this->assertSame($cliente->id, $a->cliente_id);
-        $this->assertSame('Walmart de México', $a->cliente_nombre);
-        $this->assertSame($cliente->id, ProgramaNecesidad::findOrFail($respuesta->json('claves.b'))->cliente_id);
-        // Nombre parcial o de otra empresa: texto libre.
-        $this->assertNull(ProgramaNecesidad::findOrFail($respuesta->json('claves.c'))->cliente_id);
-        $this->assertNull(ProgramaNecesidad::findOrFail($respuesta->json('claves.d'))->cliente_id);
+        $b = ProgramaNecesidad::findOrFail($respuesta->json('claves.b'));
+        $this->assertNull($a->cliente_id);
+        $this->assertNotNull($a->plan_cliente_id);
+        $this->assertSame($a->plan_cliente_id, $b->plan_cliente_id);
+        $this->assertSame('Walmart de México', $b->cliente_nombre);
 
         $renglones = collect($respuesta->json('data.necesidades'))->keyBy('id');
-        $this->assertTrue($renglones[$a->id]['en_crm']);
+        $this->assertFalse($renglones[$a->id]['en_crm']);
     }
 
-    public function test_cliente_por_id_toma_el_nombre_del_crm_y_otra_empresa_es_422(): void
+    public function test_el_cliente_id_del_crm_ya_no_cambia_el_cliente(): void
     {
         $this->comoVendedor();
         $cliente = CrmCliente::create(['empresa_id' => $this->empresaSbp()->id, 'nombre' => 'Walmart de México']);
 
+        // Un front viejo que manda el id del CRM: se ignora y manda el nombre escrito.
         $respuesta = $this->guardar(['nuevas' => [
             $this->nueva('a', ['cliente_id' => $cliente->id, 'cliente_nombre' => 'Otro nombre']),
         ]])->assertOk();
         $n = ProgramaNecesidad::findOrFail($respuesta->json('claves.a'));
-        $this->assertSame($cliente->id, $n->cliente_id);
-        $this->assertSame('Walmart de México', $n->cliente_nombre);
+        $this->assertNull($n->cliente_id);
+        $this->assertSame('Otro nombre', $n->cliente_nombre);
 
-        $otra = Enterprise::create(['name' => 'Otra', 'slug' => 'otra-empresa', 'description' => 'x', 'is_active' => true]);
-        $ajeno = CrmCliente::create(['empresa_id' => $otra->id, 'nombre' => 'Ajeno']);
-        $this->guardar(['nuevas' => [$this->nueva('b', ['cliente_id' => $ajeno->id, 'cliente_nombre' => null])]])
-            ->assertUnprocessable()->assertJsonValidationErrors('nuevas.0.cliente_id');
+        // Sin nombre ni cliente de la lista, el cliente es obligatorio.
+        $this->guardar(['nuevas' => [$this->nueva('b', ['cliente_id' => $cliente->id, 'cliente_nombre' => null])]])
+            ->assertUnprocessable()->assertJsonValidationErrors('nuevas.0.cliente_nombre');
         $this->assertSame(1, ProgramaNecesidad::count());
     }
 
@@ -271,7 +268,7 @@ class HojaNecesidadesTest extends TestCase
     public function test_cambia_cliente_variedades_y_presentacion(): void
     {
         $this->comoVendedor();
-        $cliente = CrmCliente::create(['empresa_id' => $this->empresaSbp()->id, 'nombre' => 'Vallarta']);
+        $cliente = app(ClientesPlaneacion::class)->resolver('Vallarta');
         $n = $this->necesidad($this->programa, 'Texas', 'Walmart', 'Bulk', ['Blanco'], 'RPC', [1, 2, 3, 4, 5, 6, 0]);
 
         $this->guardar(['cambios' => [[
@@ -283,7 +280,7 @@ class HojaNecesidadesTest extends TestCase
         ]]])->assertOk();
 
         $fresca = $n->fresh();
-        $this->assertSame($cliente->id, $fresca->cliente_id);
+        $this->assertSame($cliente->id, $fresca->plan_cliente_id);
         $this->assertSame('Vallarta', $fresca->cliente_nombre);
         $this->assertSame($this->bodega('Nogales')->id, $fresca->bodega_id);
         $this->assertSame($this->presentacion('Tray')->id, $fresca->presentacion_id);
@@ -562,7 +559,7 @@ class HojaNecesidadesTest extends TestCase
         $anterior = ProgramaSemanal::create(['lunes' => '2026-11-16']);
         $this->cargarWk48($anterior); // 12 renglones
         $cliente = CrmCliente::create(['empresa_id' => $this->empresaSbp()->id, 'nombre' => 'Cliente CRM']);
-        ProgramaNecesidad::where('programa_id', $anterior->id)->first()->update(['cliente_id' => $cliente->id, 'cliente_nombre' => 'Cliente CRM', 'cajas_6' => 40]);
+        ProgramaNecesidad::where('programa_id', $anterior->id)->first()->update(['cliente_id' => $cliente->id, 'cajas_6' => 40]);
         $this->assertSame(12, ProgramaNecesidad::where('programa_id', $anterior->id)->count());
 
         $this->postJson($this->urlCopiar())
@@ -575,7 +572,9 @@ class HojaNecesidadesTest extends TestCase
         foreach ($origen as $i => $o) {
             $c = $copias[$i];
             $this->assertSame($o->bodega_id, $c->bodega_id);
-            $this->assertSame($o->cliente_id, $c->cliente_id);
+            // El cliente se copia de la lista de Planeación; el id del CRM ya no se escribe.
+            $this->assertSame($o->plan_cliente_id, $c->plan_cliente_id);
+            $this->assertNull($c->cliente_id);
             $this->assertSame($o->cliente_nombre, $c->cliente_nombre);
             $this->assertSame($o->cultivo_id, $c->cultivo_id);
             $this->assertSame($o->presentacion_id, $c->presentacion_id);

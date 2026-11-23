@@ -22,6 +22,7 @@ use App\Models\Recipe;
 use App\Models\Temporada;
 use App\Models\Variedad;
 use App\Services\Planeacion\CatalogoPlaneacion;
+use App\Services\Planeacion\ClientesPlaneacion;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Event;
 use Laravel\Sanctum\Sanctum;
@@ -725,17 +726,16 @@ class ConfiguracionTest extends TestCase
         Event::assertNotDispatched(ProgramaSemanalUpdated::class);
     }
 
-    public function test_clientes_solo_de_sbp(): void
+    public function test_clientes_de_la_lista_de_planeacion_y_no_del_crm(): void
     {
         $this->conPermisos(['necesidades-venta' => ['view']]);
-        $sf = Enterprise::firstOrCreate(['slug' => 'splendidfarms'], ['name' => 'Splendid Farms', 'description' => 'SF', 'is_active' => true]);
         $sbp = Enterprise::create(['slug' => 'splendidbyporvenir', 'name' => 'Splendid by Porvenir', 'description' => 'SBP', 'is_active' => true]);
 
-        CrmCliente::create(['empresa_id' => $sf->id, 'nombre' => 'Walmart SF']);
-        $walmart = CrmCliente::create(['empresa_id' => $sbp->id, 'nombre' => 'Walmart']);
-        CrmCliente::create(['empresa_id' => $sbp->id, 'nombre' => 'El Super']);
-        $borrado = CrmCliente::create(['empresa_id' => $sbp->id, 'nombre' => 'Walmart viejo']);
-        $borrado->delete();
+        // Los clientes del CRM ya no se sugieren: solo los de la lista de Planeación activos.
+        CrmCliente::create(['empresa_id' => $sbp->id, 'nombre' => 'Walmart CRM']);
+        $walmart = app(ClientesPlaneacion::class)->resolver('Walmart');
+        app(ClientesPlaneacion::class)->resolver('El Super');
+        app(ClientesPlaneacion::class)->resolver('Walmart viejo')->update(['activo' => false]);
 
         $r = $this->getJson(self::URL.'/clientes?q=wal')->assertOk();
 
@@ -745,9 +745,8 @@ class ConfiguracionTest extends TestCase
     public function test_clientes_sin_busqueda_devuelve_los_primeros_20_en_orden(): void
     {
         $this->conPermisos(['necesidades-venta' => ['view']]);
-        $sbp = Enterprise::create(['slug' => 'splendidbyporvenir', 'name' => 'Splendid by Porvenir', 'description' => 'SBP', 'is_active' => true]);
         for ($i = 25; $i >= 1; $i--) {
-            CrmCliente::create(['empresa_id' => $sbp->id, 'nombre' => sprintf('Cliente %02d', $i)]);
+            app(ClientesPlaneacion::class)->resolver(sprintf('Cliente %02d', $i));
         }
 
         $nombres = collect($this->getJson(self::URL.'/clientes')->assertOk()->json('data'))->pluck('nombre');
@@ -757,7 +756,7 @@ class ConfiguracionTest extends TestCase
         $this->assertSame('Cliente 20', $nombres->last());
     }
 
-    public function test_clientes_sin_empresa_sbp_devuelve_lista_vacia(): void
+    public function test_clientes_sin_lista_devuelve_lista_vacia(): void
     {
         $this->conPermisos(['necesidades-venta' => ['view']]);
 

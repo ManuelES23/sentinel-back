@@ -119,7 +119,7 @@ class HojaSobrantesController extends Controller
     private static function reglasRenglon(string $prefijo): array
     {
         $reglas = ProgramaNecesidadController::reglasRenglon($prefijo);
-        unset($reglas["{$prefijo}cliente_id"], $reglas["{$prefijo}cliente_nombre"]);
+        unset($reglas["{$prefijo}cliente_id"], $reglas["{$prefijo}plan_cliente_id"], $reglas["{$prefijo}cliente_nombre"]);
 
         $empaque = array_values(array_filter(
             $reglas["{$prefijo}tipo_empaque_id"],

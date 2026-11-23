@@ -241,7 +241,8 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::put('configuracion/{catalogo}/{id}', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'update'])->whereNumber('id');
                 Route::delete('configuracion/{catalogo}/{id}', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'destroy'])->whereNumber('id');
 
-                Route::get('clientes', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ClientesSbpController::class, 'index']);
+                // Clientes de la lista propia de Planeación (necesidades-venta.view)
+                Route::get('clientes', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ClientesPlaneacionController::class, 'index']);
 
                 // Resumen de temporada (resumen-temporada.view)
                 Route::get('resumen', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ResumenTemporadaController::class, 'show']);
