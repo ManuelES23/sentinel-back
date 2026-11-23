@@ -237,11 +237,16 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::put('configuracion/avance-plantas', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'avancePlantas']);
                 Route::put('configuracion/correos-programa', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'correosPrograma']);
                 Route::put('configuracion/cajas-por-presentacion', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'cajasPorPresentacion']);
+                // Clientes de Planeación (antes de {catalogo}, que también casaría con «clientes»)
+                Route::post('configuracion/clientes', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'agregarCliente']);
+                Route::post('configuracion/clientes/importar-crm', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'importarClientesCrm']);
+                Route::put('configuracion/clientes/{cliente}', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'actualizarCliente'])->whereNumber('cliente');
                 Route::post('configuracion/{catalogo}', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'store']);
                 Route::put('configuracion/{catalogo}/{id}', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'update'])->whereNumber('id');
                 Route::delete('configuracion/{catalogo}/{id}', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'destroy'])->whereNumber('id');
 
-                Route::get('clientes', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ClientesSbpController::class, 'index']);
+                // Clientes de la lista propia de Planeación (necesidades-venta.view)
+                Route::get('clientes', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ClientesPlaneacionController::class, 'index']);
 
                 // Resumen de temporada (resumen-temporada.view)
                 Route::get('resumen', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ResumenTemporadaController::class, 'show']);

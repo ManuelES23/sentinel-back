@@ -2,6 +2,7 @@
 
 namespace App\Services\Planeacion;
 
+use App\Models\Planeacion\PlanCliente;
 use App\Models\Planeacion\ProgramaNecesidad;
 use App\Models\Planeacion\ProgramaSemanal;
 use App\Models\Planeacion\ProgramaSobrante;
@@ -71,16 +72,30 @@ class SeccionesSemana
 
     /**
      * Clientes (con su bodega) que pidieron en las 4 semanas previas y que no
-     * tienen renglón en esta. Sin id del CRM, el cliente se reconoce por nombre.
+     * tienen renglón en esta. El cliente se reconoce por su id de la lista de
+     * Planeación; un renglón viejo sin liga, por el id del CRM o por la clave
+     * de su nombre. Un renglón de esta semana cubre a uno previo si coincide
+     * por cualquiera de sus llaves (así uno ligado cubre a uno viejo sin liga).
      */
     public function clientesPrevios(string $lunes, array $necesidades): array
     {
-        $llave = fn (?int $clienteId, string $nombre, int $bodegaId) => ($clienteId !== null ? 'c'.$clienteId : 'n'.mb_strtolower(trim($nombre))).'|'.$bodegaId;
+        $llaves = function (ProgramaNecesidad $n): array {
+            $sufijo = '|'.$n->bodega_id;
+            $porNombre = 'n'.ClientesPlaneacion::clave((string) $n->cliente_nombre).$sufijo;
+            $principal = match (true) {
+                $n->plan_cliente_id !== null => 'p'.$n->plan_cliente_id.$sufijo,
+                $n->cliente_id !== null => 'c'.$n->cliente_id.$sufijo,
+                default => $porNombre,
+            };
+
+            return array_values(array_unique([$principal, $porNombre]));
+        };
 
         $presentes = [];
         foreach ($necesidades as $renglon) {
-            $n = $renglon['necesidad'];
-            $presentes[$llave($n->cliente_id, $n->cliente_nombre, $n->bodega_id)] = true;
+            foreach ($llaves($renglon['necesidad']) as $clave) {
+                $presentes[$clave] = true;
+            }
         }
 
         $programas = ProgramaSemanal::whereDate('lunes', '>=', Carbon::parse($lunes)->subWeeks(self::SEMANAS_CLIENTES_PREVIOS)->toDateString())
@@ -93,19 +108,37 @@ class SeccionesSemana
         $orden = $programas->flip();
 
         $previos = [];
+        $vistos = [];
         ProgramaNecesidad::whereIn('programa_id', $programas)
-            ->get(['id', 'programa_id', 'cliente_id', 'cliente_nombre', 'bodega_id'])
+            ->get(['id', 'programa_id', 'cliente_id', 'plan_cliente_id', 'cliente_nombre', 'bodega_id'])
             ->sortBy(fn ($n) => [$orden[$n->programa_id], -$n->id]) // el nombre más reciente gana
-            ->each(function (ProgramaNecesidad $n) use (&$previos, $presentes, $llave) {
-                $clave = $llave($n->cliente_id, $n->cliente_nombre, $n->bodega_id);
-                if (! isset($presentes[$clave]) && ! isset($previos[$clave])) {
-                    $previos[$clave] = [
-                        'cliente_id' => $n->cliente_id,
-                        'cliente_nombre' => $n->cliente_nombre,
-                        'bodega_id' => $n->bodega_id,
-                    ];
+            ->each(function (ProgramaNecesidad $n) use (&$previos, &$vistos, $presentes, $llaves) {
+                $claves = $llaves($n);
+                foreach ($claves as $clave) {
+                    if (isset($presentes[$clave]) || isset($vistos[$clave])) {
+                        return;
+                    }
                 }
+                foreach ($claves as $clave) {
+                    $vistos[$clave] = true;
+                }
+                $previos[] = [
+                    'cliente_id' => $n->cliente_id,
+                    'plan_cliente_id' => $n->plan_cliente_id,
+                    'cliente_nombre' => $n->cliente_nombre,
+                    'bodega_id' => $n->bodega_id,
+                ];
             });
+
+        // Un cliente de la lista sale con su nombre ACTUAL (tras un renombrado el renglón viejo puede traer otro).
+        $nombres = PlanCliente::whereIn('id', array_values(array_filter(array_column($previos, 'plan_cliente_id'))))
+            ->pluck('nombre', 'id');
+        foreach ($previos as &$previo) {
+            if ($previo['plan_cliente_id'] !== null && isset($nombres[$previo['plan_cliente_id']])) {
+                $previo['cliente_nombre'] = $nombres[$previo['plan_cliente_id']];
+            }
+        }
+        unset($previo);
 
         $salida = array_values($previos);
         usort($salida, fn ($a, $b) => [mb_strtolower($a['cliente_nombre']), $a['bodega_id']] <=> [mb_strtolower($b['cliente_nombre']), $b['bodega_id']]);

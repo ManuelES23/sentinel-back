@@ -4,8 +4,10 @@ namespace App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion;
 
 use App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\Concerns\PermisoPlaneacion;
 use App\Http\Controllers\Controller;
+use App\Models\Planeacion\PlanCliente;
 use App\Models\Planeacion\ProgramaNecesidad;
 use App\Models\Planeacion\ProgramaSemanal;
+use App\Services\Planeacion\ClientesPlaneacion;
 use App\Services\Planeacion\DomingoPrograma;
 use App\Services\Planeacion\ProgramaSemanalService;
 use App\Services\Planeacion\RegistroCambiosPrograma;
@@ -51,8 +53,12 @@ class ProgramaNecesidadController extends Controller
 
         return [
             "{$p}bodega_id" => ['required', 'integer', Rule::exists('plan_bodegas_destino', 'id')->where('is_active', true)],
+            // Cliente de la lista propia de Planeación: por id (manda) o por nombre
+            // (se registra solo si no existe). `cliente_id` (CRM) ya no se usa: se
+            // acepta para no romper un front viejo, pero se ignora.
             "{$p}cliente_id" => ['nullable', 'integer'],
-            "{$p}cliente_nombre" => ['nullable', "required_without:{$p}cliente_id", 'string', 'max:150'],
+            "{$p}plan_cliente_id" => ['nullable', 'integer'],
+            "{$p}cliente_nombre" => ['nullable', "required_without:{$p}plan_cliente_id", 'string', 'max:150'],
             "{$p}presentacion_id" => ['required', 'integer', Rule::exists('plan_presentaciones', 'id')->where('is_active', true)],
             "{$p}tipo_empaque_id" => ['nullable', 'integer', Rule::exists('plan_tipos_empaque', 'id')->where('is_active', true)],
             // Sin `distinct`: con comodines compara contra las variedades de todos los renglones.
@@ -73,11 +79,11 @@ class ProgramaNecesidadController extends Controller
      * con sus cajas y variedades. Solo si esta semana aún no tiene renglones
      * y si cada cultivo copiado tiene una temporada abierta en esta semana.
      */
-    public function copiarAnterior(ProgramaSemanal $programa, ProgramaSemanalService $servicio, RegistroCambiosPrograma $registro): JsonResponse
+    public function copiarAnterior(ProgramaSemanal $programa, ProgramaSemanalService $servicio, RegistroCambiosPrograma $registro, ClientesPlaneacion $clientes): JsonResponse
     {
         $this->exigirPermiso('necesidades-venta', 'capturar');
 
-        $resultado = DB::transaction(function () use ($programa, $servicio, $registro) {
+        $resultado = DB::transaction(function () use ($programa, $servicio, $registro, $clientes) {
             // Se bloquea el programa para que dos copias a la vez no dupliquen
             // renglones; el interruptor del domingo se lee de la fila bloqueada.
             $trabajaDomingo = (bool) (ProgramaSemanal::whereKey($programa->id)->lockForUpdate()->value('trabaja_domingo') ?? true);
@@ -98,6 +104,10 @@ class ProgramaNecesidadController extends Controller
                 $this->exigirTemporadaAbierta($programa, (int) $cultivoId, $servicio);
             }
 
+            // El cliente se copia de la lista (con su nombre canónico de hoy); un
+            // renglón viejo sin liga se liga por su nombre.
+            $lista = PlanCliente::whereIn('id', $origen->pluck('plan_cliente_id')->filter()->unique()->values())->get()->keyBy('id');
+
             $copiadas = 0;
             $domingoOmitido = 0;
             foreach ($origen as $o) {
@@ -111,11 +121,20 @@ class ProgramaNecesidadController extends Controller
                         continue;
                     }
                 }
+                $cliente = $o->plan_cliente_id !== null ? $lista->get($o->plan_cliente_id) : null;
+                if ($cliente === null) {
+                    try {
+                        $cliente = $clientes->resolver((string) $o->cliente_nombre);
+                    } catch (ValidationException) {
+                        $cliente = null; // Nombre viejo sin letras ni números: se copia tal cual.
+                    }
+                }
                 $copia = ProgramaNecesidad::create([
                     'programa_id' => $programa->id,
                     'bodega_id' => $o->bodega_id,
-                    'cliente_id' => $o->cliente_id,
-                    'cliente_nombre' => $o->cliente_nombre,
+                    'cliente_id' => null,
+                    'plan_cliente_id' => $cliente?->id,
+                    'cliente_nombre' => $cliente?->nombre ?? $o->cliente_nombre,
                     'cultivo_id' => $o->cultivo_id,
                     'presentacion_id' => $o->presentacion_id,
                     'tipo_empaque_id' => $o->tipo_empaque_id,

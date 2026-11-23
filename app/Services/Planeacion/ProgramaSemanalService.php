@@ -427,6 +427,7 @@ class ProgramaSemanalService
             'id' => $renglon['id'],
             'bodega_id' => $n->bodega_id,
             'cliente_id' => $n->cliente_id,
+            'plan_cliente_id' => $n->plan_cliente_id,
             'cliente_nombre' => $n->cliente_nombre,
             'en_crm' => $n->cliente_id !== null,
             'cultivo_id' => $n->cultivo_id,

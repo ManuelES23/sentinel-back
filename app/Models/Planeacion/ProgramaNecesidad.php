@@ -23,6 +23,7 @@ class ProgramaNecesidad extends Model
         'bodega_id',
         'cliente_id',
         'cliente_nombre',
+        'plan_cliente_id',
         'cultivo_id',
         'presentacion_id',
         'tipo_empaque_id',
@@ -41,6 +42,7 @@ class ProgramaNecesidad extends Model
         'programa_id' => 'integer',
         'bodega_id' => 'integer',
         'cliente_id' => 'integer',
+        'plan_cliente_id' => 'integer',
         'cultivo_id' => 'integer',
         'presentacion_id' => 'integer',
         'tipo_empaque_id' => 'integer',
@@ -63,9 +65,16 @@ class ProgramaNecesidad extends Model
         return $this->belongsTo(BodegaDestino::class, 'bodega_id');
     }
 
+    /** Cliente del CRM de SBP (columna heredada: ya no se escribe). */
     public function cliente(): BelongsTo
     {
         return $this->belongsTo(CrmCliente::class, 'cliente_id');
+    }
+
+    /** Cliente de la lista propia de Planeación; `cliente_nombre` es su nombre canónico. */
+    public function planCliente(): BelongsTo
+    {
+        return $this->belongsTo(PlanCliente::class, 'plan_cliente_id');
     }
 
     public function cultivo(): BelongsTo
