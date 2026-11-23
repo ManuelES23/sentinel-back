@@ -3,6 +3,7 @@
 namespace App\Services\Planeacion;
 
 use App\Models\Planeacion\Presentacion;
+use App\Models\Planeacion\ProgramaSemanal;
 use App\Models\Planeacion\TipoEmpaque;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
@@ -16,6 +17,11 @@ use Carbon\CarbonInterface;
  * las bodegas. Los `sin_clasificar` del programa (sin tipo de empaque), y los
  * que no tienen grupo, quedan aparte en `programado_sin_clasificar`. Sin
  * programa de la semana, todo el programado es cero (no se crea el programa).
+ *
+ * `trabaja_domingo`: si la semana trabaja el domingo (verdadero también sin
+ * programa, porque aquí no se crea). Sin domingo el programado del día 6 ya
+ * llega en cero (lo pasa al sábado `PlanSemana`), pero el real de los pallets
+ * con `fecha_produccion` en domingo se sigue contando en `real` y `totales`.
  *
  * Atraso por renglón: la deuda de los días ya pasados con compensación, día a
  * día `deuda = max(0, deuda + programado[d] − real[d])` (un sobre-empaque
@@ -46,6 +52,7 @@ final class AvanceEmpaque
         $diasPasados = max(0, min($dias, $indiceHoy));
         $hoyEnSemana = $indiceHoy >= 0 && $indiceHoy < $dias;
 
+        $trabajaDomingo = (bool) (ProgramaSemanal::whereDate('lunes', $lunes)->value('trabaja_domingo') ?? true);
         $empaque = $this->programas->empaqueDeSemana($lunes);
         $plantaIds = $this->plantas->ids();
         $real = $this->real->deLaSemana($lunes, $cultivoId, $plantaIds);
@@ -163,6 +170,7 @@ final class AvanceEmpaque
             'lunes' => $inicio->toDateString(),
             'hoy' => $fechaHoy->toDateString(),
             'dias_pasados' => $diasPasados,
+            'trabaja_domingo' => $trabajaDomingo,
             'renglones' => $renglones,
             'sin_programa' => $sinPrograma,
             'sin_clasificar' => $real['sin_clasificar'],

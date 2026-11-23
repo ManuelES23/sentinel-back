@@ -39,10 +39,15 @@ class ExportadorProgramaExcel
 
     private const DIAS_LETRA = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
 
-    /** Columnas de los siete días (G a M); la N lleva el total. */
+    /** Columnas de los siete días (G a M) y la del total (N) de una semana con domingo. */
     private const COLUMNAS_DIA = ['G', 'H', 'I', 'J', 'K', 'L', 'M'];
 
     private const COLUMNA_TOTAL = 'N';
+
+    /** Sin domingo: seis días (G a L) y el total en la M. */
+    private const COLUMNAS_DIA_SIN_DOMINGO = ['G', 'H', 'I', 'J', 'K', 'L'];
+
+    private const COLUMNA_TOTAL_SIN_DOMINGO = 'M';
 
     private const TIPOS_EMBARQUE = ['full' => 'Full', 'sencillo' => 'Sencillo'];
 
@@ -53,6 +58,11 @@ class ExportadorProgramaExcel
     private Worksheet $hoja;
 
     private int $fila = 1;
+
+    /** @var list<string> columnas de día y columna del total de la hoja en curso (según trabaje o no el domingo) */
+    private array $columnasDia = self::COLUMNAS_DIA;
+
+    private string $columnaTotal = self::COLUMNA_TOTAL;
 
     /** @var array<int|string, array> catálogo por id: bodegas, presentaciones, tipos de empaque */
     private array $bodegas = [];
@@ -167,6 +177,11 @@ class ExportadorProgramaExcel
 
         $this->hoja = $hoja;
         $this->fila = 1;
+        // Una semana sin domingo no escribe esa columna y el total sube a la siguiente al sábado. Los arreglos
+        // del payload siguen con siete posiciones (la del domingo en cero): solo se dejan de escribir.
+        $trabajaDomingo = (bool) ($programa['trabaja_domingo'] ?? true);
+        $this->columnasDia = $trabajaDomingo ? self::COLUMNAS_DIA : self::COLUMNAS_DIA_SIN_DOMINGO;
+        $this->columnaTotal = $trabajaDomingo ? self::COLUMNA_TOTAL : self::COLUMNA_TOTAL_SIN_DOMINGO;
 
         $this->bodegas = array_column($semana['catalogos']['bodegas'], null, 'id');
         $this->presentaciones = array_column($semana['catalogos']['presentaciones'], null, 'id');
@@ -186,7 +201,7 @@ class ExportadorProgramaExcel
         $this->escribirEmbarques($semana, $cultivoId, $programa['dias']);
         $this->escribirNotas($programa['notas'] ?? null);
 
-        foreach (['A' => 2, 'B' => 14, 'C' => 26, 'D' => 14, 'E' => 18, 'F' => 12, self::COLUMNA_TOTAL => 12] + array_fill_keys(self::COLUMNAS_DIA, 10) as $letra => $ancho) {
+        foreach (['A' => 2, 'B' => 14, 'C' => 26, 'D' => 14, 'E' => 18, 'F' => 12, $this->columnaTotal => 12] + array_fill_keys($this->columnasDia, 10) as $letra => $ancho) {
             $this->hoja->getColumnDimension($letra)->setWidth($ancho);
         }
         $this->hoja->getPageSetup()->setOrientation('landscape')->setFitToWidth(1)->setFitToHeight(0);
@@ -215,7 +230,7 @@ class ExportadorProgramaExcel
     {
         $this->titulo(self::SECCIONES['campo']);
         $this->fechasDeDias($dias);
-        $this->encabezado(['C' => 'COLOR', 'D' => 'REND cj/ha'] + array_combine(self::COLUMNAS_DIA, self::DIAS_LETRA) + [self::COLUMNA_TOTAL => 'HA TOTAL']);
+        $this->encabezado(['C' => 'COLOR', 'D' => 'REND cj/ha'] + array_combine($this->columnasDia, array_slice(self::DIAS_LETRA, 0, count($this->columnasDia))) + [$this->columnaTotal => 'HA TOTAL']);
 
         $porDia = [];
         $totalDia = array_fill(0, 7, 0.0);
@@ -244,7 +259,7 @@ class ExportadorProgramaExcel
 
         $this->texto('C'.$this->fila, 'Total ha '.mb_strtolower($cultivoNombre ?? 'cultivo'));
         $this->filaDeDias($totalDia, false);
-        $this->negritas('C'.$this->fila.':'.self::COLUMNA_TOTAL.$this->fila, true);
+        $this->negritas('C'.$this->fila.':'.$this->columnaTotal.$this->fila, true);
         $this->fila += 2;
     }
 
@@ -271,7 +286,7 @@ class ExportadorProgramaExcel
 
         $this->texto('C'.$this->fila, 'Total cajas');
         $this->filaDeDias($totalDia);
-        $this->negritas('C'.$this->fila.':'.self::COLUMNA_TOTAL.$this->fila, true);
+        $this->negritas('C'.$this->fila.':'.$this->columnaTotal.$this->fila, true);
         $this->fila += 2;
     }
 
@@ -306,7 +321,7 @@ class ExportadorProgramaExcel
 
             $this->texto('C'.$this->fila, 'Subtotal '.$bodega['nombre']);
             $this->filaDeDias($subtotal);
-            $this->negritas('C'.$this->fila.':'.self::COLUMNA_TOTAL.$this->fila, true);
+            $this->negritas('C'.$this->fila.':'.$this->columnaTotal.$this->fila, true);
             $this->fila += 2;
             foreach ($subtotal as $d => $valor) {
                 $totalDia[$d] += $valor;
@@ -315,7 +330,7 @@ class ExportadorProgramaExcel
 
         $this->texto('C'.$this->fila, 'TOTAL NECESIDAD');
         $this->filaDeDias($totalDia);
-        $this->resaltar('C'.$this->fila.':'.self::COLUMNA_TOTAL.$this->fila);
+        $this->resaltar('C'.$this->fila.':'.$this->columnaTotal.$this->fila);
         $this->fila += 2;
     }
 
@@ -400,14 +415,14 @@ class ExportadorProgramaExcel
 
             $this->texto('C'.$this->fila, 'Total empaque'.($nombreBodega !== '' ? ' '.$nombreBodega : ''));
             $this->filaDeDias($total);
-            $this->negritas('C'.$this->fila.':'.self::COLUMNA_TOTAL.$this->fila, true);
+            $this->negritas('C'.$this->fila.':'.$this->columnaTotal.$this->fila, true);
             $this->fila++;
 
             $this->texto('C'.$this->fila, 'Sin clasificar (debe ser 0)');
             $this->filaDeDias($sinClasificar);
             if (array_sum($sinClasificar) !== 0) {
-                $this->hoja->getStyle('C'.$this->fila.':'.self::COLUMNA_TOTAL.$this->fila)->getFont()->getColor()->setARGB('FFC00000');
-                $this->negritas('C'.$this->fila.':'.self::COLUMNA_TOTAL.$this->fila, true);
+                $this->hoja->getStyle('C'.$this->fila.':'.$this->columnaTotal.$this->fila)->getFont()->getColor()->setARGB('FFC00000');
+                $this->negritas('C'.$this->fila.':'.$this->columnaTotal.$this->fila, true);
             }
             $this->fila += 2;
         }
@@ -448,7 +463,7 @@ class ExportadorProgramaExcel
         $this->texto('D'.$this->fila, 'Inicial:');
         $this->cajas('E'.$this->fila, $inicial);
         $this->filaDeDias($acumulado, true, $acumulado[6]);
-        $this->negritas('C'.$this->fila.':'.self::COLUMNA_TOTAL.$this->fila, true);
+        $this->negritas('C'.$this->fila.':'.$this->columnaTotal.$this->fila, true);
         $this->fila++;
 
         // Una fila por grupo de balance (no está en el Excel).
@@ -522,7 +537,7 @@ class ExportadorProgramaExcel
 
         $this->texto('C'.$this->fila, 'Total embarques');
         $this->filaDeDias($total);
-        $this->negritas('C'.$this->fila.':'.self::COLUMNA_TOTAL.$this->fila, true);
+        $this->negritas('C'.$this->fila.':'.$this->columnaTotal.$this->fila, true);
         $this->fila += 2;
     }
 
@@ -531,7 +546,7 @@ class ExportadorProgramaExcel
     {
         $this->titulo(self::SECCIONES['notas']);
 
-        $rango = 'B'.$this->fila.':'.self::COLUMNA_TOTAL.($this->fila + 3);
+        $rango = 'B'.$this->fila.':'.$this->columnaTotal.($this->fila + 3);
         $this->hoja->mergeCells($rango);
         $this->texto('B'.$this->fila, (string) $notas);
         $this->hoja->getStyle($rango)->getAlignment()->setWrapText(true)->setVertical(Alignment::VERTICAL_TOP);
@@ -617,7 +632,7 @@ class ExportadorProgramaExcel
     private function titulo(string $texto): void
     {
         $this->texto('B'.$this->fila, $texto);
-        $rango = 'B'.$this->fila.':'.self::COLUMNA_TOTAL.$this->fila;
+        $rango = 'B'.$this->fila.':'.$this->columnaTotal.$this->fila;
         $estilo = $this->hoja->getStyle($rango);
         $estilo->getFont()->setBold(true)->setSize(11)->getColor()->setARGB('FFFFFFFF');
         $estilo->getFill()->setFillType(Fill::FILL_SOLID)->getStartColor()->setARGB('FF1F4E3D');
@@ -634,7 +649,7 @@ class ExportadorProgramaExcel
                 $this->texto($columna.$this->fila, $valor);
             }
         }
-        $rango = 'B'.$this->fila.':'.self::COLUMNA_TOTAL.$this->fila;
+        $rango = 'B'.$this->fila.':'.$this->columnaTotal.$this->fila;
         $estilo = $this->hoja->getStyle($rango);
         $estilo->getFont()->setBold(true);
         $estilo->getFill()->setFillType(Fill::FILL_SOLID)->getStartColor()->setARGB('FFE7EFEA');
@@ -647,35 +662,35 @@ class ExportadorProgramaExcel
     private function fechasComoEncabezado(array $dias): array
     {
         $celdas = [];
-        foreach (self::COLUMNAS_DIA as $i => $columna) {
+        foreach ($this->columnasDia as $i => $columna) {
             $celdas[$columna] = ['fecha' => $dias[$i]];
         }
 
-        return $celdas + [self::COLUMNA_TOTAL => 'TOTAL'];
+        return $celdas + [$this->columnaTotal => 'TOTAL'];
     }
 
     /** Renglón de fechas de los días sobre el encabezado de «Campo» (en el Excel va arriba de L M X J V S D). */
     private function fechasDeDias(array $dias): void
     {
-        foreach (self::COLUMNAS_DIA as $i => $columna) {
+        foreach ($this->columnasDia as $i => $columna) {
             $this->fecha($columna.$this->fila, $dias[$i]);
         }
-        $this->hoja->getStyle('G'.$this->fila.':M'.$this->fila)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
+        $this->hoja->getStyle($this->columnasDia[0].$this->fila.':'.end($this->columnasDia).$this->fila)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
         $this->fila++;
     }
 
     /**
-     * Siete valores en G a M y el total en N. Si $enteros es false se escriben
-     * tal cual (hectáreas, con decimales); `$total` fuerza el valor de M.
+     * Un valor por columna de día (siete en G a M y el total en N; sin domingo, seis en G a L y el total en M). Si $enteros es false se escriben
+     * tal cual (hectáreas, con decimales); `$total` fuerza el valor del total.
      *
      * @param  array<int, int|float>  $valores
      */
     private function filaDeDias(array $valores, bool $enteros = true, int|float|null $total = null): void
     {
-        foreach (self::COLUMNAS_DIA as $d => $columna) {
+        foreach ($this->columnasDia as $d => $columna) {
             $this->celdaNumerica($columna.$this->fila, $valores[$d] ?? 0, $enteros);
         }
-        $this->celdaNumerica(self::COLUMNA_TOTAL.$this->fila, $total ?? array_sum($valores), $enteros);
+        $this->celdaNumerica($this->columnaTotal.$this->fila, $total ?? array_sum($valores), $enteros);
     }
 
     private function filaDeColor(string $nombre, int $produccion, int $necesidad, int $sobrante, int $cajasPorCarga): void

@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Planeacion\BodegaDestino;
 use App\Models\Planeacion\ProgramaEmbarque;
 use App\Models\Planeacion\ProgramaSemanal;
+use App\Services\Planeacion\DomingoPrograma;
 use App\Services\Planeacion\ProgramaSemanalService;
 use App\Services\Planeacion\RegistroCambiosPrograma;
 use Illuminate\Database\UniqueConstraintViolationException;
@@ -79,6 +80,15 @@ class HojaEmbarquesController extends Controller
                 if ($celdas !== []) {
                     ProgramaSemanal::whereKey($programa->id)->lockForUpdate()->value('id');
                 }
+
+                // Sin domingo, una celda del día 6 con cargas es un 422.
+                $domingo = [];
+                foreach ($celdas as $i => $celda) {
+                    if ((int) $celda['dia'] === DomingoPrograma::DIA) {
+                        $domingo["celdas.$i.cargas"] = $celda['cargas'];
+                    }
+                }
+                DomingoPrograma::exigirCeldas($programa, $domingo);
 
                 $existentes = $celdas === []
                     ? collect()

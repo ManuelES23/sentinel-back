@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\Concerns\Pe
 use App\Http\Controllers\Controller;
 use App\Models\Planeacion\ProgramaNecesidad;
 use App\Models\Planeacion\ProgramaSemanal;
+use App\Services\Planeacion\DomingoPrograma;
 use App\Services\Planeacion\ProgramaSemanalService;
 use App\Services\Planeacion\RegistroCambiosPrograma;
 use Illuminate\Http\JsonResponse;
@@ -76,9 +77,10 @@ class ProgramaNecesidadController extends Controller
     {
         $this->exigirPermiso('necesidades-venta', 'capturar');
 
-        $copiadas = DB::transaction(function () use ($programa, $servicio, $registro) {
-            // Se bloquea el programa para que dos copias a la vez no dupliquen renglones.
-            ProgramaSemanal::whereKey($programa->id)->lockForUpdate()->value('id');
+        $resultado = DB::transaction(function () use ($programa, $servicio, $registro) {
+            // Se bloquea el programa para que dos copias a la vez no dupliquen
+            // renglones; el interruptor del domingo se lee de la fila bloqueada.
+            $trabajaDomingo = (bool) (ProgramaSemanal::whereKey($programa->id)->lockForUpdate()->value('trabaja_domingo') ?? true);
 
             if (ProgramaNecesidad::where('programa_id', $programa->id)->exists()) {
                 throw ValidationException::withMessages(['semana' => 'Esta semana ya tiene necesidades']);
@@ -96,7 +98,19 @@ class ProgramaNecesidadController extends Controller
                 $this->exigirTemporadaAbierta($programa, (int) $cultivoId, $servicio);
             }
 
+            $copiadas = 0;
+            $domingoOmitido = 0;
             foreach ($origen as $o) {
+                $cajas = $o->cajasPorDia();
+                // Sin domingo en esta semana, el domingo copiado queda en cero (sin error);
+                // el renglón que solo tenía domingo no se crea vacío.
+                if (! $trabajaDomingo) {
+                    $domingoOmitido += (int) ($cajas[DomingoPrograma::DIA] ?? 0);
+                    $cajas[DomingoPrograma::DIA] = 0;
+                    if (array_sum(array_map('intval', $cajas)) === 0) {
+                        continue;
+                    }
+                }
                 $copia = ProgramaNecesidad::create([
                     'programa_id' => $programa->id,
                     'bodega_id' => $o->bodega_id,
@@ -107,17 +121,23 @@ class ProgramaNecesidadController extends Controller
                     'tipo_empaque_id' => $o->tipo_empaque_id,
                     'created_by' => Auth::id(),
                     'updated_by' => Auth::id(),
-                ] + $this->atributosCajas($o->cajasPorDia()));
+                ] + $this->atributosCajas($cajas));
                 $copia->variedades()->sync($o->variedades->pluck('id')->all());
                 $registro->emitir($programa);
+                $copiadas++;
             }
 
-            return $origen->count();
+            return [$copiadas, $domingoOmitido];
         });
+
+        [$copiadas, $domingoOmitido] = $resultado;
+        $fuera = $domingoOmitido > 0
+            ? ' (sin '.($domingoOmitido === 1 ? 'la caja' : "las {$domingoOmitido} cajas").' del domingo)'
+            : '';
 
         return response()->json([
             'success' => true,
-            'message' => "Se copiaron {$copiadas} necesidades de la semana anterior.",
+            'message' => "Se copiaron {$copiadas} necesidades de la semana anterior{$fuera}.",
             'data' => ['copiadas' => $copiadas],
         ]);
     }

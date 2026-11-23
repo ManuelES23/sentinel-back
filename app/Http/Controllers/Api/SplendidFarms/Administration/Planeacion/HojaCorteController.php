@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Etapa;
 use App\Models\Planeacion\ProgramaCorte;
 use App\Models\Planeacion\ProgramaSemanal;
+use App\Services\Planeacion\DomingoPrograma;
 use App\Services\Planeacion\ProgramaSemanalService;
 use App\Services\Planeacion\RegistroCambiosPrograma;
 use Illuminate\Http\JsonResponse;
@@ -67,6 +68,15 @@ class HojaCorteController extends Controller
             if ($etapaIds !== []) {
                 Etapa::whereIn('id', $etapaIds)->orderBy('id')->lockForUpdate()->pluck('id');
             }
+
+            // Sin domingo, una celda del día 6 con hectáreas es un 422.
+            $domingo = [];
+            foreach ($celdas as $i => $celda) {
+                if ((int) $celda['dia'] === DomingoPrograma::DIA) {
+                    $domingo["celdas.$i.hectareas"] = round((float) ($celda['hectareas'] ?? 0), 2);
+                }
+            }
+            DomingoPrograma::exigirCeldas($programa, $domingo);
 
             $cambios = $this->planearCeldas($programa, $celdas, $servicio);
             $bajas = $this->planearSinEtapa($programa, $sinEtapa);

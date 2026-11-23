@@ -473,4 +473,81 @@ class ExportarProgramaTest extends TestCase
         // Igual que GET programa: abrir la semana la crea.
         $this->assertSame(1, DB::table('programas_semanales')->count());
     }
+
+    // ── Domingo opcional ────────────────────────────────
+
+    /** Valores G a M de una fila de una semana sin domingo: seis días (lunes a sábado) y total. */
+    private function diasSinDomingo(Worksheet $hoja, int $fila): array
+    {
+        return array_map(fn ($c) => $hoja->getCell($c.$fila)->getValue(), ['G', 'H', 'I', 'J', 'K', 'L', 'M']);
+    }
+
+    public function test_sin_domingo_el_excel_omite_la_columna_del_domingo_y_el_total_pasa_a_la_m(): void
+    {
+        $programa = $this->wk48();
+        $programa->forceFill(['trabaja_domingo' => false])->save();
+
+        $hoja = $this->libroDe($this->descargar()->assertOk())->getSheetByName('WK48');
+
+        // Encabezado de «Campo»: L M X J V S y el total en la M; la N queda vacía.
+        $encabezado = $this->fila($hoja, 'COLOR', 1, ['C']);
+        $this->assertSame(['L', 'M', 'X', 'J', 'V', 'S', 'HA TOTAL'], $this->diasSinDomingo($hoja, $encabezado));
+        $this->assertNull($hoja->getCell('N'.$encabezado)->getValue());
+
+        // Los totales de siempre, uno por fila, ahora con seis días.
+        $this->assertEquals([20, 10, 10, 10, 10, 10, 70], $this->diasSinDomingo($hoja, $this->fila($hoja, 'Total ha elote dulce')));
+        $this->assertEquals([12450, 6100, 6175, 6500, 6400, 6600, 44225], $this->diasSinDomingo($hoja, $this->fila($hoja, 'Total cajas')));
+        $this->assertEquals([8230, 2430, 7144, 10048, 2631, 6000, 36483], $this->diasSinDomingo($hoja, $this->fila($hoja, 'TOTAL NECESIDAD')));
+        $this->assertEquals([4220, 3670, -969, -3548, 3769, 600, 7742], $this->diasSinDomingo($hoja, $this->fila($hoja, 'Disponible del día')));
+        $this->assertEquals([4220, 7890, 6921, 3373, 7142, 7742, 7742], $this->diasSinDomingo($hoja, $this->fila($hoja, 'Inventario acumulado')));
+        $this->assertEquals(35483, $hoja->getCell('M'.$this->fila($hoja, 'Total empaque'))->getValue());
+
+        // En ninguna fila queda nada en la N, y el total de la fila es la suma de sus seis días.
+        for ($fila = 1; $fila <= $hoja->getHighestRow(); $fila++) {
+            $this->assertNull($hoja->getCell('N'.$fila)->getValue(), "N{$fila} debería estar vacía.");
+        }
+        $this->assertSame('TOTAL', $hoja->getCell('M'.$this->fila($hoja, 'TEXAS', 1, ['B']))->getValue());
+        $filaCajas = $this->fila($hoja, 'Total cajas');
+        $this->assertEquals(array_sum(array_slice($this->diasSinDomingo($hoja, $filaCajas), 0, 6)), $hoja->getCell('M'.$filaCajas)->getValue());
+
+        // Título de sección y notas llegan hasta la M, y la M lleva el ancho del total.
+        $titulo = $this->fila($hoja, 'CAMPO — HECTÁREAS A COSECHAR', 1, ['B']);
+        $this->assertSame('FF1F4E3D', $hoja->getStyle('M'.$titulo)->getFill()->getStartColor()->getARGB());
+        $this->assertNotSame('FF1F4E3D', $hoja->getStyle('N'.$titulo)->getFill()->getStartColor()->getARGB());
+        $notas = $this->fila($hoja, 'NOTAS DE LA SEMANA', 1, ['B']);
+        $this->assertSame(['B'.($notas + 1).':M'.($notas + 4)], array_values($hoja->getMergeCells()));
+        $this->assertEquals(12, $hoja->getColumnDimension('M')->getWidth());
+    }
+
+    public function test_sin_domingo_es_el_mismo_excel_que_con_domingo_sin_esa_columna(): void
+    {
+        $programa = $this->wk48();
+        $con = $this->libroDe($this->descargar()->assertOk())->getSheetByName('WK48');
+        $programa->forceFill(['trabaja_domingo' => false])->save();
+        $sin = $this->libroDe($this->descargar()->assertOk())->getSheetByName('WK48');
+
+        $this->assertSame($con->getHighestRow(), $sin->getHighestRow());
+        for ($fila = 1; $fila <= $con->getHighestRow(); $fila++) {
+            foreach (['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L'] as $c) {
+                $this->assertSame($con->getCell($c.$fila)->getValue(), $sin->getCell($c.$fila)->getValue(), "{$c}{$fila}");
+            }
+            // El total se movió de la N a la M; el domingo (que valía cero) no se escribe.
+            $this->assertSame($con->getCell('N'.$fila)->getValue(), $sin->getCell('M'.$fila)->getValue(), "total de la fila {$fila}");
+        }
+    }
+
+    public function test_con_domingo_el_excel_sigue_igual_con_siete_dias_y_el_total_en_la_n(): void
+    {
+        $this->wk48()->forceFill(['trabaja_domingo' => true])->save();
+
+        $hoja = $this->libroDe($this->descargar()->assertOk())->getSheetByName('WK48');
+
+        $encabezado = $this->fila($hoja, 'COLOR', 1, ['C']);
+        $this->assertSame(['L', 'M', 'X', 'J', 'V', 'S', 'D', 'HA TOTAL'], $this->dias($hoja, $encabezado));
+        $this->assertEquals([20, 10, 10, 10, 10, 10, 0, 70], $this->dias($hoja, $this->fila($hoja, 'Total ha elote dulce')));
+        $titulo = $this->fila($hoja, 'CAMPO — HECTÁREAS A COSECHAR', 1, ['B']);
+        $this->assertSame('FF1F4E3D', $hoja->getStyle('N'.$titulo)->getFill()->getStartColor()->getARGB());
+        $notas = $this->fila($hoja, 'NOTAS DE LA SEMANA', 1, ['B']);
+        $this->assertSame(['B'.($notas + 1).':N'.($notas + 4)], array_values($hoja->getMergeCells()));
+    }
 }

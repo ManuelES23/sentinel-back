@@ -260,6 +260,9 @@ Route::middleware('auth:sanctum')->group(function () {
                 // Hoja de embarques por cargas (embarques.capturar) y notas de la semana (tablero-semanal.editar-notas)
                 Route::put('programa/{programa}/embarques/hoja', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\HojaEmbarquesController::class, 'guardar']);
                 Route::put('programa/{programa}/notas', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\NotasProgramaController::class, 'guardar']);
+
+                // Interruptor del domingo de la semana (tablero-semanal.editar-notas)
+                Route::put('programa/{programa}/domingo', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\DomingoProgramaController::class, 'guardar']);
             });
 
             // Módulo Catálogos (catálogos generales de la empresa)
