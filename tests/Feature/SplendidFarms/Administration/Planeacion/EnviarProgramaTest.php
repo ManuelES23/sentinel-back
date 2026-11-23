@@ -149,6 +149,43 @@ class EnviarProgramaTest extends TestCase
         $this->assertEquals(0, $this->totalDe($libro->getSheetByName('WK49'), 'TOTAL NECESIDAD'));
     }
 
+    public function test_un_libro_mezcla_una_semana_sin_domingo_y_otra_con_domingo_cada_hoja_con_su_layout(): void
+    {
+        Mail::fake();
+        $this->cargarWk48(ProgramaSemanal::create(['lunes' => '2026-11-23']));
+        $sinDomingo = ProgramaSemanal::create(['lunes' => '2026-11-30']);
+        $this->corte($sinDomingo, 'Blanco', 0, 5);
+        $sinDomingo->forceFill(['trabaja_domingo' => false])->save();
+
+        $this->enviar(['lunes' => ['2026-11-23', '2026-11-30']])->assertOk();
+
+        $libro = $this->libroDe($this->correoEnviado());
+        $con = $libro->getSheetByName('WK48');
+        $sin = $libro->getSheetByName('WK49');
+
+        $filaDe = function (Worksheet $hoja, string $texto): int {
+            for ($f = 1; $f <= $hoja->getHighestRow(); $f++) {
+                if ($hoja->getCell('C'.$f)->getValue() === $texto) {
+                    return $f;
+                }
+            }
+            $this->fail("No hay una fila con «{$texto}».");
+        };
+        $encabezado = fn (Worksheet $hoja) => array_map(
+            fn ($c) => $hoja->getCell($c.$filaDe($hoja, 'COLOR'))->getValue(),
+            ['G', 'H', 'I', 'J', 'K', 'L', 'M', 'N'],
+        );
+
+        // La semana con domingo conserva G–M días y N total; la otra termina en la L y pone el total en la M.
+        $this->assertSame(['L', 'M', 'X', 'J', 'V', 'S', 'D', 'HA TOTAL'], $encabezado($con));
+        $this->assertSame(['L', 'M', 'X', 'J', 'V', 'S', 'HA TOTAL', null], $encabezado($sin));
+        $this->assertEquals(70, $con->getCell('N'.$filaDe($con, 'Total ha elote dulce'))->getValue());
+        $this->assertEquals(5, $sin->getCell('M'.$filaDe($sin, 'Total ha elote dulce'))->getValue());
+        $this->assertNull($sin->getCell('N'.$filaDe($sin, 'Total ha elote dulce'))->getValue());
+        $this->assertEquals(36483, $con->getCell('N'.$filaDe($con, 'TOTAL NECESIDAD'))->getValue());
+        $this->assertEquals(0, $sin->getCell('M'.$filaDe($sin, 'TOTAL NECESIDAD'))->getValue());
+    }
+
     public function test_con_una_semana_el_asunto_lleva_solo_esa(): void
     {
         Mail::fake();

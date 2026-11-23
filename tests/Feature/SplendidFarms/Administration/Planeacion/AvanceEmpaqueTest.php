@@ -460,4 +460,37 @@ class AvanceEmpaqueTest extends TestCase
         $this->avance(self::LUNES, 999999)->assertStatus(422)->assertJsonValidationErrors('cultivo_id');
         $this->assertSame(0, ProgramaSemanal::count());
     }
+
+    // ── Domingo opcional ────────────────────────────────
+
+    public function test_el_payload_dice_si_la_semana_trabaja_el_domingo(): void
+    {
+        // Sin programa el Avance no lo crea: se asume que sí.
+        $this->assertTrue($this->datos()['trabaja_domingo']);
+        $this->assertSame(0, ProgramaSemanal::count());
+
+        $p = $this->programa();
+        $this->assertTrue($this->datos()['trabaja_domingo']);
+
+        $p->forceFill(['trabaja_domingo' => false])->save();
+        $this->assertFalse($this->datos()['trabaja_domingo']);
+    }
+
+    public function test_el_real_del_domingo_se_cuenta_aunque_la_semana_no_lo_trabaje(): void
+    {
+        $p = $this->programa();
+        $this->necesidad($p, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [0, 0, 0, 0, 0, 0, 40]);
+        $p->forceFill(['trabaja_domingo' => false])->save();
+        $this->pallet('2026-11-29', $this->receta('Bulk', 'RPC'), 25, 'Amarillo');
+
+        $d = $this->datos();
+
+        $this->assertFalse($d['trabaja_domingo']);
+        $fila = $this->fila($d['renglones'], 'Bulk', $this->ab(), 'RPC');
+        // Lo del domingo se programa el sábado; el real del domingo sigue apareciendo en su día.
+        $this->assertSame([0, 0, 0, 0, 0, 40, 0], $fila['programado']);
+        $this->assertSame([0, 0, 0, 0, 0, 0, 25], $fila['real']);
+        $this->assertSame(40, $d['totales']['programado']);
+        $this->assertSame(25, $d['totales']['real']);
+    }
 }
