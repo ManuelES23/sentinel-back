@@ -2,6 +2,7 @@
 
 namespace App\Services\Planeacion;
 
+use App\Models\Planeacion\PlanCliente;
 use App\Models\Planeacion\ProgramaNecesidad;
 use App\Models\Planeacion\ProgramaSemanal;
 use App\Models\Planeacion\ProgramaSobrante;
@@ -128,6 +129,16 @@ class SeccionesSemana
                     'bodega_id' => $n->bodega_id,
                 ];
             });
+
+        // Un cliente de la lista sale con su nombre ACTUAL (tras un renombrado el renglón viejo puede traer otro).
+        $nombres = PlanCliente::whereIn('id', array_values(array_filter(array_column($previos, 'plan_cliente_id'))))
+            ->pluck('nombre', 'id');
+        foreach ($previos as &$previo) {
+            if ($previo['plan_cliente_id'] !== null && isset($nombres[$previo['plan_cliente_id']])) {
+                $previo['cliente_nombre'] = $nombres[$previo['plan_cliente_id']];
+            }
+        }
+        unset($previo);
 
         $salida = array_values($previos);
         usort($salida, fn ($a, $b) => [mb_strtolower($a['cliente_nombre']), $a['bodega_id']] <=> [mb_strtolower($b['cliente_nombre']), $b['bodega_id']]);

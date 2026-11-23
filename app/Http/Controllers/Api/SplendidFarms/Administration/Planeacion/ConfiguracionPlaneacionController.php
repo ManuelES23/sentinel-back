@@ -9,6 +9,7 @@ use App\Models\Entity;
 use App\Models\Planeacion\BodegaDestino;
 use App\Models\Planeacion\ConfiguracionPlaneacion;
 use App\Models\Planeacion\GrupoBalance;
+use App\Models\Planeacion\PlanCliente;
 use App\Models\Planeacion\Presentacion;
 use App\Models\Planeacion\ProgramaInventarioInicial;
 use App\Models\Planeacion\ProgramaSemanal;
@@ -18,11 +19,13 @@ use App\Models\Planeacion\TipoEmpaque;
 use App\Models\Recipe;
 use App\Models\Temporada;
 use App\Models\Variedad;
+use App\Services\Planeacion\ClientesPlaneacion;
 use App\Services\Planeacion\DestinatariosPrograma;
 use App\Services\Planeacion\PlantasAvance;
 use App\Services\Planeacion\ProgramaSemanalService;
 use App\Services\Planeacion\RegistroCambiosPrograma;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -51,6 +54,14 @@ class ConfiguracionPlaneacionController extends Controller
     private const MENSAJES = [
         'dias_antelacion.integer' => 'Los días de antelación van de 0 a 7.',
         'dias_antelacion.between' => 'Los días de antelación van de 0 a 7.',
+    ];
+
+    private const CLIENTE_REPETIDO = 'Ya existe un cliente con ese nombre.';
+
+    /** Mensajes de la validación de los clientes de Planeación. */
+    private const MENSAJES_CLIENTE = [
+        'nombre.required' => 'El cliente es obligatorio.',
+        'nombre.string' => 'Escribe el nombre del cliente.',
     ];
 
     /**
@@ -119,7 +130,111 @@ class ConfiguracionPlaneacionController extends Controller
                 'cajas_por_carga' => (int) ConfiguracionPlaneacion::valor('cajas_por_carga', 1040),
                 'avance_plantas' => $plantas->paraConfiguracion(),
                 'correos_programa' => $destinatarios->todos(),
+                'clientes' => $this->clientes(),
             ],
+        ]);
+    }
+
+    // ── Clientes de Planeación ──────────────────────────
+
+    /**
+     * Agrega un cliente a la lista. Un nombre que ya existe (por clave) no se
+     * duplica: se devuelve ese cliente y, si estaba inactivo, se reactiva.
+     */
+    public function agregarCliente(Request $request, ClientesPlaneacion $clientes): JsonResponse
+    {
+        $this->exigirPermiso('configuracion', 'editar');
+
+        $datos = $request->validate(['nombre' => ['required', 'string']], self::MENSAJES_CLIENTE);
+        $cliente = $clientes->resolver($datos['nombre']);
+
+        return response()->json([
+            'success' => true,
+            'message' => $cliente->wasRecentlyCreated ? 'Cliente agregado.' : 'Ese cliente ya estaba en la lista; quedó activo.',
+            'data' => ['cliente' => $this->clienteFormateado($cliente)],
+        ], 201);
+    }
+
+    /**
+     * Renombra y/o activa/desactiva un cliente. Renombrar actualiza en la misma
+     * transacción la clave y el `cliente_nombre` de todas sus necesidades; si
+     * la clave nueva ya es de OTRO cliente responde 422 sin cambiar nada.
+     * Desactivar solo lo saca de las sugerencias: sus necesidades no cambian.
+     */
+    public function actualizarCliente(Request $request, PlanCliente $cliente): JsonResponse
+    {
+        $this->exigirPermiso('configuracion', 'editar');
+
+        $datos = $request->validate([
+            'nombre' => ['sometimes', 'required', 'string'],
+            'activo' => ['sometimes', 'boolean'],
+        ], self::MENSAJES_CLIENTE + [
+            'activo.boolean' => 'Indica si el cliente está activo.',
+        ]);
+
+        $nombre = null;
+        $clave = null;
+        if (array_key_exists('nombre', $datos)) {
+            $nombre = ClientesPlaneacion::limpiar($datos['nombre']);
+            if ($nombre === '') {
+                throw ValidationException::withMessages(['nombre' => 'El cliente es obligatorio.']);
+            }
+            if (mb_strlen($nombre) > ClientesPlaneacion::MAX_NOMBRE) {
+                throw ValidationException::withMessages(['nombre' => 'El nombre del cliente no puede pasar de '.ClientesPlaneacion::MAX_NOMBRE.' caracteres.']);
+            }
+            $clave = ClientesPlaneacion::clave($nombre);
+            if ($clave === '') {
+                throw ValidationException::withMessages(['nombre' => 'El nombre del cliente debe tener letras o números.']);
+            }
+        }
+
+        try {
+            DB::transaction(function () use ($cliente, $datos, $nombre, $clave) {
+                $fila = PlanCliente::whereKey($cliente->id)->lockForUpdate()->firstOrFail();
+
+                if ($clave !== null && PlanCliente::where('nombre_clave', $clave)->whereKeyNot($fila->id)->exists()) {
+                    throw ValidationException::withMessages(['nombre' => self::CLIENTE_REPETIDO]);
+                }
+
+                if ($nombre !== null && $nombre !== $fila->nombre) {
+                    $fila->nombre = $nombre;
+                    $fila->nombre_clave = $clave;
+                    DB::table('programa_necesidades')
+                        ->where('plan_cliente_id', $fila->id)
+                        ->update(['cliente_nombre' => $nombre, 'updated_at' => now()]);
+                }
+                if (array_key_exists('activo', $datos)) {
+                    $fila->activo = (bool) $datos['activo'];
+                }
+                $fila->save();
+            });
+        } catch (UniqueConstraintViolationException) {
+            // Otro registró esa clave entre la revisión y el guardado.
+            throw ValidationException::withMessages(['nombre' => self::CLIENTE_REPETIDO]);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Cliente actualizado.',
+            'data' => ['cliente' => $this->clienteFormateado($cliente->fresh())],
+        ]);
+    }
+
+    /** «Traer del CRM»: agrega los clientes del CRM de SBP que aún no están. */
+    public function importarClientesCrm(ClientesPlaneacion $clientes): JsonResponse
+    {
+        $this->exigirPermiso('configuracion', 'editar');
+
+        $agregados = $clientes->importarDelCrm();
+
+        return response()->json([
+            'success' => true,
+            'message' => match (true) {
+                $agregados === 0 => 'No hay clientes nuevos en el CRM.',
+                $agregados === 1 => '1 cliente agregado del CRM.',
+                default => "{$agregados} clientes agregados del CRM.",
+            },
+            'data' => ['agregados' => $agregados],
         ]);
     }
 
@@ -586,6 +701,37 @@ class ConfiguracionPlaneacionController extends Controller
     }
 
     // ── Apoyos ──────────────────────────────────────────────────
+
+    /**
+     * Todos los clientes de Planeación (activos primero, por nombre) con el
+     * número de necesidades ligadas (una consulta agrupada).
+     *
+     * @return list<array{id: int, nombre: string, activo: bool, necesidades: int}>
+     */
+    private function clientes(): array
+    {
+        $conteos = DB::table('programa_necesidades')
+            ->whereNotNull('plan_cliente_id')
+            ->groupBy('plan_cliente_id')
+            ->selectRaw('plan_cliente_id, COUNT(*) as total')
+            ->pluck('total', 'plan_cliente_id');
+
+        return PlanCliente::orderByDesc('activo')->orderBy('nombre')->orderBy('id')
+            ->get(['id', 'nombre', 'activo'])
+            ->map(fn (PlanCliente $c) => $this->clienteFormateado($c, (int) ($conteos[$c->id] ?? 0)))
+            ->all();
+    }
+
+    /** @return array{id: int, nombre: string, activo: bool, necesidades: int} */
+    private function clienteFormateado(PlanCliente $cliente, ?int $necesidades = null): array
+    {
+        return [
+            'id' => (int) $cliente->id,
+            'nombre' => $cliente->nombre,
+            'activo' => (bool) $cliente->activo,
+            'necesidades' => $necesidades ?? $cliente->necesidades()->count(),
+        ];
+    }
 
     /** «007» -> «7», «v007» -> «v7» (la clave ya pasó el formato `^(\d+|v\d+)$`). */
     private function normalizarClave(string $clave): string

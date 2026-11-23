@@ -12,9 +12,11 @@ use Illuminate\Support\Str;
  *
  * La carga es idempotente (se puede correr otra vez): (1) los clientes del
  * CRM de Splendid by Porvenir (sin los eliminados) y (2) los nombres que ya
- * usan las necesidades, por id ascendente. Se deduplica por clave (el primero
- * gana: el del CRM y, si no, el de la necesidad más antigua) y cada necesidad
- * sin liga se liga por clave a su cliente. `cliente_nombre` no se reescribe.
+ * usan las necesidades sin liga, por id ascendente. Se deduplica por clave (el
+ * primero gana: el del CRM y, si no, el de la necesidad más antigua) y cada
+ * necesidad sin liga se liga por clave a su cliente. Las ya ligadas no se
+ * tocan ni registran su nombre (tras un renombrado sería el viejo).
+ * `cliente_nombre` no se reescribe.
  *
  * La clave es una copia exacta de `ClientesPlaneacion::clave` para que esta
  * migración no cambie si el servicio cambia (una prueba compara las dos).
@@ -115,15 +117,18 @@ return new class extends Migration
             }
         }
 
-        // (2) Nombres de las necesidades, de la más antigua a la más nueva, y la liga.
+        // (2) Nombres de las necesidades SIN liga, de la más antigua a la más nueva, y la liga.
+        // Una necesidad ya ligada no registra su nombre: tras un renombrado su
+        // texto puede ser el viejo y volvería a aparecer como cliente nuevo.
         DB::table('programa_necesidades')
-            ->select(['id', 'cliente_nombre', 'plan_cliente_id'])
+            ->whereNull('plan_cliente_id')
+            ->select(['id', 'cliente_nombre'])
             ->chunkById(self::LOTE, function ($filas) use ($agregar) {
                 /** @var array<int, list<int>> $ligas plan_cliente_id => ids de necesidades */
                 $ligas = [];
                 foreach ($filas as $f) {
                     $planId = $agregar($f->cliente_nombre);
-                    if ($planId !== null && $f->plan_cliente_id === null) {
+                    if ($planId !== null) {
                         $ligas[$planId][] = (int) $f->id;
                     }
                 }
