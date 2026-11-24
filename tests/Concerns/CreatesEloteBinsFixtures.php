@@ -6,6 +6,7 @@ use App\Models\Application;
 use App\Models\Cultivo;
 use App\Models\Module;
 use App\Models\ProcesoEmpaque;
+use App\Models\ProduccionEmpaque;
 use App\Models\RecepcionEmpaque;
 use App\Models\RezagaEmpaque;
 use App\Models\SalidaRezagaEmpaque;
@@ -123,6 +124,29 @@ trait CreatesEloteBinsFixtures
             'fecha_entrada' => '2026-02-01',
             'status' => 'en_proceso',
         ]);
+    }
+
+    /**
+     * Pallet de producción de la temporada en bins (fuera de cuarto frío y
+     * sin peso de báscula), colgado de un proceso nuevo.
+     */
+    protected function crearProduccionBins(array $overrides = []): ProduccionEmpaque
+    {
+        $proceso = $this->crearProcesoBins();
+        $this->contadorBins++;
+
+        return ProduccionEmpaque::create(array_merge([
+            'temporada_id' => $this->temporadaBins->id,
+            'entity_id' => $this->entity->id,
+            'proceso_id' => $proceso->id,
+            'folio_produccion' => 'PDN-BIN-'.$this->contadorBins,
+            'fecha_produccion' => '2026-02-02',
+            'variedad_id' => $this->variedadElote->id,
+            'total_cajas' => 50,
+            'peso_neto_kg' => 500,
+            'status' => 'en_almacen',
+            'en_cuarto_frio' => false,
+        ], $overrides));
     }
 
     /**
