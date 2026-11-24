@@ -81,14 +81,14 @@ class HojaEmbarquesController extends Controller
                     ProgramaSemanal::whereKey($programa->id)->lockForUpdate()->value('id');
                 }
 
-                // Sin domingo, una celda del día 6 con cargas es un 422.
+                // Sin domingo de Embarques, una celda del día 6 con cargas es un 422.
                 $domingo = [];
                 foreach ($celdas as $i => $celda) {
                     if ((int) $celda['dia'] === DomingoPrograma::DIA) {
                         $domingo["celdas.$i.cargas"] = $celda['cargas'];
                     }
                 }
-                DomingoPrograma::exigirCeldas($programa, $domingo);
+                DomingoPrograma::exigirCeldas($programa->id, $domingo, 'embarques');
 
                 $existentes = $celdas === []
                     ? collect()

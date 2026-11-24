@@ -155,7 +155,7 @@ class EnviarProgramaTest extends TestCase
         $this->cargarWk48(ProgramaSemanal::create(['lunes' => '2026-11-23']));
         $sinDomingo = ProgramaSemanal::create(['lunes' => '2026-11-30']);
         $this->corte($sinDomingo, 'Blanco', 0, 5);
-        $sinDomingo->forceFill(['trabaja_domingo' => false])->save();
+        $sinDomingo->forceFill(['trabaja_domingo' => false, 'domingo_corte' => false, 'domingo_empaque' => false, 'domingo_embarques' => false])->save();
 
         $this->enviar(['lunes' => ['2026-11-23', '2026-11-30']])->assertOk();
 

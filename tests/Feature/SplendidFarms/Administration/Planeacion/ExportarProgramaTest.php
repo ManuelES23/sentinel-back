@@ -485,7 +485,7 @@ class ExportarProgramaTest extends TestCase
     public function test_sin_domingo_el_excel_omite_la_columna_del_domingo_y_el_total_pasa_a_la_m(): void
     {
         $programa = $this->wk48();
-        $programa->forceFill(['trabaja_domingo' => false])->save();
+        $programa->forceFill(['trabaja_domingo' => false, 'domingo_corte' => false, 'domingo_empaque' => false, 'domingo_embarques' => false])->save();
 
         $hoja = $this->libroDe($this->descargar()->assertOk())->getSheetByName('WK48');
 
@@ -523,7 +523,7 @@ class ExportarProgramaTest extends TestCase
     {
         $programa = $this->wk48();
         $con = $this->libroDe($this->descargar()->assertOk())->getSheetByName('WK48');
-        $programa->forceFill(['trabaja_domingo' => false])->save();
+        $programa->forceFill(['trabaja_domingo' => false, 'domingo_corte' => false, 'domingo_empaque' => false, 'domingo_embarques' => false])->save();
         $sin = $this->libroDe($this->descargar()->assertOk())->getSheetByName('WK48');
 
         $this->assertSame($con->getHighestRow(), $sin->getHighestRow());

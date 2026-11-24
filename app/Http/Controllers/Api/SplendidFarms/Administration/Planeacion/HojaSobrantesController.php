@@ -71,8 +71,8 @@ class HojaSobrantesController extends Controller
                 ? collect()
                 : ProgramaSobrante::whereIn('id', $ids)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
 
-            // Sin domingo, cajas en el día 6 son un 422.
-            DomingoPrograma::exigirCeldas($programa, DomingoPrograma::celdasDeRenglones($nuevas, $cambios));
+            // Sin domingo de Empaque, cajas en el día 6 son un 422.
+            DomingoPrograma::exigirCeldas($programa->id, DomingoPrograma::celdasDeRenglones($nuevas, $cambios), 'empaque');
 
             $validador = new ValidadorRenglonPlaneacion($servicio);
             $presentaciones = $validador->presentaciones([...$nuevas, ...$cambios]);

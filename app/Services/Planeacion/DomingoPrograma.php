@@ -10,9 +10,13 @@ use App\Models\Planeacion\ProgramaSobrante;
 use Illuminate\Validation\ValidationException;
 
 /**
- * Domingo opcional por semana: la regla común de las cuatro hojas (una celda
- * del domingo con valor en una semana sin domingo es un 422) y lo que impide
- * apagarlo (datos en el día 6).
+ * Domingo opcional por proceso (`corte`, `empaque`, `embarques`; ver
+ * ProgramaSemanal::PROCESOS): la regla común de las hojas (una celda del
+ * domingo con valor cuando SU proceso no trabaja el domingo es un 422) y lo
+ * que impide apagar el domingo de un proceso (sus datos en el día 6).
+ *
+ * Qué hoja sigue a qué proceso: corte → `corte`; necesidades y sobrantes →
+ * `empaque`; embarques → `embarques`.
  */
 class DomingoPrograma
 {
@@ -20,26 +24,35 @@ class DomingoPrograma
 
     public const MENSAJE = 'Esta semana no se trabaja el domingo.';
 
+    /** Nombre de cada proceso en los mensajes. */
+    public const NOMBRES = [
+        'corte' => 'Corte',
+        'empaque' => 'Empaque',
+        'embarques' => 'Embarques',
+    ];
+
     /**
      * Rechaza con 422 la primera celda del domingo con valor distinto de cero
-     * si la semana no trabaja el domingo. Cero o vacío siempre se aceptan.
+     * si el proceso no trabaja el domingo. Cero o vacío siempre se aceptan.
      *
-     * Solo si hay alguna celda del domingo con valor se relee el interruptor
-     * con la fila del programa bloqueada: así un apagado simultáneo (que
-     * bloquea la misma fila antes de contar) espera a esta captura o esta
-     * captura ve el interruptor ya apagado. Debe llamarse dentro de la
-     * transacción de la hoja, después de sus propios bloqueos.
+     * Solo si hay alguna celda del domingo con valor se relee la bandera del
+     * proceso con la fila del programa bloqueada: así un apagado simultáneo
+     * (que bloquea la misma fila antes de contar) espera a esta captura o esta
+     * captura ve la bandera ya apagada. Debe llamarse dentro de la transacción
+     * de la hoja, después de sus propios bloqueos.
      *
-     * @param  array<string, mixed>  $valores  clave de error de la celda => valor, solo de celdas del día 6.
+     * @param  array<string, mixed>  $celdas  clave de error de la celda => valor, solo de celdas del día 6.
      */
-    public static function exigirCeldas(ProgramaSemanal $programa, array $valores): void
+    public static function exigirCeldas(int $programaId, array $celdas, string $proceso): void
     {
-        $conValor = array_filter($valores, fn ($valor) => (float) ($valor ?? 0) > 0);
+        $columna = ProgramaSemanal::columnaDomingo($proceso);
+
+        $conValor = array_filter($celdas, fn ($valor) => (float) ($valor ?? 0) > 0);
         if ($conValor === []) {
             return;
         }
 
-        $trabaja = (bool) (ProgramaSemanal::whereKey($programa->id)->lockForUpdate()->value('trabaja_domingo') ?? true);
+        $trabaja = (bool) (ProgramaSemanal::whereKey($programaId)->lockForUpdate()->value($columna) ?? true);
         if (! $trabaja) {
             throw ValidationException::withMessages([array_key_first($conValor) => self::MENSAJE]);
         }
@@ -74,17 +87,29 @@ class DomingoPrograma
     }
 
     /**
-     * Mensaje del 422 al apagar el domingo con datos, o null si el día 6 está
-     * vacío. Solo nombra lo que hay, con singular y plural.
+     * Lo que hay en el domingo de ESE proceso, con singular y plural
+     * (`['3 necesidades', '1 sobrante']`), o `[]` si su día 6 está vacío.
+     * Corte: cortes con hectáreas; Empaque: necesidades y sobrantes con cajas;
+     * Embarques: embarques con cargas.
+     *
+     * @return list<string>
      */
-    public static function datosDelDomingo(ProgramaSemanal $programa): ?string
+    public static function datosDelDomingo(int $programaId, string $proceso): array
     {
-        $conteos = [
-            ['corte', 'cortes', ProgramaCorte::where('programa_id', $programa->id)->where('dia', self::DIA)->where('hectareas', '>', 0)->count()],
-            ['necesidad', 'necesidades', ProgramaNecesidad::where('programa_id', $programa->id)->where('cajas_'.self::DIA, '>', 0)->count()],
-            ['sobrante', 'sobrantes', ProgramaSobrante::where('programa_id', $programa->id)->where('cajas_'.self::DIA, '>', 0)->count()],
-            ['embarque', 'embarques', ProgramaEmbarque::where('programa_id', $programa->id)->where('dia', self::DIA)->where('cargas', '>', 0)->count()],
-        ];
+        ProgramaSemanal::columnaDomingo($proceso);
+
+        $conteos = match ($proceso) {
+            'corte' => [
+                ['corte', 'cortes', ProgramaCorte::where('programa_id', $programaId)->where('dia', self::DIA)->where('hectareas', '>', 0)->count()],
+            ],
+            'empaque' => [
+                ['necesidad', 'necesidades', ProgramaNecesidad::where('programa_id', $programaId)->where('cajas_'.self::DIA, '>', 0)->count()],
+                ['sobrante', 'sobrantes', ProgramaSobrante::where('programa_id', $programaId)->where('cajas_'.self::DIA, '>', 0)->count()],
+            ],
+            'embarques' => [
+                ['embarque', 'embarques', ProgramaEmbarque::where('programa_id', $programaId)->where('dia', self::DIA)->where('cargas', '>', 0)->count()],
+            ],
+        };
 
         $partes = [];
         foreach ($conteos as [$singular, $plural, $cantidad]) {
@@ -92,13 +117,22 @@ class DomingoPrograma
                 $partes[] = $cantidad.' '.($cantidad === 1 ? $singular : $plural);
             }
         }
-        if ($partes === []) {
-            return null;
-        }
 
+        return $partes;
+    }
+
+    /**
+     * Mensaje del 422 al apagar el domingo de un proceso con datos:
+     * «El domingo de Empaque ya tiene datos: 3 necesidades y 1 sobrante. Vacíalos antes de apagarlo.»
+     *
+     * @param  list<string>  $partes  lo que devolvió datosDelDomingo (no vacío).
+     */
+    public static function mensajeDeApagado(string $proceso, array $partes): string
+    {
         $ultima = array_pop($partes);
         $lista = $partes === [] ? $ultima : implode(', ', $partes).' y '.$ultima;
+        $nombre = self::NOMBRES[$proceso] ?? $proceso;
 
-        return "El domingo ya tiene datos: {$lista}. Vacíalos antes de apagarlo.";
+        return "El domingo de {$nombre} ya tiene datos: {$lista}. Vacíalos antes de apagarlo.";
     }
 }
