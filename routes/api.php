@@ -223,6 +223,8 @@ Route::middleware('auth:sanctum')->group(function () {
                 // Enviar el programa por correo (tablero-semanal.enviar): rutas fijas, antes de cualquier programa/{programa}.
                 Route::get('programa/envio/opciones', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\EnviarProgramaController::class, 'opciones']);
                 Route::post('programa/envio', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\EnviarProgramaController::class, 'enviar'])->middleware('throttle:5,1');
+                // Vista previa del correo: mismas reglas que enviar, pero no envía ni deja bitácora.
+                Route::post('programa/envio/vista-previa', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\EnviarProgramaController::class, 'vistaPrevia'])->middleware('throttle:20,1');
                 // Avance de empaque: programado contra real (avance-empaque.view); no crea el programa.
                 Route::get('programa/avance', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\AvanceEmpaqueController::class, 'show']);
                 Route::put('programa/{programa}/inventario-inicial', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'inventarioInicial']);
