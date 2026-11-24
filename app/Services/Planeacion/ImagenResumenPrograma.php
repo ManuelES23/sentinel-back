@@ -291,7 +291,7 @@ final class ImagenResumenPrograma
     {
         $y += 12;
         $x0 = self::MARGEN;
-        // Necesidad = ventas + lo programado a mano en el Programa de empaque (igual que la tabla de arriba).
+        // Necesidad = solo ventas; disponible = producción − ventas (incluye lo empacado sin pedido), igual que la tabla.
         $columnas = [['Color', 104], ['Producción', 86], ['Necesidad', 86], ['Disponible', 86], ['Cargas eq.', 74]];
 
         $this->texto($x0, $y + 12, 'BALANCE POR COLOR · SEMANA', 9, 'seccion_tinta', true);
@@ -315,7 +315,7 @@ final class ImagenResumenPrograma
             $valores = [
                 [$c['nombre'], 'tinta'],
                 [$this->cajas($c['produccion']), 'tinta'],
-                [$this->cajas($c['necesidad'] + $c['sobrante']), 'tinta'],
+                [$this->cajas($c['necesidad']), 'tinta'],
             ];
             $valores[] = [$this->signo($c['disponible']), $signo];
             $valores[] = [$c['cargas'] === null ? '–' : $this->cargasEq($c['cargas']), $signo];
@@ -364,7 +364,7 @@ final class ImagenResumenPrograma
 
         return [
             $previas,
-            'Necesidad de empaque = ventas + lo programado a mano en el Programa de empaque. Disponible = cajas producidas − necesidad.',
+            'Necesidad de empaque = pedidos de venta. Disponible para venta = cajas producidas − necesidad; incluye lo ya empacado sin pedido en el Programa de empaque (por presentación y empaque) y lo que queda sin programar.',
             'F = carga full · S = carga sencilla. Cargas eq. = disponible ÷ '.number_format($r['cajas_por_carga']).' cajas.',
             'Las filas en cero no se muestran.',
         ];
