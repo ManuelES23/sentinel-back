@@ -37,6 +37,9 @@ final class ProgramaSemanalMail extends Mailable
         public array $imagenes = [],
     ) {}
 
+    /** Con true las imágenes van como data URI en el HTML (vista previa en el navegador), no incrustadas por cid. */
+    public bool $vistaPrevia = false;
+
     public function envelope(): Envelope
     {
         return new Envelope(subject: $this->asunto);
@@ -51,6 +54,7 @@ final class ProgramaSemanalMail extends Mailable
             'remitente' => $this->remitente,
             'nombreArchivo' => $this->nombreArchivo,
             'imagenes' => $this->imagenes,
+            'vistaPrevia' => $this->vistaPrevia,
         ]);
     }
 

@@ -74,16 +74,101 @@ class EnviarProgramaController extends Controller
     ): JsonResponse {
         $this->exigirPermiso('tablero-semanal', 'enviar');
 
-        $lista = $destinatarios->todos();
-        $nombres = array_column($lista, 'nombre', 'correo');
+        $nombres = array_column($destinatarios->todos(), 'nombre', 'correo');
+        $datos = $this->validar($request, $nombres);
+        $armado = $this->armarCorreo($datos, true, $servicio, $exportador, $resumidor, $dibujante);
+        if ($armado instanceof JsonResponse) {
+            return $armado;
+        }
+        ['correo' => $correo, 'lunes' => $lunes, 'semanas' => $semanas, 'cultivo_id' => $cultivoId, 'cultivo' => $cultivoNombre, 'excel' => $incluirExcel] = $armado;
+        $enviados = count($datos['destinatarios']);
 
+        try {
+            // Las direcciones se arman dentro del try: una que el validador de Symfony no acepte da el 422 amable, no un 500.
+            $ocultos = array_map(fn ($c) => new Address($c, $nombres[$c] !== '' ? $nombres[$c] : null), $datos['destinatarios']);
+            Mail::to(new Address((string) config('mail.from.address'), config('mail.from.name')))->bcc($ocultos)->send($correo);
+        } catch (Throwable $e) {
+            Log::error('No se pudo enviar el programa semanal por correo.', [
+                'error' => $e::class.': '.$e->getMessage(),
+                'semanas' => $lunes,
+                'destinatarios' => $enviados,
+            ]);
+
+            return response()->json(['success' => false, 'message' => self::MENSAJE_FALLA], 422);
+        }
+
+        // Bitácora: semanas, cultivo y cuántos destinatarios; nunca las direcciones.
+        ActivityLog::log(
+            action: 'programa_enviado',
+            model: 'ProgramaSemanal',
+            modelId: (int) $semanas[0]['programa']['id'],
+            newValues: [
+                'semanas' => $lunes,
+                'cultivo_id' => $cultivoId,
+                'cultivo' => $cultivoNombre,
+                'destinatarios' => $enviados,
+                'excel' => $incluirExcel,
+            ],
+        );
+
+        return response()->json([
+            'success' => true,
+            'message' => $enviados === 1 ? 'Programa enviado a 1 destinatario.' : "Programa enviado a {$enviados} destinatarios.",
+            'data' => ['enviados' => $enviados, 'semanas' => $lunes],
+        ]);
+    }
+
+    /**
+     * Vista previa del correo (tablero-semanal.enviar): el mismo cuerpo de
+     * `POST programa/envio` y las mismas validaciones, pero no envía nada ni
+     * deja bitácora. Devuelve el asunto, cuántos destinatarios, los adjuntos y
+     * el HTML del cuerpo con las imágenes incrustadas (data URI). El Excel no
+     * se genera: solo se anuncia su nombre.
+     */
+    public function vistaPrevia(
+        Request $request,
+        ProgramaSemanalService $servicio,
+        ExportadorProgramaExcel $exportador,
+        DestinatariosPrograma $destinatarios,
+        ResumenProgramaSemanal $resumidor,
+        ImagenResumenPrograma $dibujante,
+    ): JsonResponse {
+        $this->exigirPermiso('tablero-semanal', 'enviar');
+
+        $nombres = array_column($destinatarios->todos(), 'nombre', 'correo');
+        $datos = $this->validar($request, $nombres);
+        $armado = $this->armarCorreo($datos, false, $servicio, $exportador, $resumidor, $dibujante);
+        if ($armado instanceof JsonResponse) {
+            return $armado;
+        }
+        $correo = $armado['correo'];
+        $correo->vistaPrevia = true;
+
+        $adjuntos = array_map(fn (array $i) => ['nombre' => $i['nombre'], 'tipo' => 'png', 'tamano' => strlen($i['png'])], $correo->imagenes);
+        if ($correo->nombreArchivo !== null) {
+            $adjuntos[] = ['nombre' => $correo->nombreArchivo, 'tipo' => 'xlsx', 'tamano' => null];
+        }
+
+        return response()->json(['success' => true, 'data' => [
+            'asunto' => $correo->asunto,
+            'remitente' => config('mail.from.name'),
+            'destinatarios' => count($datos['destinatarios']),
+            'semanas' => $correo->semanas,
+            'adjuntos' => $adjuntos,
+            'html' => $correo->render(),
+        ]]);
+    }
+
+    /** Validación común de enviar y de la vista previa. */
+    private function validar(Request $request, array $nombres): array
+    {
         // Repetidos fuera antes de validar: un lunes o un correo dos veces se manda una vez.
         $request->merge([
             'lunes' => $this->sinRepetidos($request->input('lunes'), fn ($v) => $v),
             'destinatarios' => $this->sinRepetidos($request->input('destinatarios'), fn ($v) => mb_strtolower(trim($v))),
         ]);
 
-        $datos = $request->validate([
+        return $request->validate([
             'lunes' => ['required', 'array', 'max:'.self::MAXIMO_SEMANAS],
             'lunes.*' => ['bail', 'required', 'string', 'date_format:Y-m-d', $this->esLunes(), $this->conPrograma()],
             'cultivo_id' => ['nullable', 'integer', 'exists:cultivos,id'],
@@ -110,7 +195,23 @@ class EnviarProgramaController extends Controller
             'nota.max' => 'La nota admite hasta 500 caracteres.',
             'incluir_excel.boolean' => 'Indica si se adjunta el Excel (sí o no).',
         ]);
+    }
 
+    /**
+     * Arma el correo de los datos ya validados: una imagen por semana y, si se
+     * pidió, el Excel ($generarExcel = false solo anuncia su nombre, para la
+     * vista previa). Si una imagen no se puede dibujar devuelve el 422.
+     *
+     * @return JsonResponse|array{correo: ProgramaSemanalMail, lunes: list<string>, semanas: list<array>, cultivo_id: ?int, cultivo: ?string, excel: bool}
+     */
+    private function armarCorreo(
+        array $datos,
+        bool $generarExcel,
+        ProgramaSemanalService $servicio,
+        ExportadorProgramaExcel $exportador,
+        ResumenProgramaSemanal $resumidor,
+        ImagenResumenPrograma $dibujante,
+    ): JsonResponse|array {
         $lunes = $datos['lunes'];
         sort($lunes);
         $incluirExcel = (bool) ($datos['incluir_excel'] ?? true);
@@ -154,7 +255,7 @@ class EnviarProgramaController extends Controller
         }
 
         $contenido = null;
-        if ($incluirExcel) {
+        if ($incluirExcel && $generarExcel) {
             $ruta = $exportador->generarVarias($semanas, $cultivoId, $cultivoNombre);
             try {
                 $contenido = file_get_contents($ruta);
@@ -177,41 +278,8 @@ class EnviarProgramaController extends Controller
             remitente: (string) Auth::user()->name,
             imagenes: $imagenes,
         );
-        $enviados = count($datos['destinatarios']);
 
-        try {
-            // Las direcciones se arman dentro del try: una que el validador de Symfony no acepte da el 422 amable, no un 500.
-            $ocultos = array_map(fn ($c) => new Address($c, $nombres[$c] !== '' ? $nombres[$c] : null), $datos['destinatarios']);
-            Mail::to(new Address((string) config('mail.from.address'), config('mail.from.name')))->bcc($ocultos)->send($correo);
-        } catch (Throwable $e) {
-            Log::error('No se pudo enviar el programa semanal por correo.', [
-                'error' => $e::class.': '.$e->getMessage(),
-                'semanas' => $lunes,
-                'destinatarios' => $enviados,
-            ]);
-
-            return response()->json(['success' => false, 'message' => self::MENSAJE_FALLA], 422);
-        }
-
-        // Bitácora: semanas, cultivo y cuántos destinatarios; nunca las direcciones.
-        ActivityLog::log(
-            action: 'programa_enviado',
-            model: 'ProgramaSemanal',
-            modelId: (int) $semanas[0]['programa']['id'],
-            newValues: [
-                'semanas' => $lunes,
-                'cultivo_id' => $cultivoId,
-                'cultivo' => $cultivoNombre,
-                'destinatarios' => $enviados,
-                'excel' => $incluirExcel,
-            ],
-        );
-
-        return response()->json([
-            'success' => true,
-            'message' => $enviados === 1 ? 'Programa enviado a 1 destinatario.' : "Programa enviado a {$enviados} destinatarios.",
-            'data' => ['enviados' => $enviados, 'semanas' => $lunes],
-        ]);
+        return ['correo' => $correo, 'lunes' => $lunes, 'semanas' => $semanas, 'cultivo_id' => $cultivoId, 'cultivo' => $cultivoNombre, 'excel' => $incluirExcel];
     }
 
     /**
