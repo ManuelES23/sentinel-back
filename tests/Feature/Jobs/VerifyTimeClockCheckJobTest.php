@@ -7,6 +7,7 @@ use App\Models\AttendanceRecord;
 use App\Models\EmployeeFaceTemplate;
 use App\Models\TimeClockCheck;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Tests\Concerns\CreatesRhFixtures;
@@ -15,6 +16,12 @@ use Tests\TestCase;
 class VerifyTimeClockCheckJobTest extends TestCase
 {
     use RefreshDatabase, CreatesRhFixtures;
+
+    protected function tearDown(): void
+    {
+        Carbon::setTestNow();
+        parent::tearDown();
+    }
 
     private function fakeEmbedResponse(array $embedding): void
     {
@@ -149,6 +156,10 @@ class VerifyTimeClockCheckJobTest extends TestCase
 
     public function test_already_checked_in_today_marks_rejected_without_crashing_job(): void
     {
+        // Reloj fijo a mediodia (hora de la app): con now() real, entre las 00:00 y la
+        // 01:00 locales now()->subHour() cae en el dia anterior y la entrada previa
+        // ya no es "de hoy" (AttendanceRecord::checkIn ancla al dia de checked_at).
+        Carbon::setTestNow(Carbon::parse('2026-11-24 12:00:00', config('app.timezone')));
         [, $enterprise] = $this->createAuthenticatedRhUser();
         $employee = $this->createEmployee($enterprise->id);
         $embedding = array_fill(0, 128, 0.2);
