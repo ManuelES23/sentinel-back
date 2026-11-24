@@ -382,6 +382,48 @@ class DomingoOpcionalTest extends TestCase
         $this->assertSame([0, 0, 0, 0, 0, 900, 0], $this->semana()['balance'][$this->idAb()]['necesidad']);
     }
 
+    public function test_los_dias_de_antelacion_no_cuentan_el_domingo_si_no_se_empaca(): void
+    {
+        $this->comoPlaneador();
+        $this->antelacion('Texas', 2);
+        $wk49 = ProgramaSemanal::create(['lunes' => '2026-11-30']);
+        // Lunes de WK49 con 2 días: con domingo es el sábado; sin domingo (que no se cuenta) es el viernes.
+        $this->pedidoTexas($wk49, [900, 0, 0, 0, 0, 0, 0]);
+
+        $this->assertSame([0, 0, 0, 0, 0, 900, 0], $this->semana()['balance'][$this->idAb()]['necesidad']);
+
+        $this->sinDomingo();
+        $d = $this->semana();
+        $this->assertSame([0, 0, 0, 0, 900, 0, 0], $d['balance'][$this->idAb()]['necesidad']);
+        $this->assertSame([0, 0, 0, 0, 900, 0, 0], collect($d['empaque'])->firstWhere('bodega_id', $this->bodega('Texas')->id)['cajas']);
+    }
+
+    public function test_antelacion_de_tres_dias_desde_el_miercoles_siguiente_salta_el_domingo_apagado(): void
+    {
+        $this->comoPlaneador();
+        $this->antelacion('Texas', 3);
+        $wk49 = ProgramaSemanal::create(['lunes' => '2026-11-30']);
+        $this->pedidoTexas($wk49, [0, 0, 600, 0, 0, 0, 0]);
+
+        // Con domingo: miércoles − 3 = domingo.
+        $this->assertSame([0, 0, 0, 0, 0, 0, 600], $this->semana()['balance'][$this->idAb()]['necesidad']);
+
+        // Sin domingo: martes, lunes y sábado.
+        $this->sinDomingo();
+        $this->assertSame([0, 0, 0, 0, 0, 600, 0], $this->semana()['balance'][$this->idAb()]['necesidad']);
+    }
+
+    public function test_el_domingo_apagado_no_cambia_la_antelacion_dentro_de_la_misma_semana(): void
+    {
+        $this->comoPlaneador();
+        $this->antelacion('Texas', 2);
+        $this->pedidoTexas($this->programa, [0, 0, 0, 700, 0, 0, 0]);
+
+        $this->sinDomingo();
+        // Jueves − 2 = martes: no cruza ningún domingo.
+        $this->assertSame([0, 700, 0, 0, 0, 0, 0], $this->semana()['balance'][$this->idAb()]['necesidad']);
+    }
+
     public function test_el_domingo_de_la_semana_siguiente_no_cambia_lo_de_esta(): void
     {
         $this->comoPlaneador();
