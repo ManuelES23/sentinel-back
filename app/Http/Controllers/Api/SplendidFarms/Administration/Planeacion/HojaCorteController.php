@@ -69,14 +69,14 @@ class HojaCorteController extends Controller
                 Etapa::whereIn('id', $etapaIds)->orderBy('id')->lockForUpdate()->pluck('id');
             }
 
-            // Sin domingo, una celda del día 6 con hectáreas es un 422.
+            // Sin domingo de Corte, una celda del día 6 con hectáreas es un 422.
             $domingo = [];
             foreach ($celdas as $i => $celda) {
                 if ((int) $celda['dia'] === DomingoPrograma::DIA) {
                     $domingo["celdas.$i.hectareas"] = round((float) ($celda['hectareas'] ?? 0), 2);
                 }
             }
-            DomingoPrograma::exigirCeldas($programa, $domingo);
+            DomingoPrograma::exigirCeldas($programa->id, $domingo, 'corte');
 
             $cambios = $this->planearCeldas($programa, $celdas, $servicio);
             $bajas = $this->planearSinEtapa($programa, $sinEtapa);

@@ -18,8 +18,9 @@ use Carbon\CarbonInterface;
  * que no tienen grupo, quedan aparte en `programado_sin_clasificar`. Sin
  * programa de la semana, todo el programado es cero (no se crea el programa).
  *
- * `trabaja_domingo`: si la semana trabaja el domingo (verdadero también sin
- * programa, porque aquí no se crea). Sin domingo el programado del día 6 ya
+ * `trabaja_domingo`: si EMPAQUE trabaja el domingo de la semana (`domingo_empaque`;
+ * verdadero también sin programa, porque aquí no se crea). Corte y Embarques no
+ * cuentan. Sin domingo de Empaque el programado del día 6 ya
  * llega en cero (lo pasa al sábado `PlanSemana`), pero el real de los pallets
  * con `fecha_produccion` en domingo se sigue contando en `real` y `totales`.
  *
@@ -52,7 +53,8 @@ final class AvanceEmpaque
         $diasPasados = max(0, min($dias, $indiceHoy));
         $hoyEnSemana = $indiceHoy >= 0 && $indiceHoy < $dias;
 
-        $trabajaDomingo = (bool) (ProgramaSemanal::whereDate('lunes', $lunes)->value('trabaja_domingo') ?? true);
+        // Bandera de Empaque (su programado es el del programa de empaque).
+        $trabajaDomingo = (bool) (ProgramaSemanal::whereDate('lunes', $lunes)->value(ProgramaSemanal::columnaDomingo('empaque')) ?? true);
         $empaque = $this->programas->empaqueDeSemana($lunes);
         $plantaIds = $this->plantas->ids();
         $real = $this->real->deLaSemana($lunes, $cultivoId, $plantaIds);

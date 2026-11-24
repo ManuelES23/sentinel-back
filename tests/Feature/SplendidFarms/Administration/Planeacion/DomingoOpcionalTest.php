@@ -20,9 +20,11 @@ use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
 /**
- * Domingo opcional por semana: el interruptor `trabaja_domingo`, la regla del
- * sábado (sin domingo, lo que se empacaría el domingo se empaca el sábado) y
- * el rechazo de valores en el domingo de las cuatro hojas y de «copiar anterior».
+ * Domingo opcional por semana: el interruptor `trabaja_domingo` (forma vieja
+ * del endpoint, que fija los tres procesos), la regla del sábado (sin domingo,
+ * lo que se empacaría el domingo se empaca el sábado) y el rechazo de valores
+ * en el domingo de las cuatro hojas y de «copiar anterior». Los interruptores
+ * por proceso se prueban en DomingoPorProcesoTest.
  */
 class DomingoOpcionalTest extends TestCase
 {
@@ -56,7 +58,13 @@ class DomingoOpcionalTest extends TestCase
 
     private function sinDomingo(?ProgramaSemanal $p = null): void
     {
-        ($p ?? $this->programa)->forceFill(['trabaja_domingo' => false])->save();
+        // Los tres procesos sin domingo (y la columna «alguno», que se conserva).
+        ($p ?? $this->programa)->forceFill([
+            'trabaja_domingo' => false,
+            'domingo_corte' => false,
+            'domingo_empaque' => false,
+            'domingo_embarques' => false,
+        ])->save();
     }
 
     private function domingo(bool $valor, ?ProgramaSemanal $p = null): TestResponse
@@ -127,14 +135,16 @@ class DomingoOpcionalTest extends TestCase
     }
 
     /**
-     * Entre el pull y el migrate, una semana leída de la base no trae la columna:
-     * `trabaja_domingo` llega en null y debe leerse como «con domingo».
+     * Entre el pull y el migrate, una semana leída de la base no trae las
+     * columnas: llegan en null y deben leerse como «con domingo».
      */
     private function semanaSinColumna(): ProgramaSemanal
     {
+        $columnas = ['trabaja_domingo' => true, 'domingo_corte' => true, 'domingo_empaque' => true, 'domingo_embarques' => true];
         $fila = ProgramaSemanal::find($this->programa->id);
-        $fila->setRawAttributes(array_diff_key($fila->getAttributes(), ['trabaja_domingo' => true]), true);
+        $fila->setRawAttributes(array_diff_key($fila->getAttributes(), $columnas), true);
         $this->assertNull($fila->trabaja_domingo);
+        $this->assertNull($fila->domingo_empaque);
 
         return $fila;
     }
@@ -149,6 +159,7 @@ class DomingoOpcionalTest extends TestCase
 
         // Payload: con domingo.
         $this->assertTrue($semana['programa']['trabaja_domingo']);
+        $this->assertSame(['corte' => true, 'empaque' => true, 'embarques' => true], $semana['programa']['domingo']);
         // Regla del sábado: el pedido se empaca el domingo, no el sábado.
         $this->assertSame([0, 0, 0, 0, 0, 0, 1800], $semana['balance'][$this->idAb()]['necesidad']);
 
@@ -187,8 +198,13 @@ class DomingoOpcionalTest extends TestCase
             ->assertOk()
             ->assertJsonPath('success', true)
             ->assertJsonPath('message', 'La semana ahora no se trabaja el domingo.')
-            ->assertJsonPath('data.trabaja_domingo', false);
-        $this->assertFalse((bool) $this->programa->fresh()->trabaja_domingo);
+            ->assertJsonPath('data.trabaja_domingo', false)
+            ->assertJsonPath('data.domingo', ['corte' => false, 'empaque' => false, 'embarques' => false]);
+        $fresca = $this->programa->fresh();
+        $this->assertFalse($fresca->trabaja_domingo);
+        $this->assertFalse($fresca->domingo_corte);
+        $this->assertFalse($fresca->domingo_empaque);
+        $this->assertFalse($fresca->domingo_embarques);
         Event::assertDispatchedTimes(ProgramaSemanalUpdated::class, 1);
 
         // Mismo valor: 200 sin aviso.
@@ -198,8 +214,10 @@ class DomingoOpcionalTest extends TestCase
         $this->domingo(true)
             ->assertOk()
             ->assertJsonPath('message', 'La semana ahora se trabaja el domingo.')
-            ->assertJsonPath('data.trabaja_domingo', true);
-        $this->assertTrue((bool) $this->programa->fresh()->trabaja_domingo);
+            ->assertJsonPath('data.trabaja_domingo', true)
+            ->assertJsonPath('data.domingo', ['corte' => true, 'empaque' => true, 'embarques' => true]);
+        $this->assertTrue($this->programa->fresh()->trabaja_domingo);
+        $this->assertTrue($this->programa->fresh()->domingo_corte);
         Event::assertDispatchedTimes(ProgramaSemanalUpdated::class, 2);
 
         $this->domingo(true)->assertOk();
@@ -211,7 +229,9 @@ class DomingoOpcionalTest extends TestCase
         $this->comoPlaneador();
         // El modelo ligado por la ruta se cargó con domingo; otra petición lo apagó antes del bloqueo.
         $viejo = ProgramaSemanal::findOrFail($this->programa->id);
-        ProgramaSemanal::whereKey($this->programa->id)->update(['trabaja_domingo' => false]);
+        ProgramaSemanal::whereKey($this->programa->id)->update([
+            'trabaja_domingo' => false, 'domingo_corte' => false, 'domingo_empaque' => false, 'domingo_embarques' => false,
+        ]);
         Event::fake([ProgramaSemanalUpdated::class]);
 
         $respuesta = app(DomingoProgramaController::class)->guardar(
@@ -223,6 +243,7 @@ class DomingoOpcionalTest extends TestCase
         $this->assertSame(200, $respuesta->getStatusCode());
         $this->assertTrue($respuesta->getData(true)['data']['trabaja_domingo']);
         $this->assertTrue((bool) ProgramaSemanal::whereKey($this->programa->id)->value('trabaja_domingo'));
+        $this->assertTrue((bool) ProgramaSemanal::whereKey($this->programa->id)->value('domingo_embarques'));
         Event::assertDispatchedTimes(ProgramaSemanalUpdated::class, 1);
     }
 
@@ -238,7 +259,8 @@ class DomingoOpcionalTest extends TestCase
     {
         $this->comoPlaneador();
 
-        $this->putJson(self::BASE.'/programa/'.$this->programa->id.'/domingo', [])->assertUnprocessable()->assertJsonValidationErrors('trabaja_domingo');
+        // Sin ningún interruptor: 422 en `domingo` (ver DomingoPorProcesoTest).
+        $this->putJson(self::BASE.'/programa/'.$this->programa->id.'/domingo', [])->assertUnprocessable()->assertJsonValidationErrors('domingo');
         $this->domingoCrudo('quizá')->assertUnprocessable()->assertJsonValidationErrors('trabaja_domingo');
     }
 
@@ -247,14 +269,17 @@ class DomingoOpcionalTest extends TestCase
         return $this->putJson(self::BASE.'/programa/'.$this->programa->id.'/domingo', ['trabaja_domingo' => $valor]);
     }
 
-    private function assertNoApaga(string $mensaje): void
+    /** Con la forma vieja se apagan los tres: un mensaje por proceso con datos, en `trabaja_domingo`. */
+    private function assertNoApaga(string ...$mensajes): void
     {
         Event::fake([ProgramaSemanalUpdated::class]);
 
         $this->domingo(false)
             ->assertUnprocessable()
-            ->assertJsonPath('errors.trabaja_domingo.0', $mensaje);
-        $this->assertTrue((bool) $this->programa->fresh()->trabaja_domingo);
+            ->assertJsonPath('errors.trabaja_domingo', $mensajes);
+        $fresca = $this->programa->fresh();
+        $this->assertTrue($fresca->trabaja_domingo);
+        $this->assertTrue($fresca->domingo_corte && $fresca->domingo_empaque && $fresca->domingo_embarques);
         Event::assertNotDispatched(ProgramaSemanalUpdated::class);
     }
 
@@ -264,7 +289,7 @@ class DomingoOpcionalTest extends TestCase
         $this->corte($this->programa, 'Amarillo', 6, 2);
         $this->corte($this->programa, 'Amarillo', 5, 3); // otro día no cuenta
 
-        $this->assertNoApaga('El domingo ya tiene datos: 1 corte. Vacíalos antes de apagarlo.');
+        $this->assertNoApaga('El domingo de Corte ya tiene datos: 1 corte. Vacíalos antes de apagarlo.');
     }
 
     public function test_no_apaga_con_una_necesidad_en_domingo(): void
@@ -272,7 +297,7 @@ class DomingoOpcionalTest extends TestCase
         $this->comoPlaneador();
         $this->pedidoTexas($this->programa, [0, 0, 0, 0, 0, 0, 300]);
 
-        $this->assertNoApaga('El domingo ya tiene datos: 1 necesidad. Vacíalos antes de apagarlo.');
+        $this->assertNoApaga('El domingo de Empaque ya tiene datos: 1 necesidad. Vacíalos antes de apagarlo.');
     }
 
     public function test_no_apaga_con_un_sobrante_en_domingo(): void
@@ -280,7 +305,7 @@ class DomingoOpcionalTest extends TestCase
         $this->comoPlaneador();
         $this->sobrante([0, 0, 0, 0, 0, 0, 40]);
 
-        $this->assertNoApaga('El domingo ya tiene datos: 1 sobrante. Vacíalos antes de apagarlo.');
+        $this->assertNoApaga('El domingo de Empaque ya tiene datos: 1 sobrante. Vacíalos antes de apagarlo.');
     }
 
     public function test_no_apaga_con_un_embarque_en_domingo(): void
@@ -288,7 +313,7 @@ class DomingoOpcionalTest extends TestCase
         $this->comoPlaneador();
         $this->embarque('Texas', 6, 2);
 
-        $this->assertNoApaga('El domingo ya tiene datos: 1 embarque. Vacíalos antes de apagarlo.');
+        $this->assertNoApaga('El domingo de Embarques ya tiene datos: 1 embarque. Vacíalos antes de apagarlo.');
     }
 
     public function test_no_apaga_y_nombra_todo_lo_que_hay_en_domingo(): void
@@ -303,17 +328,21 @@ class DomingoOpcionalTest extends TestCase
         $this->embarque('Texas', 6, 2);
         $this->embarque('Nogales', 6, 1, 'sencillo');
 
-        $this->assertNoApaga('El domingo ya tiene datos: 2 cortes, 3 necesidades, 1 sobrante y 2 embarques. Vacíalos antes de apagarlo.');
+        $this->assertNoApaga(
+            'El domingo de Corte ya tiene datos: 2 cortes. Vacíalos antes de apagarlo.',
+            'El domingo de Empaque ya tiene datos: 3 necesidades y 1 sobrante. Vacíalos antes de apagarlo.',
+            'El domingo de Embarques ya tiene datos: 2 embarques. Vacíalos antes de apagarlo.',
+        );
     }
 
-    public function test_dos_tipos_de_dato_se_unen_con_y(): void
+    public function test_dos_tipos_de_dato_del_mismo_proceso_se_unen_con_y(): void
     {
         $this->comoPlaneador();
         $this->sobrante([0, 0, 0, 0, 0, 0, 40]);
         $this->sobrante([0, 0, 0, 0, 0, 0, 10]);
-        $this->embarque('Texas', 6, 2);
+        $this->pedidoTexas($this->programa, [0, 0, 0, 0, 0, 0, 5]);
 
-        $this->assertNoApaga('El domingo ya tiene datos: 2 sobrantes y 1 embarque. Vacíalos antes de apagarlo.');
+        $this->assertNoApaga('El domingo de Empaque ya tiene datos: 1 necesidad y 2 sobrantes. Vacíalos antes de apagarlo.');
     }
 
     // ── Regla del sábado ────────────────────────────────

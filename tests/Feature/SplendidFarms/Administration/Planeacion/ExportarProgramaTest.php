@@ -485,7 +485,7 @@ class ExportarProgramaTest extends TestCase
     public function test_sin_domingo_el_excel_omite_la_columna_del_domingo_y_el_total_pasa_a_la_m(): void
     {
         $programa = $this->wk48();
-        $programa->forceFill(['trabaja_domingo' => false])->save();
+        $programa->forceFill(['trabaja_domingo' => false, 'domingo_corte' => false, 'domingo_empaque' => false, 'domingo_embarques' => false])->save();
 
         $hoja = $this->libroDe($this->descargar()->assertOk())->getSheetByName('WK48');
 
@@ -523,7 +523,7 @@ class ExportarProgramaTest extends TestCase
     {
         $programa = $this->wk48();
         $con = $this->libroDe($this->descargar()->assertOk())->getSheetByName('WK48');
-        $programa->forceFill(['trabaja_domingo' => false])->save();
+        $programa->forceFill(['trabaja_domingo' => false, 'domingo_corte' => false, 'domingo_empaque' => false, 'domingo_embarques' => false])->save();
         $sin = $this->libroDe($this->descargar()->assertOk())->getSheetByName('WK48');
 
         $this->assertSame($con->getHighestRow(), $sin->getHighestRow());
@@ -534,6 +534,24 @@ class ExportarProgramaTest extends TestCase
             // El total se movió de la N a la M; el domingo (que valía cero) no se escribe.
             $this->assertSame($con->getCell('N'.$fila)->getValue(), $sin->getCell('M'.$fila)->getValue(), "total de la fila {$fila}");
         }
+    }
+
+    public function test_con_un_solo_proceso_con_domingo_el_excel_trae_la_columna_del_domingo(): void
+    {
+        // Corte y Embarques sin domingo, Empaque con domingo: «alguno» trabaja el domingo.
+        $programa = $this->wk48();
+        $programa->forceFill(['trabaja_domingo' => true, 'domingo_corte' => false, 'domingo_empaque' => true, 'domingo_embarques' => false])->save();
+
+        $hoja = $this->libroDe($this->descargar()->assertOk())->getSheetByName('WK48');
+
+        $encabezado = $this->fila($hoja, 'COLOR', 1, ['C']);
+        $this->assertSame(['L', 'M', 'X', 'J', 'V', 'S', 'D', 'HA TOTAL'], $this->dias($hoja, $encabezado));
+        $this->assertEquals(70, $hoja->getCell('N'.$this->fila($hoja, 'Total ha elote dulce'))->getValue());
+
+        // Solo Empaque sin domingo (Corte y Embarques sí): también hay columna de domingo.
+        $programa->forceFill(['domingo_corte' => true, 'domingo_empaque' => false, 'domingo_embarques' => true])->save();
+        $hoja = $this->libroDe($this->descargar()->assertOk())->getSheetByName('WK48');
+        $this->assertSame(['L', 'M', 'X', 'J', 'V', 'S', 'D', 'HA TOTAL'], $this->dias($hoja, $this->fila($hoja, 'COLOR', 1, ['C'])));
     }
 
     public function test_con_domingo_el_excel_sigue_igual_con_siete_dias_y_el_total_en_la_n(): void

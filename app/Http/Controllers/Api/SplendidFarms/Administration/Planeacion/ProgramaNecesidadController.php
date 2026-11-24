@@ -85,8 +85,10 @@ class ProgramaNecesidadController extends Controller
 
         $resultado = DB::transaction(function () use ($programa, $servicio, $registro, $clientes) {
             // Se bloquea el programa para que dos copias a la vez no dupliquen
-            // renglones; el interruptor del domingo se lee de la fila bloqueada.
-            $trabajaDomingo = (bool) (ProgramaSemanal::whereKey($programa->id)->lockForUpdate()->value('trabaja_domingo') ?? true);
+            // renglones; la bandera del domingo de Empaque (la de las necesidades)
+            // se lee de la fila bloqueada.
+            $trabajaDomingo = (bool) (ProgramaSemanal::whereKey($programa->id)->lockForUpdate()
+                ->value(ProgramaSemanal::columnaDomingo('empaque')) ?? true);
 
             if (ProgramaNecesidad::where('programa_id', $programa->id)->exists()) {
                 throw ValidationException::withMessages(['semana' => 'Esta semana ya tiene necesidades']);
@@ -112,7 +114,7 @@ class ProgramaNecesidadController extends Controller
             $domingoOmitido = 0;
             foreach ($origen as $o) {
                 $cajas = $o->cajasPorDia();
-                // Sin domingo en esta semana, el domingo copiado queda en cero (sin error);
+                // Sin domingo de Empaque en esta semana, el domingo copiado queda en cero (sin error);
                 // el renglón que solo tenía domingo no se crea vacío.
                 if (! $trabajaDomingo) {
                     $domingoOmitido += (int) ($cajas[DomingoPrograma::DIA] ?? 0);
