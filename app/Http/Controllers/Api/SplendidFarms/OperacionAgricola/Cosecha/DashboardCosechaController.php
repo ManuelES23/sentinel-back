@@ -34,6 +34,8 @@ class DashboardCosechaController extends Controller
 
         $temporada = Temporada::findOrFail($datos['temporada_id']);
         $temporadaId = $temporada->id;
+        // La temporada ya está cargada: sin consulta extra. Solo en bins se suman los bins.
+        $enBins = (bool) $temporada->opera_en_bins;
 
         $etapas = Etapa::with([
             'lote:id,nombre,codigo,superficie,numero_lote,zona_cultivo_id,productor_id',
@@ -52,7 +54,7 @@ class DashboardCosechaController extends Controller
         $enLista = $etapas->pluck('id')->flip()->all();
 
         $avisos = [];
-        $cortes = $this->cortesPorEtapa($temporadaId, $enLista, $avisos);
+        $cortes = $this->cortesPorEtapa($temporadaId, $enLista, $avisos, $enBins);
         $empaque = $this->empaquePorEtapa($temporadaId, $enLista);
 
         $filas = [];
@@ -65,7 +67,7 @@ class DashboardCosechaController extends Controller
                 continue;
             }
 
-            $filas[] = $this->fila($etapa, $cortesEtapa, $empaqueEtapa);
+            $filas[] = $this->fila($etapa, $cortesEtapa, $empaqueEtapa, $enBins);
         }
 
         return response()->json([
@@ -76,8 +78,10 @@ class DashboardCosechaController extends Controller
                 'sin_etapa' => [
                     'kg' => number_format($cortes['sinEtapaKg'], 2, '.', ''),
                     'cajas' => $empaque['sinEtapaCajas'],
+                    ...($enBins ? ['bins' => $cortes['sinEtapaBins']] : []),
                 ],
                 'avisos' => $avisos,
+                ...($enBins ? ['opera_en_bins' => true] : []),
             ],
         ]);
     }
@@ -88,18 +92,19 @@ class DashboardCosechaController extends Controller
      *
      * @param  array<int, int>  $enLista  Ids de las etapas de la respuesta (como llaves).
      * @param  string[]  $avisos  Se llena con las ventas cuya unidad no se pudo pasar a kilos.
-     * @return array{porEtapa: array<int, array>, sinEtapaKg: float}
+     * @return array{porEtapa: array<int, array>, sinEtapaKg: float, sinEtapaBins: int}
      */
-    private function cortesPorEtapa(int $temporadaId, array $enLista, array &$avisos): array
+    private function cortesPorEtapa(int $temporadaId, array $enLista, array &$avisos, bool $enBins = false): array
     {
-        // Un corte se identifica por (fecha, venta nacional): [fecha, ha, kg, venta_nacional]
+        // Un corte se identifica por (fecha, venta nacional): [fecha, ha, kg, bins, venta_nacional]
         $porEtapa = [];
-        $sumar = function (int $etapaId, string $fecha, bool $nacional, float $ha, float $kg) use (&$porEtapa) {
+        $sumar = function (int $etapaId, string $fecha, bool $nacional, float $ha, float $kg, int $bins = 0) use (&$porEtapa) {
             $fecha = substr($fecha, 0, 10);
             $clave = $fecha.'|'.(int) $nacional;
-            $corte = $porEtapa[$etapaId][$clave] ?? ['fecha' => $fecha, 'ha' => 0.0, 'kg' => 0.0, 'venta_nacional' => $nacional];
+            $corte = $porEtapa[$etapaId][$clave] ?? ['fecha' => $fecha, 'ha' => 0.0, 'kg' => 0.0, 'bins' => 0, 'venta_nacional' => $nacional];
             $corte['ha'] += $ha;
             $corte['kg'] += $kg;
+            $corte['bins'] += $bins;
             $porEtapa[$etapaId][$clave] = $corte;
         };
 
@@ -128,18 +133,22 @@ class DashboardCosechaController extends Controller
         }
 
         // Salidas de campo por día; las que no traen etapa, o traen una fuera de la lista, van aparte.
+        // En bins, cada salida también suma sus bins (`cantidad`).
         $sinEtapaKg = 0.0;
+        $sinEtapaBins = 0;
         $salidas = DB::table('salidas_campo_cosecha')
             ->where('temporada_id', $temporadaId)
             ->where('eliminado', false)
-            ->selectRaw('etapa_id, fecha, COALESCE(SUM(peso_neto_kg), 0) AS kg')
+            ->selectRaw('etapa_id, fecha, COALESCE(SUM(peso_neto_kg), 0) AS kg'.($enBins ? ', COALESCE(SUM(cantidad), 0) AS bins' : ''))
             ->groupBy('etapa_id', 'fecha')
             ->get();
         foreach ($salidas as $s) {
+            $bins = $enBins ? (int) $s->bins : 0;
             if ($s->etapa_id === null || ! isset($enLista[(int) $s->etapa_id])) {
                 $sinEtapaKg += (float) $s->kg;
+                $sinEtapaBins += $bins;
             } else {
-                $sumar((int) $s->etapa_id, $s->fecha, false, 0.0, (float) $s->kg);
+                $sumar((int) $s->etapa_id, $s->fecha, false, 0.0, (float) $s->kg, $bins);
             }
         }
 
@@ -171,7 +180,7 @@ class DashboardCosechaController extends Controller
             $porEtapa[$etapaId] = array_values($lista);
         }
 
-        return ['porEtapa' => $porEtapa, 'sinEtapaKg' => $sinEtapaKg];
+        return ['porEtapa' => $porEtapa, 'sinEtapaKg' => $sinEtapaKg, 'sinEtapaBins' => $sinEtapaBins];
     }
 
     /**
@@ -314,7 +323,7 @@ class DashboardCosechaController extends Controller
     }
 
     /** Arma la fila de una etapa con el formato de la respuesta. */
-    private function fila(Etapa $etapa, array $cortes, ?array $empaque): array
+    private function fila(Etapa $etapa, array $cortes, ?array $empaque, bool $enBins = false): array
     {
         $lote = $etapa->lote;
         $productor = $lote?->productor;
@@ -358,6 +367,7 @@ class DashboardCosechaController extends Controller
                 'ha' => number_format($c['ha'], 4, '.', ''),
                 'kg' => number_format($c['kg'], 2, '.', ''),
                 'venta_nacional' => $c['venta_nacional'],
+                ...($enBins ? ['bins' => (int) $c['bins']] : []),
             ], $cortes),
             'venta_nacional' => [
                 'ha' => number_format($nacionalHa, 4, '.', ''),

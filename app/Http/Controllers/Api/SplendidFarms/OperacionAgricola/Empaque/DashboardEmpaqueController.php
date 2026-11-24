@@ -10,6 +10,7 @@ use App\Models\ProduccionEmpaque;
 use App\Models\RecepcionEmpaque;
 use App\Models\RezagaEmpaque;
 use App\Models\SalidaRezagaEmpaque;
+use App\Models\Temporada;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -31,6 +32,8 @@ class DashboardEmpaqueController extends Controller
         $from        = $validated['from'] ?? null;
         $to          = $validated['to'] ?? null;
         $hoy         = Carbon::today('America/Mexico_City')->toDateString();
+        // Una sola consulta por petición: solo una temporada en bins recibe las claves de bins.
+        $enBins      = Temporada::esDeBins((int) $temporadaId);
 
         // ── helpers de filtro ──────────────────────────────────────────────
 
@@ -53,15 +56,18 @@ class DashboardEmpaqueController extends Controller
         $recBase = RecepcionEmpaque::query();
         $applyBase($recBase);
 
+        // En bins, la recepción también suma los bins recibidos (mismo filtro que los kg).
+        $binsRecepcion = $enBins ? ', COALESCE(SUM(cantidad_recibida),0) as bins' : '';
+
         $recHoy = (clone $recBase)
             ->whereDate('fecha_recepcion', $hoy)
-            ->selectRaw('COUNT(*) as total, COALESCE(SUM(peso_recibido_kg),0) as kg')
+            ->selectRaw('COUNT(*) as total, COALESCE(SUM(peso_recibido_kg),0) as kg'.$binsRecepcion)
             ->first();
 
         $recPeriodo = (clone $recBase);
         $applyRange($recPeriodo, 'fecha_recepcion');
         $recPeriodo = $recPeriodo
-            ->selectRaw('COUNT(*) as total, COALESCE(SUM(peso_recibido_kg),0) as kg, COUNT(DISTINCT productor_id) as productores')
+            ->selectRaw('COUNT(*) as total, COALESCE(SUM(peso_recibido_kg),0) as kg, COUNT(DISTINCT productor_id) as productores'.$binsRecepcion)
             ->first();
 
         // ── Producción ─────────────────────────────────────────────────────
@@ -134,6 +140,31 @@ class DashboardEmpaqueController extends Controller
             ->where('status', 'pendiente')
             ->selectRaw('COALESCE(SUM(cantidad_kg),0) as disponible_kg')
             ->first();
+
+        // En bins: disponible = bins que quedan en rezaga pendiente; generada = los que
+        // quedan (de cualquier status) más los ya vendidos de las rezagas del período.
+        $rezBinsDisponible = 0;
+        $rezBinsGenerada = 0;
+        if ($enBins) {
+            $rezBinsDisponible = (int) (clone $rezBase)
+                ->where('status', 'pendiente')
+                ->sum('cantidad_bins');
+
+            $rezBinsPeriodo = (clone $rezBase);
+            $applyRange($rezBinsPeriodo, 'fecha');
+            $rezBinsRestantes = (int) $rezBinsPeriodo->sum('cantidad_bins');
+
+            $rezBinsVendidos = DB::table('venta_rezaga_empaque_detalles as d')
+                ->join('rezaga_empaque as r', 'r.id', '=', 'd.rezaga_id')
+                ->whereNull('r.deleted_at')
+                ->where('r.temporada_id', $temporadaId)
+                ->when($entityId, fn ($q) => $q->where('r.entity_id', $entityId))
+                ->when($from, fn ($q) => $q->whereDate('r.fecha', '>=', $from))
+                ->when($to, fn ($q) => $q->whereDate('r.fecha', '<=', $to))
+                ->sum('d.bins');
+
+            $rezBinsGenerada = $rezBinsRestantes + (int) $rezBinsVendidos;
+        }
 
         // ── Salida Rezaga ──────────────────────────────────────────────────
 
@@ -314,10 +345,13 @@ class DashboardEmpaqueController extends Controller
                     'hoy'          => $hoy,
                 ],
 
+                ...($enBins ? ['opera_en_bins' => true] : []),
+
                 'hoy' => [
                     'recepciones' => [
                         'count' => intval($recHoy->total ?? 0),
                         'kg'    => round(floatval($recHoy->kg ?? 0), 1),
+                        ...($enBins ? ['bins' => intval($recHoy->bins ?? 0)] : []),
                     ],
                     'produccion' => [
                         'pallets' => intval($prodHoyPallets->pallets ?? 0),
@@ -340,6 +374,7 @@ class DashboardEmpaqueController extends Controller
                         'count'       => intval($recPeriodo->total ?? 0),
                         'kg'          => round(floatval($recPeriodo->kg ?? 0), 1),
                         'productores' => intval($recPeriodo->productores ?? 0),
+                        ...($enBins ? ['bins' => intval($recPeriodo->bins ?? 0)] : []),
                     ],
                     'produccion' => [
                         'pallets' => intval($prodPeriodoPallets->pallets ?? 0),
@@ -355,6 +390,7 @@ class DashboardEmpaqueController extends Controller
                     'rezaga' => [
                         'generada_kg'   => round(floatval($rezPeriodo->generada_kg ?? 0), 1),
                         'disponible_kg' => round(floatval($rezDisponible->disponible_kg ?? 0), 1),
+                        ...($enBins ? ['generada_bins' => $rezBinsGenerada, 'disponible_bins' => $rezBinsDisponible] : []),
                     ],
                     'salida_rezaga' => [
                         'kg'    => round(floatval($salidaPeriodo->kg ?? 0), 1),

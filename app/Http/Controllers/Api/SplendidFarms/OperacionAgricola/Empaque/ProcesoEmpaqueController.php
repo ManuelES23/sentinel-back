@@ -1004,9 +1004,12 @@ class ProcesoEmpaqueController extends Controller
 
         $proceso->load($this->eagerLoad);
 
+        // En una temporada en bins la entrada se cuenta en bins, no en cajas.
+        $unidad = Temporada::esDeBins((int) $proceso->temporada_id) ? 'bins' : 'cajas';
+
         return response()->json([
             'success' => true,
-            'message' => "Folio {$proceso->folio_proceso} reabierto con disponibilidad restaurada ({$cantidadEntrada} cajas)",
+            'message' => "Folio {$proceso->folio_proceso} reabierto con disponibilidad restaurada ({$cantidadEntrada} {$unidad})",
             'data' => $proceso,
         ]);
     }

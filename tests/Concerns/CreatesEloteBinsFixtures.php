@@ -217,9 +217,10 @@ trait CreatesEloteBinsFixtures
     }
 
     /**
-     * Venta de rezaga con un renglón que consume $kg de la rezaga dada.
+     * Venta de rezaga con un renglón que consume $kg de la rezaga dada (y $bins
+     * cuando es una venta en bins). No toca la rezaga: quien la use decide su restante.
      */
-    protected function crearVentaDeRezaga(RezagaEmpaque $rezaga, float $kg, array $overrides = []): SalidaRezagaEmpaqueDetalle
+    protected function crearVentaDeRezaga(RezagaEmpaque $rezaga, float $kg, array $overrides = [], ?int $bins = null): SalidaRezagaEmpaqueDetalle
     {
         $this->contadorBins++;
 
@@ -232,12 +233,12 @@ trait CreatesEloteBinsFixtures
             'total_peso_kg' => $kg,
         ], $overrides));
 
-        return SalidaRezagaEmpaqueDetalle::create([
+        return SalidaRezagaEmpaqueDetalle::create(array_merge([
             'venta_rezaga_id' => $venta->id,
             'rezaga_id' => $rezaga->id,
             'peso_kg' => $kg,
             'precio_kg' => 0,
             'monto' => 0,
-        ]);
+        ], $bins === null ? [] : ['bins' => $bins]));
     }
 }
