@@ -22,7 +22,7 @@ class SalidaRezagaEmpaqueController extends Controller
 
     private array $eagerLoad = [
         'entity:id,name,code',
-        'detalles.rezaga:id,folio_rezaga,tipo_rezaga,cantidad_kg,cantidad_bins,proceso_id',
+        'detalles.rezaga:id,folio_rezaga,tipo_rezaga,subtipo_rezaga,tipo_carga_id,cantidad_kg,cantidad_bins,proceso_id',
         'detalles.rezaga.proceso:id,folio_proceso,etapa_id,recepcion_id',
         'detalles.rezaga.proceso.productor:id,nombre,apellido',
         'detalles.rezaga.proceso.lote:id,nombre,numero_lote',

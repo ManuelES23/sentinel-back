@@ -765,12 +765,66 @@ class ProcesoEmpaqueController extends Controller
             ], 422);
         }
 
+        // Rezaga en bins: se validan TODOS los renglones antes de escribir nada.
+        $validarRezagasBins = function () use ($enBins, $validated, $temporada): array {
+            $atributosRenglones = [];
+            if ($enBins) {
+                foreach (array_values($validated['rezagas_bins'] ?? []) as $i => $renglon) {
+                    try {
+                        $atributosRenglones[] = RezagaEnBins::atributos(
+                            $temporada,
+                            (int) $renglon['tipo_carga_id'],
+                            (int) $renglon['bins'],
+                            ['hoja', 'fresco'],
+                        );
+                    } catch (ValidationException $e) {
+                        $errores = [];
+                        foreach ($e->errors() as $campo => $mensajes) {
+                            $campoRenglon = $campo === 'cantidad_bins' ? 'bins' : $campo;
+                            $errores["rezagas_bins.{$i}.{$campoRenglon}"] = $mensajes;
+                        }
+
+                        throw ValidationException::withMessages($errores);
+                    }
+                }
+            }
+
+            return $atributosRenglones;
+        };
+
+        // Un registro por renglón, ligado al folio; las observaciones del cierre se copian a cada uno.
+        $crearRezagasBins = function (array $atributosRenglones) use ($proceso, $request, $validated): void {
+            foreach ($atributosRenglones as $atributos) {
+                RezagaEmpaque::create(array_merge($atributos, [
+                    'temporada_id' => $proceso->temporada_id,
+                    'entity_id' => $proceso->entity_id,
+                    'proceso_id' => $proceso->id,
+                    'folio_rezaga' => $this->generarFolioRezaga($proceso->entity_id),
+                    'fecha' => now('America/Mexico_City')->toDateString(),
+                    'status' => 'pendiente',
+                    'observaciones' => $validated['rezaga_observaciones'] ?? null,
+                    'created_by' => $request->user()->id,
+                ]));
+            }
+        };
+
         if ($totalProcesado === 0) {
             // Permite destrabar folios reabiertos incorrectamente con disponible = 0.
             if ((int) $proceso->cantidad_disponible === 0) {
-                $proceso->update([
-                    'status' => 'procesado',
-                ]);
+                // En bins, un folio que se cierra con 0/0 todavía puede traer rezaga por renglones
+                // (se olvidó capturarla): se valida y se crea junto con el cierre.
+                $atributosDestrabar = $validarRezagasBins();
+
+                if ($atributosDestrabar !== []) {
+                    DB::transaction(function () use ($proceso, $crearRezagasBins, $atributosDestrabar) {
+                        $crearRezagasBins($atributosDestrabar);
+                        $proceso->update(['status' => 'procesado']);
+                    });
+                } else {
+                    $proceso->update([
+                        'status' => 'procesado',
+                    ]);
+                }
 
                 $proceso->load($this->eagerLoad);
 
@@ -789,28 +843,7 @@ class ProcesoEmpaqueController extends Controller
 
         $remainder = $proceso->cantidad_disponible - $totalProcesado;
 
-        // Rezaga en bins: se validan TODOS los renglones antes de escribir nada.
-        $atributosRezagasBins = [];
-        if ($enBins) {
-            foreach (array_values($validated['rezagas_bins'] ?? []) as $i => $renglon) {
-                try {
-                    $atributosRezagasBins[] = RezagaEnBins::atributos(
-                        $temporada,
-                        (int) $renglon['tipo_carga_id'],
-                        (int) $renglon['bins'],
-                        ['hoja', 'fresco'],
-                    );
-                } catch (ValidationException $e) {
-                    $errores = [];
-                    foreach ($e->errors() as $campo => $mensajes) {
-                        $campoRenglon = $campo === 'cantidad_bins' ? 'bins' : $campo;
-                        $errores["rezagas_bins.{$i}.{$campoRenglon}"] = $mensajes;
-                    }
-
-                    throw ValidationException::withMessages($errores);
-                }
-            }
-        }
+        $atributosRezagasBins = $validarRezagasBins();
 
         $crearRezaga = function (string $tipoRezaga, float $kg, ?string $subtipo, ?string $observaciones) use ($proceso, $request) {
             if ($kg <= 0) {
@@ -837,7 +870,7 @@ class ProcesoEmpaqueController extends Controller
 
         // Escrituras del cierre (rezagas + folio). En bins van en una sola transacción.
         $escribirCierre = function () use (
-            $request, $validated, $proceso, $crearRezaga, $atributosRezagasBins,
+            $request, $validated, $proceso, $crearRezaga, $crearRezagasBins, $atributosRezagasBins,
             $cuartoFrio, $fresco, $remainder,
         ) {
             // Automatic mode: consume rezagas capturadas por tarima del folio.
@@ -868,17 +901,7 @@ class ProcesoEmpaqueController extends Controller
             }
 
             // Rezaga en bins: un registro por renglón, ligado al folio.
-            foreach ($atributosRezagasBins as $atributos) {
-                RezagaEmpaque::create(array_merge($atributos, [
-                    'temporada_id' => $proceso->temporada_id,
-                    'entity_id' => $proceso->entity_id,
-                    'proceso_id' => $proceso->id,
-                    'folio_rezaga' => $this->generarFolioRezaga($proceso->entity_id),
-                    'fecha' => now('America/Mexico_City')->toDateString(),
-                    'status' => 'pendiente',
-                    'created_by' => $request->user()->id,
-                ]));
-            }
+            $crearRezagasBins($atributosRezagasBins);
 
             // Register production rezaga if provided
             if ($request->filled('rezaga_kg')) {

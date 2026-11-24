@@ -373,4 +373,97 @@ class VentaRezagaBinsTest extends TestCase
         $this->assertSame('pendiente', $a->fresh()->status);
         $this->assertEquals(50, (float) $b->fresh()->cantidad_kg);
     }
+
+    // --- Ola de correcciones: la clase de la rezaga viaja en el detalle de la venta en bins ---
+
+    public function test_venta_en_bins_trae_subtipo_y_tipo_de_carga_de_la_rezaga_hoja(): void
+    {
+        [$a, $b] = $this->dosRezagasHoja();
+
+        $resp = $this->ventaDeCincoBins($a, $b)->assertCreated();
+
+        $resp->assertJsonPath('data.detalles.0.rezaga.subtipo_rezaga', 'hoja')
+            ->assertJsonPath('data.detalles.0.rezaga.tipo_carga_id', $this->binHoja->id)
+            ->assertJsonPath('data.detalles.0.rezaga.tipo_rezaga', 'produccion');
+
+        // Mismo cuerpo en show e index.
+        $id = $resp->json('data.id');
+        $this->getJson(self::URL.'/'.$id)->assertOk()
+            ->assertJsonPath('data.detalles.0.rezaga.subtipo_rezaga', 'hoja')
+            ->assertJsonPath('data.detalles.1.rezaga.tipo_carga_id', $this->binHoja->id);
+
+        $fila = collect($this->getJson(self::URL)->assertOk()->json('data'))->firstWhere('id', $id);
+        $this->assertSame('hoja', $fila['detalles'][0]['rezaga']['subtipo_rezaga']);
+        $this->assertSame($this->binHoja->id, $fila['detalles'][0]['rezaga']['tipo_carga_id']);
+    }
+
+    public function test_venta_en_bins_trae_subtipo_y_tipo_de_carga_de_la_rezaga_fresco(): void
+    {
+        $proceso = $this->crearProcesoBins(10);
+        $fresco = $this->crearRezagaBins($proceso, [
+            'subtipo_rezaga' => 'producto',
+            'tipo_carga_id' => $this->binFresco->id,
+            'cantidad_bins' => 4,
+            'cantidad_kg' => 1200,
+        ]);
+
+        $resp = $this->postJson(self::URL, $this->cuerpoVenta([
+            'detalles' => [['rezaga_id' => $fresco->id, 'bins' => 2]],
+        ]))->assertCreated();
+
+        $resp->assertJsonPath('data.detalles.0.rezaga.subtipo_rezaga', 'producto')
+            ->assertJsonPath('data.detalles.0.rezaga.tipo_carga_id', $this->binFresco->id)
+            ->assertJsonPath('data.detalles.0.rezaga.cantidad_bins', 2);
+    }
+
+    public function test_venta_en_kg_no_trae_subtipo_ni_tipo_de_carga_en_el_detalle(): void
+    {
+        $base = $this->crearRecepcionConProduccion($this->productorPrincipal, 'MANGO-SUBTIPO');
+        $rezaga = RezagaEmpaque::create([
+            'temporada_id' => $this->temporada->id,
+            'entity_id' => $this->entity->id,
+            'proceso_id' => $base['proceso']->id,
+            'folio_rezaga' => 'REZ-MANGO-S1',
+            'tipo_rezaga' => 'produccion',
+            'subtipo_rezaga' => 'hoja',
+            'fecha' => '2026-02-02',
+            'cantidad_kg' => 100,
+            'modo_registro' => 'general',
+            'status' => 'pendiente',
+        ]);
+
+        $resp = $this->postJson(self::URL, [
+            'temporada_id' => $this->temporada->id,
+            'entity_id' => $this->entity->id,
+            'tipo_salida' => 'venta',
+            'fecha_venta' => '2026-02-10',
+            'comprador' => 'Comprador',
+            'precio_kg' => 10,
+            'autorizado_por' => 'Gerente',
+            'solicitado_por' => 'Comprador',
+            'chofer' => 'Juan',
+            'placa' => 'XYZ-1',
+            'total_peso_kg' => 40,
+            'detalles' => [['rezaga_id' => $rezaga->id, 'peso_kg' => 40]],
+        ])->assertCreated();
+
+        $resp->assertJsonMissingPath('data.detalles.0.rezaga.subtipo_rezaga')
+            ->assertJsonMissingPath('data.detalles.0.rezaga.tipo_carga_id')
+            ->assertJsonMissingPath('data.detalles.0.rezaga.cantidad_bins');
+
+        // Las claves que hoy trae el detalle de una venta en kg no cambian.
+        $this->assertEqualsCanonicalizing(
+            ['id', 'folio_rezaga', 'tipo_rezaga', 'cantidad_kg', 'proceso_id', 'proceso'],
+            array_keys($resp->json('data.detalles.0.rezaga')),
+        );
+
+        $id = $resp->json('data.id');
+        $this->getJson(self::URL.'/'.$id)->assertOk()
+            ->assertJsonMissingPath('data.detalles.0.rezaga.subtipo_rezaga')
+            ->assertJsonMissingPath('data.detalles.0.rezaga.tipo_carga_id');
+
+        $fila = collect($this->getJson(self::URL)->assertOk()->json('data'))->firstWhere('id', $id);
+        $this->assertArrayNotHasKey('subtipo_rezaga', $fila['detalles'][0]['rezaga']);
+        $this->assertArrayNotHasKey('tipo_carga_id', $fila['detalles'][0]['rezaga']);
+    }
 }

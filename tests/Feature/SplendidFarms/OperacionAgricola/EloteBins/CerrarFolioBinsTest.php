@@ -360,4 +360,143 @@ class CerrarFolioBinsTest extends TestCase
             ->assertOk()
             ->assertJsonPath('message', 'Folio movido a procesando (8 cajas)');
     }
+
+    // --- Ola de correcciones: destrabar (disponible 0) y observaciones en bins ---
+
+    /** Folio reabierto en en_proceso con disponible 0 (camino «destrabar»). */
+    private function crearProcesoBinsSinDisponible(): ProcesoEmpaque
+    {
+        $proceso = $this->crearProcesoBins(10);
+        $proceso->update([
+            'cantidad_disponible' => 0,
+            'peso_disponible_kg' => 0,
+            'cantidad_cuarto_frio' => 6,
+            'cantidad_fresco' => 4,
+        ]);
+
+        return $proceso->fresh();
+    }
+
+    public function test_destrabar_en_bins_con_renglones_crea_las_rezagas_y_cierra(): void
+    {
+        $proceso = $this->crearProcesoBinsSinDisponible();
+
+        $this->postJson(self::BASE."/proceso/{$proceso->id}/cerrar", [
+            'cantidad_cuarto_frio' => 0,
+            'cantidad_fresco' => 0,
+            'rezagas_bins' => [
+                ['tipo_carga_id' => $this->binHoja->id, 'bins' => 3],
+                ['tipo_carga_id' => $this->binFresco->id, 'bins' => 2],
+            ],
+        ])->assertOk()->assertJsonPath('success', true);
+
+        $proceso->refresh();
+        $this->assertSame('procesado', $proceso->status);
+        // Sin cambios en lo ya procesado.
+        $this->assertSame(6, (int) $proceso->cantidad_cuarto_frio);
+        $this->assertSame(4, (int) $proceso->cantidad_fresco);
+        $this->assertSame(0, (int) $proceso->cantidad_disponible);
+
+        $rezagas = RezagaEmpaque::where('proceso_id', $proceso->id)->orderBy('id')->get();
+        $this->assertCount(2, $rezagas);
+        $this->assertSame(3, (int) $rezagas[0]->cantidad_bins);
+        $this->assertSame('hoja', $rezagas[0]->subtipo_rezaga);
+        $this->assertSame(2, (int) $rezagas[1]->cantidad_bins);
+        $this->assertSame('pendiente', $rezagas[1]->status);
+        $this->assertCount(2, $rezagas->pluck('folio_rezaga')->unique());
+    }
+
+    public function test_destrabar_en_bins_con_renglon_invalido_da_422_y_no_escribe_nada(): void
+    {
+        $proceso = $this->crearProcesoBinsSinDisponible();
+
+        $this->postJson(self::BASE."/proceso/{$proceso->id}/cerrar", [
+            'cantidad_cuarto_frio' => 0,
+            'cantidad_fresco' => 0,
+            'rezagas_bins' => [
+                ['tipo_carga_id' => $this->binHoja->id, 'bins' => 1],
+                ['tipo_carga_id' => $this->binCuartoFrio->id, 'bins' => 1],
+            ],
+        ])->assertStatus(422)->assertJsonValidationErrors(['rezagas_bins.1.tipo_carga_id']);
+
+        $this->assertSame('en_proceso', $proceso->fresh()->status);
+        $this->assertSame(0, RezagaEmpaque::count());
+    }
+
+    public function test_destrabar_en_bins_sin_renglones_queda_igual_que_hoy(): void
+    {
+        $proceso = $this->crearProcesoBinsSinDisponible();
+
+        $this->postJson(self::BASE."/proceso/{$proceso->id}/cerrar", [
+            'cantidad_cuarto_frio' => 0,
+            'cantidad_fresco' => 0,
+        ])->assertOk()
+            ->assertJsonPath('message', 'Folio cerrado sin cambios (sin remanente disponible)');
+
+        $this->assertSame('procesado', $proceso->fresh()->status);
+        $this->assertSame(0, RezagaEmpaque::count());
+    }
+
+    public function test_destrabar_mango_queda_igual_que_hoy(): void
+    {
+        $proceso = $this->crearProcesoMango(10);
+        $proceso->update(['cantidad_disponible' => 0, 'peso_disponible_kg' => 0]);
+
+        $this->postJson(self::BASE."/proceso/{$proceso->id}/cerrar", [
+            'cantidad_cuarto_frio' => 0,
+            'cantidad_fresco' => 0,
+            'rezagas_bins' => [['tipo_carga_id' => $this->binHoja->id, 'bins' => 3]],
+        ])->assertOk()
+            ->assertJsonPath('message', 'Folio cerrado sin cambios (sin remanente disponible)');
+
+        $this->assertSame('procesado', $proceso->fresh()->status);
+        $this->assertSame(0, RezagaEmpaque::count());
+    }
+
+    public function test_cerrar_en_bins_copia_las_observaciones_a_cada_rezaga(): void
+    {
+        $proceso = $this->crearProcesoBins(10);
+
+        $this->postJson(self::BASE."/proceso/{$proceso->id}/cerrar", $this->cuerpoCierre([
+            'rezaga_observaciones' => 'Lluvia en el corte',
+            'rezagas_bins' => [
+                ['tipo_carga_id' => $this->binHoja->id, 'bins' => 3],
+                ['tipo_carga_id' => $this->binFresco->id, 'bins' => 2],
+            ],
+        ]))->assertOk();
+
+        $rezagas = RezagaEmpaque::where('proceso_id', $proceso->id)->get();
+        $this->assertCount(2, $rezagas);
+        foreach ($rezagas as $rezaga) {
+            $this->assertSame('Lluvia en el corte', $rezaga->observaciones);
+        }
+    }
+
+    public function test_destrabar_en_bins_copia_las_observaciones_a_cada_rezaga(): void
+    {
+        $proceso = $this->crearProcesoBinsSinDisponible();
+
+        $this->postJson(self::BASE."/proceso/{$proceso->id}/cerrar", [
+            'cantidad_cuarto_frio' => 0,
+            'cantidad_fresco' => 0,
+            'rezaga_observaciones' => 'Se olvidó capturar',
+            'rezagas_bins' => [['tipo_carga_id' => $this->binHoja->id, 'bins' => 1]],
+        ])->assertOk();
+
+        $this->assertSame(
+            'Se olvidó capturar',
+            RezagaEmpaque::where('proceso_id', $proceso->id)->firstOrFail()->observaciones,
+        );
+    }
+
+    public function test_cerrar_en_bins_sin_observaciones_deja_observaciones_nulas(): void
+    {
+        $proceso = $this->crearProcesoBins(10);
+
+        $this->postJson(self::BASE."/proceso/{$proceso->id}/cerrar", $this->cuerpoCierre([
+            'rezagas_bins' => [['tipo_carga_id' => $this->binHoja->id, 'bins' => 1]],
+        ]))->assertOk();
+
+        $this->assertNull(RezagaEmpaque::where('proceso_id', $proceso->id)->firstOrFail()->observaciones);
+    }
 }

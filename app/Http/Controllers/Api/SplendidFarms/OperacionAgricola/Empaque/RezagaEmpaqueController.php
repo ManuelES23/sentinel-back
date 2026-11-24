@@ -269,7 +269,7 @@ class RezagaEmpaqueController extends Controller
     {
         $validated = $request->validate([
             'entity_id' => 'sometimes|exists:entities,id',
-            'proceso_id' => 'nullable|exists:proceso_empaque,id',
+            'proceso_id' => 'sometimes|required|exists:proceso_empaque,id',
             'fecha' => 'sometimes|date',
             'tipo_carga_id' => 'sometimes|integer',
             'cantidad_bins' => 'sometimes|integer|min:1',

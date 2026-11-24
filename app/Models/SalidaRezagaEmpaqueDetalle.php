@@ -38,6 +38,22 @@ class SalidaRezagaEmpaqueDetalle extends Model
         return $atributos;
     }
 
+    /**
+     * La clase de la rezaga (`subtipo_rezaga`, `tipo_carga_id`) solo viaja dentro del detalle de
+     * un renglón vendido en bins, que es donde el front distingue Hoja de Fresco; en los renglones
+     * en kg la rezaga conserva exactamente las claves de siempre.
+     */
+    public function relationsToArray(): array
+    {
+        $relaciones = parent::relationsToArray();
+
+        if ($this->getAttribute('bins') === null && isset($relaciones['rezaga']) && is_array($relaciones['rezaga'])) {
+            unset($relaciones['rezaga']['subtipo_rezaga'], $relaciones['rezaga']['tipo_carga_id']);
+        }
+
+        return $relaciones;
+    }
+
     public function salidaRezaga() { return $this->belongsTo(SalidaRezagaEmpaque::class, 'venta_rezaga_id'); }
     public function rezaga() { return $this->belongsTo(RezagaEmpaque::class, 'rezaga_id'); }
 }

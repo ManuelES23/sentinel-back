@@ -317,6 +317,36 @@ class RezagaEnBinsTest extends TestCase
         $this->assertSame(95.5, (float) $rezaga->fresh()->cantidad_kg);
     }
 
+    public function test_update_en_bins_no_admite_quitar_el_proceso(): void
+    {
+        $proceso = $this->crearProcesoBins();
+        $rezaga = $this->crearRezagaBins($proceso);
+
+        $this->putJson(self::BASE.'/rezaga/'.$rezaga->id, ['proceso_id' => null])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('proceso_id');
+
+        $this->assertSame($proceso->id, (int) $rezaga->fresh()->proceso_id);
+
+        // Omitir la clave conserva el proceso.
+        $this->putJson(self::BASE.'/rezaga/'.$rezaga->id, ['motivo' => 'Nota'])->assertOk();
+        $this->assertSame($proceso->id, (int) $rezaga->fresh()->proceso_id);
+    }
+
+    public function test_update_sin_interruptor_acepta_proceso_nulo_como_hoy(): void
+    {
+        $proceso = $this->crearRecepcionConProduccion($this->productorPrincipal, 'MG-NULO')['proceso'];
+        $rezaga = $this->crearRezagaBins($proceso, [
+            'cantidad_bins' => null,
+            'tipo_carga_id' => null,
+            'cantidad_kg' => 40,
+        ]);
+
+        $this->putJson(self::BASE.'/rezaga/'.$rezaga->id, ['proceso_id' => null])->assertOk();
+
+        $this->assertNull($rezaga->fresh()->proceso_id);
+    }
+
     public function test_update_sin_interruptor_igual_que_hoy(): void
     {
         $proceso = $this->crearRecepcionConProduccion($this->productorPrincipal, 'MG')['proceso'];
