@@ -135,22 +135,30 @@ final class ResumenProgramaSemanal
     }
 
     /**
-     * Necesidad de empaque por presentación (ventas, por día de empaque), el
+     * Necesidad de empaque por presentación y tipo de empaque («Bulk · RPC»,
+     * «Bulk · Cartón»…; ventas, por día de empaque), en el orden de los
+     * catálogos; las ventas sin empaque van como «· Sin empaque». Después, el
      * sobrante asignado si hay y el total (siempre).
      */
     private function necesidad(array $semana, array $columnas, ?int $cultivoId): array
     {
+        $empaques = array_merge(
+            array_map(fn ($t) => [(int) $t['id'], $t['nombre']], $semana['catalogos']['tipos_empaque']),
+            [[null, 'Sin empaque']],
+        );
         $filas = [];
         foreach ($semana['catalogos']['presentaciones'] as $p) {
             if ((int) $p['cultivo_id'] !== $cultivoId) {
                 continue;
             }
-            $valores = $this->porColumna($columnas, fn (array $s, int $d) => $this->sumaEmpaque($s, $cultivoId, $d, 'ok', (int) $p['id']));
-            if ($this->tieneDatos($valores)) {
-                $filas[] = $this->fila($p['nombre'], $valores, $columnas, 'cajas');
+            foreach ($empaques as [$empaqueId, $empaqueNombre]) {
+                $valores = $this->porColumna($columnas, fn (array $s, int $d) => $this->sumaEmpaque($s, $cultivoId, $d, ['ok', 'sin_clasificar'], (int) $p['id'], $empaqueId));
+                if ($this->tieneDatos($valores)) {
+                    $filas[] = $this->fila($p['nombre'].' · '.$empaqueNombre, $valores, $columnas, 'cajas');
+                }
             }
         }
-        $sobrante = $this->porColumna($columnas, fn (array $s, int $d) => $this->sumaEmpaque($s, $cultivoId, $d, 'sobrante'));
+        $sobrante = $this->porColumna($columnas, fn (array $s, int $d) => $this->sumaEmpaque($s, $cultivoId, $d, ['sobrante']));
         if ($this->tieneDatos($sobrante)) {
             $filas[] = $this->fila('Sobrante asignado', $sobrante, $columnas, 'cajas');
         }
@@ -284,16 +292,24 @@ final class ResumenProgramaSemanal
         return $campo === 'hectareas' ? round($suma, 2) : (int) $suma;
     }
 
-    /** Cajas del programa de empaque de un día, por clase y (opcional) presentación, solo del cultivo. */
-    private function sumaEmpaque(array $semana, ?int $cultivoId, int $dia, string $clase, ?int $presentacionId = null): int
+    /**
+     * Cajas del programa de empaque de un día, solo del cultivo, de las clases dadas y, si se indican,
+     * de una presentación y un tipo de empaque (`$empaqueId` null = sin empaque; `false` = cualquiera).
+     *
+     * @param  list<string>  $clases
+     */
+    private function sumaEmpaque(array $semana, ?int $cultivoId, int $dia, array $clases, ?int $presentacionId = null, int|null|false $empaqueId = false): int
     {
         $cultivoDe = array_column($semana['catalogos']['presentaciones'], 'cultivo_id', 'id');
         $suma = 0;
         foreach ($semana['empaque'] as $r) {
-            if ($r['clase'] !== $clase || (int) ($cultivoDe[$r['presentacion_id']] ?? 0) !== $cultivoId) {
+            if (! in_array($r['clase'], $clases, true) || (int) ($cultivoDe[$r['presentacion_id']] ?? 0) !== $cultivoId) {
                 continue;
             }
             if ($presentacionId !== null && (int) $r['presentacion_id'] !== $presentacionId) {
+                continue;
+            }
+            if ($empaqueId !== false && ($r['tipo_empaque_id'] === null ? null : (int) $r['tipo_empaque_id']) !== $empaqueId) {
                 continue;
             }
             $suma += (int) ($r['cajas'][$dia] ?? 0);
