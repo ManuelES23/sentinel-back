@@ -3,10 +3,14 @@
 namespace App\Http\Controllers\Api\SplendidFarms\Inventory;
 
 use App\Http\Controllers\Controller;
+use App\Models\RecepcionEmpaque;
+use App\Models\RezagaEmpaque;
+use App\Models\SalidaCampoCosecha;
 use App\Models\TipoCarga;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Validation\ValidationException;
 
 class TipoCargaController extends Controller
 {
@@ -93,6 +97,15 @@ class TipoCargaController extends Controller
             'is_active' => 'nullable|boolean',
         ]);
 
+        // La clase de rezaga no cambia (ni se quita) cuando ya hay registros ligados.
+        if (array_key_exists('clase_rezaga', $validated)
+            && $validated['clase_rezaga'] !== $tipoCarga->clase_rezaga
+            && $this->tieneRegistrosLigados($tipoCarga)) {
+            throw ValidationException::withMessages([
+                'clase_rezaga' => ['Este tipo de carga ya tiene registros ligados; no se puede cambiar su clase de rezaga.'],
+            ]);
+        }
+
         $tipoCarga->update($validated);
         $tipoCarga->load('cultivo:id,nombre');
 
@@ -101,6 +114,18 @@ class TipoCargaController extends Controller
             'message' => 'Tipo de carga actualizado',
             'data' => $tipoCarga,
         ]);
+    }
+
+    /**
+     * Registros vivos (sin borrado suave) que dependen de la clase del tipo:
+     * rezagas de bins, y salidas de campo o recepciones que lo usan como tipo de carga.
+     * Una consulta `exists()` por tabla, con corte en la primera que acierte.
+     */
+    private function tieneRegistrosLigados(TipoCarga $tipoCarga): bool
+    {
+        return RezagaEmpaque::where('tipo_carga_id', $tipoCarga->id)->exists()
+            || SalidaCampoCosecha::where('tipo_carga_id', $tipoCarga->id)->where('eliminado', false)->exists()
+            || RecepcionEmpaque::where('tipo_carga_id', $tipoCarga->id)->exists();
     }
 
     public function destroy(TipoCarga $tipoCarga): JsonResponse
