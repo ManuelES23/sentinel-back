@@ -26,6 +26,13 @@ class TipoCargaController extends Controller
             }
         }
 
+        // Los bins de rezaga (con clase) se ocultan salvo que se pidan.
+        match ($request->query('rezaga')) {
+            'solo' => $query->whereNotNull('clase_rezaga'),
+            'todas' => null,
+            default => $query->whereNull('clase_rezaga'),
+        };
+
         if ($request->filled('search')) {
             $search = $request->search;
             $query->where(function ($q) use ($search) {
@@ -49,6 +56,7 @@ class TipoCargaController extends Controller
             'nombre' => 'required|string|max:100',
             'categoria_caja' => 'required|in:campo,empaque,hidrotermico',
             'peso_estimado_kg' => 'required|numeric|min:0.01',
+            'clase_rezaga' => 'nullable|in:hoja,fresco,cuarto_frio',
             'descripcion' => 'nullable|string',
             'is_active' => 'nullable|boolean',
         ]);
@@ -80,6 +88,7 @@ class TipoCargaController extends Controller
             'nombre' => 'sometimes|string|max:100',
             'categoria_caja' => 'sometimes|in:campo,empaque,hidrotermico',
             'peso_estimado_kg' => 'sometimes|numeric|min:0.01',
+            'clase_rezaga' => 'sometimes|nullable|in:hoja,fresco,cuarto_frio',
             'descripcion' => 'nullable|string',
             'is_active' => 'nullable|boolean',
         ]);

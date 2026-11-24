@@ -14,6 +14,9 @@ class TipoCarga extends Model
 
     protected $table = 'tipos_carga';
 
+    /** Clases de bin de rezaga (Elote en bins); null = tipo de carga normal. */
+    public const CLASES_REZAGA = ['hoja', 'fresco', 'cuarto_frio'];
+
     protected $fillable = [
         'cultivo_id',
         'nombre',
@@ -39,6 +42,22 @@ class TipoCarga extends Model
     public function salidasCampo(): HasMany
     {
         return $this->hasMany(SalidaCampoCosecha::class, 'tipo_carga_id');
+    }
+
+    // ── Rezaga en bins ──────────────────────────────────
+
+    /**
+     * Tipo y subtipo de rezaga que le corresponden a la clase de este tipo de
+     * carga, o null si no tiene clase (o es desconocida).
+     */
+    public function mapeoRezaga(): ?array
+    {
+        return match ($this->clase_rezaga) {
+            'hoja' => ['tipo_rezaga' => 'produccion', 'subtipo_rezaga' => 'hoja'],
+            'fresco' => ['tipo_rezaga' => 'produccion', 'subtipo_rezaga' => 'producto'],
+            'cuarto_frio' => ['tipo_rezaga' => 'cuarto_frio', 'subtipo_rezaga' => 'producto'],
+            default => null,
+        };
     }
 
     // ── Scopes ──────────────────────────────────────────
