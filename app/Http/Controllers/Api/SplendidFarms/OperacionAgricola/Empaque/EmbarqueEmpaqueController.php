@@ -9,6 +9,7 @@ use App\Models\PreEmbarqueEmpaque;
 use App\Models\ProduccionEmpaque;
 use App\Models\ProduccionEmpaqueDetalle;
 use App\Models\RecipeItem;
+use App\Models\Temporada;
 use App\Services\Empaque\ConsumoProduccion;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -210,7 +211,12 @@ class EmbarqueEmpaqueController extends Controller
         $validated['peso_total_kg'] = $pallets->sum(function (ProduccionEmpaque $pallet) use ($palletMetrics) {
             return (float) ($palletMetrics[$pallet->id]['peso_neto_kg'] ?? 0);
         });
-        $validated['peso_bascula_total_kg'] = $pallets->sum('peso_bascula_kg');
+        $pesoBasculaTotal = $pallets->sum('peso_bascula_kg');
+        // En bins los pallets entran a cuarto frío sin báscula: si ninguno trae peso de báscula el
+        // total queda nulo (no 0) para que tableros y manifiestos caigan al peso estimado.
+        $validated['peso_bascula_total_kg'] = (float) $pesoBasculaTotal <= 0 && Temporada::esDeBins((int) $validated['temporada_id'])
+            ? null
+            : $pesoBasculaTotal;
 
         $embarque = DB::transaction(function () use ($validated, $pallets, $palletMetrics, $posiciones) {
             // Punto de serialización por pallet (id ascendente): se relee su estado bajo el bloqueo

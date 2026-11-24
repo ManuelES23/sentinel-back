@@ -4,6 +4,8 @@ namespace App\Http\Controllers\Api\SplendidFarms;
 
 use App\Http\Controllers\Controller;
 use App\Models\Temporada;
+use App\Models\RezagaEmpaque;
+use App\Models\SalidaRezagaEmpaque;
 use App\Models\Cultivo;
 use App\Models\Productor;
 use App\Models\ZonaCultivo;
@@ -71,6 +73,7 @@ class TemporadaController extends Controller
                 'locacion' => 'required|string|max:255',
                 'fecha_inicio' => 'required|date',
                 'fecha_fin' => 'required|date|after_or_equal:fecha_inicio',
+                'opera_en_bins' => 'sometimes|boolean',
             ], [
                 'cultivo_id.required' => 'El cultivo es requerido',
                 'cultivo_id.exists' => 'El cultivo seleccionado no existe',
@@ -80,6 +83,7 @@ class TemporadaController extends Controller
                 'fecha_fin.required' => 'La fecha de fin es requerida',
                 'fecha_fin.date' => 'La fecha de fin debe ser una fecha válida',
                 'fecha_fin.after_or_equal' => 'La fecha de fin debe ser posterior o igual a la fecha de inicio',
+                'opera_en_bins.boolean' => 'El campo opera en bins debe ser verdadero o falso',
             ]);
 
             if ($validator->fails()) {
@@ -116,6 +120,7 @@ class TemporadaController extends Controller
                 'fecha_inicio' => $request->fecha_inicio,
                 'fecha_fin' => $request->fecha_fin,
                 'estado' => 'abierta',
+                'opera_en_bins' => $request->boolean('opera_en_bins'),
                 'user_id' => \Illuminate\Support\Facades\Auth::id(),
             ]);
 
@@ -166,6 +171,7 @@ class TemporadaController extends Controller
                 'locacion' => 'required|string|max:255',
                 'fecha_inicio' => 'required|date',
                 'fecha_fin' => 'required|date|after_or_equal:fecha_inicio',
+                'opera_en_bins' => 'sometimes|boolean',
             ], [
                 'cultivo_id.required' => 'El cultivo es requerido',
                 'cultivo_id.exists' => 'El cultivo seleccionado no existe',
@@ -175,12 +181,30 @@ class TemporadaController extends Controller
                 'fecha_fin.required' => 'La fecha de fin es requerida',
                 'fecha_fin.date' => 'La fecha de fin debe ser una fecha válida',
                 'fecha_fin.after_or_equal' => 'La fecha de fin debe ser posterior o igual a la fecha de inicio',
+                'opera_en_bins.boolean' => 'El campo opera en bins debe ser verdadero o falso',
             ]);
 
             if ($validator->fails()) {
                 return response()->json([
                     'message' => 'Error de validación',
                     'errors' => $validator->errors()
+                ], 422);
+            }
+
+            // El modo de bins no se cambia con rezaga o ventas de rezaga ya
+            // registradas (sus unidades dejarían de cuadrar). Mismo valor u
+            // omitir el campo se guarda normal.
+            $cambiaBins = $request->filled('opera_en_bins')
+                && $request->boolean('opera_en_bins') !== $temporada->operaEnBins();
+            if ($cambiaBins && (
+                RezagaEmpaque::where('temporada_id', $temporada->id)->exists()
+                || SalidaRezagaEmpaque::where('temporada_id', $temporada->id)->exists()
+            )) {
+                return response()->json([
+                    'message' => 'Error de validación',
+                    'errors' => [
+                        'opera_en_bins' => ['No se puede cambiar: la temporada ya tiene rezaga o ventas de rezaga registradas.'],
+                    ],
                 ], 422);
             }
 
@@ -204,7 +228,7 @@ class TemporadaController extends Controller
             }
 
             // Actualizar la temporada
-            $temporada->update([
+            $campos = [
                 'cultivo_id' => $request->cultivo_id,
                 'nombre' => $nombre,
                 'locacion' => $request->locacion,
@@ -213,7 +237,11 @@ class TemporadaController extends Controller
                 'año_fin' => $añoFin,
                 'fecha_inicio' => $request->fecha_inicio,
                 'fecha_fin' => $request->fecha_fin,
-            ]);
+            ];
+            if ($request->filled('opera_en_bins')) {
+                $campos['opera_en_bins'] = $request->boolean('opera_en_bins');
+            }
+            $temporada->update($campos);
 
             // Cargar relaciones
             $temporada->load(['cultivo', 'usuario']);

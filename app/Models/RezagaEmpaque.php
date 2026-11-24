@@ -17,7 +17,7 @@ class RezagaEmpaque extends Model
         'temporada_id', 'entity_id', 'proceso_id', 'folio_rezaga',
         'tipo_rezaga', 'subtipo_rezaga', 'fecha', 'cantidad_kg',
         'modo_registro', 'tipo_carga_id', 'total_cajas', 'peso_bascula_kg',
-        'cantidad_unidades_pequenas', 'motivo',
+        'cantidad_unidades_pequenas', 'cantidad_bins', 'motivo',
         'status', 'observaciones', 'created_by',
     ];
 
@@ -26,8 +26,53 @@ class RezagaEmpaque extends Model
         'peso_bascula_kg' => 'decimal:2',
         'total_cajas' => 'integer',
         'cantidad_unidades_pequenas' => 'integer',
+        'cantidad_bins' => 'integer',
         'fecha' => 'date:Y-m-d',
     ];
+
+    /**
+     * `cantidad_bins` solo viaja en el JSON cuando la rezaga se capturó en bins;
+     * las rezagas en kg (las de siempre) conservan exactamente el mismo cuerpo.
+     */
+    public function attributesToArray(): array
+    {
+        $atributos = parent::attributesToArray();
+
+        if (array_key_exists('cantidad_bins', $atributos) && $atributos['cantidad_bins'] === null) {
+            unset($atributos['cantidad_bins']);
+        }
+
+        return $atributos;
+    }
+
+    /**
+     * Bins con los que nació la rezaga: los disponibles hoy más los ya vendidos.
+     * Solo existe para rezagas capturadas en bins; una rezaga en kg devuelve null.
+     */
+    public function historicaBins(?int $vendidoBins): ?int
+    {
+        if ($this->cantidad_bins === null) {
+            return null;
+        }
+
+        return (int) $this->cantidad_bins + (int) $vendidoBins;
+    }
+
+    /**
+     * Anota `cantidad_historica_bins` (junto a `cantidad_historica_kg`) con los
+     * bins vendidos de `ventaDetalles`. No hace nada si la rezaga es en kg, para
+     * que su JSON no cambie. Usa la relación ya cargada (o la carga una vez).
+     */
+    public function anotarHistoricaBins(): static
+    {
+        if ($this->cantidad_bins === null) {
+            return $this;
+        }
+
+        $this->setAttribute('cantidad_historica_bins', $this->historicaBins((int) $this->ventaDetalles->sum('bins')));
+
+        return $this;
+    }
 
     public function temporada() { return $this->belongsTo(Temporada::class); }
     public function entity() { return $this->belongsTo(Entity::class); }
