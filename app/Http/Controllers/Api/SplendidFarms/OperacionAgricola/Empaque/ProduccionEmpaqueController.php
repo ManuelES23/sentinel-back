@@ -12,6 +12,7 @@ use App\Models\ProduccionEmpaqueConsumo;
 use App\Models\ProduccionEmpaqueDetalle;
 use App\Models\Recipe;
 use App\Models\RecipeItem;
+use App\Models\Temporada;
 use App\Services\Empaque\CalculoConsumoReceta;
 use App\Services\Empaque\ConsumoProduccion;
 use Carbon\Carbon;
@@ -997,14 +998,24 @@ class ProduccionEmpaqueController extends Controller
         $nuevoEstado = ! $produccion->en_cuarto_frio;
 
         if ($nuevoEstado) {
+            // En una temporada que opera en bins no hay báscula por pallet:
+            // el peso es opcional y solo se guarda si viene.
+            $enBins = Temporada::esDeBins($produccion->temporada_id);
+
             $validated = $request->validate([
-                'peso_bascula_kg' => 'required|numeric|min:0.01',
+                'peso_bascula_kg' => ($enBins ? 'nullable' : 'required').'|numeric|min:0.01',
             ]);
 
-            $produccion->update([
-                'en_cuarto_frio' => true,
-                'peso_bascula_kg' => $validated['peso_bascula_kg'],
-            ]);
+            $cambios = ['en_cuarto_frio' => true];
+            if ($enBins) {
+                if (isset($validated['peso_bascula_kg'])) {
+                    $cambios['peso_bascula_kg'] = $validated['peso_bascula_kg'];
+                }
+            } else {
+                $cambios['peso_bascula_kg'] = $validated['peso_bascula_kg'];
+            }
+
+            $produccion->update($cambios);
         } else {
             $produccion->update([
                 'en_cuarto_frio' => false,
@@ -1033,7 +1044,7 @@ class ProduccionEmpaqueController extends Controller
             'en_cuarto_frio' => 'required|boolean',
         ]);
 
-        if ($validated['en_cuarto_frio']) {
+        if ($validated['en_cuarto_frio'] && ! $this->todosLosPalletsSonDeBins($validated['ids'])) {
             return response()->json([
                 'status' => 'error',
                 'message' => 'Para ingresar a cuarto frío debes capturar peso báscula por pallet. Usa el ingreso individual.',
@@ -1049,6 +1060,24 @@ class ProduccionEmpaqueController extends Controller
             'success' => true,
             'message' => count($validated['ids']) . " pallet(s) {$label} cuarto frío",
         ]);
+    }
+
+    /**
+     * Si todos los pallets son de temporadas que operan en bins (una consulta
+     * por los temporada_id distintos), el ingreso masivo a cuarto frío no
+     * necesita peso de báscula por pallet.
+     *
+     * @param  array<int, int|string>  $ids
+     */
+    private function todosLosPalletsSonDeBins(array $ids): bool
+    {
+        $temporadaIds = ProduccionEmpaque::whereIn('id', $ids)->distinct()->pluck('temporada_id');
+
+        if ($temporadaIds->isEmpty() || $temporadaIds->contains(null)) {
+            return false;
+        }
+
+        return Temporada::whereIn('id', $temporadaIds)->where('opera_en_bins', true)->count() === $temporadaIds->count();
     }
 
     /**

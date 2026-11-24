@@ -31,6 +31,8 @@ class SalidaRezagaEmpaque extends Model
         'placa',
         'total_peso_kg',
         'precio_kg',
+        'total_bins',
+        'precio_bin',
         'monto_total',
         'status',
         'observaciones',
@@ -46,12 +48,31 @@ class SalidaRezagaEmpaque extends Model
     protected $casts = [
         'total_peso_kg' => 'decimal:2',
         'precio_kg' => 'decimal:2',
+        'total_bins' => 'integer',
+        'precio_bin' => 'decimal:2',
         'monto_total' => 'decimal:2',
         'fecha_venta' => 'date:Y-m-d',
         'revision_kilos_ok' => 'boolean',
         'revision_importe_ok' => 'boolean',
         'revision_revisado_en' => 'datetime:Y-m-d H:i:s',
     ];
+
+    /**
+     * `total_bins` y `precio_bin` solo viajan en el JSON cuando la venta se hizo
+     * en bins; las ventas en kg (las de siempre) conservan exactamente el mismo cuerpo.
+     */
+    public function attributesToArray(): array
+    {
+        $atributos = parent::attributesToArray();
+
+        foreach (['total_bins', 'precio_bin'] as $clave) {
+            if (array_key_exists($clave, $atributos) && $atributos[$clave] === null) {
+                unset($atributos[$clave]);
+            }
+        }
+
+        return $atributos;
+    }
 
     public function temporada() { return $this->belongsTo(Temporada::class); }
     public function entity() { return $this->belongsTo(Entity::class); }

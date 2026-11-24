@@ -7,6 +7,7 @@ use App\Models\ProcesoEmpaque;
 use App\Models\ProduccionEmpaque;
 use App\Models\RecepcionEmpaque;
 use App\Models\RezagaEmpaque;
+use App\Models\Temporada;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -34,6 +35,8 @@ class BalanceMasasEmpaqueController extends Controller
 
         [$fechaInicio, $fechaFin] = $this->resolveDateRange($validated);
         $folios = $this->parseFolios($request, $validated);
+        // Una sola consulta por petición: solo una temporada en bins recibe las claves de bins.
+        $enBins = Temporada::esDeBins((int) $validated['temporada_id']);
 
         $recepciones = $this->queryRecepciones($validated, $fechaInicio, $fechaFin, $folios)
             ->keyBy('id');
@@ -57,8 +60,8 @@ class BalanceMasasEmpaqueController extends Controller
         [$produccionNetaByFolio, $produccionBasculaByFolio] = $this->queryProduccionAtribuida($validated, $processIds, $groups);
 
         $rows = collect($groups)
-            ->map(function (array $group) use ($rezagasByProceso, $produccionNetaByFolio, $produccionBasculaByFolio) {
-                return $this->buildRow($group, $rezagasByProceso, $produccionNetaByFolio, $produccionBasculaByFolio);
+            ->map(function (array $group) use ($rezagasByProceso, $produccionNetaByFolio, $produccionBasculaByFolio, $enBins) {
+                return $this->buildRow($group, $rezagasByProceso, $produccionNetaByFolio, $produccionBasculaByFolio, $enBins);
             })
             ->sortBy([
                 ['fecha_recepcion', 'desc'],
@@ -81,15 +84,26 @@ class BalanceMasasEmpaqueController extends Controller
             ? round(($summary['peso_salida_control_kg'] / $summary['peso_recibido_bascula_kg']) * 100, 2)
             : 0.0;
 
+        if ($enBins) {
+            $summary['bins_entrada'] = (int) $rows->sum('bins_entrada');
+            $summary['bins_rezaga'] = (int) $rows->sum('bins_rezaga');
+        }
+
         $options = $this->buildOptions($validated, $fechaInicio, $fechaFin, $folios);
+
+        $data = [
+            'rows' => $rows,
+            'summary' => $summary,
+            'options' => $options,
+        ];
+
+        if ($enBins) {
+            $data['opera_en_bins'] = true;
+        }
 
         return response()->json([
             'success' => true,
-            'data' => [
-                'rows' => $rows,
-                'summary' => $summary,
-                'options' => $options,
-            ],
+            'data' => $data,
         ]);
     }
 
@@ -284,7 +298,7 @@ class BalanceMasasEmpaqueController extends Controller
 
         return RezagaEmpaque::query()
             ->with([
-                'ventaDetalles:id,rezaga_id,peso_kg',
+                'ventaDetalles:id,rezaga_id,peso_kg,bins',
                 'ajustesPeso:id,rezaga_empaque_id,kg_antes,kg_despues',
             ])
             ->whereIn('proceso_id', $processIds)
@@ -475,7 +489,7 @@ class BalanceMasasEmpaqueController extends Controller
             ->all();
     }
 
-    private function buildRow(array $group, Collection $rezagasByProceso, array $produccionNetaByFolio, array $produccionBasculaByFolio): array
+    private function buildRow(array $group, Collection $rezagasByProceso, array $produccionNetaByFolio, array $produccionBasculaByFolio, bool $enBins = false): array
     {
         $recepcion = $group['recepcion'];
         $procesos = collect($group['procesos']);
@@ -496,10 +510,14 @@ class BalanceMasasEmpaqueController extends Controller
 
         $pesoRezagaLavado = 0.0;
         $pesoRezagaProduccion = 0.0;
+        $binsRezaga = 0;
         foreach ($procesos as $proceso) {
             $rezagas = $rezagasByProceso->get((int) $proceso->id, collect());
             foreach ($rezagas as $rezaga) {
                 $historicaKg = $this->resolveRezagaHistoricaKg($rezaga);
+                if ($enBins) {
+                    $binsRezaga += $this->resolveRezagaHistoricaBins($rezaga);
+                }
                 $tipoRezaga = strtolower(trim((string) ($rezaga->tipo_rezaga ?? '')));
 
                 if ($tipoRezaga === 'lavado') {
@@ -511,7 +529,10 @@ class BalanceMasasEmpaqueController extends Controller
         }
 
         $pesoProduccionNeto = (float) ($produccionNetaByFolio[$folio] ?? 0);
-        $pesoProduccionBascula = (float) ($produccionBasculaByFolio[$folio] ?? 0);
+        // En bins el pallet entra sin báscula: el peso producido es el neto estimado atribuido.
+        $pesoProduccionBascula = $enBins
+            ? $pesoProduccionNeto
+            : (float) ($produccionBasculaByFolio[$folio] ?? 0);
 
         $pesoRecibidoBascula = 0.0;
         if ($recepcion) {
@@ -560,7 +581,7 @@ class BalanceMasasEmpaqueController extends Controller
             ?: $procesos->pluck('fecha_entrada')->filter()->sort()->first()
             ?: $procesos->pluck('fecha_proceso')->filter()->sort()->first();
 
-        return [
+        $fila = [
             'folio' => $folio,
             'fecha_recepcion' => $fechaRecepcion,
             'productor' => [
@@ -593,6 +614,23 @@ class BalanceMasasEmpaqueController extends Controller
             'diferencia_kg' => round($diferenciaKg, 2),
             'aprovechamiento_pct' => $pesoRecibidoBascula > 0 ? round(($pesoSalidaControl / $pesoRecibidoBascula) * 100, 2) : 0.0,
         ];
+
+        if ($enBins) {
+            $fila['bins_entrada'] = $cantidadEntrada;
+            $fila['bins_rezaga'] = $binsRezaga;
+        }
+
+        return $fila;
+    }
+
+    /**
+     * Bins de la rezaga desde que se capturó: los que quedan más los que ya se
+     * vendieron. Análogo a resolveRezagaHistoricaKg, pero sin ajustes de peso (un
+     * ajuste mueve kg, nunca bins).
+     */
+    private function resolveRezagaHistoricaBins(RezagaEmpaque $rezaga): int
+    {
+        return (int) ($rezaga->cantidad_bins ?? 0) + (int) $rezaga->ventaDetalles->sum('bins');
     }
 
     private function resolveRezagaHistoricaKg(RezagaEmpaque $rezaga): float

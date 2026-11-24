@@ -14,12 +14,15 @@ use App\Models\RecepcionEmpaque;
 use App\Models\RezagaEmpaque;
 use App\Models\SalidaRezagaEmpaqueDetalle;
 use App\Models\Submodule;
+use App\Models\Temporada;
 use App\Models\UserSubmodulePermission;
+use App\Services\Empaque\RezagaEnBins;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Validation\ValidationException;
 
 class ProcesoEmpaqueController extends Controller
 {
@@ -57,7 +60,7 @@ class ProcesoEmpaqueController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $query = ProcesoEmpaque::with([...$this->eagerLoad, 'producciones', 'rezagas.ventaDetalles:id,rezaga_id,peso_kg']);
+        $query = ProcesoEmpaque::with([...$this->eagerLoad, 'producciones', 'rezagas.ventaDetalles:id,rezaga_id,peso_kg,bins']);
 
         $asOf = null;
         if ($request->filled('as_of_date')) {
@@ -127,6 +130,7 @@ class ProcesoEmpaqueController extends Controller
             $proceso->rezagas->each(function ($rezaga) {
                 $vendido = (float) $rezaga->ventaDetalles->sum('peso_kg');
                 $rezaga->setAttribute('cantidad_historica_kg', round((float) $rezaga->cantidad_kg + $vendido, 2));
+                $rezaga->anotarHistoricaBins();
             });
         });
 
@@ -365,7 +369,9 @@ class ProcesoEmpaqueController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => "Folio movido a procesando ({$unidadesParaProcesar} cajas)",
+            'message' => Temporada::esDeBins((int) $proceso->temporada_id)
+                ? "Folio movido a procesando ({$unidadesParaProcesar} bins)"
+                : "Folio movido a procesando ({$unidadesParaProcesar} cajas)",
             'data' => $proceso,
         ], 200);
     }
@@ -437,7 +443,9 @@ class ProcesoEmpaqueController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => "Folio movido a procesando ($cantidad uds)",
+            'message' => Temporada::esDeBins((int) $validated['temporada_id'])
+                ? "Folio movido a procesando ($cantidad bins)"
+                : "Folio movido a procesando ($cantidad uds)",
             'data' => $proceso,
         ], 201);
     }
@@ -706,7 +714,11 @@ class ProcesoEmpaqueController extends Controller
             ], 422);
         }
 
-        $validated = $request->validate([
+        // La temporada del folio decide si la rezaga se captura en bins (una sola consulta).
+        $temporada = Temporada::find($proceso->temporada_id);
+        $enBins = $temporada !== null && $temporada->operaEnBins();
+
+        $reglas = [
             'cantidad_cuarto_frio' => 'required|integer|min:0',
             'cantidad_fresco' => 'required|integer|min:0',
             'rezaga_kg' => 'nullable|numeric|min:0.01',
@@ -715,7 +727,32 @@ class ProcesoEmpaqueController extends Controller
             'usar_rezagas_tarima' => 'nullable|boolean',
             'rezaga_tarima_produccion_kg' => 'nullable|numeric|min:0',
             'rezaga_tarima_lavado_kg' => 'nullable|numeric|min:0',
-        ]);
+        ];
+
+        if ($enBins) {
+            // En bins la rezaga se captura por renglones (rezagas_bins), no en kg ni por tarima.
+            $reglas['rezaga_kg'] = [
+                'nullable',
+                function (string $attribute, mixed $value, \Closure $fail) {
+                    $fail('En esta temporada la rezaga se captura en bins.');
+                },
+            ];
+            $reglas['subtipo_rezaga'] = 'nullable|in:hoja,producto';
+            $reglas['usar_rezagas_tarima'] = [
+                'nullable',
+                'boolean',
+                function (string $attribute, mixed $value, \Closure $fail) {
+                    if (filter_var($value, FILTER_VALIDATE_BOOLEAN)) {
+                        $fail('En esta temporada la rezaga se captura en bins; no aplica la rezaga por tarima.');
+                    }
+                },
+            ];
+            $reglas['rezagas_bins'] = 'nullable|array|max:10';
+            $reglas['rezagas_bins.*.tipo_carga_id'] = 'required|integer';
+            $reglas['rezagas_bins.*.bins'] = 'required|integer|min:1';
+        }
+
+        $validated = $request->validate($reglas);
 
         $cuartoFrio = $validated['cantidad_cuarto_frio'];
         $fresco = $validated['cantidad_fresco'];
@@ -728,12 +765,66 @@ class ProcesoEmpaqueController extends Controller
             ], 422);
         }
 
+        // Rezaga en bins: se validan TODOS los renglones antes de escribir nada.
+        $validarRezagasBins = function () use ($enBins, $validated, $temporada): array {
+            $atributosRenglones = [];
+            if ($enBins) {
+                foreach (array_values($validated['rezagas_bins'] ?? []) as $i => $renglon) {
+                    try {
+                        $atributosRenglones[] = RezagaEnBins::atributos(
+                            $temporada,
+                            (int) $renglon['tipo_carga_id'],
+                            (int) $renglon['bins'],
+                            ['hoja', 'fresco'],
+                        );
+                    } catch (ValidationException $e) {
+                        $errores = [];
+                        foreach ($e->errors() as $campo => $mensajes) {
+                            $campoRenglon = $campo === 'cantidad_bins' ? 'bins' : $campo;
+                            $errores["rezagas_bins.{$i}.{$campoRenglon}"] = $mensajes;
+                        }
+
+                        throw ValidationException::withMessages($errores);
+                    }
+                }
+            }
+
+            return $atributosRenglones;
+        };
+
+        // Un registro por renglón, ligado al folio; las observaciones del cierre se copian a cada uno.
+        $crearRezagasBins = function (array $atributosRenglones) use ($proceso, $request, $validated): void {
+            foreach ($atributosRenglones as $atributos) {
+                RezagaEmpaque::create(array_merge($atributos, [
+                    'temporada_id' => $proceso->temporada_id,
+                    'entity_id' => $proceso->entity_id,
+                    'proceso_id' => $proceso->id,
+                    'folio_rezaga' => $this->generarFolioRezaga($proceso->entity_id),
+                    'fecha' => now('America/Mexico_City')->toDateString(),
+                    'status' => 'pendiente',
+                    'observaciones' => $validated['rezaga_observaciones'] ?? null,
+                    'created_by' => $request->user()->id,
+                ]));
+            }
+        };
+
         if ($totalProcesado === 0) {
             // Permite destrabar folios reabiertos incorrectamente con disponible = 0.
             if ((int) $proceso->cantidad_disponible === 0) {
-                $proceso->update([
-                    'status' => 'procesado',
-                ]);
+                // En bins, un folio que se cierra con 0/0 todavía puede traer rezaga por renglones
+                // (se olvidó capturarla): se valida y se crea junto con el cierre.
+                $atributosDestrabar = $validarRezagasBins();
+
+                if ($atributosDestrabar !== []) {
+                    DB::transaction(function () use ($proceso, $crearRezagasBins, $atributosDestrabar) {
+                        $crearRezagasBins($atributosDestrabar);
+                        $proceso->update(['status' => 'procesado']);
+                    });
+                } else {
+                    $proceso->update([
+                        'status' => 'procesado',
+                    ]);
+                }
 
                 $proceso->load($this->eagerLoad);
 
@@ -751,6 +842,8 @@ class ProcesoEmpaqueController extends Controller
         }
 
         $remainder = $proceso->cantidad_disponible - $totalProcesado;
+
+        $atributosRezagasBins = $validarRezagasBins();
 
         $crearRezaga = function (string $tipoRezaga, float $kg, ?string $subtipo, ?string $observaciones) use ($proceso, $request) {
             if ($kg <= 0) {
@@ -775,71 +868,86 @@ class ProcesoEmpaqueController extends Controller
             ]);
         };
 
-        // Automatic mode: consume rezagas capturadas por tarima del folio.
-        // If a total is provided but no tarima exists for that type, create one consolidated record.
-        if ($request->boolean('usar_rezagas_tarima')) {
-            $tarimaProduccionKg = (float) RezagaEmpaque::query()
-                ->where('proceso_id', $proceso->id)
-                ->where('modo_registro', 'tarima')
-                ->where('tipo_rezaga', 'produccion')
-                ->sum('cantidad_kg');
+        // Escrituras del cierre (rezagas + folio). En bins van en una sola transacción.
+        $escribirCierre = function () use (
+            $request, $validated, $proceso, $crearRezaga, $crearRezagasBins, $atributosRezagasBins,
+            $cuartoFrio, $fresco, $remainder,
+        ) {
+            // Automatic mode: consume rezagas capturadas por tarima del folio.
+            // If a total is provided but no tarima exists for that type, create one consolidated record.
+            if ($request->boolean('usar_rezagas_tarima')) {
+                $tarimaProduccionKg = (float) RezagaEmpaque::query()
+                    ->where('proceso_id', $proceso->id)
+                    ->where('modo_registro', 'tarima')
+                    ->where('tipo_rezaga', 'produccion')
+                    ->sum('cantidad_kg');
 
-            $tarimaLavadoKg = (float) RezagaEmpaque::query()
-                ->where('proceso_id', $proceso->id)
-                ->where('modo_registro', 'tarima')
-                ->where('tipo_rezaga', 'lavado')
-                ->sum('cantidad_kg');
+                $tarimaLavadoKg = (float) RezagaEmpaque::query()
+                    ->where('proceso_id', $proceso->id)
+                    ->where('modo_registro', 'tarima')
+                    ->where('tipo_rezaga', 'lavado')
+                    ->sum('cantidad_kg');
 
-            $fallbackProduccionKg = (float) ($validated['rezaga_tarima_produccion_kg'] ?? 0);
-            $fallbackLavadoKg = (float) ($validated['rezaga_tarima_lavado_kg'] ?? 0);
+                $fallbackProduccionKg = (float) ($validated['rezaga_tarima_produccion_kg'] ?? 0);
+                $fallbackLavadoKg = (float) ($validated['rezaga_tarima_lavado_kg'] ?? 0);
 
-            if ($tarimaProduccionKg <= 0 && $fallbackProduccionKg > 0) {
-                $crearRezaga('produccion', $fallbackProduccionKg, 'producto', 'Auto-generada al cierre desde control por tarimas');
+                if ($tarimaProduccionKg <= 0 && $fallbackProduccionKg > 0) {
+                    $crearRezaga('produccion', $fallbackProduccionKg, 'producto', 'Auto-generada al cierre desde control por tarimas');
+                }
+
+                if ($tarimaLavadoKg <= 0 && $fallbackLavadoKg > 0) {
+                    $crearRezaga('lavado', $fallbackLavadoKg, 'producto', 'Auto-generada al cierre desde control por tarimas');
+                }
             }
 
-            if ($tarimaLavadoKg <= 0 && $fallbackLavadoKg > 0) {
-                $crearRezaga('lavado', $fallbackLavadoKg, 'producto', 'Auto-generada al cierre desde control por tarimas');
+            // Rezaga en bins: un registro por renglón, ligado al folio.
+            $crearRezagasBins($atributosRezagasBins);
+
+            // Register production rezaga if provided
+            if ($request->filled('rezaga_kg')) {
+                $crearRezaga(
+                    'produccion',
+                    (float) $validated['rezaga_kg'],
+                    $validated['subtipo_rezaga'] ?? 'producto',
+                    $validated['rezaga_observaciones'] ?? null,
+                );
             }
+
+            // peso_entrada_kg and cantidad_entrada stay original (full folio entry).
+            // Calculate the weight of the remainder proportionally for piso display.
+            $pesoEntradaKgOriginal = (float) $proceso->peso_entrada_kg;
+            $cantidadEntradaOriginal = (int) $proceso->cantidad_entrada;
+
+            $pesoRemainder = 0;
+            if ($cantidadEntradaOriginal > 0 && $remainder > 0) {
+                $pesoUnitario = $pesoEntradaKgOriginal / $cantidadEntradaOriginal;
+                $pesoRemainder = round($pesoUnitario * $remainder, 2);
+            }
+
+            // Accumulate cuarto_frio/fresco so reopen+close cycles add up
+            // (e.g. first closure 540 + second closure of remaining 120 = 660 total)
+            $nuevoCuartoFrio = (int) $proceso->cantidad_cuarto_frio + $cuartoFrio;
+            $nuevoFresco = (int) $proceso->cantidad_fresco + $fresco;
+
+            // Update the proceso:
+            // - cantidad_entrada stays original (660)
+            // - cantidad_disponible = what goes back to piso
+            // - peso_disponible_kg = weight of remainder
+            // - cantidad_cuarto_frio + cantidad_fresco accumulate across multiple closures
+            $proceso->update([
+                'cantidad_cuarto_frio' => $nuevoCuartoFrio,
+                'cantidad_fresco' => $nuevoFresco,
+                'cantidad_disponible' => $remainder,
+                'peso_disponible_kg' => $pesoRemainder,
+                'status' => 'procesado',
+            ]);
+        };
+
+        if ($enBins) {
+            DB::transaction($escribirCierre);
+        } else {
+            $escribirCierre();
         }
-
-        // Register production rezaga if provided
-        if ($request->filled('rezaga_kg')) {
-            $crearRezaga(
-                'produccion',
-                (float) $validated['rezaga_kg'],
-                $validated['subtipo_rezaga'] ?? 'producto',
-                $validated['rezaga_observaciones'] ?? null,
-            );
-        }
-
-        // peso_entrada_kg and cantidad_entrada stay original (full folio entry).
-        // Calculate the weight of the remainder proportionally for piso display.
-        $pesoEntradaKgOriginal = (float) $proceso->peso_entrada_kg;
-        $cantidadEntradaOriginal = (int) $proceso->cantidad_entrada;
-
-        $pesoRemainder = 0;
-        if ($cantidadEntradaOriginal > 0 && $remainder > 0) {
-            $pesoUnitario = $pesoEntradaKgOriginal / $cantidadEntradaOriginal;
-            $pesoRemainder = round($pesoUnitario * $remainder, 2);
-        }
-
-        // Accumulate cuarto_frio/fresco so reopen+close cycles add up
-        // (e.g. first closure 540 + second closure of remaining 120 = 660 total)
-        $nuevoCuartoFrio = (int) $proceso->cantidad_cuarto_frio + $cuartoFrio;
-        $nuevoFresco = (int) $proceso->cantidad_fresco + $fresco;
-
-        // Update the proceso:
-        // - cantidad_entrada stays original (660)
-        // - cantidad_disponible = what goes back to piso
-        // - peso_disponible_kg = weight of remainder
-        // - cantidad_cuarto_frio + cantidad_fresco accumulate across multiple closures
-        $proceso->update([
-            'cantidad_cuarto_frio' => $nuevoCuartoFrio,
-            'cantidad_fresco' => $nuevoFresco,
-            'cantidad_disponible' => $remainder,
-            'peso_disponible_kg' => $pesoRemainder,
-            'status' => 'procesado',
-        ]);
 
         // Remainder automatically goes back to piso (recepcion's available quantity)
         $proceso->load($this->eagerLoad);
@@ -920,9 +1028,12 @@ class ProcesoEmpaqueController extends Controller
 
         $proceso->load($this->eagerLoad);
 
+        // En una temporada en bins la entrada se cuenta en bins, no en cajas.
+        $unidad = Temporada::esDeBins((int) $proceso->temporada_id) ? 'bins' : 'cajas';
+
         return response()->json([
             'success' => true,
-            'message' => "Folio {$proceso->folio_proceso} reabierto con disponibilidad restaurada ({$cantidadEntrada} cajas)",
+            'message' => "Folio {$proceso->folio_proceso} reabierto con disponibilidad restaurada ({$cantidadEntrada} {$unidad})",
             'data' => $proceso,
         ]);
     }

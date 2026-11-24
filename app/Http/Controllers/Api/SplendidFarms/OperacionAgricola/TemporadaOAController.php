@@ -53,6 +53,7 @@ class TemporadaOAController extends Controller
                 'fecha_inicio' => $temporada->fecha_inicio?->format('Y-m-d'),
                 'fecha_fin' => $temporada->fecha_fin?->format('Y-m-d'),
                 'estado' => $temporada->estado,
+                'opera_en_bins' => (bool) $temporada->opera_en_bins,
                 'created_at' => $temporada->created_at,
             ];
         });
@@ -93,6 +94,7 @@ class TemporadaOAController extends Controller
                 'fecha_inicio' => $temporada->fecha_inicio?->format('Y-m-d'),
                 'fecha_fin' => $temporada->fecha_fin?->format('Y-m-d'),
                 'estado' => $temporada->estado,
+                'opera_en_bins' => (bool) $temporada->opera_en_bins,
                 'created_at' => $temporada->created_at,
                 'stats' => $stats,
             ],

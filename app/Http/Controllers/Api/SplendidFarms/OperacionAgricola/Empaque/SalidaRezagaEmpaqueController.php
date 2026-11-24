@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\SalidaRezagaEmpaque;
 use App\Models\RezagaEmpaque;
 use App\Models\Submodule;
+use App\Models\Temporada;
+use App\Models\TipoCarga;
 use App\Models\UserSubmodulePermission;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
@@ -20,7 +22,7 @@ class SalidaRezagaEmpaqueController extends Controller
 
     private array $eagerLoad = [
         'entity:id,name,code',
-        'detalles.rezaga:id,folio_rezaga,tipo_rezaga,cantidad_kg,proceso_id',
+        'detalles.rezaga:id,folio_rezaga,tipo_rezaga,subtipo_rezaga,tipo_carga_id,cantidad_kg,cantidad_bins,proceso_id',
         'detalles.rezaga.proceso:id,folio_proceso,etapa_id,recepcion_id',
         'detalles.rezaga.proceso.productor:id,nombre,apellido',
         'detalles.rezaga.proceso.lote:id,nombre,numero_lote',
@@ -92,6 +94,11 @@ class SalidaRezagaEmpaqueController extends Controller
     {
         if ($error = $this->ensurePermission($request, 'create', 'crear salidas de rezaga')) {
             return $error;
+        }
+
+        // Una sola consulta por petición: la temporada decide el camino.
+        if (Temporada::esDeBins($request->filled('temporada_id') ? (int) $request->input('temporada_id') : null)) {
+            return $this->storeEnBins($request);
         }
 
         $validated = $request->validate([
@@ -293,6 +300,11 @@ class SalidaRezagaEmpaqueController extends Controller
             return $error;
         }
 
+        // Las ventas capturadas en bins se editan por su propio camino.
+        if ($salidaRezaga->total_bins !== null) {
+            return $this->updateEnBins($request, $salidaRezaga);
+        }
+
         $validated = $request->validate([
             'tipo_salida' => 'sometimes|in:venta,regalia,desecho',
             'comprador' => 'nullable|string|max:200',
@@ -397,16 +409,252 @@ class SalidaRezagaEmpaqueController extends Controller
                     continue;
                 }
 
-                $rezaga->update([
+                $restauracion = [
                     'status' => 'pendiente',
                     'cantidad_kg' => ((float) $rezaga->cantidad_kg) + ((float) $det->peso_kg),
-                ]);
+                ];
+
+                // Solo los renglones vendidos en bins devuelven bins; los de kg siguen igual.
+                if ($det->bins !== null) {
+                    $restauracion['cantidad_bins'] = ((int) $rezaga->cantidad_bins) + (int) $det->bins;
+                }
+
+                $rezaga->update($restauracion);
             }
             $salidaRezaga->detalles()->delete();
             $salidaRezaga->delete();
         });
 
         return response()->json(['success' => true, 'message' => 'Salida de rezaga eliminada']);
+    }
+
+    /**
+     * Venta de rezaga de una temporada que opera en bins. El kg de cada renglón
+     * sale de la propia rezaga (cantidad_kg / cantidad_bins), nunca del catálogo,
+     * y todo se valida antes de escribir.
+     */
+    private function storeEnBins(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'temporada_id' => 'required|exists:temporadas,id',
+            'entity_id' => 'required|exists:entities,id',
+            'tipo_salida' => 'required|in:venta,regalia,desecho',
+            'fecha_venta' => 'required|date',
+            'comprador' => 'required_if:tipo_salida,venta|nullable|string|max:200',
+            'precio_bin' => 'required_if:tipo_salida,venta|nullable|numeric|min:0',
+            'autorizado_por' => 'required|string|max:150',
+            'solicitado_por' => 'required|string|max:150',
+            'chofer' => 'required|string|max:150',
+            'placa' => 'required|string|max:50',
+            'status' => 'nullable|in:pendiente,pagada,cancelada',
+            'observaciones' => 'nullable|string',
+            'detalles' => 'required|array|min:1',
+            'detalles.*.rezaga_id' => 'required|exists:rezaga_empaque,id',
+            'detalles.*.bins' => 'required|integer|min:1',
+        ]);
+
+        $validated['status'] = $validated['status'] ?? 'pendiente';
+        $validated['created_by'] = $request->user()->id;
+
+        $precioBin = round((float) ($validated['precio_bin'] ?? 0), 2);
+        if ($validated['tipo_salida'] !== 'venta') {
+            $precioBin = 0.0;
+            $validated['comprador'] = $validated['comprador'] ?? '';
+        }
+
+        $detallesSolicitados = $validated['detalles'];
+        unset($validated['detalles']);
+
+        $ids = collect($detallesSolicitados)->pluck('rezaga_id');
+        if ($ids->count() !== $ids->unique()->count()) {
+            throw ValidationException::withMessages([
+                'detalles' => 'No se puede repetir el mismo folio de rezaga en el detalle.',
+            ]);
+        }
+
+        $salida = null;
+        $maxAttempts = 5;
+
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            try {
+                $salida = DB::transaction(function () use ($validated, $precioBin, $detallesSolicitados) {
+                    $rezagaPendiente = RezagaEmpaque::query()
+                        ->with('tipoCarga:id,clase_rezaga')
+                        ->where('temporada_id', $validated['temporada_id'])
+                        ->where('entity_id', $validated['entity_id'])
+                        ->where('status', 'pendiente')
+                        ->where('cantidad_bins', '>', 0)
+                        ->orderBy('fecha')
+                        ->orderBy('id')
+                        ->lockForUpdate()
+                        ->get()
+                        ->keyBy('id');
+
+                    // Se calcula y valida todo antes de escribir algo.
+                    $renglones = [];
+                    $clases = [];
+                    foreach ($detallesSolicitados as $det) {
+                        $rezaga = $rezagaPendiente->get((int) $det['rezaga_id']);
+                        if (!$rezaga) {
+                            throw ValidationException::withMessages([
+                                'detalles' => 'Uno o más folios de rezaga no están disponibles para esta salida.',
+                            ]);
+                        }
+
+                        $clase = $rezaga->tipoCarga?->clase_rezaga;
+                        if (!in_array($clase, TipoCarga::CLASES_REZAGA, true)) {
+                            throw ValidationException::withMessages([
+                                'detalles' => "La rezaga {$rezaga->folio_rezaga} no tiene un tipo de rezaga válido para venderse en bins.",
+                            ]);
+                        }
+                        $clases[$clase] = true;
+
+                        $bins = (int) $det['bins'];
+                        $binsDisponibles = (int) $rezaga->cantidad_bins;
+                        if ($bins > $binsDisponibles) {
+                            throw ValidationException::withMessages([
+                                'detalles' => "Los bins para el folio {$rezaga->folio_rezaga} exceden lo disponible.",
+                            ]);
+                        }
+
+                        // El kg por bin sale de la propia rezaga, no del catálogo.
+                        $kgDisponibles = (float) $rezaga->cantidad_kg;
+                        $pesoKg = round($bins * ($kgDisponibles / $binsDisponibles), 2);
+                        $restanteBins = $binsDisponibles - $bins;
+
+                        $renglones[] = [
+                            'rezaga' => $rezaga,
+                            'bins' => $bins,
+                            'peso_kg' => $pesoKg,
+                            'restante_bins' => $restanteBins,
+                            // Se resta (no se re-multiplica) para que vendido + restante = original al centavo.
+                            'restante_kg' => $restanteBins > 0 ? round($kgDisponibles - $pesoKg, 2) : 0,
+                        ];
+                    }
+
+                    if (count($clases) > 1) {
+                        throw ValidationException::withMessages([
+                            'detalles' => 'Una venta lleva un solo tipo de rezaga.',
+                        ]);
+                    }
+
+                    $totalBins = (int) collect($renglones)->sum('bins');
+                    $payload = $validated;
+                    $payload['folio_venta'] = $this->generarFolio($validated);
+                    $payload['total_bins'] = $totalBins;
+                    $payload['precio_bin'] = $precioBin;
+                    $payload['total_peso_kg'] = round((float) collect($renglones)->sum('peso_kg'), 2);
+                    $payload['precio_kg'] = 0;
+                    $payload['monto_total'] = round($totalBins * $precioBin, 2);
+
+                    $salida = SalidaRezagaEmpaque::create($payload);
+
+                    foreach ($renglones as $r) {
+                        $salida->detalles()->create([
+                            'venta_rezaga_id' => $salida->id,
+                            'rezaga_id' => $r['rezaga']->id,
+                            'bins' => $r['bins'],
+                            'precio_bin' => $precioBin,
+                            'peso_kg' => $r['peso_kg'],
+                            'precio_kg' => 0,
+                            'monto' => round($r['bins'] * $precioBin, 2),
+                        ]);
+
+                        if ($r['restante_bins'] > 0) {
+                            RezagaEmpaque::where('id', $r['rezaga']->id)->update([
+                                'cantidad_bins' => $r['restante_bins'],
+                                'cantidad_kg' => $r['restante_kg'],
+                            ]);
+                        } else {
+                            RezagaEmpaque::where('id', $r['rezaga']->id)->update([
+                                'status' => $validated['tipo_salida'] === 'desecho' ? 'destruida' : 'vendida',
+                                'cantidad_bins' => 0,
+                                'cantidad_kg' => 0,
+                            ]);
+                        }
+                    }
+
+                    return $salida;
+                });
+
+                break;
+            } catch (QueryException $e) {
+                if ($this->isFolioDuplicateError($e) && $attempt < $maxAttempts) {
+                    continue;
+                }
+                throw $e;
+            }
+        }
+
+        $salida->load($this->eagerLoad);
+        $this->maskSensitiveReviewFields($salida, $request);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Salida de rezaga registrada exitosamente',
+            'data' => $salida,
+        ], 201);
+    }
+
+    /**
+     * Edición de una venta capturada en bins: el precio por bin recalcula los
+     * montos de la cabecera y de cada renglón; los bins y kg vendidos no cambian.
+     */
+    private function updateEnBins(Request $request, SalidaRezagaEmpaque $salidaRezaga): JsonResponse
+    {
+        $validated = $request->validate([
+            'tipo_salida' => 'sometimes|in:venta,regalia,desecho',
+            'comprador' => 'nullable|string|max:200',
+            'fecha_venta' => 'sometimes|date',
+            'precio_bin' => 'sometimes|numeric|min:0',
+            'autorizado_por' => 'sometimes|string|max:150',
+            'solicitado_por' => 'sometimes|string|max:150',
+            'chofer' => 'sometimes|string|max:150',
+            'placa' => 'sometimes|string|max:50',
+            'status' => 'nullable|in:pendiente,pagada,cancelada',
+            'observaciones' => 'nullable|string',
+        ]);
+
+        // Una venta en bins nunca cobra por kg.
+        $validated['precio_kg'] = 0;
+
+        $recalcular = false;
+        $precioBin = null;
+        if (($validated['tipo_salida'] ?? $salidaRezaga->tipo_salida) !== 'venta') {
+            $validated['comprador'] = $validated['comprador'] ?? '';
+            $validated['precio_bin'] = 0;
+            $validated['monto_total'] = 0;
+            $precioBin = 0.0;
+            $recalcular = true;
+        } elseif (array_key_exists('precio_bin', $validated)) {
+            $precioBin = round((float) $validated['precio_bin'], 2);
+            $validated['precio_bin'] = $precioBin;
+            $validated['monto_total'] = round(((int) $salidaRezaga->total_bins) * $precioBin, 2);
+            $recalcular = true;
+        }
+
+        DB::transaction(function () use ($salidaRezaga, $validated, $recalcular, $precioBin) {
+            $salidaRezaga->update($validated);
+
+            if ($recalcular) {
+                foreach ($salidaRezaga->detalles as $det) {
+                    $det->update([
+                        'precio_bin' => $precioBin,
+                        'precio_kg' => 0,
+                        'monto' => round(((int) $det->bins) * $precioBin, 2),
+                    ]);
+                }
+            }
+        });
+
+        $salidaRezaga->load($this->eagerLoad);
+        $this->maskSensitiveReviewFields($salidaRezaga, $request);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Salida de rezaga actualizada',
+            'data' => $salidaRezaga,
+        ]);
     }
 
     private function generarFolio(array $data): string
