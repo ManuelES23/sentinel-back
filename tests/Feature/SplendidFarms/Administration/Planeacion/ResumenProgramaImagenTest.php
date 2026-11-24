@@ -149,6 +149,39 @@ class ResumenProgramaImagenTest extends TestCase
         $this->assertEquals(21, $amarillo['total']);
     }
 
+    public function test_lo_programado_a_mano_en_el_programa_de_empaque_va_en_su_presentacion_y_empaque(): void
+    {
+        // WK48 trae Minicobs · RPC = 150 el lunes; el Programa de empaque le suma 75 el viernes y crea Tray · Cartón.
+        $this->crearSobrante($this->wk48, [
+            'bodega_id' => $this->bodega('Nogales')->id,
+            'presentacion_id' => $this->presentacion('Minicobs')->id,
+            'tipo_empaque_id' => $this->tipoEmpaque('RPC')->id,
+            'cajas_4' => 75,
+        ], [$this->variedades['Bicolor']->id]);
+        $this->crearSobrante($this->wk48, [
+            'bodega_id' => $this->bodega('Texas')->id,
+            'presentacion_id' => $this->presentacion('Tray')->id,
+            'tipo_empaque_id' => $this->tipoEmpaque('Cartón')->id,
+            'cajas_2' => 40,
+        ], [$this->variedades['Blanco']->id]);
+
+        $r = $this->resumen(null);
+
+        $necesidad = collect($r['secciones'])->firstWhere('titulo', 'Necesidad de empaque')['filas'];
+        $this->assertNotContains('Sobrante asignado', array_column($necesidad, 'etiqueta'));
+        $minicobs = $this->fila($r, 'Necesidad de empaque', 'Minicobs · RPC');
+        $this->assertSame(225, $minicobs['total']);
+        $this->assertSame(75, $minicobs['valores'][6]); // viernes 27 (2 previas + índice 4)
+        $this->assertSame(40, $this->fila($r, 'Necesidad de empaque', 'Tray · Cartón')['total']);
+
+        // Las filas siguen sumando el total, que ya incluía lo programado a mano.
+        $this->assertSame(36483 + 75 + 40, $this->fila($r, 'Necesidad de empaque', 'Total')['total']);
+        $this->assertSame(
+            $this->fila($r, 'Necesidad de empaque', 'Total')['total'],
+            array_sum(array_column(array_slice($necesidad, 0, -1), 'total')),
+        );
+    }
+
     public function test_una_semana_sin_domingo_no_trae_esa_columna(): void
     {
         $this->wk48->forceFill(['trabaja_domingo' => false, 'domingo_corte' => false, 'domingo_empaque' => false, 'domingo_embarques' => false])->save();
