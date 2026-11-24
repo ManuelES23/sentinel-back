@@ -136,9 +136,10 @@ final class ResumenProgramaSemanal
 
     /**
      * Necesidad de empaque por presentación y tipo de empaque («Bulk · RPC»,
-     * «Bulk · Cartón»…; ventas, por día de empaque), en el orden de los
-     * catálogos; las ventas sin empaque van como «· Sin empaque». Después, el
-     * sobrante asignado si hay y el total (siempre).
+     * «Bulk · Cartón»…; por día de empaque), en el orden de los catálogos:
+     * las ventas MÁS lo programado a mano en el Programa de empaque (sobrante
+     * asignado), que ya dice con qué presentación y empaque se va a empacar.
+     * Lo que no trae empaque va como «· Sin empaque». Al final, el total (siempre).
      */
     private function necesidad(array $semana, array $columnas, ?int $cultivoId): array
     {
@@ -152,15 +153,11 @@ final class ResumenProgramaSemanal
                 continue;
             }
             foreach ($empaques as [$empaqueId, $empaqueNombre]) {
-                $valores = $this->porColumna($columnas, fn (array $s, int $d) => $this->sumaEmpaque($s, $cultivoId, $d, ['ok', 'sin_clasificar'], (int) $p['id'], $empaqueId));
+                $valores = $this->porColumna($columnas, fn (array $s, int $d) => $this->sumaEmpaque($s, $cultivoId, $d, ['ok', 'sin_clasificar', 'sobrante'], (int) $p['id'], $empaqueId));
                 if ($this->tieneDatos($valores)) {
                     $filas[] = $this->fila($p['nombre'].' · '.$empaqueNombre, $valores, $columnas, 'cajas');
                 }
             }
-        }
-        $sobrante = $this->porColumna($columnas, fn (array $s, int $d) => $this->sumaEmpaque($s, $cultivoId, $d, ['sobrante']));
-        if ($this->tieneDatos($sobrante)) {
-            $filas[] = $this->fila('Sobrante asignado', $sobrante, $columnas, 'cajas');
         }
         $total = $this->porColumna($columnas, function (array $s, int $d) use ($cultivoId) {
             $b = $this->balanceDe($s, $cultivoId);
