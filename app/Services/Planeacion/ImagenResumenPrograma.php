@@ -51,6 +51,13 @@ final class ImagenResumenPrograma
         'previa' => [240, 242, 241],
         'previa_seccion' => [226, 231, 228],
         'previa_tinta' => [89, 100, 94],
+        // Encabezados marcados: banda de sección verde fuerte, cabecera de días verde claro y líneas gruesas.
+        'seccion_fuerte' => [47, 107, 82],
+        'seccion_fuerte_previa' => [36, 86, 66],
+        'cabecera' => [214, 232, 221],
+        'cabecera_previa' => [205, 214, 209],
+        'linea_fuerte' => [31, 78, 61],
+        'linea_total' => [150, 172, 160],
         'negativo' => [180, 35, 24],
         'positivo' => [26, 115, 67],
     ];
@@ -169,38 +176,50 @@ final class ImagenResumenPrograma
         $primeraSemana = count($previas);
         $altoCuerpo = self::ALTO_GRUPO + self::ALTO_DIAS + $this->altoSecciones($r['secciones']);
 
+        $yInicio = $y;
+        $xFin = $xTotal + self::ANCHO_TOTAL;
+
         // Fondo gris de las columnas de la semana anterior, de la cabecera al final de la tabla.
         foreach ($previas as $i) {
             $this->rect($xDia($i), $y, self::ANCHO_DIA, $altoCuerpo, 'previa');
         }
 
-        // Cabecera de grupos y de días.
+        // Cabecera de grupos y de días: fondo verde claro (gris verdoso en la semana anterior).
+        $altoCabecera = self::ALTO_GRUPO + self::ALTO_DIAS;
+        $this->rect(self::MARGEN, $y, self::ANCHO_ETIQUETA, $altoCabecera, 'cabecera');
+        foreach ($columnas as $i => $c) {
+            $this->rect($xDia($i), $y, self::ANCHO_DIA, $altoCabecera, $c['previa'] ? 'cabecera_previa' : 'cabecera');
+        }
+        $this->rect($xTotal, $y, self::ANCHO_TOTAL, $altoCabecera, 'cabecera');
+        $this->linea(self::MARGEN, $y, $xFin, $y, 'linea_fuerte');
+
         $semanaAnterior = $r['semana'] > 1 ? $r['semana'] - 1 : null;
         $tituloPrevias = $r['con_previas']
             ? 'CIERRE SEM '.($semanaAnterior ?? '')
             : 'SIN PROGRAMA';
         if ($previas !== []) {
-            $this->texto($xDia(0) + $primeraSemana * self::ANCHO_DIA / 2, $y + 14, $tituloPrevias, 8.5, 'tenue', true, 'centro');
+            $this->texto($xDia(0) + $primeraSemana * self::ANCHO_DIA / 2, $y + 14, $tituloPrevias, 8.5, 'previa_tinta', true, 'centro');
         }
-        $this->texto(($xDia($primeraSemana) + $xTotal) / 2, $y + 14, 'SEMANA '.$r['semana'], 8.5, 'tenue', true, 'centro');
+        $this->texto(($xDia($primeraSemana) + $xTotal) / 2, $y + 14, 'SEMANA '.$r['semana'], 8.5, 'seccion_tinta', true, 'centro');
         $y += self::ALTO_GRUPO;
         foreach ($columnas as $i => $c) {
             $centro = $xDia($i) + self::ANCHO_DIA / 2;
             $this->texto($centro, $y + 13, $c['letra'], 11, $c['previa'] ? 'previa_tinta' : 'tinta', true, 'centro');
-            $this->texto($centro, $y + 27, $c['dia'], 9.5, 'tenue', false, 'centro');
+            $this->texto($centro, $y + 27, $c['dia'], 9.5, $c['previa'] ? 'previa_tinta' : 'seccion_tinta', false, 'centro');
         }
         $this->texto($xTotal + self::ANCHO_TOTAL - 8, $y + 20, 'Total', 10, 'tinta', true, 'der');
         $y += self::ALTO_DIAS;
-        $this->linea(self::MARGEN, $y, $xTotal + self::ANCHO_TOTAL, $y, 'linea');
+        $this->lineaGruesa(self::MARGEN, $y, $xFin, 'linea_fuerte');
 
         foreach ($r['secciones'] as $seccion) {
             if ($seccion['titulo'] !== null) {
-                $this->rect(self::MARGEN, $y, self::ANCHO_ETIQUETA, self::ALTO_SECCION, 'seccion');
+                // Banda de sección en verde fuerte con el título en blanco.
+                $this->rect(self::MARGEN, $y, self::ANCHO_ETIQUETA, self::ALTO_SECCION, 'seccion_fuerte');
                 foreach ($columnas as $i => $c) {
-                    $this->rect($xDia($i), $y, self::ANCHO_DIA, self::ALTO_SECCION, $c['previa'] ? 'previa_seccion' : 'seccion');
+                    $this->rect($xDia($i), $y, self::ANCHO_DIA, self::ALTO_SECCION, $c['previa'] ? 'seccion_fuerte_previa' : 'seccion_fuerte');
                 }
-                $this->rect($xTotal, $y, self::ANCHO_TOTAL, self::ALTO_SECCION, 'seccion');
-                $this->texto(self::MARGEN + 8, $y + 14.5, mb_strtoupper($seccion['titulo']), 9, 'seccion_tinta', true);
+                $this->rect($xTotal, $y, self::ANCHO_TOTAL, self::ALTO_SECCION, 'seccion_fuerte');
+                $this->texto(self::MARGEN + 8, $y + 14.5, mb_strtoupper($seccion['titulo']), 9.5, 'blanco', true);
                 $y += self::ALTO_SECCION;
             }
             foreach ($seccion['filas'] as $fila) {
@@ -208,8 +227,12 @@ final class ImagenResumenPrograma
             }
         }
 
-        // Separador de la columna del total.
-        $this->linea($xTotal, $y - $this->altoSecciones($r['secciones']), $xTotal, $y, 'linea');
+        // Separadores verticales: entre la semana anterior y la actual, y antes de la columna del total.
+        if ($previas !== []) {
+            $this->linea($xDia($primeraSemana), $yInicio, $xDia($primeraSemana), $y, 'linea_fuerte');
+        }
+        $this->linea($xTotal, $yInicio, $xTotal, $y, 'linea_fuerte');
+        $this->lineaGruesa(self::MARGEN, $y, $xFin, 'linea_fuerte');
 
         return $y;
     }
@@ -218,7 +241,7 @@ final class ImagenResumenPrograma
     {
         $negrita = ! empty($fila['total_fila']);
         if ($negrita) {
-            $this->linea(self::MARGEN, $y, $xTotal + self::ANCHO_TOTAL, $y, 'linea');
+            $this->linea(self::MARGEN, $y, $xTotal + self::ANCHO_TOTAL, $y, 'linea_total');
         }
         $base = $y + 15;
         $this->texto(self::MARGEN + 8, $base, $fila['etiqueta'], 11, 'tinta', $negrita);
@@ -273,14 +296,15 @@ final class ImagenResumenPrograma
 
         $this->texto($x0, $y + 12, 'BALANCE POR COLOR · SEMANA', 9, 'seccion_tinta', true);
         $yt = $y + 22;
+        $this->rect($x0, $yt, $this->anchoColor($conSobrante), 19, 'cabecera');
         $x = $x0;
         foreach ($columnas as $i => [$titulo, $anchoCol]) {
             $i === 0
-                ? $this->texto($x, $yt + 13, $titulo, 9, 'tenue', true)
-                : $this->texto($x + $anchoCol - 4, $yt + 13, $titulo, 9, 'tenue', true, 'der');
+                ? $this->texto($x + 6, $yt + 13, $titulo, 9, 'seccion_tinta', true)
+                : $this->texto($x + $anchoCol - 4, $yt + 13, $titulo, 9, 'seccion_tinta', true, 'der');
             $x += $anchoCol;
         }
-        $this->linea($x0, $yt + 19, $x0 + $this->anchoColor($conSobrante), $yt + 19, 'linea');
+        $this->linea($x0, $yt + 19, $x0 + $this->anchoColor($conSobrante), $yt + 19, 'linea_fuerte');
         $yt += 20;
         foreach ($r['por_color'] as $c) {
             $total = ! empty($c['total']);
@@ -302,7 +326,7 @@ final class ImagenResumenPrograma
             foreach ($columnas as $i => [, $anchoCol]) {
                 [$texto, $color] = $valores[$i];
                 $i === 0
-                    ? $this->texto($x, $yt + 14, $texto, 10, $color, $total)
+                    ? $this->texto($x + 6, $yt + 14, $texto, 10, $color, $total)
                     : $this->texto($x + $anchoCol - 4, $yt + 14, $texto, 10, $color, $total || $i >= count($columnas) - 2, 'der');
                 $x += $anchoCol;
             }
@@ -466,6 +490,12 @@ final class ImagenResumenPrograma
         $k = self::ESCALA;
         imagesetthickness($this->img, $k);
         imageline($this->img, (int) round($x1 * $k), (int) round($y1 * $k), (int) round($x2 * $k), (int) round($y2 * $k), $this->color[$color]);
+    }
+
+    /** Línea horizontal del doble de grosor (cabecera y cierre de la tabla). */
+    private function lineaGruesa(float $x1, float $y, float $x2, string $color): void
+    {
+        $this->rect($x1, $y - 1, $x2 - $x1, 2, $color);
     }
 
     /** Texto con la línea base en $y. $alinear: izq | der | centro respecto de $x. */
