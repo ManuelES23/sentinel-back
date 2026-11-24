@@ -32,7 +32,7 @@
                 Ningún día con faltante.
             @endif
         </p>
-        <img src="{{ $message->embedData($imagen['png'], $imagen['nombre'], 'image/png') }}" alt="Programa semana {{ $r['semana'] }}" width="{{ $imagen['ancho'] ?? 760 }}" style="max-width: 100%; height: auto; border: 1px solid #d9e1dc;">
+        <img src="{{ ($vistaPrevia ?? false) ? 'data:image/png;base64,'.base64_encode($imagen['png']) : $message->embedData($imagen['png'], $imagen['nombre'], 'image/png') }}" alt="Programa semana {{ $r['semana'] }}" width="{{ $imagen['ancho'] ?? 760 }}" style="max-width: 100%; height: auto; border: 1px solid #d9e1dc;">
     @endforeach
 
     <p style="margin: 20px 0 6px; font-size: 13px; color: #4b5563;">Las imágenes también van adjuntas.@if ($nombreArchivo) El detalle completo va en el Excel adjunto ({{ $nombreArchivo }}), con una hoja por semana.@endif Las cifras son proyecciones del programa al momento del envío.</p>
