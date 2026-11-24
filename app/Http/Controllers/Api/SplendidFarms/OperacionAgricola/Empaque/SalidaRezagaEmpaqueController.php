@@ -441,7 +441,7 @@ class SalidaRezagaEmpaqueController extends Controller
             'tipo_salida' => 'required|in:venta,regalia,desecho',
             'fecha_venta' => 'required|date',
             'comprador' => 'required_if:tipo_salida,venta|nullable|string|max:200',
-            'precio_bin' => 'required_if:tipo_salida,venta|nullable|numeric|min:0',
+            'precio_bin' => 'required_if:tipo_salida,venta|nullable|numeric|min:0|max:9999999.99',
             'autorizado_por' => 'required|string|max:150',
             'solicitado_por' => 'required|string|max:150',
             'chofer' => 'required|string|max:150',
@@ -450,7 +450,7 @@ class SalidaRezagaEmpaqueController extends Controller
             'observaciones' => 'nullable|string',
             'detalles' => 'required|array|min:1',
             'detalles.*.rezaga_id' => 'required|exists:rezaga_empaque,id',
-            'detalles.*.bins' => 'required|integer|min:1',
+            'detalles.*.bins' => 'required|integer|min:1|max:1000000',
         ]);
 
         $validated['status'] = $validated['status'] ?? 'pendiente';
@@ -606,7 +606,7 @@ class SalidaRezagaEmpaqueController extends Controller
             'tipo_salida' => 'sometimes|in:venta,regalia,desecho',
             'comprador' => 'nullable|string|max:200',
             'fecha_venta' => 'sometimes|date',
-            'precio_bin' => 'sometimes|numeric|min:0',
+            'precio_bin' => 'sometimes|numeric|min:0|max:9999999.99',
             'autorizado_por' => 'sometimes|string|max:150',
             'solicitado_por' => 'sometimes|string|max:150',
             'chofer' => 'sometimes|string|max:150',

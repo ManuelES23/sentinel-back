@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Traits\Loggable;
+use Closure;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -45,6 +46,23 @@ class TipoCarga extends Model
     }
 
     // ── Rezaga en bins ──────────────────────────────────
+
+    /**
+     * Regla de validación para el `tipo_carga_id` de salidas de campo y
+     * recepciones: solo acepta tipos de carga SIN clase de rezaga (un bin de
+     * rezaga no se cosecha ni se recibe). Va después de `exists:tipos_carga,id`
+     * (con `bail`) para que un id inexistente siga dando el mensaje por defecto.
+     */
+    public static function reglaBinDeCampo(): Closure
+    {
+        return function (string $attribute, mixed $value, Closure $fail): void {
+            $esRezaga = static::query()->whereKey($value)->whereNotNull('clase_rezaga')->exists();
+
+            if ($esRezaga) {
+                $fail('Ese tipo de carga es un bin de rezaga; elige un bin de campo.');
+            }
+        };
+    }
 
     /**
      * Tipo y subtipo de rezaga que le corresponden a la clase de este tipo de

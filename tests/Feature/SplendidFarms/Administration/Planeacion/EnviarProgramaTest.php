@@ -7,6 +7,7 @@ use App\Models\ActivityLog;
 use App\Models\Planeacion\ProgramaSemanal;
 use App\Models\User;
 use App\Services\Planeacion\DestinatariosPrograma;
+use App\Services\Planeacion\ExportadorProgramaExcel;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Testing\TestResponse;
@@ -95,10 +96,38 @@ class EnviarProgramaTest extends TestCase
         $this->fail("No hay una fila con «{$texto}».");
     }
 
-    /** @return list<string> */
-    private function xlsxTemporales(): array
+    /**
+     * Registra la ruta de cada .xlsx temporal que crea el exportador durante la petición, y si el
+     * archivo existía al terminar de generarlo. Así las pruebas miran solo SUS archivos: listar toda
+     * la carpeta temporal del sistema falla si otro proceso crea un .xlsx al mismo tiempo.
+     *
+     * @return \ArrayObject<int, array{ruta: string, existia: bool}>
+     */
+    private function espiarTemporales(): \ArrayObject
     {
-        return glob(sys_get_temp_dir().DIRECTORY_SEPARATOR.'*.xlsx') ?: [];
+        $generados = new \ArrayObject;
+        $this->app->bind(ExportadorProgramaExcel::class, fn () => new class($generados) extends ExportadorProgramaExcel
+        {
+            public function __construct(private \ArrayObject $generados) {}
+
+            public function generarVarias(array $semanas, ?int $cultivoId, ?string $cultivoNombre = null): string
+            {
+                $ruta = parent::generarVarias($semanas, $cultivoId, $cultivoNombre);
+                $this->generados[] = ['ruta' => $ruta, 'existia' => is_file($ruta)];
+
+                return $ruta;
+            }
+        });
+
+        return $generados;
+    }
+
+    /** El exportador generó exactamente un temporal en la petición y ya no existe. */
+    private function assertTemporalBorrado(\ArrayObject $generados): void
+    {
+        $this->assertCount(1, $generados, 'El exportador debía generar un solo .xlsx temporal.');
+        $this->assertTrue($generados[0]['existia'], 'El .xlsx temporal debía existir al generarse.');
+        $this->assertFileDoesNotExist($generados[0]['ruta']);
     }
 
     public function test_envia_dos_semanas_en_un_solo_correo_con_copia_oculta(): void
@@ -372,13 +401,13 @@ class EnviarProgramaTest extends TestCase
         });
         config(['mail.mailers.falla' => ['transport' => 'falla'], 'mail.default' => 'falla']);
         $this->dosSemanas();
-        $antes = $this->xlsxTemporales();
+        $generados = $this->espiarTemporales();
 
         $this->enviar([])->assertStatus(422)
             ->assertJsonPath('success', false)
             ->assertJsonPath('message', 'No se pudo enviar el correo. Revisa la configuración del servidor de correo.');
 
-        $this->assertSame([], array_values(array_diff($this->xlsxTemporales(), $antes)));
+        $this->assertTemporalBorrado($generados);
         $this->assertSame(0, ActivityLog::where('action', 'programa_enviado')->count());
     }
 
@@ -386,11 +415,11 @@ class EnviarProgramaTest extends TestCase
     {
         Mail::fake();
         $this->dosSemanas();
-        $antes = $this->xlsxTemporales();
+        $generados = $this->espiarTemporales();
 
         $this->enviar(['lunes' => ['2026-11-23', '2026-11-30']])->assertOk();
 
-        $this->assertSame([], array_values(array_diff($this->xlsxTemporales(), $antes)));
+        $this->assertTemporalBorrado($generados);
     }
 
     public function test_deja_la_bitacora_sin_direcciones(): void

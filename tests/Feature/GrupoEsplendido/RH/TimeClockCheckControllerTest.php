@@ -8,6 +8,7 @@ use App\Models\Enterprise;
 use App\Models\TimeClockCheck;
 use App\Models\UserEnterpriseAccess;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use Tests\Concerns\CreatesRhFixtures;
 use Tests\TestCase;
@@ -15,6 +16,12 @@ use Tests\TestCase;
 class TimeClockCheckControllerTest extends TestCase
 {
     use RefreshDatabase, CreatesRhFixtures;
+
+    protected function tearDown(): void
+    {
+        Carbon::setTestNow();
+        parent::tearDown();
+    }
 
     private function makeCheckDirectly(int $employeeId, array $overrides = []): TimeClockCheck
     {
@@ -242,6 +249,10 @@ class TimeClockCheckControllerTest extends TestCase
 
     public function test_review_approve_when_already_checked_in_marks_rejected_not_500(): void
     {
+        // Reloj fijo a mediodia (hora de la app): con now() real, entre las 00:00 y la
+        // 01:00 locales now()->subHour() cae en el dia anterior y la entrada previa
+        // ya no es "de hoy" (AttendanceRecord::checkIn ancla al dia de checked_at).
+        Carbon::setTestNow(Carbon::parse('2026-11-24 12:00:00', config('app.timezone')));
         [$user, $enterprise] = $this->createAuthenticatedRhUser();
         $employee = $this->createEmployee($enterprise->id);
         AttendanceRecord::checkIn($employee, 'biometric', null, now()->subHour());
