@@ -2,14 +2,19 @@
 
 namespace Tests\Concerns;
 
+use App\Models\Application;
 use App\Models\Cultivo;
+use App\Models\Module;
 use App\Models\ProcesoEmpaque;
 use App\Models\RecepcionEmpaque;
 use App\Models\RezagaEmpaque;
 use App\Models\SalidaRezagaEmpaque;
 use App\Models\SalidaRezagaEmpaqueDetalle;
+use App\Models\Submodule;
+use App\Models\SubmodulePermissionType;
 use App\Models\Temporada;
 use App\Models\TipoCarga;
+use App\Models\UserSubmodulePermission;
 use App\Models\Variedad;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
@@ -160,6 +165,31 @@ trait CreatesEloteBinsFixtures
             'modo_registro' => 'general',
             'status' => 'pendiente',
         ], $overrides));
+    }
+
+    /**
+     * Concede al usuario de pruebas los permisos del submódulo `salida-rezaga`
+     * (el controlador los lee de user_submodule_permissions).
+     */
+    protected function concederPermisosSalidaRezaga(array $permisos = ['view', 'create', 'edit', 'delete']): void
+    {
+        $app = Application::firstOrCreate(
+            ['enterprise_id' => $this->enterprise->id, 'slug' => 'operacion-agricola'],
+            ['name' => 'Operación Agrícola', 'path' => '/splendidfarms/operacion-agricola', 'description' => 'operacion-agricola'],
+        );
+        $modulo = Module::firstOrCreate(['application_id' => $app->id, 'slug' => 'empaque'], ['name' => 'Empaque']);
+        $sub = Submodule::firstOrCreate(['module_id' => $modulo->id, 'slug' => 'salida-rezaga'], ['name' => 'Salida de rezaga']);
+
+        foreach ($permisos as $slug) {
+            $tipo = SubmodulePermissionType::firstOrCreate(
+                ['submodule_id' => $sub->id, 'slug' => $slug],
+                ['name' => ucfirst($slug), 'is_active' => true],
+            );
+            UserSubmodulePermission::firstOrCreate(
+                ['user_id' => $this->actingUser->id, 'submodule_id' => $sub->id, 'permission_type_id' => $tipo->id],
+                ['is_granted' => true],
+            );
+        }
     }
 
     /**

@@ -11,13 +11,32 @@ class SalidaRezagaEmpaqueDetalle extends Model
 
     protected $table = 'venta_rezaga_empaque_detalles';
 
-    protected $fillable = ['venta_rezaga_id', 'rezaga_id', 'peso_kg', 'precio_kg', 'monto'];
+    protected $fillable = ['venta_rezaga_id', 'rezaga_id', 'peso_kg', 'precio_kg', 'monto', 'bins', 'precio_bin'];
 
     protected $casts = [
         'peso_kg' => 'decimal:2',
         'precio_kg' => 'decimal:2',
         'monto' => 'decimal:2',
+        'bins' => 'integer',
+        'precio_bin' => 'decimal:2',
     ];
+
+    /**
+     * `bins` y `precio_bin` solo viajan en el JSON cuando el renglón se vendió en
+     * bins; los renglones en kg (los de siempre) conservan exactamente el mismo cuerpo.
+     */
+    public function attributesToArray(): array
+    {
+        $atributos = parent::attributesToArray();
+
+        foreach (['bins', 'precio_bin'] as $clave) {
+            if (array_key_exists($clave, $atributos) && $atributos[$clave] === null) {
+                unset($atributos[$clave]);
+            }
+        }
+
+        return $atributos;
+    }
 
     public function salidaRezaga() { return $this->belongsTo(SalidaRezagaEmpaque::class, 'venta_rezaga_id'); }
     public function rezaga() { return $this->belongsTo(RezagaEmpaque::class, 'rezaga_id'); }
