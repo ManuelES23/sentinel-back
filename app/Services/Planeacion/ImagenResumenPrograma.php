@@ -37,6 +37,9 @@ final class ImagenResumenPrograma
 
     private const ALTO_FILA = 22;
 
+    /** Ancho de la tabla «Balance por color» del pie. */
+    private const ANCHO_COLOR = 436;
+
     private const COLORES = [
         'blanco' => [255, 255, 255],
         'tinta' => [23, 32, 28],
@@ -272,8 +275,7 @@ final class ImagenResumenPrograma
     /** @return array{0: int, 1: list<string>} alto del pie y líneas de la leyenda */
     private function medirPie(array $r, int $anchoTabla): array
     {
-        $conSobrante = $this->conSobrante($r);
-        $anchoColor = $this->anchoColor($conSobrante);
+        $anchoColor = self::ANCHO_COLOR;
         $anchoLeyenda = max(160, $anchoTabla - $anchoColor - 24);
         $leyenda = [];
         foreach ($this->textosLeyenda($r) as $parrafo) {
@@ -289,14 +291,12 @@ final class ImagenResumenPrograma
     {
         $y += 12;
         $x0 = self::MARGEN;
-        $conSobrante = $this->conSobrante($r);
-        $columnas = $conSobrante
-            ? [['Color', 104], ['Producción', 82], ['Necesidad', 80], ['Sobrante', 72], ['Disponible', 82], ['Cargas eq.', 70]]
-            : [['Color', 104], ['Producción', 86], ['Necesidad', 86], ['Disponible', 86], ['Cargas eq.', 74]];
+        // Necesidad = ventas + lo programado a mano en el Programa de empaque (igual que la tabla de arriba).
+        $columnas = [['Color', 104], ['Producción', 86], ['Necesidad', 86], ['Disponible', 86], ['Cargas eq.', 74]];
 
         $this->texto($x0, $y + 12, 'BALANCE POR COLOR · SEMANA', 9, 'seccion_tinta', true);
         $yt = $y + 22;
-        $this->rect($x0, $yt, $this->anchoColor($conSobrante), 19, 'cabecera');
+        $this->rect($x0, $yt, self::ANCHO_COLOR, 19, 'cabecera');
         $x = $x0;
         foreach ($columnas as $i => [$titulo, $anchoCol]) {
             $i === 0
@@ -304,22 +304,19 @@ final class ImagenResumenPrograma
                 : $this->texto($x + $anchoCol - 4, $yt + 13, $titulo, 9, 'seccion_tinta', true, 'der');
             $x += $anchoCol;
         }
-        $this->linea($x0, $yt + 19, $x0 + $this->anchoColor($conSobrante), $yt + 19, 'linea_fuerte');
+        $this->linea($x0, $yt + 19, $x0 + self::ANCHO_COLOR, $yt + 19, 'linea_fuerte');
         $yt += 20;
         foreach ($r['por_color'] as $c) {
             $total = ! empty($c['total']);
             if ($total) {
-                $this->linea($x0, $yt, $x0 + $this->anchoColor($conSobrante), $yt, 'linea');
+                $this->linea($x0, $yt, $x0 + self::ANCHO_COLOR, $yt, 'linea');
             }
             $signo = $c['disponible'] < 0 ? 'negativo' : ($c['disponible'] > 0 ? 'positivo' : 'tinta');
             $valores = [
                 [$c['nombre'], 'tinta'],
                 [$this->cajas($c['produccion']), 'tinta'],
-                [$this->cajas($c['necesidad']), 'tinta'],
+                [$this->cajas($c['necesidad'] + $c['sobrante']), 'tinta'],
             ];
-            if ($conSobrante) {
-                $valores[] = [$this->cajas($c['sobrante']), 'tinta'];
-            }
             $valores[] = [$this->signo($c['disponible']), $signo];
             $valores[] = [$c['cargas'] === null ? '–' : $this->cargasEq($c['cargas']), $signo];
             $x = $x0;
@@ -334,7 +331,7 @@ final class ImagenResumenPrograma
         }
 
         // Leyenda a la derecha.
-        $xl = $x0 + $this->anchoColor($conSobrante) + 24;
+        $xl = $x0 + self::ANCHO_COLOR + 24;
         $this->texto($xl, $y + 12, 'CÓMO LEERLA', 9, 'seccion_tinta', true);
         $yl = $y + 22;
         foreach ($leyenda as $linea) {
@@ -367,7 +364,7 @@ final class ImagenResumenPrograma
 
         return [
             $previas,
-            'Disponible = cajas producidas − necesidad de empaque (ventas y sobrante asignado).',
+            'Necesidad de empaque = ventas + lo programado a mano en el Programa de empaque. Disponible = cajas producidas − necesidad.',
             'F = carga full · S = carga sencilla. Cargas eq. = disponible ÷ '.number_format($r['cajas_por_carga']).' cajas.',
             'Las filas en cero no se muestran.',
         ];
@@ -422,21 +419,6 @@ final class ImagenResumenPrograma
         return ($n < 0 ? '−' : ($n > 0 ? '+' : '')).number_format(abs($n), 2);
     }
 
-    private function conSobrante(array $r): bool
-    {
-        foreach ($r['por_color'] as $c) {
-            if ($c['sobrante'] != 0) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private function anchoColor(bool $conSobrante): int
-    {
-        return $conSobrante ? 490 : 436;
-    }
 
     private function altoSecciones(array $secciones): int
     {
