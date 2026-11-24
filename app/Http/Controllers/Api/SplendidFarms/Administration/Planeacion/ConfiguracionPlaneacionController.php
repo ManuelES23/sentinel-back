@@ -54,6 +54,12 @@ class ConfiguracionPlaneacionController extends Controller
     private const MENSAJES = [
         'dias_antelacion.integer' => 'Los días de antelación van de 0 a 7.',
         'dias_antelacion.between' => 'Los días de antelación van de 0 a 7.',
+        'cajas_full.integer' => 'Las cajas del Full deben ser un número entero de 1 a 5,000.',
+        'cajas_full.min' => 'Las cajas del Full deben ser un número entero de 1 a 5,000.',
+        'cajas_full.max' => 'Las cajas del Full deben ser un número entero de 1 a 5,000.',
+        'cajas_sencillo.integer' => 'Las cajas del Sencillo deben ser un número entero de 1 a 5,000.',
+        'cajas_sencillo.min' => 'Las cajas del Sencillo deben ser un número entero de 1 a 5,000.',
+        'cajas_sencillo.max' => 'Las cajas del Sencillo deben ser un número entero de 1 a 5,000.',
     ];
 
     private const CLIENTE_REPETIDO = 'Ya existe un cliente con ese nombre.';
@@ -248,6 +254,7 @@ class ConfiguracionPlaneacionController extends Controller
         $datos['orden'] ??= ((int) $modelo::max('orden')) + 1;
         $datos['is_active'] ??= true;
         $this->exigirNombreLibre($catalogo, $datos['nombre'], $datos['cultivo_id'] ?? null, null);
+        $this->exigirSencilloNoMayorQueFull($catalogo, $datos, null);
 
         $fila = $modelo::create($datos);
 
@@ -273,6 +280,7 @@ class ConfiguracionPlaneacionController extends Controller
             $datos['cultivo_id'] ?? $fila->cultivo_id ?? null,
             $fila->id,
         );
+        $this->exigirSencilloNoMayorQueFull($catalogo, $datos, $fila);
 
         $fila->update($datos);
 
@@ -774,9 +782,33 @@ class ConfiguracionPlaneacionController extends Controller
         }
         if ($catalogo === 'bodegas') {
             $reglas['dias_antelacion'] = ['sometimes', 'integer', 'between:0,7'];
+            // Cajas de un Full y de un Sencillo hacia el destino; nulo = no se usa.
+            $reglas['cajas_full'] = ['sometimes', 'nullable', 'integer', 'min:1', 'max:5000'];
+            $reglas['cajas_sencillo'] = ['sometimes', 'nullable', 'integer', 'min:1', 'max:5000'];
         }
 
         return $reglas;
+    }
+
+    /**
+     * En un destino el Sencillo no lleva más cajas que el Full. Se compara con
+     * los valores finales: los de la petición o, si falta uno, el guardado.
+     * Si alguno queda vacío no hay comparación.
+     */
+    private function exigirSencilloNoMayorQueFull(string $catalogo, array $datos, ?Model $fila): void
+    {
+        if ($catalogo !== 'bodegas') {
+            return;
+        }
+
+        $full = array_key_exists('cajas_full', $datos) ? $datos['cajas_full'] : $fila?->cajas_full;
+        $sencillo = array_key_exists('cajas_sencillo', $datos) ? $datos['cajas_sencillo'] : $fila?->cajas_sencillo;
+
+        if ($full !== null && $sencillo !== null && (int) $sencillo > (int) $full) {
+            throw ValidationException::withMessages([
+                'cajas_sencillo' => 'Las cajas del Sencillo no pueden ser más que las del Full.',
+            ]);
+        }
     }
 
     /** El nombre es único en el catálogo (en presentaciones, dentro del cultivo). */
@@ -801,7 +833,11 @@ class ConfiguracionPlaneacionController extends Controller
                 'cajas_full' => $fila->cajas_full,
                 'cajas_sencillo' => $fila->cajas_sencillo,
             ],
-            'bodegas' => ['dias_antelacion' => (int) $fila->dias_antelacion],
+            'bodegas' => [
+                'dias_antelacion' => (int) $fila->dias_antelacion,
+                'cajas_full' => $fila->cajas_full,
+                'cajas_sencillo' => $fila->cajas_sencillo,
+            ],
             default => [],
         };
     }

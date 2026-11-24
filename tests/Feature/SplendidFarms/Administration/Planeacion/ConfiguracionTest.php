@@ -569,6 +569,126 @@ class ConfiguracionTest extends TestCase
         $this->assertSame(0, BodegaDestino::find($id)->dias_antelacion);
     }
 
+    public function test_bodega_guarda_y_devuelve_cajas_full_y_sencillo(): void
+    {
+        $this->conPermisos(['configuracion' => ['view', 'editar'], 'tablero-semanal' => ['view']]);
+        $texas = $this->bodega('Texas');
+        $this->assertNull($texas->cajas_full);
+        $this->assertNull($texas->cajas_sencillo);
+
+        $this->putJson(self::URL.'/configuracion/bodegas/'.$texas->id, ['cajas_full' => 400, 'cajas_sencillo' => 200])
+            ->assertOk()
+            ->assertJsonPath('data.cajas_full', 400)
+            ->assertJsonPath('data.cajas_sencillo', 200);
+        $this->assertDatabaseHas('plan_bodegas_destino', ['id' => $texas->id, 'cajas_full' => 400, 'cajas_sencillo' => 200]);
+
+        $bodegas = collect($this->getJson(self::URL.'/configuracion')->assertOk()->json('data.bodegas'));
+        $this->assertSame(400, $bodegas->firstWhere('id', $texas->id)['cajas_full']);
+        $this->assertSame(200, $bodegas->firstWhere('id', $texas->id)['cajas_sencillo']);
+        $nogales = $bodegas->firstWhere('id', $this->bodega('Nogales')->id);
+        $this->assertArrayHasKey('cajas_full', $nogales);
+        $this->assertNull($nogales['cajas_full']);
+        $this->assertNull($nogales['cajas_sencillo']);
+
+        $programa = collect($this->getJson(self::URL.'/programa?lunes=2026-11-23')->assertOk()->json('data.catalogos.bodegas'));
+        $this->assertSame(400, $programa->firstWhere('id', $texas->id)['cajas_full']);
+        $this->assertSame(200, $programa->firstWhere('id', $texas->id)['cajas_sencillo']);
+        $this->assertCount(4, $programa->filter(fn ($b) => array_key_exists('cajas_full', $b) && array_key_exists('cajas_sencillo', $b)));
+
+        // Omitirlos no los toca.
+        $this->putJson(self::URL.'/configuracion/bodegas/'.$texas->id, ['dias_antelacion' => 1])
+            ->assertOk()
+            ->assertJsonPath('data.cajas_full', 400)
+            ->assertJsonPath('data.cajas_sencillo', 200);
+
+        // null los limpia.
+        $this->putJson(self::URL.'/configuracion/bodegas/'.$texas->id, ['cajas_full' => null, 'cajas_sencillo' => null])
+            ->assertOk()
+            ->assertJsonPath('data.cajas_full', null)
+            ->assertJsonPath('data.cajas_sencillo', null);
+        $this->assertDatabaseHas('plan_bodegas_destino', ['id' => $texas->id, 'cajas_full' => null, 'cajas_sencillo' => null]);
+    }
+
+    public function test_bodega_nueva_sin_cajas_queda_en_null(): void
+    {
+        $this->conPermisos();
+
+        $id = $this->postJson(self::URL.'/configuracion/bodegas', ['nombre' => 'Chicago'])
+            ->assertCreated()
+            ->assertJsonPath('data.cajas_full', null)
+            ->assertJsonPath('data.cajas_sencillo', null)
+            ->json('data.id');
+        $this->assertNull(BodegaDestino::find($id)->cajas_full);
+        $this->assertNull(BodegaDestino::find($id)->cajas_sencillo);
+
+        $id = $this->postJson(self::URL.'/configuracion/bodegas', ['nombre' => 'Denver', 'cajas_full' => 1040, 'cajas_sencillo' => 520])
+            ->assertCreated()->assertJsonPath('data.cajas_full', 1040)->json('data.id');
+        $this->assertSame(520, BodegaDestino::find($id)->cajas_sencillo);
+    }
+
+    public function test_cajas_de_bodega_fuera_de_rango_o_no_enteras_es_422(): void
+    {
+        $this->conPermisos();
+        $id = $this->bodega('Texas')->id;
+
+        foreach (['cajas_full' => 'Full', 'cajas_sencillo' => 'Sencillo'] as $campo => $nombre) {
+            foreach ([0, 5001, 'abc', 1.5] as $valor) {
+                $this->putJson(self::URL.'/configuracion/bodegas/'.$id, [$campo => $valor])
+                    ->assertStatus(422)
+                    ->assertJsonValidationErrors($campo)
+                    ->assertJsonPath("errors.$campo.0", "Las cajas del $nombre deben ser un número entero de 1 a 5,000.");
+            }
+        }
+        $this->assertNull(BodegaDestino::find($id)->cajas_full);
+        $this->assertNull(BodegaDestino::find($id)->cajas_sencillo);
+    }
+
+    public function test_cajas_del_sencillo_no_pueden_pasar_las_del_full(): void
+    {
+        $this->conPermisos();
+        $texas = $this->bodega('Texas');
+        $mensaje = 'Las cajas del Sencillo no pueden ser más que las del Full.';
+
+        // Ambos en la petición.
+        $this->putJson(self::URL.'/configuracion/bodegas/'.$texas->id, ['cajas_full' => 400, 'cajas_sencillo' => 500])
+            ->assertStatus(422)
+            ->assertJsonPath('errors.cajas_sencillo.0', $mensaje);
+        $this->assertNull($texas->fresh()->cajas_full);
+
+        // En el alta también.
+        $this->postJson(self::URL.'/configuracion/bodegas', ['nombre' => 'Chicago', 'cajas_full' => 400, 'cajas_sencillo' => 500])
+            ->assertStatus(422)
+            ->assertJsonPath('errors.cajas_sencillo.0', $mensaje);
+        $this->assertDatabaseMissing('plan_bodegas_destino', ['nombre' => 'Chicago']);
+
+        // Iguales sí se vale.
+        $this->putJson(self::URL.'/configuracion/bodegas/'.$texas->id, ['cajas_full' => 400, 'cajas_sencillo' => 400])->assertOk();
+
+        // Un Sencillo nuevo contra el Full guardado.
+        $this->putJson(self::URL.'/configuracion/bodegas/'.$texas->id, ['cajas_sencillo' => 500])
+            ->assertStatus(422)
+            ->assertJsonPath('errors.cajas_sencillo.0', $mensaje);
+
+        // Un Full nuevo contra el Sencillo guardado.
+        $this->putJson(self::URL.'/configuracion/bodegas/'.$texas->id, ['cajas_full' => 300])
+            ->assertStatus(422)
+            ->assertJsonPath('errors.cajas_sencillo.0', $mensaje);
+        $this->assertSame(400, $texas->fresh()->cajas_full);
+        $this->assertSame(400, $texas->fresh()->cajas_sencillo);
+
+        // Con uno de los dos vacío no hay comparación.
+        $this->putJson(self::URL.'/configuracion/bodegas/'.$texas->id, ['cajas_full' => null, 'cajas_sencillo' => 900])->assertOk();
+    }
+
+    public function test_cajas_de_bodega_exigen_configuracion_editar(): void
+    {
+        $this->conPermisos(['configuracion' => ['view']]);
+        $id = $this->bodega('Texas')->id;
+
+        $this->putJson(self::URL.'/configuracion/bodegas/'.$id, ['cajas_full' => 400, 'cajas_sencillo' => 200])->assertForbidden();
+        $this->assertNull(BodegaDestino::find($id)->cajas_full);
+    }
+
     public function test_antelacion_de_una_bodega_se_memoiza_y_olvidar_la_limpia(): void
     {
         $catalogo = new CatalogoPlaneacion;

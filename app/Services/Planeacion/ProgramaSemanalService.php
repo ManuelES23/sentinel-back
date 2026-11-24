@@ -371,7 +371,11 @@ class ProgramaSemanalService
 
         return [
             'bodegas' => BodegaDestino::orderBy('orden')->orderBy('id')->get()
-                ->map(fn ($m) => $fila($m) + ['dias_antelacion' => (int) $m->dias_antelacion])->all(),
+                ->map(fn ($m) => $fila($m) + [
+                    'dias_antelacion' => (int) $m->dias_antelacion,
+                    'cajas_full' => $m->cajas_full,
+                    'cajas_sencillo' => $m->cajas_sencillo,
+                ])->all(),
             'presentaciones' => Presentacion::orderBy('cultivo_id')->orderBy('orden')->orderBy('id')->get()
                 ->map(fn ($m) => $fila($m) + [
                     'cultivo_id' => $m->cultivo_id,
