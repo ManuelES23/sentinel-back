@@ -17,7 +17,7 @@ class RezagaEmpaque extends Model
         'temporada_id', 'entity_id', 'proceso_id', 'folio_rezaga',
         'tipo_rezaga', 'subtipo_rezaga', 'fecha', 'cantidad_kg',
         'modo_registro', 'tipo_carga_id', 'total_cajas', 'peso_bascula_kg',
-        'cantidad_unidades_pequenas', 'motivo',
+        'cantidad_unidades_pequenas', 'cantidad_bins', 'motivo',
         'status', 'observaciones', 'created_by',
     ];
 
@@ -26,8 +26,24 @@ class RezagaEmpaque extends Model
         'peso_bascula_kg' => 'decimal:2',
         'total_cajas' => 'integer',
         'cantidad_unidades_pequenas' => 'integer',
+        'cantidad_bins' => 'integer',
         'fecha' => 'date:Y-m-d',
     ];
+
+    /**
+     * `cantidad_bins` solo viaja en el JSON cuando la rezaga se capturó en bins;
+     * las rezagas en kg (las de siempre) conservan exactamente el mismo cuerpo.
+     */
+    public function attributesToArray(): array
+    {
+        $atributos = parent::attributesToArray();
+
+        if (array_key_exists('cantidad_bins', $atributos) && $atributos['cantidad_bins'] === null) {
+            unset($atributos['cantidad_bins']);
+        }
+
+        return $atributos;
+    }
 
     public function temporada() { return $this->belongsTo(Temporada::class); }
     public function entity() { return $this->belongsTo(Entity::class); }

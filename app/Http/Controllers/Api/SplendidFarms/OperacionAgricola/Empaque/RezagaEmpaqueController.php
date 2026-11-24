@@ -5,6 +5,9 @@ namespace App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque;
 use App\Http\Controllers\Controller;
 use App\Models\RezagaEmpaque;
 use App\Models\ProcesoEmpaque;
+use App\Models\Temporada;
+use App\Services\Empaque\RezagaEnBins;
+use Illuminate\Validation\ValidationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -158,6 +161,10 @@ class RezagaEmpaqueController extends Controller
 
     public function store(Request $request): JsonResponse
     {
+        if ($request->filled('temporada_id') && Temporada::esDeBins((int) $request->temporada_id)) {
+            return $this->storeEnBins($request);
+        }
+
         $validated = $request->validate([
             'temporada_id' => 'required|exists:temporadas,id',
             'entity_id' => 'required|exists:entities,id',
@@ -211,6 +218,116 @@ class RezagaEmpaqueController extends Controller
         ], 201);
     }
 
+    /**
+     * Alta de rezaga en una temporada que opera en bins: el cliente manda los
+     * bins y el tipo de bin; los kg estimados y el tipo/subtipo los calcula el
+     * servidor (RezagaEnBins). Cualquier kg o tipo que mande el cliente se ignora.
+     */
+    private function storeEnBins(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'temporada_id' => 'required|exists:temporadas,id',
+            'entity_id' => 'required|exists:entities,id',
+            'proceso_id' => 'required|exists:proceso_empaque,id',
+            'fecha' => 'required|date',
+            'tipo_carga_id' => 'required|integer',
+            'cantidad_bins' => 'required|integer|min:1',
+            'motivo' => 'nullable|string',
+            'observaciones' => 'nullable|string',
+        ]);
+
+        $temporada = Temporada::findOrFail($validated['temporada_id']);
+
+        $this->validarProcesoDeLaTemporada($temporada->id, (int) $validated['proceso_id']);
+
+        $datos = array_merge($validated, RezagaEnBins::atributos(
+            $temporada,
+            (int) $validated['tipo_carga_id'],
+            (int) $validated['cantidad_bins'],
+        ));
+
+        $datos['status'] = 'pendiente';
+        $datos['created_by'] = $request->user()->id;
+        $datos['folio_rezaga'] = $this->generarFolio($datos);
+
+        $rezaga = RezagaEmpaque::create($datos);
+        $rezaga->load($this->eagerLoad);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Rezaga registrada exitosamente',
+            'data' => $rezaga,
+        ], 201);
+    }
+
+    /**
+     * Edición de una rezaga capturada en bins: si cambian los bins o el tipo
+     * de bin se recalculan los kg estimados; una rezaga que ya tiene ventas no
+     * admite ese cambio porque descuadraría lo vendido.
+     */
+    private function updateEnBins(Request $request, RezagaEmpaque $rezaga): JsonResponse
+    {
+        $validated = $request->validate([
+            'entity_id' => 'sometimes|exists:entities,id',
+            'proceso_id' => 'nullable|exists:proceso_empaque,id',
+            'fecha' => 'sometimes|date',
+            'tipo_carga_id' => 'sometimes|integer',
+            'cantidad_bins' => 'sometimes|integer|min:1',
+            'motivo' => 'nullable|string',
+            'status' => 'nullable|in:pendiente,vendida,destruida',
+            'observaciones' => 'nullable|string',
+        ]);
+
+        if (! empty($validated['proceso_id'])) {
+            $this->validarProcesoDeLaTemporada((int) $rezaga->temporada_id, (int) $validated['proceso_id']);
+        }
+
+        $bins = (int) ($validated['cantidad_bins'] ?? $rezaga->cantidad_bins);
+        $tipoCargaId = (int) ($validated['tipo_carga_id'] ?? $rezaga->tipo_carga_id);
+
+        // Solo se recalcula cuando de verdad cambia algo: reenviar los mismos
+        // valores (el formulario manda todo) no debe mover los kg guardados si
+        // el peso del bin cambió después en el catálogo.
+        if ($bins !== (int) $rezaga->cantidad_bins || $tipoCargaId !== (int) $rezaga->tipo_carga_id) {
+            if ($rezaga->ventaDetalles()->exists()) {
+                throw ValidationException::withMessages([
+                    'cantidad_bins' => 'Esta rezaga ya tiene ventas; no se pueden cambiar sus bins.',
+                ]);
+            }
+
+            $validated = array_merge($validated, RezagaEnBins::atributos(
+                Temporada::findOrFail($rezaga->temporada_id),
+                $tipoCargaId,
+                $bins,
+            ));
+        } else {
+            unset($validated['cantidad_bins'], $validated['tipo_carga_id']);
+        }
+
+        $rezaga->update($validated);
+        $rezaga->load($this->eagerLoad);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Rezaga actualizada',
+            'data' => $rezaga,
+        ]);
+    }
+
+    /**
+     * En una temporada en bins el proceso de la rezaga debe ser de esa misma
+     * temporada (revisión barata contra procesos de otro cultivo).
+     */
+    private function validarProcesoDeLaTemporada(int $temporadaId, int $procesoId): void
+    {
+        $procesoTemporadaId = ProcesoEmpaque::query()->whereKey($procesoId)->value('temporada_id');
+
+        if ((int) $procesoTemporadaId !== $temporadaId) {
+            throw ValidationException::withMessages([
+                'proceso_id' => 'El proceso no pertenece a esta temporada.',
+            ]);
+        }
+    }
     public function show(RezagaEmpaque $rezaga): JsonResponse
     {
         $rezaga->load([...$this->eagerLoad, 'ventaDetalles']);
@@ -220,6 +337,10 @@ class RezagaEmpaqueController extends Controller
 
     public function update(Request $request, RezagaEmpaque $rezaga): JsonResponse
     {
+        if ($rezaga->cantidad_bins !== null && Temporada::esDeBins((int) $rezaga->temporada_id)) {
+            return $this->updateEnBins($request, $rezaga);
+        }
+
         $validated = $request->validate([
             'entity_id' => 'sometimes|exists:entities,id',
             'proceso_id' => 'nullable|exists:proceso_empaque,id',

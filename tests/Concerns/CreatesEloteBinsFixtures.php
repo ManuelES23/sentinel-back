@@ -5,9 +5,15 @@ namespace Tests\Concerns;
 use App\Models\Cultivo;
 use App\Models\ProcesoEmpaque;
 use App\Models\RecepcionEmpaque;
+use App\Models\RezagaEmpaque;
+use App\Models\SalidaRezagaEmpaque;
+use App\Models\SalidaRezagaEmpaqueDetalle;
 use App\Models\Temporada;
 use App\Models\TipoCarga;
 use App\Models\Variedad;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * Fixtures de Elote Mochis en bins: un segundo cultivo («Elote») con su
@@ -33,6 +39,7 @@ trait CreatesEloteBinsFixtures
     protected function setUpEloteBinsFixtures(): void
     {
         $this->setUpReporteEmpaqueFixtures();
+        $this->relajarEnumsDeRezagaEnSqlite();
 
         $this->cultivoElote = Cultivo::create(['nombre' => 'Elote']);
 
@@ -110,6 +117,73 @@ trait CreatesEloteBinsFixtures
             'peso_disponible_kg' => $bins * 400,
             'fecha_entrada' => '2026-02-01',
             'status' => 'en_proceso',
+        ]);
+    }
+
+    /**
+     * Solo para el esquema de pruebas (SQLite): las migraciones que amplían
+     * `rezaga_empaque.tipo_rezaga` a produccion/cuarto_frio/lavado/hidrotermico
+     * corren únicamente en MySQL, así que en SQLite el enum sigue siendo el
+     * CHECK original (descarte/merma/segunda/basura). Se relaja a string para
+     * poder crear rezagas de bins. No toca ninguna migración ni el enum de MySQL.
+     */
+    private function relajarEnumsDeRezagaEnSqlite(): void
+    {
+        if (DB::getDriverName() !== 'sqlite') {
+            return;
+        }
+
+        Schema::table('rezaga_empaque', function (Blueprint $table) {
+            $table->string('tipo_rezaga', 20)->default('produccion')->change();
+        });
+    }
+
+    /**
+     * Crea una rezaga directamente en BD. Por defecto: 3 bins de hoja
+     * (450 kg estimados) del proceso dado, pendiente.
+     */
+    protected function crearRezagaBins(ProcesoEmpaque $proceso, array $overrides = []): RezagaEmpaque
+    {
+        $this->contadorBins++;
+
+        return RezagaEmpaque::create(array_merge([
+            'temporada_id' => $proceso->temporada_id,
+            'entity_id' => $this->entity->id,
+            'proceso_id' => $proceso->id,
+            'folio_rezaga' => 'REZ-TEST-'.str_pad((string) $this->contadorBins, 4, '0', STR_PAD_LEFT),
+            'tipo_rezaga' => 'produccion',
+            'subtipo_rezaga' => 'hoja',
+            'fecha' => '2026-02-02',
+            'tipo_carga_id' => $this->binHoja->id,
+            'cantidad_bins' => 3,
+            'cantidad_kg' => 450,
+            'modo_registro' => 'general',
+            'status' => 'pendiente',
+        ], $overrides));
+    }
+
+    /**
+     * Venta de rezaga con un renglón que consume $kg de la rezaga dada.
+     */
+    protected function crearVentaDeRezaga(RezagaEmpaque $rezaga, float $kg, array $overrides = []): SalidaRezagaEmpaqueDetalle
+    {
+        $this->contadorBins++;
+
+        $venta = SalidaRezagaEmpaque::create(array_merge([
+            'temporada_id' => $rezaga->temporada_id,
+            'entity_id' => $this->entity->id,
+            'folio_venta' => 'VTA-TEST-'.str_pad((string) $this->contadorBins, 4, '0', STR_PAD_LEFT),
+            'comprador' => 'Comprador de prueba',
+            'fecha_venta' => '2026-02-03',
+            'total_peso_kg' => $kg,
+        ], $overrides));
+
+        return SalidaRezagaEmpaqueDetalle::create([
+            'venta_rezaga_id' => $venta->id,
+            'rezaga_id' => $rezaga->id,
+            'peso_kg' => $kg,
+            'precio_kg' => 0,
+            'monto' => 0,
         ]);
     }
 }

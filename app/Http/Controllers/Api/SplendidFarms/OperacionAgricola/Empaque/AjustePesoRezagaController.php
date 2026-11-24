@@ -86,6 +86,13 @@ class AjustePesoRezagaController extends Controller
         // Buscar la rezaga y validar que esté pendiente
         $rezaga = RezagaEmpaque::findOrFail($validated['rezaga_empaque_id']);
 
+        if ($rezaga->cantidad_bins !== null) {
+            return response()->json([
+                'status'  => 'error',
+                'message' => 'La rezaga en bins no lleva ajuste de peso.',
+            ], 422);
+        }
+
         if ($rezaga->status !== 'pendiente') {
             return response()->json([
                 'status'  => 'error',
