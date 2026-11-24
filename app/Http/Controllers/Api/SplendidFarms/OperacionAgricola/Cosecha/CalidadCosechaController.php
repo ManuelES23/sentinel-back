@@ -15,6 +15,9 @@ class CalidadCosechaController extends Controller
             'etapa:id,nombre,lote_id',
             'lote:id,nombre,numero_lote',
             'salidaCampo:id,folio_salida,fecha,cantidad,peso_neto_kg,tipo_carga_id',
+            // El accessor peso_calculado lee tipoCarga->peso_estimado_kg; sin esto
+            // el listado (get() sin paginar) lo cargaría por fila (N+1).
+            'salidaCampo.tipoCarga:id,peso_estimado_kg',
             'creador:id,name',
         ]);
 

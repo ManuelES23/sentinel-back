@@ -5,6 +5,7 @@ namespace Tests\Feature\SplendidFarms\OperacionAgricola;
 use App\Models\CalidadCosecha;
 use App\Models\SalidaCampoCosecha;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Laravel\Sanctum\Sanctum;
 use Tests\Concerns\CreatesReporteEmpaqueFixtures;
 use Tests\TestCase;
@@ -69,6 +70,48 @@ class CalidadCosechaSalidaLigadaTest extends TestCase
         $show = $this->getJson(self::URL.'/'.$this->calidad->id);
         $show->assertOk()
             ->assertJsonPath('data.salida_campo.folio_salida', 'SAL-CAL-001');
+    }
+
+    public function test_listado_con_varias_calidades_precarga_tipo_carga_sin_n_mas_1(): void
+    {
+        foreach (['B', 'C', 'D'] as $i => $letra) {
+            $salida = SalidaCampoCosecha::create([
+                'temporada_id' => $this->temporada->id,
+                'fecha' => '2026-02-1'.($i + 1),
+                'cantidad' => 5,
+                'peso_neto_kg' => 100,
+                'tipo_carga_id' => $this->tipoCarga->id,
+                'folio_salida' => 'SAL-CAL-00'.$letra,
+            ]);
+            CalidadCosecha::create([
+                'temporada_id' => $this->temporada->id,
+                'salida_campo_cosecha_id' => $salida->id,
+                'fecha_inspeccion' => '2026-02-1'.($i + 1),
+                'tipo_inspeccion' => 'visual',
+                'resultado' => 'aprobado',
+                'created_by' => $this->actingUser->id,
+            ]);
+        }
+
+        DB::enableQueryLog();
+        $index = $this->getJson(self::URL.'?temporada_id='.$this->temporada->id);
+        $consultasTipoCarga = collect(DB::getQueryLog())
+            ->filter(fn ($q) => preg_match('/from [`"]tipos_carga[`"]/', $q['query']) === 1)
+            ->count();
+
+        $index->assertOk()->assertJsonCount(4, 'data');
+        // Una sola consulta (eager load) sin importar cuántas calidades haya.
+        $this->assertSame(1, $consultasTipoCarga);
+
+        // El conjunto de claves de salida_campo no cambia; solo tipo_carga queda
+        // acotado a las columnas del select anidado (id, peso_estimado_kg).
+        foreach ($index->json('data') as $fila) {
+            $this->assertEqualsCanonicalizing(
+                ['id', 'folio_salida', 'fecha', 'cantidad', 'peso_neto_kg', 'tipo_carga_id', 'peso_calculado', 'tipo_carga'],
+                array_keys($fila['salida_campo'])
+            );
+            $this->assertEqualsCanonicalizing(['id', 'peso_estimado_kg'], array_keys($fila['salida_campo']['tipo_carga']));
+        }
     }
 
     public function test_actualizar_calidad_con_salida_ligada_responde_200(): void
