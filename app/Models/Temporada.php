@@ -22,6 +22,7 @@ class Temporada extends Model
         'fecha_fin',
         'estado',
         'fecha_cierre_real',
+        'opera_en_bins',
         'user_id',
     ];
 
@@ -29,9 +30,31 @@ class Temporada extends Model
         'fecha_inicio' => 'date',
         'fecha_fin' => 'date',
         'fecha_cierre_real' => 'date',
+        'opera_en_bins' => 'boolean',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
     ];
+
+    /**
+     * ¿La temporada opera en bins (Elote Mochis)? Las demás se comportan
+     * exactamente como siempre.
+     */
+    public function operaEnBins(): bool
+    {
+        return (bool) $this->opera_en_bins;
+    }
+
+    /**
+     * Igual que operaEnBins() pero por id: false si es null o no existe.
+     */
+    public static function esDeBins(?int $temporadaId): bool
+    {
+        if ($temporadaId === null) {
+            return false;
+        }
+
+        return (bool) static::query()->whereKey($temporadaId)->value('opera_en_bins');
+    }
 
     /**
      * Relación con Cultivo

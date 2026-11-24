@@ -19,6 +19,7 @@ class TipoCarga extends Model
         'nombre',
         'categoria_caja',
         'peso_estimado_kg',
+        'clase_rezaga',
         'descripcion',
         'is_active',
     ];
