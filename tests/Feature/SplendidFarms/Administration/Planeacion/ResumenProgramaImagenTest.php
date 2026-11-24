@@ -108,8 +108,17 @@ class ResumenProgramaImagenTest extends TestCase
         $this->assertSame(36483, $r['kpis']['necesidad']);
         $this->assertGreaterThan(0, $this->fila($r, 'Cajas producidas', 'Total')['valores'][0]); // viernes anterior con cajas
 
-        // Necesidad por presentación (sin desglose por empaque ni destino).
-        $this->assertSame(['Bulk', 'Tray', 'Minicobs', 'Total'], array_column(collect($r['secciones'])->firstWhere('titulo', 'Necesidad de empaque')['filas'], 'etiqueta'));
+        // Necesidad por presentación y tipo de empaque (sin destino ni cliente); lo sin empaque también sale
+        // y las filas suman el total.
+        $necesidad = collect($r['secciones'])->firstWhere('titulo', 'Necesidad de empaque')['filas'];
+        $etiquetas = array_column($necesidad, 'etiqueta');
+        $this->assertSame('Total', end($etiquetas));
+        $this->assertEqualsCanonicalizing(['Bulk · RPC', 'Bulk · Cartón', 'Bulk · Sin empaque', 'Tray · RPC', 'Minicobs · RPC', 'Total'], $etiquetas);
+        $this->assertSame(1000, $this->fila($r, 'Necesidad de empaque', 'Bulk · Sin empaque')['total']);
+        $this->assertSame(
+            $this->fila($r, 'Necesidad de empaque', 'Total')['total'],
+            array_sum(array_column(array_slice($necesidad, 0, -1), 'total')),
+        );
 
         // Embarques: celdas [full, sencillo]; la del sábado anterior viene de WK47 y no suma.
         $texas = $this->fila($r, 'Embarques · cargas', 'Texas');
