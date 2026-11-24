@@ -463,7 +463,7 @@ class AvanceEmpaqueTest extends TestCase
 
     // ── Domingo opcional ────────────────────────────────
 
-    public function test_el_payload_dice_si_la_semana_trabaja_el_domingo(): void
+    public function test_el_payload_dice_si_empaque_trabaja_el_domingo(): void
     {
         // Sin programa el Avance no lo crea: se asume que sí.
         $this->assertTrue($this->datos()['trabaja_domingo']);
@@ -472,15 +472,29 @@ class AvanceEmpaqueTest extends TestCase
         $p = $this->programa();
         $this->assertTrue($this->datos()['trabaja_domingo']);
 
-        $p->forceFill(['trabaja_domingo' => false])->save();
+        // Solo cuenta Empaque: con Corte y Embarques trabajando el domingo («alguno» = sí) sigue en false.
+        $p->forceFill(['domingo_empaque' => false, 'trabaja_domingo' => true])->save();
         $this->assertFalse($this->datos()['trabaja_domingo']);
     }
 
-    public function test_el_real_del_domingo_se_cuenta_aunque_la_semana_no_lo_trabaje(): void
+    public function test_empaque_con_domingo_aunque_corte_y_embarques_no(): void
     {
         $p = $this->programa();
         $this->necesidad($p, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [0, 0, 0, 0, 0, 0, 40]);
-        $p->forceFill(['trabaja_domingo' => false])->save();
+        $p->forceFill(['domingo_corte' => false, 'domingo_embarques' => false])->save();
+
+        $d = $this->datos();
+
+        $this->assertTrue($d['trabaja_domingo']);
+        $this->assertSame([0, 0, 0, 0, 0, 0, 40], $this->fila($d['renglones'], 'Bulk', $this->ab(), 'RPC')['programado']);
+    }
+
+    public function test_el_real_del_domingo_se_cuenta_aunque_empaque_no_lo_trabaje(): void
+    {
+        $p = $this->programa();
+        $this->necesidad($p, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [0, 0, 0, 0, 0, 0, 40]);
+        // Corte y Embarques sí trabajan el domingo: el programado igual se adelanta al sábado.
+        $p->forceFill(['domingo_empaque' => false, 'trabaja_domingo' => true])->save();
         $this->pallet('2026-11-29', $this->receta('Bulk', 'RPC'), 25, 'Amarillo');
 
         $d = $this->datos();

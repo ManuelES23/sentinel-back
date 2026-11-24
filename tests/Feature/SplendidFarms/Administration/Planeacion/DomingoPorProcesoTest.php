@@ -192,6 +192,7 @@ class DomingoPorProcesoTest extends TestCase
         $this->cambiar(['empaque' => false])
             ->assertOk()
             ->assertJsonPath('success', true)
+            ->assertJsonPath('message', 'Domingo: Corte sí, Empaque no, Embarques sí.')
             ->assertJsonPath('data', ['trabaja_domingo' => true, 'domingo' => ['corte' => true, 'empaque' => false, 'embarques' => true]]);
 
         $this->assertSame(['corte' => true, 'empaque' => false, 'embarques' => true], $this->banderas());
@@ -207,6 +208,7 @@ class DomingoPorProcesoTest extends TestCase
 
         $this->cambiar(['corte' => false, 'embarques' => false])
             ->assertOk()
+            ->assertJsonPath('message', 'Domingo: Corte no, Empaque sí, Embarques no.')
             ->assertJsonPath('data.domingo', ['corte' => false, 'empaque' => true, 'embarques' => false])
             ->assertJsonPath('data.trabaja_domingo', true);
 

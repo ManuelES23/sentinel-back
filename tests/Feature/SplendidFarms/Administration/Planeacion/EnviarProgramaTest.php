@@ -186,6 +186,32 @@ class EnviarProgramaTest extends TestCase
         $this->assertEquals(0, $sin->getCell('M'.$filaDe($sin, 'TOTAL NECESIDAD'))->getValue());
     }
 
+    public function test_el_correo_trae_el_domingo_si_algun_proceso_lo_trabaja(): void
+    {
+        Mail::fake();
+        // WK48: solo Empaque con domingo («alguno» = sí). WK49: los tres sin domingo.
+        $wk48 = ProgramaSemanal::create(['lunes' => '2026-11-23']);
+        $this->cargarWk48($wk48);
+        $wk48->forceFill(['trabaja_domingo' => true, 'domingo_corte' => false, 'domingo_empaque' => true, 'domingo_embarques' => false])->save();
+        $sinDomingo = ProgramaSemanal::create(['lunes' => '2026-11-30']);
+        $sinDomingo->forceFill(['trabaja_domingo' => false, 'domingo_corte' => false, 'domingo_empaque' => false, 'domingo_embarques' => false])->save();
+
+        $this->enviar(['lunes' => ['2026-11-23', '2026-11-30']])->assertOk();
+
+        $libro = $this->libroDe($this->correoEnviado());
+        $encabezado = function (Worksheet $hoja): array {
+            for ($f = 1; $f <= $hoja->getHighestRow(); $f++) {
+                if ($hoja->getCell('C'.$f)->getValue() === 'COLOR') {
+                    return array_map(fn ($c) => $hoja->getCell($c.$f)->getValue(), ['G', 'H', 'I', 'J', 'K', 'L', 'M', 'N']);
+                }
+            }
+            $this->fail('No hay encabezado de días.');
+        };
+
+        $this->assertSame(['L', 'M', 'X', 'J', 'V', 'S', 'D', 'HA TOTAL'], $encabezado($libro->getSheetByName('WK48')));
+        $this->assertSame(['L', 'M', 'X', 'J', 'V', 'S', 'HA TOTAL', null], $encabezado($libro->getSheetByName('WK49')));
+    }
+
     public function test_con_una_semana_el_asunto_lleva_solo_esa(): void
     {
         Mail::fake();

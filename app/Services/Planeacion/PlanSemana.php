@@ -219,7 +219,7 @@ class PlanSemana
      * las de esta semana que se empacan dentro de ella, más las de la semana
      * siguiente que se empacan antes de su lunes (caen al final de esta). Lo que
      * de esta semana se empaca antes de su lunes ya no cuenta aquí: le toca a la
-     * semana anterior. Si la semana no trabaja el domingo, lo del domingo se
+     * semana anterior. Si Empaque no trabaja el domingo, lo del domingo se
      * empaca el sábado. Los renglones que quedan sin cajas se omiten.
      *
      * @return list<array{id: int, necesidad: ProgramaNecesidad, grupo: ?string, cajas: int[], de_semana_siguiente: bool}>
@@ -238,10 +238,11 @@ class PlanSemana
                         // La semana anterior no tiene programa que lo descuente: cuenta el lunes.
                         $empaque = 0;
                     }
-                    // Regla del sábado: si esta semana no trabaja el domingo, lo que
-                    // se empacaría el domingo (propio o de la semana siguiente) se
-                    // empaca un día antes. Lo decide el interruptor de ESTA semana.
-                    if ($empaque === CalculadoraBalance::DIAS - 1 && ! (bool) ($this->programa->trabaja_domingo ?? true)) {
+                    // Regla del sábado: si Empaque no trabaja el domingo de esta
+                    // semana, lo que se empacaría el domingo (propio o de la semana
+                    // siguiente) se empaca un día antes. Lo decide SOLO la bandera de
+                    // Empaque de ESTA semana (Corte y Embarques no cuentan).
+                    if ($empaque === CalculadoraBalance::DIAS - 1 && ! $this->programa->trabajaDomingo('empaque')) {
                         $empaque--;
                     }
                     if ($this->diaValido($empaque)) {
