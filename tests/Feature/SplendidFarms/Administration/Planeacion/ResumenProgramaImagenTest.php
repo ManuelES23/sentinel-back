@@ -103,7 +103,9 @@ class ResumenProgramaImagenTest extends TestCase
         // Totales de la semana = las cuatro cifras = el balance del Tablero.
         $this->assertSame($r['kpis']['produccion'], $this->fila($r, 'Cajas producidas', 'Total')['total']);
         $this->assertSame($r['kpis']['necesidad'], $this->fila($r, 'Necesidad de empaque', 'Total')['total']);
-        $this->assertSame($r['kpis']['disponible'], $this->fila($r, null, 'Disponible')['total']);
+        $this->assertSame($r['kpis']['disponible'], $this->fila($r, 'Disponible para venta', 'Disponible')['total']);
+        // Sin programa manual de empaque la sección solo trae el total disponible.
+        $this->assertSame(['Disponible'], array_column(collect($r['secciones'])->firstWhere('titulo', 'Disponible para venta')['filas'], 'etiqueta'));
         $this->assertSame($r['kpis']['produccion'] - $r['kpis']['necesidad'], $r['kpis']['disponible']);
         $this->assertSame(36483, $r['kpis']['necesidad']);
         $this->assertGreaterThan(0, $this->fila($r, 'Cajas producidas', 'Total')['valores'][0]); // viernes anterior con cajas
@@ -149,9 +151,9 @@ class ResumenProgramaImagenTest extends TestCase
         $this->assertEquals(21, $amarillo['total']);
     }
 
-    public function test_lo_programado_a_mano_en_el_programa_de_empaque_va_en_su_presentacion_y_empaque(): void
+    public function test_lo_programado_a_mano_en_el_programa_de_empaque_es_disponible_para_venta_no_necesidad(): void
     {
-        // WK48 trae Minicobs · RPC = 150 el lunes; el Programa de empaque le suma 75 el viernes y crea Tray · Cartón.
+        // WK48 trae Minicobs · RPC = 150 de venta el lunes; el Programa de empaque empaca 75 Minicobs · RPC el viernes y 40 Tray · Cartón el miércoles.
         $this->crearSobrante($this->wk48, [
             'bodega_id' => $this->bodega('Nogales')->id,
             'presentacion_id' => $this->presentacion('Minicobs')->id,
@@ -167,19 +169,26 @@ class ResumenProgramaImagenTest extends TestCase
 
         $r = $this->resumen(null);
 
+        // Necesidad = solo ventas: lo programado a mano no entra.
         $necesidad = collect($r['secciones'])->firstWhere('titulo', 'Necesidad de empaque')['filas'];
-        $this->assertNotContains('Sobrante asignado', array_column($necesidad, 'etiqueta'));
-        $minicobs = $this->fila($r, 'Necesidad de empaque', 'Minicobs · RPC');
-        $this->assertSame(225, $minicobs['total']);
-        $this->assertSame(75, $minicobs['valores'][6]); // viernes 27 (2 previas + índice 4)
-        $this->assertSame(40, $this->fila($r, 'Necesidad de empaque', 'Tray · Cartón')['total']);
+        $this->assertNotContains('Tray · Cartón', array_column($necesidad, 'etiqueta'));
+        $this->assertSame(150, $this->fila($r, 'Necesidad de empaque', 'Minicobs · RPC')['total']);
+        $this->assertSame(36483, $this->fila($r, 'Necesidad de empaque', 'Total')['total']);
+        $this->assertSame(36483, $r['kpis']['necesidad']);
 
-        // Las filas siguen sumando el total, que ya incluía lo programado a mano.
-        $this->assertSame(36483 + 75 + 40, $this->fila($r, 'Necesidad de empaque', 'Total')['total']);
-        $this->assertSame(
-            $this->fila($r, 'Necesidad de empaque', 'Total')['total'],
-            array_sum(array_column(array_slice($necesidad, 0, -1), 'total')),
-        );
+        // Disponible para venta: lo empacado sin pedido por presentación y empaque, lo sin programar y el total.
+        $disponible = collect($r['secciones'])->firstWhere('titulo', 'Disponible para venta')['filas'];
+        $this->assertSame(['Tray · Cartón', 'Minicobs · RPC', 'Sin programar', 'Disponible'], array_column($disponible, 'etiqueta'));
+        $minicobs = $this->fila($r, 'Disponible para venta', 'Minicobs · RPC');
+        $this->assertSame(75, $minicobs['total']);
+        $this->assertSame(75, $minicobs['valores'][6]); // viernes 27 (2 previas + índice 4)
+        $this->assertSame(40, $this->fila($r, 'Disponible para venta', 'Tray · Cartón')['total']);
+        $total = $this->fila($r, 'Disponible para venta', 'Disponible')['total'];
+        $this->assertSame($r['kpis']['produccion'] - 36483, $total);
+        $this->assertSame($total, 75 + 40 + $this->fila($r, 'Disponible para venta', 'Sin programar')['total']);
+        $this->assertSame($total, $r['kpis']['disponible']);
+        $this->assertSame(115, $r['kpis']['empacado_sin_venta']);
+        $this->assertSame($total, end($r['por_color'])['disponible']);
     }
 
     public function test_una_semana_sin_domingo_no_trae_esa_columna(): void

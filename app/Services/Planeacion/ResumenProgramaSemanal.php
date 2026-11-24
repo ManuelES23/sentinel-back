@@ -61,7 +61,7 @@ final class ResumenProgramaSemanal
             $this->campo($semana, $columnas, $cultivoId),
             $this->cajas($semana, $columnas, $cultivoId),
             $this->necesidad($semana, $columnas, $cultivoId),
-            $this->disponible($columnas, $cultivoId),
+            $this->disponible($semana, $columnas, $cultivoId),
             $this->embarques($semana, $anterior, $columnas, $cultivoId),
         ]));
 
@@ -70,10 +70,12 @@ final class ResumenProgramaSemanal
         $total = fn (string $campo) => array_sum(array_map(fn ($d) => $balance[$campo][$d], $dias));
         $embarques = $this->cargas($semana, $cultivoId);
 
+        // Faltante = la producción no alcanza para las VENTAS del día (lo programado a mano no cuenta: es disponible).
         $faltantes = [];
         foreach ($dias as $d) {
-            if ($balance['del_dia'][$d] < 0) {
-                $faltantes[] = ['dia' => self::LETRAS[$d].' '.$lunes->copy()->addDays($d)->format('d'), 'cajas' => $balance['del_dia'][$d]];
+            $paraVenta = $balance['produccion'][$d] - $balance['necesidad'][$d];
+            if ($paraVenta < 0) {
+                $faltantes[] = ['dia' => self::LETRAS[$d].' '.$lunes->copy()->addDays($d)->format('d'), 'cajas' => $paraVenta];
             }
         }
 
@@ -89,8 +91,10 @@ final class ResumenProgramaSemanal
             'secciones' => $secciones,
             'kpis' => [
                 'produccion' => $total('produccion'),
-                'necesidad' => $total('necesidad') + $total('sobrante'),
-                'disponible' => $total('del_dia'),
+                // Necesidad = solo ventas; disponible = producción − ventas (incluye lo empacado sin pedido).
+                'necesidad' => $total('necesidad'),
+                'disponible' => $total('produccion') - $total('necesidad'),
+                'empacado_sin_venta' => $total('sobrante'),
                 'full' => array_sum(array_map(fn ($b) => array_sum(array_map(fn ($d) => $b[$d][0], $dias)), $embarques)),
                 'sencillo' => array_sum(array_map(fn ($b) => array_sum(array_map(fn ($d) => $b[$d][1], $dias)), $embarques)),
             ],
@@ -135,13 +139,53 @@ final class ResumenProgramaSemanal
     }
 
     /**
-     * Necesidad de empaque por presentación y tipo de empaque («Bulk · RPC»,
-     * «Bulk · Cartón»…; por día de empaque), en el orden de los catálogos:
-     * las ventas MÁS lo programado a mano en el Programa de empaque (sobrante
-     * asignado), que ya dice con qué presentación y empaque se va a empacar.
-     * Lo que no trae empaque va como «· Sin empaque». Al final, el total (siempre).
+     * Necesidad de empaque de VENTAS por presentación y tipo de empaque
+     * («Bulk · RPC», «Bulk · Cartón»…; por día de empaque), en el orden de los
+     * catálogos; lo que no trae empaque va como «· Sin empaque». Al final, el
+     * total (siempre). Lo programado a mano en el Programa de empaque no es
+     * venta: va en «Disponible para venta».
      */
     private function necesidad(array $semana, array $columnas, ?int $cultivoId): array
+    {
+        $filas = $this->filasPorEmpaque($semana, $columnas, $cultivoId, ['ok', 'sin_clasificar']);
+        $total = $this->porColumna($columnas, fn (array $s, int $d) => $this->balanceDe($s, $cultivoId)['necesidad'][$d]);
+        $filas[] = $this->fila('Total', $total, $columnas, 'cajas') + ['total_fila' => true];
+
+        return ['titulo' => 'Necesidad de empaque', 'filas' => $filas];
+    }
+
+    /**
+     * Disponible para venta = producción − necesidad de ventas. Si hay programa
+     * manual de empaque (sobrante asignado), primero lo ya empacado sin pedido
+     * por presentación y empaque (para que ventas sepa qué tiene para vender) y
+     * «Sin programar» (lo que queda, el disponible del día del balance); al
+     * final el total disponible (siempre).
+     */
+    private function disponible(array $semana, array $columnas, ?int $cultivoId): array
+    {
+        $filas = $this->filasPorEmpaque($semana, $columnas, $cultivoId, ['sobrante']);
+        if ($filas !== []) {
+            $sinProgramar = $this->porColumna($columnas, fn (array $s, int $d) => $this->balanceDe($s, $cultivoId)['del_dia'][$d]);
+            $filas[] = $this->fila('Sin programar', $sinProgramar, $columnas, 'signo');
+        }
+        $total = $this->porColumna($columnas, function (array $s, int $d) use ($cultivoId) {
+            $b = $this->balanceDe($s, $cultivoId);
+
+            return $b['produccion'][$d] - $b['necesidad'][$d];
+        });
+        $filas[] = $this->fila('Disponible', $total, $columnas, 'signo') + ['total_fila' => true];
+
+        return ['titulo' => 'Disponible para venta', 'filas' => $filas];
+    }
+
+    /**
+     * Filas «Presentación · Empaque» de las clases dadas del programa de empaque, en el orden de los
+     * catálogos (lo sin empaque al final de cada presentación); solo las que tienen cajas.
+     *
+     * @param  list<string>  $clases
+     * @return list<array>
+     */
+    private function filasPorEmpaque(array $semana, array $columnas, ?int $cultivoId, array $clases): array
     {
         $empaques = array_merge(
             array_map(fn ($t) => [(int) $t['id'], $t['nombre']], $semana['catalogos']['tipos_empaque']),
@@ -153,28 +197,14 @@ final class ResumenProgramaSemanal
                 continue;
             }
             foreach ($empaques as [$empaqueId, $empaqueNombre]) {
-                $valores = $this->porColumna($columnas, fn (array $s, int $d) => $this->sumaEmpaque($s, $cultivoId, $d, ['ok', 'sin_clasificar', 'sobrante'], (int) $p['id'], $empaqueId));
+                $valores = $this->porColumna($columnas, fn (array $s, int $d) => $this->sumaEmpaque($s, $cultivoId, $d, $clases, (int) $p['id'], $empaqueId));
                 if ($this->tieneDatos($valores)) {
                     $filas[] = $this->fila($p['nombre'].' · '.$empaqueNombre, $valores, $columnas, 'cajas');
                 }
             }
         }
-        $total = $this->porColumna($columnas, function (array $s, int $d) use ($cultivoId) {
-            $b = $this->balanceDe($s, $cultivoId);
 
-            return $b['necesidad'][$d] + $b['sobrante'][$d];
-        });
-        $filas[] = $this->fila('Total', $total, $columnas, 'cajas') + ['total_fila' => true];
-
-        return ['titulo' => 'Necesidad de empaque', 'filas' => $filas];
-    }
-
-    /** Disponible del día del balance (producción − necesidad − sobrante asignado). */
-    private function disponible(array $columnas, ?int $cultivoId): array
-    {
-        $valores = $this->porColumna($columnas, fn (array $s, int $d) => $this->balanceDe($s, $cultivoId)['del_dia'][$d]);
-
-        return ['titulo' => null, 'filas' => [$this->fila('Disponible', $valores, $columnas, 'signo') + ['total_fila' => true]]];
+        return $filas;
     }
 
     /** Embarques · cargas: una fila por destino con cargas; cada celda «2F 1S». */
@@ -386,7 +416,8 @@ final class ResumenProgramaSemanal
 
     private function conDisponible(array $renglon, int $cajasPorCarga): array
     {
-        $disponible = $renglon['produccion'] - $renglon['necesidad'] - $renglon['sobrante'];
+        // Disponible para venta: lo programado a mano (sobrante) cuenta como disponible, no como necesidad.
+        $disponible = $renglon['produccion'] - $renglon['necesidad'];
 
         return $renglon + [
             'disponible' => $disponible,

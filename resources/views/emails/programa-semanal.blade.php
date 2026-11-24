@@ -19,7 +19,11 @@
         <p style="margin: 0 0 4px; font-size: 14px;">
             Producción <b>{{ $cajas($k['produccion']) }}</b> cj ·
             Necesidad <b>{{ $cajas($k['necesidad']) }}</b> cj ·
-            Disponible <b style="color: {{ $k['disponible'] < 0 ? '#b42318' : ($k['disponible'] > 0 ? '#1a7343' : '#111827') }};">{{ $signo($k['disponible']) }}</b> cj ·
+            Disponible para venta <b style="color: {{ $k['disponible'] < 0 ? '#b42318' : ($k['disponible'] > 0 ? '#1a7343' : '#111827') }};">{{ $signo($k['disponible']) }}</b> cj
+            @if (($k['empacado_sin_venta'] ?? 0) > 0)
+                (<b>{{ $cajas($k['empacado_sin_venta']) }}</b> ya empacadas sin pedido)
+            @endif
+            ·
             Embarques <b>{{ $k['full'] }} F · {{ $k['sencillo'] }} S</b>
         </p>
         <p style="margin: 0 0 8px; font-size: 13px; color: #4b5563;">
