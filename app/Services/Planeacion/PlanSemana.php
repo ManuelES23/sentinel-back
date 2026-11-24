@@ -219,8 +219,8 @@ class PlanSemana
      * las de esta semana que se empacan dentro de ella, más las de la semana
      * siguiente que se empacan antes de su lunes (caen al final de esta). Lo que
      * de esta semana se empaca antes de su lunes ya no cuenta aquí: le toca a la
-     * semana anterior. Si Empaque no trabaja el domingo, lo del domingo se
-     * empaca el sábado. Los renglones que quedan sin cajas se omiten.
+     * semana anterior. Si Empaque no trabaja el domingo, ese día no cuenta como
+     * día de antelación (ver diaDeEmpaque). Los renglones que quedan sin cajas se omiten.
      *
      * @return list<array{id: int, necesidad: ProgramaNecesidad, grupo: ?string, cajas: int[], de_semana_siguiente: bool}>
      */
@@ -233,17 +233,10 @@ class PlanSemana
                 $cajas = array_fill(0, CalculadoraBalance::DIAS, 0);
                 foreach ($necesidad->cajasPorDia() as $llegada => $cantidad) {
                     // Día de empaque contado desde el lunes de esta semana.
-                    $empaque = $llegada - $antelacion + ($deSiguiente ? CalculadoraBalance::DIAS : 0);
+                    $empaque = $this->diaDeEmpaque($llegada + ($deSiguiente ? CalculadoraBalance::DIAS : 0), $antelacion);
                     if ($empaque < 0 && ! $deSiguiente && ! $this->anteriorConPrograma) {
                         // La semana anterior no tiene programa que lo descuente: cuenta el lunes.
                         $empaque = 0;
-                    }
-                    // Regla del sábado: si Empaque no trabaja el domingo de esta
-                    // semana, lo que se empacaría el domingo (propio o de la semana
-                    // siguiente) se empaca un día antes. Lo decide SOLO la bandera de
-                    // Empaque de ESTA semana (Corte y Embarques no cuentan).
-                    if ($empaque === CalculadoraBalance::DIAS - 1 && ! $this->programa->trabajaDomingo('empaque')) {
-                        $empaque--;
                     }
                     if ($this->diaValido($empaque)) {
                         $cajas[$empaque] += $cantidad;
@@ -263,6 +256,34 @@ class PlanSemana
         }
 
         return $renglones;
+    }
+
+    /**
+     * Día de empaque (contado desde el lunes de esta semana; negativo = semana
+     * anterior, 7 o más = siguiente) de una llegada: retrocede los días de
+     * antelación sin CONTAR el domingo de esta semana cuando Empaque no lo
+     * trabaja (un martes con 2 días se empaca el sábado; un lunes, el viernes).
+     * Lo decide SOLO la bandera de Empaque de ESTA semana (Corte y Embarques no
+     * cuentan). Los domingos de otras semanas los cuenta su propio programa: un
+     * resultado antes del lunes ya no es de esta semana.
+     */
+    private function diaDeEmpaque(int $llegada, int $antelacion): int
+    {
+        $domingo = CalculadoraBalance::DIAS - 1;
+        $sinDomingo = ! $this->programa->trabajaDomingo('empaque');
+        $dia = $llegada;
+        for ($i = 0; $i < $antelacion; $i++) {
+            $dia--;
+            if ($sinDomingo && $dia === $domingo) {
+                $dia--;
+            }
+        }
+        // Una llegada en el propio domingo apagado (sin antelación) también se adelanta.
+        if ($sinDomingo && $dia === $domingo) {
+            $dia--;
+        }
+
+        return $dia;
     }
 
     /**
