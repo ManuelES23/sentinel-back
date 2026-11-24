@@ -14,7 +14,7 @@ class CalidadCosechaController extends Controller
         $query = CalidadCosecha::with([
             'etapa:id,nombre,lote_id',
             'lote:id,nombre,numero_lote',
-            'salidaCampo:id,fecha,producto,cantidad,unidad_medida',
+            'salidaCampo:id,folio_salida,fecha,cantidad,peso_neto_kg,tipo_carga_id',
             'creador:id,name',
         ]);
 
@@ -73,7 +73,7 @@ class CalidadCosechaController extends Controller
         $calidad->load([
             'etapa:id,nombre,lote_id',
             'lote:id,nombre,numero_lote',
-            'salidaCampo:id,fecha,producto,cantidad,unidad_medida',
+            'salidaCampo:id,folio_salida,fecha,cantidad,peso_neto_kg,tipo_carga_id',
             'creador:id,name',
         ]);
 
@@ -119,7 +119,7 @@ class CalidadCosechaController extends Controller
         $calidad->load([
             'etapa:id,nombre,lote_id',
             'lote:id,nombre,numero_lote',
-            'salidaCampo:id,fecha,producto,cantidad,unidad_medida',
+            'salidaCampo:id,folio_salida,fecha,cantidad,peso_neto_kg,tipo_carga_id',
             'creador:id,name',
         ]);
 
