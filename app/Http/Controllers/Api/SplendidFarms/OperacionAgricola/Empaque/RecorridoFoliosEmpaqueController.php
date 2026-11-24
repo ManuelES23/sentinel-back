@@ -87,7 +87,7 @@ class RecorridoFoliosEmpaqueController extends Controller
         $rezagas = RezagaEmpaque::query()
             ->with([
                 'proceso:id,folio_proceso,status',
-                'ventaDetalles:id,rezaga_id,peso_kg',
+                'ventaDetalles:id,rezaga_id,peso_kg,bins',
                 'ajustesPeso:id,rezaga_empaque_id,kg_antes,kg_despues',
             ])
             ->when(!empty($procesoIds), fn ($q) => $q->whereIn('proceso_id', $procesoIds), fn ($q) => $q->whereRaw('1 = 0'))
@@ -109,6 +109,7 @@ class RecorridoFoliosEmpaqueController extends Controller
             );
 
             $rezaga->setAttribute('cantidad_historica_kg', round($historicaKg, 2));
+            $rezaga->anotarHistoricaBins();
         });
 
         $producciones = ProduccionEmpaque::query()

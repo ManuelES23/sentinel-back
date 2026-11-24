@@ -26,7 +26,7 @@ class RezagaEmpaqueController extends Controller
         'proceso.recepcion.salidaCampo:id,variedad_id,folio_salida,cantidad',
         'proceso.recepcion.salidaCampo.variedad:id,nombre',
         'tipoCarga:id,nombre,peso_estimado_kg,categoria_caja',
-        'ventaDetalles:id,rezaga_id,peso_kg',
+        'ventaDetalles:id,rezaga_id,peso_kg,bins',
         'creador:id,name',
     ];
 
@@ -387,6 +387,7 @@ class RezagaEmpaqueController extends Controller
 
         // Histórico independiente de salidas: cantidad antes de descontar salidas.
         $rezaga->setAttribute('cantidad_historica_kg', round($cantidadActual + $consumidoEnSalidas, 2));
+        $rezaga->anotarHistoricaBins();
 
         return $rezaga;
     }

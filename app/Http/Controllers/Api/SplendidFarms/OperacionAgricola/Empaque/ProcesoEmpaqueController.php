@@ -60,7 +60,7 @@ class ProcesoEmpaqueController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $query = ProcesoEmpaque::with([...$this->eagerLoad, 'producciones', 'rezagas.ventaDetalles:id,rezaga_id,peso_kg']);
+        $query = ProcesoEmpaque::with([...$this->eagerLoad, 'producciones', 'rezagas.ventaDetalles:id,rezaga_id,peso_kg,bins']);
 
         $asOf = null;
         if ($request->filled('as_of_date')) {
@@ -130,6 +130,7 @@ class ProcesoEmpaqueController extends Controller
             $proceso->rezagas->each(function ($rezaga) {
                 $vendido = (float) $rezaga->ventaDetalles->sum('peso_kg');
                 $rezaga->setAttribute('cantidad_historica_kg', round((float) $rezaga->cantidad_kg + $vendido, 2));
+                $rezaga->anotarHistoricaBins();
             });
         });
 

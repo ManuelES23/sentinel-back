@@ -45,6 +45,35 @@ class RezagaEmpaque extends Model
         return $atributos;
     }
 
+    /**
+     * Bins con los que nació la rezaga: los disponibles hoy más los ya vendidos.
+     * Solo existe para rezagas capturadas en bins; una rezaga en kg devuelve null.
+     */
+    public function historicaBins(?int $vendidoBins): ?int
+    {
+        if ($this->cantidad_bins === null) {
+            return null;
+        }
+
+        return (int) $this->cantidad_bins + (int) $vendidoBins;
+    }
+
+    /**
+     * Anota `cantidad_historica_bins` (junto a `cantidad_historica_kg`) con los
+     * bins vendidos de `ventaDetalles`. No hace nada si la rezaga es en kg, para
+     * que su JSON no cambie. Usa la relación ya cargada (o la carga una vez).
+     */
+    public function anotarHistoricaBins(): static
+    {
+        if ($this->cantidad_bins === null) {
+            return $this;
+        }
+
+        $this->setAttribute('cantidad_historica_bins', $this->historicaBins((int) $this->ventaDetalles->sum('bins')));
+
+        return $this;
+    }
+
     public function temporada() { return $this->belongsTo(Temporada::class); }
     public function entity() { return $this->belongsTo(Entity::class); }
     public function proceso() { return $this->belongsTo(ProcesoEmpaque::class, 'proceso_id'); }

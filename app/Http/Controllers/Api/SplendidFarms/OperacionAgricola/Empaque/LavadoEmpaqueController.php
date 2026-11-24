@@ -51,7 +51,7 @@ class LavadoEmpaqueController extends Controller
                 'status',
             ])
                 ->where('tipo_rezaga', 'lavado')
-                ->with(['ventaDetalles:id,rezaga_id,peso_kg'])
+                ->with(['ventaDetalles:id,rezaga_id,peso_kg,bins'])
                 ->orderByDesc('id');
         };
 
@@ -536,6 +536,7 @@ class LavadoEmpaqueController extends Controller
                 $item->setAttribute('rezaga_lavado_historica_kg', $kgHistorico);
 
                 $rezaga->setAttribute('cantidad_historica_kg', $kgHistorico);
+                $rezaga->anotarHistoricaBins();
             }
 
             return $item;
