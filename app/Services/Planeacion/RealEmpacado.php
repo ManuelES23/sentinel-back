@@ -5,6 +5,7 @@ namespace App\Services\Planeacion;
 use App\Models\Planeacion\RecetaCombinacion;
 use App\Models\ProduccionEmpaque;
 use App\Models\Recipe;
+use App\Models\Temporada;
 use Carbon\CarbonImmutable;
 
 /**
@@ -13,7 +14,9 @@ use Carbon\CarbonImmutable;
  * las cajas por día.
  *
  * Cuentan los pallets de `produccion_empaque` no borrados con
- * `fecha_produccion` en la semana, en cualquier estado y también las colas.
+ * `fecha_produccion` en la semana, en cualquier estado y también las colas,
+ * salvo los de temporadas de prueba (`Temporada::dePrueba`: nombre o locación
+ * con «prueba»).
  * Un pallet con renglones en `produccion_empaque_detalles` (mixto) se reparte
  * por ellos, cada uno con su receta y sus cajas; si no, cuenta entero con su
  * propia receta (mismo criterio que los reportes de empaque y el dashboard de
@@ -72,6 +75,9 @@ final class RealEmpacado
             ->where('fecha_produccion', '>=', $inicio->toDateString())
             ->where('fecha_produccion', '<', $inicio->addDays(CalculadoraBalance::DIAS)->toDateString())
             ->when($plantaIds !== null, fn ($q) => $plantaIds === [] ? $q->whereRaw('1 = 0') : $q->whereIn('entity_id', $plantaIds))
+            // Los pallets de temporadas de prueba no son empaque real (sin temporada sí cuentan).
+            ->where(fn ($q) => $q->whereNull('temporada_id')
+                ->orWhereNotIn('temporada_id', Temporada::dePrueba()->select('id')))
             ->with('detalles:id,produccion_id,numero_entrada,recipe_id,total_cajas')
             ->get(['id', 'fecha_produccion', 'variedad_id', 'recipe_id', 'total_cajas']);
 
