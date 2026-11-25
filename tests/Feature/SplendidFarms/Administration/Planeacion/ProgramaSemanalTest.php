@@ -175,12 +175,14 @@ class ProgramaSemanalTest extends TestCase
         $permisos = $this->semana('2026-11-23')->assertOk()->json('data.permisos');
 
         $this->assertSame([
-            'tablero' => ['view' => true, 'editar_notas' => false, 'enviar' => false],
+            'tablero' => ['view' => true, 'editar_notas' => false, 'enviar' => false, 'acordar' => false],
             'plan_corte' => ['view' => false, 'capturar' => false],
+            'avance_cosecha' => ['view' => false],
             'necesidades' => ['view' => true, 'capturar' => true],
             'programa_empaque' => ['view' => false, 'capturar' => false],
             'avance_empaque' => ['view' => false],
             'embarques' => ['view' => false, 'capturar' => false],
+            'avance_embarques' => ['view' => false],
             'resumen' => ['view' => false],
             'configuracion' => ['view' => false, 'editar' => false],
         ], $permisos);
