@@ -2,12 +2,14 @@
 
 namespace App\Http\Controllers\Api\CRM;
 
+use App\Events\CRM\AgendaUpdated;
 use App\Events\CRM\ContactoUpdated;
 use App\Http\Controllers\Controller;
 use App\Models\CRM\CrmCliente;
 use App\Models\CRM\CrmContacto;
 use App\Models\CRM\CrmEmpresaExterna;
 use App\Models\CRM\CrmProspecto;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -89,6 +91,15 @@ abstract class CrmBaseController extends Controller
                 'evento' => $evento::class,
                 'error' => $e->getMessage(),
             ]);
+        }
+    }
+
+    /** Emite AgendaUpdated por evento, con el vendedor cargado como los demás emisores de agenda. */
+    protected function difundirEventos(string $accion, Collection $eventos): void
+    {
+        $eventos->load(['vendedor:id,nombre', 'etiqueta:id,nombre', 'contacto:id,nombre,cargo']);
+        foreach ($eventos as $evento) {
+            $this->difundir(new AgendaUpdated($accion, $evento->toArray()));
         }
     }
 

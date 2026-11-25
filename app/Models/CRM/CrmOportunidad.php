@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\DB;
@@ -191,6 +192,18 @@ class CrmOportunidad extends Model
     public function cotizaciones(): HasMany
     {
         return $this->hasMany(CrmCotizacion::class, 'oportunidad_id');
+    }
+
+    /** La venta registrada vigente (una sola por oportunidad, solo SBP). */
+    public function ventaVigente(): HasOne
+    {
+        return $this->hasOne(CrmOportunidadVenta::class, 'oportunidad_id')->where('vigente', true);
+    }
+
+    /** Ajustes posteriores a la venta (rechazos y cambios de precio), vigentes y anulados. */
+    public function ajustes(): HasMany
+    {
+        return $this->hasMany(CrmOportunidadAjuste::class, 'oportunidad_id')->orderBy('id');
     }
 
     public function actividades(): MorphMany

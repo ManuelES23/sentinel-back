@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\CRM;
 
+use App\Events\CRM\ActividadUpdated;
 use App\Events\CRM\CotizacionUpdated;
 use App\Events\CRM\OportunidadUpdated;
 use App\Models\CRM\CrmConfiguracionComercial;
@@ -9,14 +10,19 @@ use App\Models\CRM\CrmConfiguracionImpuesto;
 use App\Models\CRM\CrmCotizacion;
 use App\Models\CRM\CrmOportunidad;
 use App\Models\CRM\CrmOportunidadProducto;
+use App\Models\CRM\CrmOportunidadVenta;
 use App\Models\CRM\CrmProducto;
 use App\Services\CRM\CotizacionCalculoService;
 use App\Services\CRM\MontoOportunidadService;
+use App\Services\CRM\VentaNoRegistrableException;
+use App\Services\CRM\VentaOportunidadService;
+use App\Services\CRM\VersionesCotizacion;
 use App\Services\CRM\VisibilidadOportunidades;
 use App\Traits\CRM\FiltraPorEmpresa;
 use App\Traits\CRM\VerificaPermisoSubmodulo;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -39,10 +45,16 @@ class CotizacionController extends CrmBaseController
 
     private const MENSAJE_SIN_VER = 'No tienes permiso para ver cotizaciones.';
 
+    private const MENSAJE_SOLO_BORRADOR = 'Solo se puede editar una cotización en borrador.';
+
+    private const MENSAJE_CON_VENTA = 'La cotización ya tiene venta registrada; registra un ajuste en la oportunidad.';
+
     public function __construct(
         private readonly CotizacionCalculoService $calculo,
         private readonly MontoOportunidadService $monto,
         private readonly VisibilidadOportunidades $visibilidad,
+        private readonly VersionesCotizacion $versiones,
+        private readonly VentaOportunidadService $ventas,
     ) {}
 
     /** GET /crm/oportunidades/{oportunidad}/cotizaciones */
@@ -191,18 +203,28 @@ class CotizacionController extends CrmBaseController
         return $this->jsonSuccess($cotizacion, 'Cotización creada correctamente', 201);
     }
 
-    /** PUT /crm/cotizaciones/{cotizacion} — solo permitido en borrador */
+    /**
+     * PUT /crm/cotizaciones/{cotizacion} — solo en borrador. En SBP (cotización
+     * por caja) también una enviada, con `motivo_cambio` obligatorio: cada
+     * guardado crea la versión siguiente (spec 2026-11-25 §4).
+     */
     public function update(Request $request, CrmCotizacion $cotizacion): JsonResponse
     {
         $this->verificarEmpresa($cotizacion);
         $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'cotizaciones', 'cotizaciones', 'editar', 'No tienes permiso para editar cotizaciones.');
         $this->exigirOportunidadVisible($cotizacion, self::MENSAJE_MODIFICAR_AJENA);
 
-        if ($cotizacion->estado !== 'borrador') {
-            return $this->jsonError('Solo se puede editar una cotización en borrador.', 422);
+        $empresaId = $this->getEmpresaId();
+        $sbp = CrmConfiguracionComercial::cotizacionPorCaja($empresaId);
+
+        $noEditable = $this->mensajeSiNoSeEdita($cotizacion, $sbp);
+        if ($noEditable !== null) {
+            return $this->jsonError($noEditable, 422);
         }
 
-        $empresaId = $this->getEmpresaId();
+        // Una enviada (solo SBP) se edita con motivo y deja una versión nueva.
+        $conVersion = $sbp && $cotizacion->estado === 'enviado';
+
         $this->normalizarTextosDeLineas($request);
         $validated = $request->validate([
             'fecha_emision' => 'sometimes|required|date',
@@ -215,7 +237,11 @@ class CotizacionController extends CrmBaseController
             'lineas.*.presentacion' => 'nullable|string|max:150',
             'lineas.*.cantidad' => 'required_with:lineas|numeric|min:0.0001',
             'lineas.*.precio_unitario' => 'required_with:lineas|numeric|min:0',
+            'motivo_cambio' => $conVersion ? 'required|string|max:500' : 'nullable',
+        ], [
+            'motivo_cambio.required' => 'Escribe el motivo del cambio.',
         ]);
+        $motivo = $conVersion ? trim((string) $validated['motivo_cambio']) : null;
 
         // `descuento_global_pct` es NOT NULL en BD y la regla es `nullable`, así que
         // un null explícito en el body debe resolverse al valor ya guardado (no escribirse).
@@ -236,11 +262,28 @@ class CotizacionController extends CrmBaseController
             return $this->jsonError($excede, 422);
         }
 
-        [$cotizacion, $oportunidad] = DB::transaction(function () use ($validated, $cotizacion, $empresaId, $descuentoNuevo) {
+        $resultado = DB::transaction(function () use ($validated, $cotizacion, $empresaId, $descuentoNuevo, $sbp, $conVersion, $motivo) {
             // Bloquea la oportunidad (si sigue existiendo) antes de tocar su monto.
             $oportunidad = CrmOportunidad::whereKey($cotizacion->oportunidad_id)->lockForUpdate()->first();
 
-            $datos = collect($validated)->except(['lineas', 'descuento_global_pct'])->all();
+            // En SBP el estado y la venta se revisan de nuevo ya con el bloqueo:
+            // una venta o un rechazo concurrentes no pueden colarse entre medias.
+            if ($sbp) {
+                $actual = CrmCotizacion::whereKey($cotizacion->id)->lockForUpdate()->firstOrFail();
+                $mensaje = $this->mensajeSiNoSeEdita($actual, true);
+                if ($mensaje !== null || $actual->estado !== $cotizacion->estado) {
+                    return $mensaje ?? self::MENSAJE_SOLO_BORRADOR;
+                }
+
+                // Una enviada de antes de las versiones no tiene ninguna: se guarda
+                // su contenido previo (sin motivo ni usuario) como versión 1 ANTES
+                // de editarla, para no perder lo que tenía.
+                if ($conVersion && ! $actual->versiones()->exists()) {
+                    $this->versiones->registrar($actual, null, null);
+                }
+            }
+
+            $datos = collect($validated)->except(['lineas', 'descuento_global_pct', 'motivo_cambio'])->all();
             $datos['descuento_global_pct'] = $descuentoNuevo;
             $cotizacion->update($datos);
 
@@ -250,6 +293,9 @@ class CotizacionController extends CrmBaseController
             }
 
             $cotizacion = $this->calculo->recalcular($cotizacion);
+            if ($conVersion) {
+                $this->versiones->registrar($cotizacion, $motivo, Auth::id());
+            }
             if ($oportunidad) {
                 $this->monto->alGuardar($oportunidad, $cotizacion);
             }
@@ -257,10 +303,43 @@ class CotizacionController extends CrmBaseController
             return [$cotizacion, $oportunidad];
         });
 
+        if (is_string($resultado)) {
+            return $this->jsonError($resultado, 422);
+        }
+        [$cotizacion, $oportunidad] = $resultado;
+
         $this->difundirMontoSiCambio($oportunidad);
         $this->difundir(new CotizacionUpdated('updated', $cotizacion->toArray()));
 
         return $this->jsonSuccess($cotizacion, 'Cotización actualizada correctamente');
+    }
+
+    /** GET /crm/cotizaciones/{cotizacion}/versiones — más nueva primero */
+    public function versiones(Request $request, CrmCotizacion $cotizacion): JsonResponse
+    {
+        $this->verificarEmpresa($cotizacion);
+        $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'cotizaciones', 'cotizaciones', 'ver', self::MENSAJE_SIN_VER);
+        $this->exigirOportunidadVisible($cotizacion, self::MENSAJE_LEER_AJENA);
+
+        $versiones = $cotizacion->versiones()
+            ->reorder()
+            ->orderByDesc('numero')
+            ->with('usuario:id,name')
+            ->get()
+            ->map(fn ($v) => [
+                'id' => $v->id,
+                'numero' => $v->numero,
+                'renglones' => $v->renglones,
+                'descuento_global_pct' => $v->descuento_global_pct,
+                'subtotal' => $v->subtotal,
+                'total' => $v->total,
+                'motivo' => $v->motivo,
+                'usuario' => $v->usuario ? ['id' => $v->usuario->id, 'name' => $v->usuario->name] : null,
+                'created_at' => $v->created_at,
+            ])
+            ->values();
+
+        return $this->jsonSuccess($versiones);
     }
 
     /** PATCH /crm/cotizaciones/{cotizacion}/enviar */
@@ -272,7 +351,27 @@ class CotizacionController extends CrmBaseController
         if ($cotizacion->estado !== 'borrador') {
             return $this->jsonError('Solo una cotización en borrador se puede enviar.', 422);
         }
-        $cotizacion->update(['estado' => 'enviado']);
+
+        if (CrmConfiguracionComercial::cotizacionPorCaja((int) $cotizacion->empresa_id)) {
+            // SBP: el cambio de estado y la versión 1 van juntos. Se revisa el
+            // estado de nuevo con la fila bloqueada para no duplicar la versión 1.
+            $enviada = DB::transaction(function () use ($cotizacion) {
+                $actual = CrmCotizacion::whereKey($cotizacion->id)->lockForUpdate()->firstOrFail();
+                if ($actual->estado !== 'borrador') {
+                    return false;
+                }
+                $actual->update(['estado' => 'enviado']);
+                $this->versiones->registrar($actual, null, Auth::id());
+
+                return true;
+            });
+            if (! $enviada) {
+                return $this->jsonError('Solo una cotización en borrador se puede enviar.', 422);
+            }
+            $cotizacion->refresh();
+        } else {
+            $cotizacion->update(['estado' => 'enviado']);
+        }
 
         $this->difundir(new CotizacionUpdated('updated', $cotizacion->toArray()));
 
@@ -289,17 +388,29 @@ class CotizacionController extends CrmBaseController
             return $this->jsonError('Solo una cotización enviada se puede rechazar.', 422);
         }
 
-        $oportunidad = DB::transaction(function () use ($cotizacion) {
+        $resultado = DB::transaction(function () use ($cotizacion) {
             // Bloquea la oportunidad (si sigue existiendo) antes de tocar su monto.
             $oportunidad = CrmOportunidad::whereKey($cotizacion->oportunidad_id)->lockForUpdate()->first();
+
+            // El estado se revisa de nuevo con el bloqueo: una venta o un cambio
+            // concurrentes no pueden quedar pisados con «rechazado».
+            $actual = CrmCotizacion::whereKey($cotizacion->id)->lockForUpdate()->firstOrFail();
+            if ($actual->estado !== 'enviado') {
+                return null;
+            }
 
             $cotizacion->update(['estado' => 'rechazado']);
             if ($oportunidad) {
                 $this->monto->alRechazar($oportunidad);
             }
 
-            return $oportunidad;
+            return [$oportunidad];
         });
+
+        if ($resultado === null) {
+            return $this->jsonError('Solo una cotización enviada se puede rechazar.', 422);
+        }
+        [$oportunidad] = $resultado;
 
         $this->difundirMontoSiCambio($oportunidad);
         $this->difundir(new CotizacionUpdated('updated', $cotizacion->toArray()));
@@ -313,6 +424,10 @@ class CotizacionController extends CrmBaseController
         $this->verificarEmpresa($cotizacion);
         $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'cotizaciones', 'cotizaciones', 'aprobar', 'No tienes permiso para aprobar cotizaciones.');
         $this->exigirOportunidadVisible($cotizacion, self::MENSAJE_MODIFICAR_AJENA);
+        // En SBP se gana registrando lo vendido por renglón (venta()), no aprobando.
+        if (CrmConfiguracionComercial::cotizacionPorCaja((int) $cotizacion->empresa_id)) {
+            return $this->jsonError('En esta empresa se registra lo vendido de la cotización.', 422);
+        }
         if ($cotizacion->estado !== 'enviado') {
             return $this->jsonError('Solo una cotización enviada se puede aprobar.', 422);
         }
@@ -377,6 +492,77 @@ class CotizacionController extends CrmBaseController
         $this->difundir(new CotizacionUpdated('updated', $cotizacion->fresh()->toArray()));
 
         return $this->jsonSuccess($cotizacion->fresh(), 'Cotización aprobada — la oportunidad se cerró como ganada');
+    }
+
+    /**
+     * POST /crm/cotizaciones/{cotizacion}/venta — registra lo vendido por
+     * renglón (solo SBP). Gana la oportunidad con monto = lo vendido, o la
+     * pierde si ningún renglón se vendió. No exige aprobar ni cerrar: basta
+     * cotizaciones.editar y oportunidades.editar sobre una oportunidad visible.
+     */
+    public function venta(Request $request, CrmCotizacion $cotizacion): JsonResponse
+    {
+        $this->verificarEmpresa($cotizacion);
+        $empresaId = $this->getEmpresaId();
+        $this->exigirPermisoSubmodulo($empresaId, 'cotizaciones', 'cotizaciones', 'editar', 'No tienes permiso para editar cotizaciones.');
+        $this->exigirPermisoSubmodulo($empresaId, 'oportunidades', 'oportunidades', 'editar', 'No tienes permiso para editar oportunidades.');
+        $this->exigirOportunidadVisible($cotizacion, self::MENSAJE_MODIFICAR_AJENA);
+
+        if (! CrmConfiguracionComercial::cotizacionPorCaja($empresaId)) {
+            return $this->jsonError('Esta empresa no registra lo vendido por renglón.', 422);
+        }
+
+        try {
+            $resultado = $this->ventas->registrar($cotizacion, $request->input('renglones'), (int) Auth::id());
+        } catch (VentaNoRegistrableException $e) {
+            return $this->jsonError($e->getMessage(), 422);
+        }
+
+        $oportunidad = $resultado['oportunidad'];
+        $venta = $resultado['venta'];
+        $cotizacion = $resultado['cotizacion'];
+        $actividad = $resultado['actividad'];
+
+        // Todo ya está confirmado: ahora sí se avisa en tiempo real.
+        $this->difundirOportunidad($oportunidad);
+        $this->difundir(new CotizacionUpdated('updated', $cotizacion->toArray()));
+        foreach ($resultado['superadas'] as $superada) {
+            $this->difundir(new CotizacionUpdated('updated', $superada->fresh()->toArray()));
+        }
+        $actividad->load(ActividadController::RELACIONES);
+        $actividad->entidad_tipo = 'oportunidad';
+        $this->difundir(new ActividadUpdated('created', $actividad->toArray()));
+        $this->difundirEventos('completed', $resultado['eventos']);
+
+        return $this->jsonSuccess([
+            'oportunidad' => $oportunidad->load(CrmOportunidad::RELACIONES_API)->conMontoOrigen(),
+            'cotizacion' => $cotizacion,
+            'venta' => $venta,
+        ], $oportunidad->estaPerdida() ? 'La oportunidad se cerró como perdida' : 'Venta registrada');
+    }
+
+    /**
+     * Mensaje de 422 si la cotización ya no admite edición; null si se puede.
+     * Sin SBP solo el borrador. En SBP también la enviada, salvo que ya tenga
+     * venta registrada (los cambios son ajustes de la oportunidad) o esté
+     * aprobada.
+     */
+    private function mensajeSiNoSeEdita(CrmCotizacion $cotizacion, bool $sbp): ?string
+    {
+        if (! $sbp) {
+            return $cotizacion->estado === 'borrador' ? null : self::MENSAJE_SOLO_BORRADOR;
+        }
+
+        $conVenta = $cotizacion->estado === 'aprobado'
+            || CrmOportunidadVenta::where('oportunidad_id', $cotizacion->oportunidad_id)
+                ->where('cotizacion_id', $cotizacion->id)
+                ->where('vigente', true)
+                ->exists();
+        if ($conVenta) {
+            return self::MENSAJE_CON_VENTA;
+        }
+
+        return in_array($cotizacion->estado, ['borrador', 'enviado'], true) ? null : self::MENSAJE_SOLO_BORRADOR;
     }
 
     /** Difunde la oportunidad con su forma de API (incluye `monto_origen`). */

@@ -203,6 +203,15 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('oportunidades/{oportunidad}/compro-antes', [
         App\Http\Controllers\Api\CRM\OportunidadController::class, 'compraAntes'
     ]);
+    Route::get('oportunidades/{oportunidad}/venta', [
+        App\Http\Controllers\Api\CRM\VentaOportunidadController::class, 'show'
+    ]);
+    Route::post('oportunidades/{oportunidad}/ajustes', [
+        App\Http\Controllers\Api\CRM\VentaOportunidadController::class, 'store'
+    ]);
+    Route::post('oportunidades/{oportunidad}/ajustes/{ajuste}/anular', [
+        App\Http\Controllers\Api\CRM\VentaOportunidadController::class, 'anular'
+    ]);
     Route::apiResource('oportunidades', App\Http\Controllers\Api\CRM\OportunidadController::class)
         ->parameters(['oportunidades' => 'oportunidad']);
 
@@ -224,11 +233,17 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('cotizaciones/{cotizacion}', [
         App\Http\Controllers\Api\CRM\CotizacionController::class, 'show'
     ]);
+    Route::get('cotizaciones/{cotizacion}/versiones', [
+        App\Http\Controllers\Api\CRM\CotizacionController::class, 'versiones'
+    ]);
     Route::put('cotizaciones/{cotizacion}', [
         App\Http\Controllers\Api\CRM\CotizacionController::class, 'update'
     ]);
     Route::patch('cotizaciones/{cotizacion}/enviar', [
         App\Http\Controllers\Api\CRM\CotizacionController::class, 'enviar'
+    ]);
+    Route::post('cotizaciones/{cotizacion}/venta', [
+        App\Http\Controllers\Api\CRM\CotizacionController::class, 'venta'
     ]);
     Route::patch('cotizaciones/{cotizacion}/aprobar', [
         App\Http\Controllers\Api\CRM\CotizacionController::class, 'aprobar'

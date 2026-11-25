@@ -44,6 +44,12 @@ class CrmCotizacion extends Model
         return $this->hasMany(CrmOportunidadProducto::class, 'cotizacion_id');
     }
 
+    /** Versiones guardadas al enviar y en cada edición posterior (SBP), de la 1 en adelante. */
+    public function versiones(): HasMany
+    {
+        return $this->hasMany(CrmCotizacionVersion::class, 'cotizacion_id')->orderBy('numero');
+    }
+
     public function impuestos(): HasMany
     {
         return $this->hasMany(CrmCotizacionImpuesto::class, 'cotizacion_id');
