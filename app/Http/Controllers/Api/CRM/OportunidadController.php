@@ -3,7 +3,6 @@
 namespace App\Http\Controllers\Api\CRM;
 
 use App\Events\CRM\ActividadUpdated;
-use App\Events\CRM\AgendaUpdated;
 use App\Events\CRM\OportunidadUpdated;
 use App\Models\CRM\CrmActividad;
 use App\Models\CRM\CrmAgenda;
@@ -659,20 +658,7 @@ class OportunidadController extends CrmBaseController
     /** Eventos de agenda aún pendientes ligados a la oportunidad (de cualquier vendedor). */
     private function eventosPendientesDe(CrmOportunidad $oportunidad): Builder
     {
-        return CrmAgenda::query()
-            ->where('empresa_id', $oportunidad->empresa_id)
-            ->where('entidad_type', CrmOportunidad::class)
-            ->where('entidad_id', $oportunidad->id)
-            ->where('completado', false);
-    }
-
-    /** Emite AgendaUpdated por evento, con el vendedor cargado como los demás emisores de agenda. */
-    private function difundirEventos(string $accion, Collection $eventos): void
-    {
-        $eventos->load(['vendedor:id,nombre', 'etiqueta:id,nombre', 'contacto:id,nombre,cargo']);
-        foreach ($eventos as $evento) {
-            $this->difundir(new AgendaUpdated($accion, $evento->toArray()));
-        }
+        return CrmAgenda::pendientesDeOportunidad($oportunidad);
     }
 
     /**

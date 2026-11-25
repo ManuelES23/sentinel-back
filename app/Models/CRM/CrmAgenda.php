@@ -4,6 +4,7 @@ namespace App\Models\CRM;
 
 use App\Models\Enterprise;
 use App\Traits\Loggable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -74,6 +75,16 @@ class CrmAgenda extends Model
     public function scopePendientes($query)
     {
         return $query->where('completado', false);
+    }
+
+    /** Eventos aún pendientes ligados a una oportunidad (de cualquier vendedor). */
+    public static function pendientesDeOportunidad(CrmOportunidad $oportunidad): Builder
+    {
+        return static::query()
+            ->where('empresa_id', $oportunidad->empresa_id)
+            ->where('entidad_type', CrmOportunidad::class)
+            ->where('entidad_id', $oportunidad->id)
+            ->where('completado', false);
     }
 
     public function scopeVencidos($query)

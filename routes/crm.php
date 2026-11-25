@@ -233,6 +233,9 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::patch('cotizaciones/{cotizacion}/enviar', [
         App\Http\Controllers\Api\CRM\CotizacionController::class, 'enviar'
     ]);
+    Route::post('cotizaciones/{cotizacion}/venta', [
+        App\Http\Controllers\Api\CRM\CotizacionController::class, 'venta'
+    ]);
     Route::patch('cotizaciones/{cotizacion}/aprobar', [
         App\Http\Controllers\Api\CRM\CotizacionController::class, 'aprobar'
     ]);

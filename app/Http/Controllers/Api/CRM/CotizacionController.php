@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\CRM;
 
+use App\Events\CRM\ActividadUpdated;
 use App\Events\CRM\CotizacionUpdated;
 use App\Events\CRM\OportunidadUpdated;
 use App\Models\CRM\CrmConfiguracionComercial;
@@ -13,6 +14,8 @@ use App\Models\CRM\CrmOportunidadVenta;
 use App\Models\CRM\CrmProducto;
 use App\Services\CRM\CotizacionCalculoService;
 use App\Services\CRM\MontoOportunidadService;
+use App\Services\CRM\VentaNoRegistrableException;
+use App\Services\CRM\VentaOportunidadService;
 use App\Services\CRM\VersionesCotizacion;
 use App\Services\CRM\VisibilidadOportunidades;
 use App\Traits\CRM\FiltraPorEmpresa;
@@ -51,6 +54,7 @@ class CotizacionController extends CrmBaseController
         private readonly MontoOportunidadService $monto,
         private readonly VisibilidadOportunidades $visibilidad,
         private readonly VersionesCotizacion $versiones,
+        private readonly VentaOportunidadService $ventas,
     ) {}
 
     /** GET /crm/oportunidades/{oportunidad}/cotizaciones */
@@ -401,6 +405,10 @@ class CotizacionController extends CrmBaseController
         $this->verificarEmpresa($cotizacion);
         $this->exigirPermisoSubmodulo($this->getEmpresaId(), 'cotizaciones', 'cotizaciones', 'aprobar', 'No tienes permiso para aprobar cotizaciones.');
         $this->exigirOportunidadVisible($cotizacion, self::MENSAJE_MODIFICAR_AJENA);
+        // En SBP se gana registrando lo vendido por renglón (venta()), no aprobando.
+        if (CrmConfiguracionComercial::cotizacionPorCaja((int) $cotizacion->empresa_id)) {
+            return $this->jsonError('En esta empresa se registra lo vendido de la cotización.', 422);
+        }
         if ($cotizacion->estado !== 'enviado') {
             return $this->jsonError('Solo una cotización enviada se puede aprobar.', 422);
         }
@@ -465,6 +473,53 @@ class CotizacionController extends CrmBaseController
         $this->difundir(new CotizacionUpdated('updated', $cotizacion->fresh()->toArray()));
 
         return $this->jsonSuccess($cotizacion->fresh(), 'Cotización aprobada — la oportunidad se cerró como ganada');
+    }
+
+    /**
+     * POST /crm/cotizaciones/{cotizacion}/venta — registra lo vendido por
+     * renglón (solo SBP). Gana la oportunidad con monto = lo vendido, o la
+     * pierde si ningún renglón se vendió. No exige aprobar ni cerrar: basta
+     * cotizaciones.editar y oportunidades.editar sobre una oportunidad visible.
+     */
+    public function venta(Request $request, CrmCotizacion $cotizacion): JsonResponse
+    {
+        $this->verificarEmpresa($cotizacion);
+        $empresaId = $this->getEmpresaId();
+        $this->exigirPermisoSubmodulo($empresaId, 'cotizaciones', 'cotizaciones', 'editar', 'No tienes permiso para editar cotizaciones.');
+        $this->exigirPermisoSubmodulo($empresaId, 'oportunidades', 'oportunidades', 'editar', 'No tienes permiso para editar oportunidades.');
+        $this->exigirOportunidadVisible($cotizacion, self::MENSAJE_MODIFICAR_AJENA);
+
+        if (! CrmConfiguracionComercial::cotizacionPorCaja($empresaId)) {
+            return $this->jsonError('Esta empresa no registra lo vendido por renglón.', 422);
+        }
+
+        try {
+            $resultado = $this->ventas->registrar($cotizacion, $request->input('renglones'), (int) Auth::id());
+        } catch (VentaNoRegistrableException $e) {
+            return $this->jsonError($e->getMessage(), 422);
+        }
+
+        $oportunidad = $resultado['oportunidad'];
+        $venta = $resultado['venta'];
+        $cotizacion = $resultado['cotizacion'];
+        $actividad = $resultado['actividad'];
+
+        // Todo ya está confirmado: ahora sí se avisa en tiempo real.
+        $this->difundirOportunidad($oportunidad);
+        $this->difundir(new CotizacionUpdated('updated', $cotizacion->toArray()));
+        foreach ($resultado['superadas'] as $superada) {
+            $this->difundir(new CotizacionUpdated('updated', $superada->fresh()->toArray()));
+        }
+        $actividad->load(ActividadController::RELACIONES);
+        $actividad->entidad_tipo = 'oportunidad';
+        $this->difundir(new ActividadUpdated('created', $actividad->toArray()));
+        $this->difundirEventos('completed', $resultado['eventos']);
+
+        return $this->jsonSuccess([
+            'oportunidad' => $oportunidad->load(CrmOportunidad::RELACIONES_API)->conMontoOrigen(),
+            'cotizacion' => $cotizacion,
+            'venta' => $venta,
+        ], $oportunidad->estaPerdida() ? 'La oportunidad se cerró como perdida' : 'Venta registrada');
     }
 
     /**
