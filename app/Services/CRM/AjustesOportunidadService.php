@@ -22,9 +22,15 @@ use Illuminate\Validation\ValidationException;
  * ocurre con la oportunidad bloqueada y el estado revalidado bajo el candado;
  * los eventos en tiempo real los difunde el controlador DESPUÉS de confirmar.
  *
- * Los importes se calculan en centavos enteros: el descuento global de la
- * venta se aplica igual que al monto vendido y se redondea al centavo hacia
- * arriba (en valor absoluto), de modo que el monto siempre cuadra con la suma.
+ * Todo en centavos enteros. Sea f(bruto) = round-half-up(bruto × (1 − descuento)),
+ * el mismo redondeo de VentaOportunidadService::montoVenta, y `bruto` la suma de
+ * cajas × precio vigentes de todos los renglones vendidos. `monto_esperado` es
+ * SIEMPRE f(bruto de lo vigente), y el importe de cada ajuste es
+ * f(bruto después) − f(bruto antes): así los importes se suman en cadena (Σ
+ * importes vigentes + montoVenta = f(bruto vigente)), rechazar todas las cajas
+ * deja exactamente 0.00 y anular el último ajuste devuelve el monto anterior
+ * al centavo. El importe de un ajuste suelto puede diferir un centavo de
+ * cajas × precio × factor; es el precio de que la suma sea exacta.
  */
 class AjustesOportunidadService
 {
@@ -57,6 +63,8 @@ class AjustesOportunidadService
     private const MENSAJE_NOTA = 'La nota no es válida.';
 
     private const MENSAJE_MONTO = 'El monto vendido excede el máximo permitido.';
+
+    private const MENSAJE_NEGATIVO = 'El ajuste dejaría el monto vendido en negativo.';
 
     private const MENSAJE_MOTIVO_ANULACION = 'Escribe por qué se anula el ajuste.';
 
@@ -111,11 +119,7 @@ class AjustesOportunidadService
             $vigentes = $this->vigentes($venta);
             $ajuste = $this->validar($datos, $venta, $renglones, $vigentes, (int) $oportunidad->empresa_id);
 
-            $actuales = $this->centavosFirmes($venta);
-            $nuevo = $actuales + $ajuste['importe'];
-            if ($nuevo < 0 || $nuevo > (int) round(CrmOportunidad::MONTO_MAXIMO * 100)) {
-                throw ValidationException::withMessages([$ajuste['campo_monto'] => self::MENSAJE_MONTO]);
-            }
+            $nuevo = $ajuste['monto_nuevo'];
 
             $renglon = $renglones->firstWhere('id', $ajuste['renglon_id']);
             $importe = $ajuste['importe'] / 100;
@@ -334,11 +338,27 @@ class AjustesOportunidadService
         return (int) round($this->ventas->montoVenta($venta) * 100);
     }
 
-    /** Lo vendido más los importes vigentes (el `monto_esperado` que corresponde), en centavos. */
+    /** El `monto_esperado` que corresponde a lo vigente: f(bruto de los vigentes), en centavos. */
     private function centavosFirmes(CrmOportunidadVenta $venta): int
     {
-        return $this->centavosVendidos($venta)
-            + $this->ajustesVigentes($venta)->sum(fn (CrmOportunidadAjuste $a) => $this->centavos($a->importe));
+        return $this->neto($this->bruto($this->vigentes($venta)), $this->factor($venta));
+    }
+
+    /** Σ cajas × precio (en centavos) de los renglones vendidos, sin descuento. */
+    private function bruto(array $vigentes): int
+    {
+        $bruto = 0;
+        foreach ($vigentes as $v) {
+            $bruto += $v['cajas'] * $this->centavos($v['precio']);
+        }
+
+        return $bruto;
+    }
+
+    /** Factor del descuento global de la venta en diezmilésimas: 10 % → 9000. */
+    private function factor(CrmOportunidadVenta $venta): int
+    {
+        return 10000 - (int) round((float) $venta->descuento_global_pct * 100);
     }
 
     private function centavos(mixed $monto): int
@@ -353,7 +373,7 @@ class AjustesOportunidadService
      * @param  array<string, mixed>  $datos
      * @param  Collection<int, CrmOportunidadVentaRenglon>  $renglones  los vendidos de la venta
      * @param  array<int, array{cajas: int, precio: float}>  $vigentes
-     * @return array{renglon_id: int, tipo: string, cajas: ?int, precio_nuevo: ?float, importe: int, motivo_id: int, nota: ?string, fecha: string, campo_monto: string}
+     * @return array{renglon_id: int, tipo: string, cajas: ?int, precio_nuevo: ?float, importe: int, monto_nuevo: int, motivo_id: int, nota: ?string, fecha: string}
      */
     private function validar(array $datos, CrmOportunidadVenta $venta, Collection $renglones, array $vigentes, int $empresaId): array
     {
@@ -391,13 +411,13 @@ class AjustesOportunidadService
 
         $cajas = null;
         $precioNuevo = null;
-        $importe = 0;
-        $campoMonto = $tipo === 'precio' ? 'precio_nuevo' : 'cajas';
+        $antes = $despues = 0;
 
         if ($renglonId !== null && $tipo !== null) {
             $vigente = $vigentes[$renglonId];
-            $factor = 10000 - (int) round((float) $venta->descuento_global_pct * 100);
+            $factor = $this->factor($venta);
             $maximo = (int) round(CrmOportunidad::MONTO_MAXIMO * 100);
+            $antes = $despues = $this->neto($this->bruto($vigentes), $factor);
 
             if ($vigente['cajas'] < 1) {
                 $errores['venta_renglon_id'] = self::MENSAJE_SIN_CAJAS;
@@ -410,7 +430,7 @@ class AjustesOportunidadService
                     $errores['cajas'] = 'No puedes rechazar más de '.number_format($vigente['cajas']).' cajas.';
                     $cajas = null;
                 } else {
-                    $importe = -$this->aplicarFactor($cajas * $this->centavos($vigente['precio']), $factor);
+                    $despues = $this->netoTras($vigentes, $renglonId, $vigente['cajas'] - $cajas, $vigente['precio'], $factor);
                 }
             } else {
                 $precioNuevo = $this->ventas->precio($datos['precio_nuevo'] ?? null);
@@ -419,15 +439,22 @@ class AjustesOportunidadService
                 } elseif ($this->centavos($precioNuevo) === $this->centavos($vigente['precio'])) {
                     $errores['precio_nuevo'] = self::MENSAJE_PRECIO_IGUAL;
                 } else {
-                    $diferencia = $this->centavos($precioNuevo) - $this->centavos($vigente['precio']);
-                    $base = abs($diferencia) * $vigente['cajas'];
-                    if ($base > $maximo) {
+                    // Comparado como flotante antes de multiplicar enteros: no desborda.
+                    if ((float) $vigente['cajas'] * $this->centavos($precioNuevo) > $maximo) {
                         $errores['precio_nuevo'] = self::MENSAJE_MONTO;
                     } else {
-                        $importe = ($diferencia < 0 ? -1 : 1) * $this->aplicarFactor($base, $factor);
+                        $despues = $this->netoTras($vigentes, $renglonId, $vigente['cajas'], $precioNuevo, $factor);
                     }
                 }
             }
+        }
+
+        if ($errores === [] && $despues > (int) round(CrmOportunidad::MONTO_MAXIMO * 100)) {
+            $errores[$tipo === 'precio' ? 'precio_nuevo' : 'cajas'] = self::MENSAJE_MONTO;
+        }
+        // Defensa: con cajas ≥ 1 y precios ≥ 0 el monto nunca baja de 0; si llegara a pasar, no se escribe.
+        if ($errores === [] && $despues < 0) {
+            $errores[$tipo === 'precio' ? 'precio_nuevo' : 'cajas'] = self::MENSAJE_NEGATIVO;
         }
 
         if ($errores !== []) {
@@ -439,18 +466,26 @@ class AjustesOportunidadService
             'tipo' => $tipo,
             'cajas' => $cajas,
             'precio_nuevo' => $precioNuevo,
-            'importe' => $importe,
+            'importe' => $despues - $antes,
+            'monto_nuevo' => $despues,
             'motivo_id' => $motivoId,
             'nota' => $nota,
             'fecha' => $fecha,
-            'campo_monto' => $campoMonto,
         ];
     }
 
-    /** `centavos × factor / 10000` redondeado al centavo hacia arriba (centavos ≥ 0). */
-    private function aplicarFactor(int $centavos, int $factor): int
+    /** f(bruto) = bruto × factor / 10000 redondeado al centavo (half-up, bruto ≥ 0); igual que VentaOportunidadService::calcularMonto. */
+    private function neto(int $bruto, int $factor): int
     {
-        return intdiv($centavos * $factor + 5000, 10000);
+        return intdiv($bruto * $factor + 5000, 10000);
+    }
+
+    /** f(bruto) de lo vigente si el renglón pasara a tener `$cajas` y `$precio`. */
+    private function netoTras(array $vigentes, int $renglonId, int $cajas, float $precio, int $factor): int
+    {
+        $vigentes[$renglonId] = ['cajas' => $cajas, 'precio' => $precio];
+
+        return $this->neto($this->bruto($vigentes), $factor);
     }
 
     /**

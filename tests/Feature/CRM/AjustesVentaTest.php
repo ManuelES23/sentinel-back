@@ -255,6 +255,95 @@ class AjustesVentaTest extends TestCase
         $this->assertEquals(3424.35, $this->monto());
     }
 
+    /** Vende el calibre 9 como `$cajas` × `$precio` con el descuento dado (ajusta la venta ya registrada). */
+    private function ventaChica(int $cajas, float $precio, float $descuento): void
+    {
+        $this->venderElNueve($descuento);
+        CrmOportunidadVenta::firstOrFail()->renglones()->where('vendido', true)
+            ->update(['cantidad_vendida' => $cajas, 'precio_vendido' => $precio]);
+        $factor = 10000 - (int) round($descuento * 100);
+        $this->oportunidad->update(['monto_esperado' => intdiv($cajas * (int) round($precio * 100) * $factor + 5000, 10000) / 100]);
+    }
+
+    /** Σ importes vigentes + lo vendido == monto_esperado (al centavo). */
+    private function assertMontoCuadra(float $vendido): void
+    {
+        $suma = (int) round($vendido * 100)
+            + CrmOportunidadAjuste::vigentes()->get()->sum(fn ($a) => (int) round((float) $a->importe * 100));
+        $this->assertSame($suma, (int) round($this->monto() * 100), 'monto_esperado = vendido + Σ importes vigentes');
+    }
+
+    public function test_rechazar_en_pedazos_con_descuento_termina_exactamente_en_cero(): void
+    {
+        // 2 × 28.54 con 10 %: vendido 51.37; la mitad suelta redondearía a 25.69 y la otra a 25.69 (−0.01).
+        $this->ventaChica(2, 28.54, 10);
+        $this->assertEquals(51.37, $this->monto());
+
+        $this->ajustar($this->rechazo(1))->assertCreated();
+        $this->assertEquals(25.69, $this->monto());
+        $this->assertMontoCuadra(51.37);
+
+        $this->ajustar($this->rechazo(1))->assertCreated();
+        $this->assertEquals(0.00, $this->monto());
+        $this->assertMontoCuadra(51.37);
+        $this->assertEquals(
+            [-25.68, -25.69],
+            CrmOportunidadAjuste::orderBy('id')->pluck('importe')->map(fn ($i) => (float) $i)->all()
+        );
+        $this->assertSame(-5137, (int) round(CrmOportunidadAjuste::sum('importe') * 100));
+
+        $res = $this->withHeaders($this->crmHeaders())->getJson("/api/crm/oportunidades/{$this->oportunidad->id}/venta")->assertOk();
+        $this->assertEquals(0.0, $res->json('data.resumen.firme'));
+        $this->assertSame(0, $res->json('data.resumen.cajas_firmes'));
+    }
+
+    public function test_rechazar_en_tres_pedazos_con_descuento_termina_en_cero(): void
+    {
+        $this->ventaChica(3, 33.33, 15);
+
+        foreach ([1, 1, 1] as $cajas) {
+            $this->ajustar($this->rechazo($cajas))->assertCreated();
+            $this->assertMontoCuadra(84.99);
+        }
+
+        $this->assertEquals(0.00, $this->monto());
+    }
+
+    public function test_un_cambio_de_precio_y_luego_rechazar_todo_termina_en_cero(): void
+    {
+        $this->ventaChica(2, 28.54, 10);
+
+        $this->ajustar($this->precio(27.33))->assertCreated();   // bruto 54.66 → 49.19
+        $this->assertEquals(49.19, $this->monto());
+        $this->assertEquals(-2.18, (float) CrmOportunidadAjuste::firstOrFail()->importe);
+        $this->assertMontoCuadra(51.37);
+
+        $this->ajustar($this->rechazo(2))->assertCreated();
+        $this->assertEquals(0.00, $this->monto());
+        $this->assertMontoCuadra(51.37);
+    }
+
+    public function test_anular_restaura_exactamente_el_monto_anterior_con_descuento(): void
+    {
+        $this->ventaChica(2, 28.54, 10);
+        $this->ajustar($this->precio(27.33))->assertCreated();
+        $this->ajustar($this->rechazo(1))->assertCreated();
+        $montoIntermedio = $this->monto();
+        $this->ajustar($this->rechazo(1))->assertCreated();
+        $this->assertEquals(0.00, $this->monto());
+
+        $this->anular(CrmOportunidadAjuste::orderByDesc('id')->firstOrFail(), ['motivo' => 'Uno'])->assertOk();
+        $this->assertSame($montoIntermedio, $this->monto());
+        $this->assertMontoCuadra(51.37);
+
+        $this->anular(CrmOportunidadAjuste::vigentes()->orderByDesc('id')->firstOrFail(), ['motivo' => 'Dos'])->assertOk();
+        $this->assertEquals(49.19, $this->monto());
+
+        $this->anular(CrmOportunidadAjuste::vigentes()->orderByDesc('id')->firstOrFail(), ['motivo' => 'Tres'])->assertOk();
+        $this->assertEquals(51.37, $this->monto());
+        $this->assertMontoCuadra(51.37);
+    }
+
     public function test_se_pueden_rechazar_todas_las_cajas_vigentes_pero_no_mas(): void
     {
         $this->venderElNueve();
