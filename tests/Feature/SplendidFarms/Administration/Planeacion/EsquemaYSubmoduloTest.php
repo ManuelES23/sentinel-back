@@ -321,4 +321,38 @@ class EsquemaYSubmoduloTest extends TestCase
             'bodega_id' => $bodega->id, 'cultivo_id' => $cultivo->id, 'presentacion_id' => $presentacion->id,
         ]);
     }
+
+    public function test_tabla_programa_planes_acordados_y_cascada(): void
+    {
+        $this->assertTrue(Schema::hasTable('programa_planes_acordados'));
+        $columnas = collect(Schema::getColumns('programa_planes_acordados'))->keyBy('name');
+        $this->assertEqualsCanonicalizing(
+            ['id', 'programa_id', 'acordado_por', 'cortes', 'embarques', 'created_at'],
+            $columnas->keys()->all(),
+        );
+        $this->assertFalse($columnas['programa_id']['nullable']);
+        $this->assertTrue($columnas['acordado_por']['nullable']);
+        $this->assertFalse($columnas['cortes']['nullable']);
+        $this->assertFalse($columnas['embarques']['nullable']);
+
+        $usuario = User::factory()->create();
+        $programa = ProgramaSemanal::create(['lunes' => '2026-11-23']);
+        $id = DB::table('programa_planes_acordados')->insertGetId([
+            'programa_id' => $programa->id,
+            'acordado_por' => $usuario->id,
+            'cortes' => json_encode([['variedad_id' => 1, 'dia' => 0, 'hectareas' => 5]]),
+            'embarques' => json_encode([]),
+            'created_at' => now(),
+        ]);
+        $this->assertSame(1, DB::table('programa_planes_acordados')->where('programa_id', $programa->id)->count());
+
+        // Borrar al usuario deja la foto con `acordado_por` nulo.
+        DB::table('users')->where('id', $usuario->id)->delete();
+        $this->assertNull(DB::table('programa_planes_acordados')->where('id', $id)->value('acordado_por'));
+        $this->assertSame(1, DB::table('programa_planes_acordados')->count());
+
+        // Borrar el programa borra sus fotos.
+        DB::table('programas_semanales')->where('id', $programa->id)->delete();
+        $this->assertSame(0, DB::table('programa_planes_acordados')->count());
+    }
 }

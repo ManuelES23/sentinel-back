@@ -227,6 +227,10 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::post('programa/envio/vista-previa', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\EnviarProgramaController::class, 'vistaPrevia'])->middleware('throttle:20,1');
                 // Avance de empaque: programado contra real (avance-empaque.view); no crea el programa.
                 Route::get('programa/avance', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\AvanceEmpaqueController::class, 'show']);
+                // Avance de cosecha: plan de corte contra cierres (avance-cosecha.view); no crea el programa.
+                Route::get('programa/avance-cosecha', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\AvanceCosechaController::class, 'show']);
+                // Avance de embarques: cargas programadas contra embarques salidos (avance-embarques.view); no crea el programa.
+                Route::get('programa/avance-embarques', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\AvanceEmbarquesController::class, 'show']);
                 Route::put('programa/{programa}/inventario-inicial', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'inventarioInicial']);
 
                 // Configuración (las rutas fijas van antes que {catalogo})
@@ -270,6 +274,10 @@ Route::middleware('auth:sanctum')->group(function () {
 
                 // Interruptor del domingo de la semana (tablero-semanal.editar-notas)
                 Route::put('programa/{programa}/domingo', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\DomingoProgramaController::class, 'guardar']);
+
+                // Plan acordado en la junta: guardar la foto (tablero-semanal.acordar) y leerla (tablero, avance de cosecha o de embarques)
+                Route::post('programa/{programa}/plan-acordado', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\PlanAcordadoController::class, 'store']);
+                Route::get('programa/{programa}/plan-acordado', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\PlanAcordadoController::class, 'show']);
             });
 
             // Módulo Catálogos (catálogos generales de la empresa)
@@ -292,6 +300,8 @@ Route::middleware('auth:sanctum')->group(function () {
                 // Ciclos Agrícolas
                 Route::apiResource('ciclos-agricolas', App\Http\Controllers\Api\SplendidFarms\AgricultureCycleController::class);
                 // Temporadas
+                // Opciones de empaque del formulario (antes del apiResource para no chocar con {temporada})
+                Route::get('temporadas/empaques-opciones', [App\Http\Controllers\Api\SplendidFarms\TemporadaController::class, 'empaquesOpciones']);
                 Route::apiResource('temporadas', App\Http\Controllers\Api\SplendidFarms\TemporadaController::class);
                 Route::post('temporadas/{id}/cerrar', [App\Http\Controllers\Api\SplendidFarms\TemporadaController::class, 'cerrar']);
                 Route::get('temporadas/{id}/resumen', [App\Http\Controllers\Api\SplendidFarms\TemporadaController::class, 'resumen']);

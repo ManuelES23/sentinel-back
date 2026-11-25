@@ -12,6 +12,7 @@ use Illuminate\Http\Request;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 class CalidadEmpaqueController extends Controller
 {
@@ -72,6 +73,7 @@ class CalidadEmpaqueController extends Controller
             'responsable' => 'nullable|string|max:150',
             'piezas_por_caja' => 'nullable|integer|min:0',
             'observaciones' => 'nullable|string',
+            'cuarto_frio_total' => 'nullable|numeric|min:0|max:9999999999.99',
 
             'muestras' => 'required|array|min:1',
             'muestras.*.recepcion_id' => 'nullable|exists:recepciones_empaque,id',
@@ -107,6 +109,7 @@ class CalidadEmpaqueController extends Controller
                         'responsable' => $validated['responsable'] ?? null,
                         'piezas_por_caja' => $validated['piezas_por_caja'] ?? null,
                         'observaciones' => $validated['observaciones'] ?? null,
+                        'cuarto_frio_total' => $validated['cuarto_frio_total'] ?? 0,
                         'evaluado_por' => $request->user()->id,
                         'created_by' => $request->user()->id,
                         'folio_evaluacion' => $this->generarFolio($validated),
@@ -166,6 +169,7 @@ class CalidadEmpaqueController extends Controller
             'responsable' => 'nullable|string|max:150',
             'piezas_por_caja' => 'nullable|integer|min:0',
             'observaciones' => 'nullable|string',
+            'cuarto_frio_total' => 'nullable|numeric|min:0|max:9999999999.99',
 
             'muestras' => 'nullable|array',
             'muestras.*.recepcion_id' => 'nullable|exists:recepciones_empaque,id',
@@ -188,6 +192,7 @@ class CalidadEmpaqueController extends Controller
                 'responsable' => array_key_exists('responsable', $validated) ? $validated['responsable'] : $calidad->responsable,
                 'piezas_por_caja' => array_key_exists('piezas_por_caja', $validated) ? $validated['piezas_por_caja'] : $calidad->piezas_por_caja,
                 'observaciones' => array_key_exists('observaciones', $validated) ? $validated['observaciones'] : $calidad->observaciones,
+                'cuarto_frio_total' => array_key_exists('cuarto_frio_total', $validated) ? ($validated['cuarto_frio_total'] ?? 0) : $calidad->cuarto_frio_total,
             ]);
 
             if (array_key_exists('muestras', $validated) && is_array($validated['muestras'])) {
@@ -265,32 +270,33 @@ class CalidadEmpaqueController extends Controller
         }
     }
 
+    /**
+     * Recalcula totales y porcentajes. El aprovechable para cuarto frío se suma a lo que cumple
+     * (tope 100) y no puede exceder lo que no cumple en fresco; si lo excede lanza 422 y, como se
+     * llama dentro de la transacción del controlador, todo se revierte.
+     */
     private function recalcularTotales(CalidadEmpaque $calidad): void
     {
         $muestras = $calidad->muestras()->get();
-
-        if ($muestras->isEmpty()) {
-            $calidad->update([
-                'tamano_muestra_total' => 0,
-                'cumple_total' => 0,
-                'no_cumple_total' => 0,
-                'porcentaje_cumple' => null,
-            ]);
-            return;
-        }
+        $cuarto = (float) ($calidad->cuarto_frio_total ?? 0);
 
         $tamano = (int) $muestras->sum('muestra');
         $cumple = (float) $muestras->sum('cumple');
         $noCumple = (float) $muestras->sum('no_cumple');
         $base = $muestras->sum(fn($m) => (float) ($m->conteo ?: $m->muestra));
 
-        $porcentaje = $base > 0 ? round(($cumple / $base) * 100, 2) : null;
+        if (round($cuarto, 2) > round($noCumple, 2)) {
+            throw ValidationException::withMessages([
+                'cuarto_frio_total' => ['El aprovechable para cuarto frío no puede ser mayor que lo que no cumple en fresco (' . number_format($noCumple, 2, '.', '') . ').'],
+            ]);
+        }
 
         $calidad->update([
             'tamano_muestra_total' => $tamano,
             'cumple_total' => $cumple,
             'no_cumple_total' => $noCumple,
-            'porcentaje_cumple' => $porcentaje,
+            'porcentaje_cumple_fresco' => $base > 0 ? round(($cumple / $base) * 100, 2) : null,
+            'porcentaje_cumple' => $base > 0 ? min(100.0, round((($cumple + $cuarto) / $base) * 100, 2)) : null,
         ]);
     }
 

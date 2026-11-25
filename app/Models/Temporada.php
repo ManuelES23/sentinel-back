@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Traits\Loggable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Temporada extends Model
@@ -54,6 +55,44 @@ class Temporada extends Model
         }
 
         return (bool) static::query()->whereKey($temporadaId)->value('opera_en_bins');
+    }
+
+    /**
+     * Empaques (entidades EMPAQUE) que operan en esta temporada. Sin renglones
+     * = sin restricción (se comporta como siempre).
+     */
+    public function empaques(): BelongsToMany
+    {
+        return $this->belongsToMany(Entity::class, 'temporada_empaques', 'temporada_id', 'entity_id')
+            ->withTimestamps();
+    }
+
+    /**
+     * Ids de empaques marcados (enteros, ordenados). Úsese con la relación
+     * `empaques:entities.id` ya cargada para no consultar por temporada.
+     *
+     * @return array<int,int>
+     */
+    public function idsDeEmpaques(): array
+    {
+        return $this->empaques
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->sort()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Temporadas de prueba: su nombre o su locación dicen «prueba» (sin
+     * distinguir mayúsculas). No hay campo propio; basta con nombrarlas así.
+     * Incluye las borradas (una temporada de prueba borrada sigue siendo de prueba).
+     */
+    public function scopeDePrueba($query)
+    {
+        return $query->withTrashed()->where(fn ($q) => $q
+            ->whereRaw("LOWER(nombre) LIKE '%prueba%'")
+            ->orWhereRaw("LOWER(COALESCE(locacion, '')) LIKE '%prueba%'"));
     }
 
     /**

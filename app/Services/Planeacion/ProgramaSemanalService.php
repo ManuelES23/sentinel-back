@@ -364,6 +364,8 @@ class ProgramaSemanalService
             // Excel) y la bandera de cada proceso.
             'trabaja_domingo' => $programa->trabajaAlgunDomingo(),
             'domingo' => $programa->domingoPorProceso(),
+            // Quién y cuándo acordó el plan vigente (null si no se ha acordado).
+            'plan_acordado' => (new PlanAcordado)->resumen($programa->id),
         ];
     }
 

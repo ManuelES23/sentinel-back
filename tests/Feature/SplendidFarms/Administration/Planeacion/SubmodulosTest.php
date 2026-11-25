@@ -30,6 +30,8 @@ class SubmodulosTest extends TestCase
     private const MIGRACION_EMPAQUE = '2026_11_20_110100_add_programa_empaque_submodulo.php';
     private const MIGRACION_AVANCE = '2026_11_20_130000_add_avance_empaque_submodulo.php';
     private const MIGRACION_ENVIAR = '2026_11_21_100000_add_enviar_permission_to_tablero_semanal.php';
+    private const MIGRACION_AVANCES_COSECHA_EMBARQUES = '2026_11_25_110000_add_avance_cosecha_y_embarques_submodulos.php';
+    private const MIGRACION_ACORDAR = '2026_11_25_120000_add_acordar_permission_to_tablero_semanal.php';
 
     private const SUBMODULOS = [
         'tablero-semanal' => ['view', 'editar-notas'],
@@ -650,6 +652,294 @@ class SubmodulosTest extends TestCase
         Sanctum::actingAs($this->usuarioCon(['tablero-semanal' => ['view']]));
         $sin = $this->getJson('/api/splendidfarms/administration/planeacion/programa?lunes=2026-11-23');
         $this->assertSame(['view' => false], $sin->json('data.permisos.avance_empaque'));
+    }
+
+    /** Planeación con los ocho submódulos de antes de «Avance de cosecha» y «Avance de embarques». */
+    private function sembrarHastaAvanceEmpaque(): int
+    {
+        $moduloId = $this->sembrarHastaEmpaque();
+        $this->correr(self::MIGRACION_AVANCE);
+
+        return $moduloId;
+    }
+
+    private function slugsActivos(int $moduloId): array
+    {
+        return DB::table('submodules')->where('module_id', $moduloId)->where('is_active', true)->orderBy('order')->pluck('slug')->all();
+    }
+
+    public function test_crea_avance_cosecha_y_avance_embarques_en_su_lugar(): void
+    {
+        $moduloId = $this->sembrarHastaAvanceEmpaque();
+        $admin = User::factory()->create(['email' => 'admin@sentinel.com']);
+        $demo = User::factory()->create(['email' => 'demo@sentinel.com']);
+
+        $this->correr(self::MIGRACION_AVANCES_COSECHA_EMBARQUES);
+        $this->correr(self::MIGRACION_AVANCES_COSECHA_EMBARQUES);
+
+        $this->assertSame(
+            ['tablero-semanal', 'plan-corte', 'avance-cosecha', 'necesidades-venta', 'programa-empaque', 'avance-empaque', 'embarques', 'avance-embarques', 'resumen-temporada', 'configuracion'],
+            $this->slugsActivos($moduloId),
+        );
+        $ordenes = DB::table('submodules')->where('module_id', $moduloId)->where('is_active', true)->pluck('order')->all();
+        $this->assertSame(count($ordenes), count(array_unique($ordenes)), 'Los órdenes no se repiten.');
+
+        $cosecha = DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'avance-cosecha')->first();
+        $this->assertSame('Avance de cosecha', $cosecha->name);
+        $this->assertSame('Cosecha real contra el plan de corte', $cosecha->description);
+        $this->assertSame('Wheat', $cosecha->icon);
+        $this->assertTrue((bool) $cosecha->is_active);
+
+        $embarques = DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'avance-embarques')->first();
+        $this->assertSame('Avance de embarques', $embarques->name);
+        $this->assertSame('Embarques reales contra las cargas programadas', $embarques->description);
+        $this->assertSame('Route', $embarques->icon);
+        $this->assertTrue((bool) $embarques->is_active);
+
+        foreach (['avance-cosecha' => 'Ver', 'avance-embarques' => 'Ver'] as $slug => $nombre) {
+            $submoduloId = DB::table('submodules')->where('module_id', $moduloId)->where('slug', $slug)->value('id');
+            $tipos = DB::table('submodule_permission_types')->where('submodule_id', $submoduloId)->orderBy('order')->get();
+            $this->assertSame(['view'], $tipos->pluck('slug')->all(), $slug);
+            $this->assertSame([$nombre], $tipos->pluck('name')->all(), $slug);
+
+            foreach ([$admin, $demo] as $usuario) {
+                $this->assertSame(['view'], $this->concedidos($usuario, $slug), $slug);
+                $this->assertTrue($this->conAcceso($usuario, $slug), $slug);
+                $this->assertTrue($this->conAccesoAlModulo($usuario, $moduloId));
+            }
+        }
+    }
+
+    public function test_avance_cosecha_y_embarques_se_conceden_a_quien_ya_tenia_tablero_view(): void
+    {
+        $moduloId = $this->sembrarHastaAvanceEmpaque();
+        $conTablero = User::factory()->create();
+        $sinTablero = User::factory()->create();
+        $tableroRevocado = User::factory()->create();
+        $tableroSinAcceso = User::factory()->create();
+        $soloNotas = User::factory()->create();
+        $this->conceder($conTablero, 'tablero-semanal', ['view']);
+        $this->conceder($sinTablero, 'plan-corte', ['view', 'capturar']);
+        $this->conceder($tableroRevocado, 'tablero-semanal', ['view'], granted: false);
+        $this->conceder($tableroSinAcceso, 'tablero-semanal', ['view'], accesoActivo: false);
+        $this->conceder($soloNotas, 'tablero-semanal', ['editar-notas']);
+
+        $this->correr(self::MIGRACION_AVANCES_COSECHA_EMBARQUES);
+        $this->correr(self::MIGRACION_AVANCES_COSECHA_EMBARQUES);
+
+        foreach (['avance-cosecha', 'avance-embarques'] as $slug) {
+            $this->assertSame(['view'], $this->concedidos($conTablero, $slug), $slug);
+            $this->assertTrue($this->conAcceso($conTablero, $slug), $slug);
+
+            foreach ([$sinTablero, $tableroRevocado, $tableroSinAcceso, $soloNotas] as $usuario) {
+                $this->assertSame([], $this->concedidos($usuario, $slug), $slug);
+                $this->assertFalse($this->conAcceso($usuario, $slug), $slug);
+            }
+        }
+        $this->assertTrue($this->conAccesoAlModulo($conTablero, $moduloId));
+        // Sus permisos de antes no cambian.
+        $this->assertSame(['view'], $this->concedidos($conTablero, 'tablero-semanal'));
+        $this->assertFalse($this->conAccesoAlModulo($sinTablero, $moduloId));
+    }
+
+    public function test_avance_cosecha_y_embarques_no_reactivan_lo_revocado(): void
+    {
+        $this->sembrarHastaAvanceEmpaque();
+        $usuario = User::factory()->create();
+        $this->conceder($usuario, 'tablero-semanal', ['view']);
+        $this->correr(self::MIGRACION_AVANCES_COSECHA_EMBARQUES);
+
+        foreach (['avance-cosecha', 'avance-embarques'] as $slug) {
+            $submoduloId = DB::table('submodules')->where('slug', $slug)->value('id');
+            DB::table('user_submodule_access')->where('user_id', $usuario->id)->where('submodule_id', $submoduloId)->update(['is_active' => false]);
+            DB::table('user_submodule_permissions')->where('user_id', $usuario->id)->where('submodule_id', $submoduloId)->update(['is_granted' => false]);
+        }
+
+        $this->correr(self::MIGRACION_AVANCES_COSECHA_EMBARQUES);
+
+        foreach (['avance-cosecha', 'avance-embarques'] as $slug) {
+            $this->assertFalse($this->conAcceso($usuario, $slug), $slug);
+            $this->assertSame([], $this->concedidos($usuario, $slug), $slug);
+        }
+    }
+
+    public function test_avance_cosecha_y_embarques_sin_planeacion_no_hacen_nada(): void
+    {
+        $this->correr(self::MIGRACION_AVANCES_COSECHA_EMBARQUES);
+
+        $this->assertSame(0, DB::table('submodules')->whereIn('slug', ['avance-cosecha', 'avance-embarques'])->count());
+    }
+
+    public function test_avance_cosecha_y_embarques_fallan_claro_sin_plan_corte(): void
+    {
+        $moduloId = $this->sembrarHastaAvanceEmpaque();
+        User::factory()->create(['email' => 'admin@sentinel.com']);
+        $orden = DB::table('submodules')->where('module_id', $moduloId)->pluck('order', 'slug')->all();
+        DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'plan-corte')->delete();
+
+        // Sin «Plan de corte» no puede quedar anotada como corrida sin crear nada: lanza y no escribe.
+        try {
+            $this->correr(self::MIGRACION_AVANCES_COSECHA_EMBARQUES);
+            $this->fail('Debió lanzar RuntimeException.');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('plan-corte', $e->getMessage());
+        }
+        $this->assertSame(0, DB::table('submodules')->whereIn('slug', ['avance-cosecha', 'avance-embarques'])->count());
+        $this->assertSame($orden['embarques'], (int) DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'embarques')->value('order'));
+
+        // Tampoco crea «Avance de cosecha» a medias si falta «Embarques».
+        DB::table('submodules')->insert([
+            'module_id' => $moduloId, 'slug' => 'plan-corte', 'name' => 'Plan de corte', 'order' => $orden['plan-corte'],
+            'is_active' => true, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'embarques')->delete();
+        try {
+            $this->correr(self::MIGRACION_AVANCES_COSECHA_EMBARQUES);
+            $this->fail('Debió lanzar RuntimeException.');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('embarques', $e->getMessage());
+        }
+        $this->assertSame(0, DB::table('submodules')->whereIn('slug', ['avance-cosecha', 'avance-embarques'])->count());
+    }
+
+    public function test_down_de_avance_cosecha_y_embarques_los_quita_y_recorre(): void
+    {
+        $moduloId = $this->sembrarHastaAvanceEmpaque();
+        $admin = User::factory()->create(['email' => 'admin@sentinel.com']);
+        $antes = DB::table('submodules')->where('module_id', $moduloId)->pluck('order', 'slug')->all();
+
+        $this->correr(self::MIGRACION_AVANCES_COSECHA_EMBARQUES);
+        (require base_path('database/migrations/'.self::MIGRACION_AVANCES_COSECHA_EMBARQUES))->down();
+
+        $this->assertSame(0, DB::table('submodules')->whereIn('slug', ['avance-cosecha', 'avance-embarques'])->count());
+        foreach (['avance-cosecha', 'avance-embarques'] as $slug) {
+            $this->assertSame([], $this->concedidos($admin, $slug));
+            $this->assertFalse($this->conAcceso($admin, $slug));
+        }
+        $this->assertSame($antes, DB::table('submodules')->where('module_id', $moduloId)->pluck('order', 'slug')->all());
+        $this->assertSame(0, DB::table('submodule_permission_types')->whereIn('description', ['Ver el avance de cosecha', 'Ver el avance de embarques'])->count());
+    }
+
+    public function test_acordar_solo_a_admin_y_demo_sin_duplicar(): void
+    {
+        $moduloId = $this->sembrarHastaAvanceEmpaque();
+        $admin = User::factory()->create(['email' => 'admin@sentinel.com']);
+        $demo = User::factory()->create(['email' => 'demo@sentinel.com']);
+        $editor = User::factory()->create();
+        $conTablero = User::factory()->create();
+        $this->conceder($editor, 'configuracion', ['view', 'editar']);
+        $this->conceder($conTablero, 'tablero-semanal', ['view', 'editar-notas']);
+        $tableroId = DB::table('submodules')->where('slug', 'tablero-semanal')->value('id');
+        $ordenes = DB::table('submodule_permission_types')->where('submodule_id', $tableroId)->pluck('order')->all();
+
+        $this->correr(self::MIGRACION_ACORDAR);
+        $this->correr(self::MIGRACION_ACORDAR);
+
+        $tipo = DB::table('submodule_permission_types')->where('submodule_id', $tableroId)->where('slug', 'acordar')->get();
+        $this->assertCount(1, $tipo);
+        $this->assertSame('Acordar plan', $tipo[0]->name);
+        $this->assertSame('Guardar la copia del plan acordado en la junta', $tipo[0]->description);
+        $this->assertSame(max($ordenes) + 1, (int) $tipo[0]->order);
+        $this->assertSame(0, DB::table('submodules')->where('slug', 'acordar')->count(), 'No crea un submódulo.');
+
+        foreach ([$admin, $demo] as $usuario) {
+            $this->assertSame(['acordar'], $this->concedidos($usuario, 'tablero-semanal'));
+            $this->assertTrue($this->conAcceso($usuario, 'tablero-semanal'));
+            $this->assertTrue($this->conAccesoAlModulo($usuario, $moduloId));
+            $this->assertSame(1, DB::table('user_submodule_permissions')->where('user_id', $usuario->id)->where('permission_type_id', $tipo[0]->id)->count());
+        }
+        // Nadie más lo recibe: ni quien edita la Configuración ni quien ya veía el Tablero.
+        $this->assertNotContains('acordar', $this->concedidos($editor, 'tablero-semanal'));
+        $this->assertSame(['view', 'editar-notas'], $this->concedidos($conTablero, 'tablero-semanal'));
+        $this->assertSame(0, DB::table('user_submodule_permissions')->where('permission_type_id', $tipo[0]->id)->whereNotIn('user_id', [$admin->id, $demo->id])->count());
+    }
+
+    public function test_acordar_sin_planeacion_no_hace_nada_y_falla_claro_sin_tablero(): void
+    {
+        $this->correr(self::MIGRACION_ACORDAR);
+        $this->assertSame(0, DB::table('submodule_permission_types')->where('slug', 'acordar')->count());
+
+        $moduloId = $this->sembrarEstructura();
+        DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'tablero-semanal')->delete();
+        try {
+            $this->correr(self::MIGRACION_ACORDAR);
+            $this->fail('Debió lanzar RuntimeException.');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('2026_11_11_100100', $e->getMessage());
+        }
+        $this->assertSame(0, DB::table('submodule_permission_types')->where('slug', 'acordar')->count());
+    }
+
+    public function test_down_de_acordar_quita_permiso_y_concesiones(): void
+    {
+        $this->sembrarHastaAvanceEmpaque();
+        $admin = User::factory()->create(['email' => 'admin@sentinel.com']);
+        $this->conceder($admin, 'tablero-semanal', ['view']);
+        $this->correr(self::MIGRACION_ACORDAR);
+        $this->assertContains('acordar', $this->concedidos($admin, 'tablero-semanal'));
+
+        (require base_path('database/migrations/'.self::MIGRACION_ACORDAR))->down();
+
+        $this->assertSame(0, DB::table('submodule_permission_types')->where('slug', 'acordar')->count());
+        $this->assertSame(['view'], $this->concedidos($admin, 'tablero-semanal'));
+    }
+
+    public function test_payload_trae_permisos_de_avances_y_acordar(): void
+    {
+        $this->crearElote();
+        Sanctum::actingAs($this->usuarioCon([
+            'tablero-semanal' => ['view', 'acordar'],
+            'avance-cosecha' => ['view'],
+            'avance-embarques' => ['view'],
+        ]));
+
+        $respuesta = $this->getJson('/api/splendidfarms/administration/planeacion/programa?lunes=2026-11-23');
+
+        $respuesta->assertOk();
+        $this->assertTrue($respuesta->json('data.permisos.avance_cosecha.view'));
+        $this->assertTrue($respuesta->json('data.permisos.avance_embarques.view'));
+        $this->assertTrue($respuesta->json('data.permisos.tablero.acordar'));
+
+        Sanctum::actingAs($this->usuarioCon(['tablero-semanal' => ['view']]));
+        $sin = $this->getJson('/api/splendidfarms/administration/planeacion/programa?lunes=2026-11-23');
+        $this->assertFalse($sin->json('data.permisos.avance_cosecha.view'));
+        $this->assertFalse($sin->json('data.permisos.avance_embarques.view'));
+        $this->assertFalse($sin->json('data.permisos.tablero.acordar'));
+    }
+
+    public function test_los_ayudantes_de_datos_reales_arman_filas_validas(): void
+    {
+        $this->crearElote();
+        $this->usuarioCon([]);
+        $etapa = $this->crearEtapa('Amarillo', 10);
+        $programa = ProgramaSemanal::create(['lunes' => '2026-11-23']);
+
+        $cierre = $this->cierre($etapa, '2026-11-24', 3.5);
+        $this->assertSame($this->temporada->id, $cierre->temporada_id);
+        $this->assertSame('cerrado', $cierre->status);
+        $this->assertSame($etapa->lote_id, $cierre->lote_id);
+        $this->assertSame($this->temporada->id, $this->cierre(null, '2026-11-24', 1)->temporada_id);
+
+        $otra = $this->otroCultivo();
+        $this->assertSame($otra->id, $this->cierre(null, '2026-11-24', 1, ['temporada_id' => $otra->id])->temporada_id);
+        $this->assertSame('abierta', $otra->estado);
+        $this->assertSame('Tomate', $otra->cultivo->nombre);
+
+        $salida = $this->salidaCampo($etapa, '2026-11-24', 12000.5);
+        $this->assertSame('12000.50', $salida->fresh()->peso_neto_kg);
+        $this->assertFalse($salida->fresh()->eliminado);
+        $this->assertNull($this->salidaCampo(null, '2026-11-24', 1)->etapa_id);
+
+        $carga = $this->cargaPlan($programa, 'Texas', 'full', 2, 3);
+        $this->assertSame(3, $carga->fresh()->cargas);
+
+        $embarque = $this->embarqueReal('2026-11-25', 'entregado', 'Texas');
+        $this->assertSame(1000, $embarque->fresh()->total_cajas);
+        $this->assertNotSame($embarque->folio_embarque, $this->embarqueReal('2026-11-25', 'programado', null)->folio_embarque);
+
+        $consignatario = $this->consignatario('Walmart Texas', 'Texas');
+        $this->assertSame('Texas', $consignatario->fresh()->bodega);
+        $this->assertNull($this->consignatario('Otro', null)->bodega);
     }
 
     public function test_programa_embarques_rechaza_celda_duplicada(): void

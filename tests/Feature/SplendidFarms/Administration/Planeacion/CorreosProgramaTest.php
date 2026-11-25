@@ -209,6 +209,6 @@ class CorreosProgramaTest extends TestCase
 
         Sanctum::actingAs($this->usuarioCon(['tablero-semanal' => ['view']]));
         $permisos = $this->getJson(self::URL.'/programa?lunes=2026-11-23')->assertOk()->json('data.permisos.tablero');
-        $this->assertSame(['view' => true, 'editar_notas' => false, 'enviar' => false], $permisos);
+        $this->assertSame(['view' => true, 'editar_notas' => false, 'enviar' => false, 'acordar' => false], $permisos);
     }
 }

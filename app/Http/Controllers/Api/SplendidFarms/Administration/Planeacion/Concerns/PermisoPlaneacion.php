@@ -10,8 +10,8 @@ use Illuminate\Support\Facades\Auth;
 
 /**
  * Permisos de los submódulos de Splendid Farms → Administración → Planeación
- * (Tablero semanal, Plan de corte, Necesidades de venta, Programa de empaque,
- * Avance de empaque, Embarques, Resumen de temporada y Configuración). Cada endpoint
+ * (Tablero semanal, Plan de corte, Avance de cosecha, Necesidades de venta, Programa de empaque,
+ * Avance de empaque, Embarques, Avance de embarques, Resumen de temporada y Configuración). Cada endpoint
  * exige el par submódulo + permiso que le toca.
  */
 trait PermisoPlaneacion
@@ -23,12 +23,14 @@ trait PermisoPlaneacion
      * El orden es el del contrato de `permisos`.
      */
     private const SUBMODULOS_PLANEACION = [
-        'tablero-semanal' => ['tablero', ['view' => 'view', 'editar-notas' => 'editar_notas', 'enviar' => 'enviar']],
+        'tablero-semanal' => ['tablero', ['view' => 'view', 'editar-notas' => 'editar_notas', 'enviar' => 'enviar', 'acordar' => 'acordar']],
         'plan-corte' => ['plan_corte', ['view' => 'view', 'capturar' => 'capturar']],
+        'avance-cosecha' => ['avance_cosecha', ['view' => 'view']],
         'necesidades-venta' => ['necesidades', ['view' => 'view', 'capturar' => 'capturar']],
         'programa-empaque' => ['programa_empaque', ['view' => 'view', 'capturar' => 'capturar']],
         'avance-empaque' => ['avance_empaque', ['view' => 'view']],
         'embarques' => ['embarques', ['view' => 'view', 'capturar' => 'capturar']],
+        'avance-embarques' => ['avance_embarques', ['view' => 'view']],
         'resumen-temporada' => ['resumen', ['view' => 'view']],
         'configuracion' => ['configuracion', ['view' => 'view', 'editar' => 'editar']],
     ];
@@ -76,7 +78,7 @@ trait PermisoPlaneacion
 
     /**
      * Permisos del usuario en todos los submódulos de Planeación, con la forma
-     * `permisos` del payload: `{ tablero: { view, editar_notas, enviar }, plan_corte: … }`.
+     * `permisos` del payload: `{ tablero: { view, editar_notas, enviar, acordar }, plan_corte: … }`.
      *
      * @return array<string, array<string, bool>>
      */

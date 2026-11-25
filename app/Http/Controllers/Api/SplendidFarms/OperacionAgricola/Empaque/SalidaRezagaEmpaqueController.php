@@ -501,7 +501,9 @@ class SalidaRezagaEmpaqueController extends Controller
                             ]);
                         }
 
-                        $clase = $rezaga->tipoCarga?->clase_rezaga;
+                        // La clase sale del tipo/subtipo ya guardados (el bin puede no tener clase propia);
+                        // una rezaga sin bin ligado sigue sin poder venderse en bins.
+                        $clase = $rezaga->tipoCarga === null ? null : $rezaga->claseRezagaEfectiva();
                         if (!in_array($clase, TipoCarga::CLASES_REZAGA, true)) {
                             throw ValidationException::withMessages([
                                 'detalles' => "La rezaga {$rezaga->folio_rezaga} no tiene un tipo de rezaga válido para venderse en bins.",
