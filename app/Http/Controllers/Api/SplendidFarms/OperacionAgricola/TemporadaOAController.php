@@ -21,7 +21,7 @@ class TemporadaOAController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $query = Temporada::with(['cultivo:id,nombre,imagen']);
+        $query = Temporada::with(['cultivo:id,nombre,imagen', 'empaques:entities.id']);
 
         // Filtro por estado
         if ($request->filled('estado')) {
@@ -54,6 +54,7 @@ class TemporadaOAController extends Controller
                 'fecha_fin' => $temporada->fecha_fin?->format('Y-m-d'),
                 'estado' => $temporada->estado,
                 'opera_en_bins' => (bool) $temporada->opera_en_bins,
+                'empaque_ids' => $temporada->idsDeEmpaques(),
                 'created_at' => $temporada->created_at,
             ];
         });
@@ -69,7 +70,7 @@ class TemporadaOAController extends Controller
      */
     public function show(Temporada $temporada): JsonResponse
     {
-        $temporada->load(['cultivo:id,nombre', 'usuario:id,name']);
+        $temporada->load(['cultivo:id,nombre', 'usuario:id,name', 'empaques:entities.id']);
 
         // Contar elementos asignados
         $stats = [
@@ -95,6 +96,7 @@ class TemporadaOAController extends Controller
                 'fecha_fin' => $temporada->fecha_fin?->format('Y-m-d'),
                 'estado' => $temporada->estado,
                 'opera_en_bins' => (bool) $temporada->opera_en_bins,
+                'empaque_ids' => $temporada->idsDeEmpaques(),
                 'created_at' => $temporada->created_at,
                 'stats' => $stats,
             ],

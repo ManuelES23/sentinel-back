@@ -4,6 +4,8 @@ namespace App\Http\Controllers\Api\SplendidFarms;
 
 use App\Http\Controllers\Controller;
 use App\Models\Temporada;
+use App\Models\Entity;
+use App\Models\RecepcionEmpaque;
 use App\Models\RezagaEmpaque;
 use App\Models\SalidaRezagaEmpaque;
 use App\Models\Cultivo;
@@ -11,6 +13,7 @@ use App\Models\Productor;
 use App\Models\ZonaCultivo;
 use App\Models\Lote;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 use Carbon\Carbon;
@@ -23,7 +26,7 @@ class TemporadaController extends Controller
     public function index(Request $request)
     {
         try {
-            $query = Temporada::with(['cultivo', 'usuario']);
+            $query = Temporada::with(['cultivo', 'usuario', 'empaques:entities.id']);
 
             // Filtros opcionales
             if ($request->filled('cultivo_id')) {
@@ -50,7 +53,8 @@ class TemporadaController extends Controller
                 });
             }
 
-            $temporadas = $query->orderBy('created_at', 'desc')->get();
+            $temporadas = $query->orderBy('created_at', 'desc')->get()
+                ->each(fn (Temporada $t) => $this->exponerEmpaqueIds($t));
 
             return response()->json($temporadas);
         } catch (\Exception $e) {
@@ -60,6 +64,130 @@ class TemporadaController extends Controller
                 'error' => $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * Opciones de empaque para el formulario de temporada: entidades EMPAQUE
+     * activas con el cultivo asignado, más las ya marcadas en la temporada
+     * (aunque estén inactivas o sin el cultivo) para no perderlas al editar.
+     * `recepciones` = recepciones de la entidad en cualquier temporada del cultivo.
+     */
+    public function empaquesOpciones(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'cultivo_id' => 'required|integer|exists:cultivos,id',
+            'temporada_id' => 'nullable|integer',
+        ], [
+            'cultivo_id.required' => 'El cultivo es requerido',
+            'cultivo_id.integer' => 'El cultivo seleccionado no existe',
+            'cultivo_id.exists' => 'El cultivo seleccionado no existe',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'message' => 'Error de validación',
+                'errors' => $validator->errors(),
+            ], 422);
+        }
+
+        $cultivoId = (int) $request->cultivo_id;
+        $marcados = $request->filled('temporada_id')
+            ? DB::table('temporada_empaques')
+                ->where('temporada_id', (int) $request->temporada_id)
+                ->pluck('entity_id')
+                ->map(fn ($id) => (int) $id)
+                ->all()
+            : [];
+
+        $entidades = Entity::query()
+            ->whereHas('entityType', fn ($q) => $q->where('code', 'EMPAQUE'))
+            ->where(function ($q) use ($cultivoId, $marcados) {
+                $q->where(function ($q2) use ($cultivoId) {
+                    $q2->where('is_active', true)
+                        ->whereHas('cultivos', fn ($c) => $c->where('cultivos.id', $cultivoId));
+                });
+                if ($marcados) {
+                    $q->orWhereIn('entities.id', $marcados);
+                }
+            })
+            ->get(['entities.id', 'entities.name', 'entities.code', 'entities.is_active']);
+
+        $recepciones = $entidades->isEmpty() ? collect() : RecepcionEmpaque::query()
+            ->whereIn('entity_id', $entidades->pluck('id'))
+            ->whereIn('temporada_id', Temporada::withTrashed()->where('cultivo_id', $cultivoId)->select('id'))
+            ->selectRaw('entity_id, COUNT(*) as total')
+            ->groupBy('entity_id')
+            ->pluck('total', 'entity_id');
+
+        $data = $entidades
+            ->map(fn (Entity $e) => [
+                'id' => $e->id,
+                'name' => $e->name,
+                'code' => $e->code,
+                'is_active' => (bool) $e->is_active,
+                'recepciones' => (int) ($recepciones[$e->id] ?? 0),
+            ])
+            ->sortBy([['recepciones', 'desc'], ['name', 'asc']])
+            ->values();
+
+        return response()->json([
+            'success' => true,
+            'data' => $data,
+        ]);
+    }
+
+    /**
+     * Si llega `empaque_ids`, cada id debe ser una entidad de tipo EMPAQUE.
+     * Devuelve la respuesta 422 o null si todo está bien (o si se omitió).
+     */
+    private function validarEmpaques(Request $request)
+    {
+        if (!$request->has('empaque_ids')) {
+            return null;
+        }
+
+        $ids = array_values(array_unique(array_map('intval', (array) $request->input('empaque_ids'))));
+        if (!$ids) {
+            return null;
+        }
+
+        $validos = Entity::query()
+            ->whereIn('id', $ids)
+            ->whereHas('entityType', fn ($q) => $q->where('code', 'EMPAQUE'))
+            ->count();
+
+        if ($validos !== count($ids)) {
+            return response()->json([
+                'message' => 'Error de validación',
+                'errors' => [
+                    'empaque_ids' => ['Solo se pueden elegir entidades de tipo Empaque.'],
+                ],
+            ], 422);
+        }
+
+        return null;
+    }
+
+    /**
+     * Reemplaza los empaques marcados. Omitido = no se toca; [] = limpiar todos.
+     */
+    private function sincronizarEmpaques(Temporada $temporada, Request $request): void
+    {
+        if (!$request->has('empaque_ids')) {
+            return;
+        }
+
+        $temporada->empaques()->sync(array_map('intval', (array) $request->input('empaque_ids')));
+    }
+
+    /**
+     * Deja `empaque_ids` (arreglo de enteros ordenado) en el JSON de la
+     * temporada y suelta la relación cargada.
+     */
+    private function exponerEmpaqueIds(Temporada $temporada): void
+    {
+        $temporada->setAttribute('empaque_ids', $temporada->idsDeEmpaques());
+        $temporada->unsetRelation('empaques');
     }
 
     /**
@@ -74,6 +202,8 @@ class TemporadaController extends Controller
                 'fecha_inicio' => 'required|date',
                 'fecha_fin' => 'required|date|after_or_equal:fecha_inicio',
                 'opera_en_bins' => 'sometimes|boolean',
+                'empaque_ids' => 'sometimes|array',
+                'empaque_ids.*' => 'integer|distinct|exists:entities,id',
             ], [
                 'cultivo_id.required' => 'El cultivo es requerido',
                 'cultivo_id.exists' => 'El cultivo seleccionado no existe',
@@ -84,6 +214,10 @@ class TemporadaController extends Controller
                 'fecha_fin.date' => 'La fecha de fin debe ser una fecha válida',
                 'fecha_fin.after_or_equal' => 'La fecha de fin debe ser posterior o igual a la fecha de inicio',
                 'opera_en_bins.boolean' => 'El campo opera en bins debe ser verdadero o falso',
+                'empaque_ids.array' => 'Los empaques deben enviarse como una lista',
+                'empaque_ids.*.integer' => 'Empaque inválido',
+                'empaque_ids.*.distinct' => 'No se puede repetir un empaque',
+                'empaque_ids.*.exists' => 'El empaque seleccionado no existe',
             ]);
 
             if ($validator->fails()) {
@@ -91,6 +225,10 @@ class TemporadaController extends Controller
                     'message' => 'Error de validación',
                     'errors' => $validator->errors()
                 ], 422);
+            }
+
+            if ($errorEmpaques = $this->validarEmpaques($request)) {
+                return $errorEmpaques;
             }
 
             // Obtener el cultivo
@@ -109,23 +247,30 @@ class TemporadaController extends Controller
                 $nombre .= '-' . $añoFin;
             }
 
-            // Crear la temporada
-            $temporada = Temporada::create([
-                'cultivo_id' => $request->cultivo_id,
-                'nombre' => $nombre,
-                'locacion' => $request->locacion,
-                'folio_temporada' => $folio,
-                'año_inicio' => $añoInicio,
-                'año_fin' => $añoFin,
-                'fecha_inicio' => $request->fecha_inicio,
-                'fecha_fin' => $request->fecha_fin,
-                'estado' => 'abierta',
-                'opera_en_bins' => $request->boolean('opera_en_bins'),
-                'user_id' => \Illuminate\Support\Facades\Auth::id(),
-            ]);
+            // Crear la temporada (y sus empaques) en una sola transacción
+            $temporada = DB::transaction(function () use ($request, $nombre, $folio, $añoInicio, $añoFin) {
+                $nueva = Temporada::create([
+                    'cultivo_id' => $request->cultivo_id,
+                    'nombre' => $nombre,
+                    'locacion' => $request->locacion,
+                    'folio_temporada' => $folio,
+                    'año_inicio' => $añoInicio,
+                    'año_fin' => $añoFin,
+                    'fecha_inicio' => $request->fecha_inicio,
+                    'fecha_fin' => $request->fecha_fin,
+                    'estado' => 'abierta',
+                    'opera_en_bins' => $request->boolean('opera_en_bins'),
+                    'user_id' => \Illuminate\Support\Facades\Auth::id(),
+                ]);
+
+                $this->sincronizarEmpaques($nueva, $request);
+
+                return $nueva;
+            });
 
             // Cargar relaciones
-            $temporada->load(['cultivo', 'usuario']);
+            $temporada->load(['cultivo', 'usuario', 'empaques:entities.id']);
+            $this->exponerEmpaqueIds($temporada);
 
             return response()->json([
                 'message' => 'Temporada creada exitosamente',
@@ -146,7 +291,8 @@ class TemporadaController extends Controller
     public function show($id)
     {
         try {
-            $temporada = Temporada::with(['cultivo', 'usuario'])->findOrFail($id);
+            $temporada = Temporada::with(['cultivo', 'usuario', 'empaques:entities.id'])->findOrFail($id);
+            $this->exponerEmpaqueIds($temporada);
 
             return response()->json($temporada);
         } catch (\Exception $e) {
@@ -172,6 +318,8 @@ class TemporadaController extends Controller
                 'fecha_inicio' => 'required|date',
                 'fecha_fin' => 'required|date|after_or_equal:fecha_inicio',
                 'opera_en_bins' => 'sometimes|boolean',
+                'empaque_ids' => 'sometimes|array',
+                'empaque_ids.*' => 'integer|distinct|exists:entities,id',
             ], [
                 'cultivo_id.required' => 'El cultivo es requerido',
                 'cultivo_id.exists' => 'El cultivo seleccionado no existe',
@@ -182,6 +330,10 @@ class TemporadaController extends Controller
                 'fecha_fin.date' => 'La fecha de fin debe ser una fecha válida',
                 'fecha_fin.after_or_equal' => 'La fecha de fin debe ser posterior o igual a la fecha de inicio',
                 'opera_en_bins.boolean' => 'El campo opera en bins debe ser verdadero o falso',
+                'empaque_ids.array' => 'Los empaques deben enviarse como una lista',
+                'empaque_ids.*.integer' => 'Empaque inválido',
+                'empaque_ids.*.distinct' => 'No se puede repetir un empaque',
+                'empaque_ids.*.exists' => 'El empaque seleccionado no existe',
             ]);
 
             if ($validator->fails()) {
@@ -189,6 +341,10 @@ class TemporadaController extends Controller
                     'message' => 'Error de validación',
                     'errors' => $validator->errors()
                 ], 422);
+            }
+
+            if ($errorEmpaques = $this->validarEmpaques($request)) {
+                return $errorEmpaques;
             }
 
             // El modo de bins no se cambia con rezaga o ventas de rezaga ya
@@ -241,10 +397,14 @@ class TemporadaController extends Controller
             if ($request->filled('opera_en_bins')) {
                 $campos['opera_en_bins'] = $request->boolean('opera_en_bins');
             }
-            $temporada->update($campos);
+            DB::transaction(function () use ($temporada, $campos, $request) {
+                $temporada->update($campos);
+                $this->sincronizarEmpaques($temporada, $request);
+            });
 
             // Cargar relaciones
-            $temporada->load(['cultivo', 'usuario']);
+            $temporada->load(['cultivo', 'usuario', 'empaques:entities.id']);
+            $this->exponerEmpaqueIds($temporada);
 
             return response()->json([
                 'message' => 'Temporada actualizada exitosamente',
