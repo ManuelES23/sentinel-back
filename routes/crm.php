@@ -203,6 +203,15 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('oportunidades/{oportunidad}/compro-antes', [
         App\Http\Controllers\Api\CRM\OportunidadController::class, 'compraAntes'
     ]);
+    Route::get('oportunidades/{oportunidad}/venta', [
+        App\Http\Controllers\Api\CRM\VentaOportunidadController::class, 'show'
+    ]);
+    Route::post('oportunidades/{oportunidad}/ajustes', [
+        App\Http\Controllers\Api\CRM\VentaOportunidadController::class, 'store'
+    ]);
+    Route::post('oportunidades/{oportunidad}/ajustes/{ajuste}/anular', [
+        App\Http\Controllers\Api\CRM\VentaOportunidadController::class, 'anular'
+    ]);
     Route::apiResource('oportunidades', App\Http\Controllers\Api\CRM\OportunidadController::class)
         ->parameters(['oportunidades' => 'oportunidad']);
 

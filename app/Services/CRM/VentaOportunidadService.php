@@ -380,7 +380,7 @@ class VentaOportunidadService
     }
 
     /** Entero ≥ 0 o negativo escrito como entero (1, "1", 1.0); null si no es un entero. */
-    private function entero(mixed $valor): ?int
+    public function entero(mixed $valor): ?int
     {
         if (is_int($valor)) {
             return $valor;
@@ -396,7 +396,7 @@ class VentaOportunidadService
     }
 
     /** Precio ≥ 0 con a lo más 2 decimales y dentro de decimal(12,2); null si no. */
-    private function precio(mixed $valor): ?float
+    public function precio(mixed $valor): ?float
     {
         if (is_string($valor)) {
             $valor = trim($valor);
