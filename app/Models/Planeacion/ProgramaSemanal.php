@@ -138,6 +138,12 @@ class ProgramaSemanal extends Model
         return $this->hasMany(ProgramaCambio::class, 'programa_id');
     }
 
+    /** Fotos del plan acordado; la vigente es la de mayor `id`. */
+    public function planesAcordados(): HasMany
+    {
+        return $this->hasMany(ProgramaPlanAcordado::class, 'programa_id');
+    }
+
     public function juntaRegistradaPor(): BelongsTo
     {
         return $this->belongsTo(User::class, 'junta_registrada_por');

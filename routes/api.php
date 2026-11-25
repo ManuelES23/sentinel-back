@@ -274,6 +274,10 @@ Route::middleware('auth:sanctum')->group(function () {
 
                 // Interruptor del domingo de la semana (tablero-semanal.editar-notas)
                 Route::put('programa/{programa}/domingo', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\DomingoProgramaController::class, 'guardar']);
+
+                // Plan acordado en la junta: guardar la foto (tablero-semanal.acordar) y leerla (tablero, avance de cosecha o de embarques)
+                Route::post('programa/{programa}/plan-acordado', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\PlanAcordadoController::class, 'store']);
+                Route::get('programa/{programa}/plan-acordado', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\PlanAcordadoController::class, 'show']);
             });
 
             // Módulo Catálogos (catálogos generales de la empresa)
