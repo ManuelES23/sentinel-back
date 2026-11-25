@@ -227,6 +227,8 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::post('programa/envio/vista-previa', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\EnviarProgramaController::class, 'vistaPrevia'])->middleware('throttle:20,1');
                 // Avance de empaque: programado contra real (avance-empaque.view); no crea el programa.
                 Route::get('programa/avance', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\AvanceEmpaqueController::class, 'show']);
+                // Avance de cosecha: plan de corte contra cierres (avance-cosecha.view); no crea el programa.
+                Route::get('programa/avance-cosecha', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\AvanceCosechaController::class, 'show']);
                 Route::put('programa/{programa}/inventario-inicial', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'inventarioInicial']);
 
                 // Configuración (las rutas fijas van antes que {catalogo})
