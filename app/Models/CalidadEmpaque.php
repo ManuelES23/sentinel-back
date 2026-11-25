@@ -17,7 +17,8 @@ class CalidadEmpaque extends Model
         'temporada_id', 'entity_id', 'tipo_evaluacion', 'evaluable_type',
         'evaluable_id', 'folio_evaluacion', 'fecha_evaluacion', 'responsable',
         'tamano_muestra_total', 'cumple_total', 'no_cumple_total',
-        'porcentaje_cumple', 'piezas_por_caja', 'resultado',
+        'cuarto_frio_total', 'porcentaje_cumple', 'porcentaje_cumple_fresco',
+        'piezas_por_caja', 'resultado',
         'porcentaje_defectos', 'defectos_encontrados', 'temperatura',
         'humedad', 'observaciones', 'evaluado_por', 'created_by',
     ];
@@ -27,6 +28,8 @@ class CalidadEmpaque extends Model
         'porcentaje_cumple' => 'decimal:2',
         'cumple_total' => 'decimal:2',
         'no_cumple_total' => 'decimal:2',
+        'cuarto_frio_total' => 'decimal:2',
+        'porcentaje_cumple_fresco' => 'decimal:2',
         'tamano_muestra_total' => 'integer',
         'piezas_por_caja' => 'integer',
         'temperatura' => 'decimal:1',
