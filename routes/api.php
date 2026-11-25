@@ -229,6 +229,8 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::get('programa/avance', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\AvanceEmpaqueController::class, 'show']);
                 // Avance de cosecha: plan de corte contra cierres (avance-cosecha.view); no crea el programa.
                 Route::get('programa/avance-cosecha', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\AvanceCosechaController::class, 'show']);
+                // Avance de embarques: cargas programadas contra embarques salidos (avance-embarques.view); no crea el programa.
+                Route::get('programa/avance-embarques', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\AvanceEmbarquesController::class, 'show']);
                 Route::put('programa/{programa}/inventario-inicial', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ConfiguracionPlaneacionController::class, 'inventarioInicial']);
 
                 // Configuración (las rutas fijas van antes que {catalogo})
