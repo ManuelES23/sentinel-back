@@ -7,18 +7,24 @@ use App\Models\TipoCarga;
 use Illuminate\Validation\ValidationException;
 
 /**
- * Atributos de una rezaga capturada en bins (Elote en bins): el cliente solo
- * manda cuántos bins y de qué tipo; los kg estimados (bins × peso estimado del
- * bin) y el tipo/subtipo de rezaga los decide el servidor a partir de la clase
- * del bin. Lo comparten la captura manual de rezaga y la de producción.
+ * Atributos de una rezaga capturada en bins (Elote en bins): el cliente manda
+ * cuántos bins, de qué tipo de carga y (aparte) de qué clase de rezaga; los kg
+ * estimados (bins × peso estimado del bin) y el tipo/subtipo de rezaga los
+ * decide el servidor. Lo comparten la captura manual de rezaga y la de
+ * producción.
  */
 class RezagaEnBins
 {
     /**
      * @param  Temporada  $temporada  Temporada en bins (decide el cultivo del bin).
-     * @param  int  $tipoCargaId  Bin de rezaga elegido.
+     * @param  int  $tipoCargaId  Tipo de carga (bin) elegido.
      * @param  int  $bins  Cantidad de bins (>= 1).
-     * @param  array  $clasesPermitidas  Clases de bin aceptadas (por defecto, todas).
+     * @param  array  $clasesPermitidas  Clases de rezaga aceptadas (por defecto, todas).
+     * @param  string|null  $clase  Clase de rezaga elegida APARTE en la captura
+     *                              (hoja|fresco|cuarto_frio). Con valor, el bin puede ser
+     *                              cualquiera del cultivo (de campo, sin clase). Con null se
+     *                              conserva el camino legado: el bin debe traer su propia
+     *                              `clase_rezaga` y esa clase manda.
      *
      * @throws ValidationException
      */
@@ -27,21 +33,50 @@ class RezagaEnBins
         int $tipoCargaId,
         int $bins,
         array $clasesPermitidas = TipoCarga::CLASES_REZAGA,
+        ?string $clase = null,
     ): array {
         $tipoCarga = TipoCarga::query()->find($tipoCargaId);
 
-        $mapeo = $tipoCarga?->mapeoRezaga();
+        $tipoValido = $tipoCarga !== null
+            && (int) $tipoCarga->cultivo_id === (int) $temporada->cultivo_id
+            && $tipoCarga->is_active;
 
-        if (
-            $tipoCarga === null
-            || (int) $tipoCarga->cultivo_id !== (int) $temporada->cultivo_id
-            || ! $tipoCarga->is_active
-            || $mapeo === null
-            || ! in_array($tipoCarga->clase_rezaga, $clasesPermitidas, true)
-        ) {
-            throw ValidationException::withMessages([
-                'tipo_carga_id' => 'Elige un bin de rezaga de este cultivo.',
-            ]);
+        if ($clase !== null) {
+            // Camino nuevo: la clase se elige aparte; el bin puede no tener clase.
+            if (! $tipoValido) {
+                throw ValidationException::withMessages([
+                    'tipo_carga_id' => 'Elige un bin de rezaga de este cultivo.',
+                ]);
+            }
+
+            $mapeo = TipoCarga::mapeoDeClase($clase);
+
+            if ($mapeo === null || ! in_array($clase, $clasesPermitidas, true)) {
+                throw ValidationException::withMessages([
+                    'clase_rezaga' => 'Elige un tipo de rezaga válido.',
+                ]);
+            }
+        } else {
+            // Camino legado: el bin lleva su propia clase y esa clase manda.
+            $mapeo = $tipoCarga?->mapeoRezaga();
+
+            if (
+                ! $tipoValido
+                || ($mapeo !== null && ! in_array($tipoCarga->clase_rezaga, $clasesPermitidas, true))
+            ) {
+                throw ValidationException::withMessages([
+                    'tipo_carga_id' => 'Elige un bin de rezaga de este cultivo.',
+                ]);
+            }
+
+            if ($mapeo === null) {
+                // Un bin sin clase y sin clase elegida: se marca la clase que falta y,
+                // por compatibilidad con el contrato anterior, también el bin.
+                throw ValidationException::withMessages([
+                    'tipo_carga_id' => 'Elige un bin de rezaga de este cultivo.',
+                    'clase_rezaga' => 'Elige el tipo de rezaga.',
+                ]);
+            }
         }
 
         if ($bins < 1) {

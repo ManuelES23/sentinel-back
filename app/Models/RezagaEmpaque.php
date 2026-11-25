@@ -46,6 +46,26 @@ class RezagaEmpaque extends Model
     }
 
     /**
+     * Clase de rezaga efectiva (hoja|fresco|cuarto_frio) de una rezaga en bins:
+     * sale de su tipo/subtipo ya guardados y, si no encajan, de la clase del
+     * tipo de carga. Así un bin sin clase propia también se clasifica.
+     */
+    public function claseRezagaEfectiva(): ?string
+    {
+        if ($this->tipo_rezaga === 'produccion' && $this->subtipo_rezaga === 'hoja') {
+            return 'hoja';
+        }
+        if ($this->tipo_rezaga === 'produccion' && $this->subtipo_rezaga === 'producto') {
+            return 'fresco';
+        }
+        if ($this->tipo_rezaga === 'cuarto_frio') {
+            return 'cuarto_frio';
+        }
+
+        return $this->tipoCarga?->clase_rezaga;
+    }
+
+    /**
      * Bins con los que nació la rezaga: los disponibles hoy más los ya vendidos.
      * Solo existe para rezagas capturadas en bins; una rezaga en kg devuelve null.
      */
