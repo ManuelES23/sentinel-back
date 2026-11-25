@@ -29,6 +29,8 @@ class ConfiguracionComercialController extends CrmBaseController
             'moneda' => $config->moneda,
             'productos_en_oportunidad' => $config->productos_en_oportunidad,
             'cotizacion_por_caja' => $config->cotizacion_por_caja,
+            // Anuncio al front: lo vendido por renglón, rechazos y versiones viven detrás de la bandera de SBP.
+            'venta_por_renglon' => (bool) $config->cotizacion_por_caja,
             'catalogo_por_lineas' => CrmConfiguracionComercial::catalogoPorLineas($empresaId),
             'prospecto_como_empresa' => CrmConfiguracionComercial::prospectoComoEmpresa($empresaId),
             'impuestos' => $impuestos,
