@@ -282,6 +282,22 @@ class CerrarFolioBinsTest extends TestCase
         $this->assertArrayNotHasKey('cantidad_bins', $rezagas[0]->toArray());
     }
 
+    public function test_cerrar_no_genera_rezaga_consolidada_con_lo_acumulado_por_tarimas(): void
+    {
+        // Un front anterior mandaba los totales de las rezagas por tarima: el cierre
+        // ya no crea un registro «Auto-generada» con lo acumulado del folio.
+        $proceso = $this->crearProcesoMango(10);
+
+        $this->postJson(self::BASE."/proceso/{$proceso->id}/cerrar", $this->cuerpoCierre([
+            'usar_rezagas_tarima' => true,
+            'rezaga_tarima_produccion_kg' => 120,
+            'rezaga_tarima_lavado_kg' => 80,
+        ]))->assertOk()->assertJsonPath('success', true);
+
+        $this->assertSame('procesado', $proceso->fresh()->status);
+        $this->assertSame(0, RezagaEmpaque::where('proceso_id', $proceso->id)->count());
+    }
+
     public function test_cerrar_sin_interruptor_mantiene_validaciones_de_hoy(): void
     {
         $proceso = $this->crearProcesoMango(10);

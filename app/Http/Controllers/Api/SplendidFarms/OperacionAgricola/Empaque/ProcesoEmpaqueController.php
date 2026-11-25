@@ -873,32 +873,10 @@ class ProcesoEmpaqueController extends Controller
             $request, $validated, $proceso, $crearRezaga, $crearRezagasBins, $atributosRezagasBins,
             $cuartoFrio, $fresco, $remainder,
         ) {
-            // Automatic mode: consume rezagas capturadas por tarima del folio.
-            // If a total is provided but no tarima exists for that type, create one consolidated record.
-            if ($request->boolean('usar_rezagas_tarima')) {
-                $tarimaProduccionKg = (float) RezagaEmpaque::query()
-                    ->where('proceso_id', $proceso->id)
-                    ->where('modo_registro', 'tarima')
-                    ->where('tipo_rezaga', 'produccion')
-                    ->sum('cantidad_kg');
-
-                $tarimaLavadoKg = (float) RezagaEmpaque::query()
-                    ->where('proceso_id', $proceso->id)
-                    ->where('modo_registro', 'tarima')
-                    ->where('tipo_rezaga', 'lavado')
-                    ->sum('cantidad_kg');
-
-                $fallbackProduccionKg = (float) ($validated['rezaga_tarima_produccion_kg'] ?? 0);
-                $fallbackLavadoKg = (float) ($validated['rezaga_tarima_lavado_kg'] ?? 0);
-
-                if ($tarimaProduccionKg <= 0 && $fallbackProduccionKg > 0) {
-                    $crearRezaga('produccion', $fallbackProduccionKg, 'producto', 'Auto-generada al cierre desde control por tarimas');
-                }
-
-                if ($tarimaLavadoKg <= 0 && $fallbackLavadoKg > 0) {
-                    $crearRezaga('lavado', $fallbackLavadoKg, 'producto', 'Auto-generada al cierre desde control por tarimas');
-                }
-            }
+            // Las rezagas capturadas durante el día (por tarima o en Rezaga) ya están
+            // registradas: cerrar el folio NUNCA genera un registro consolidado con lo
+            // acumulado. `usar_rezagas_tarima` y `rezaga_tarima_*_kg` se aceptan solo para
+            // no romper un front con versión anterior, y se ignoran.
 
             // Rezaga en bins: un registro por renglón, ligado al folio.
             $crearRezagasBins($atributosRezagasBins);
