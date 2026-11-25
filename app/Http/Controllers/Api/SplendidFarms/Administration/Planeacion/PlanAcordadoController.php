@@ -29,9 +29,11 @@ class PlanAcordadoController extends Controller
         $foto = DB::transaction(function () use ($programa, $planes, $registro) {
             // El bloqueo de la fila del programa DEBE ser la primera sentencia de
             // la transacción (MySQL toma la «foto» en la primera lectura sin
-            // bloqueo): las hojas de captura bloquean la misma fila, así que la
-            // foto ve todo lo que una captura simultánea ya confirmó o espera a
-            // que termine.
+            // bloqueo). HojaEmbarques y HojaSobrantes bloquean esta misma fila del
+            // programa, así que con ella la foto es una vista coherente de lo ya
+            // confirmado. HojaCorte no: bloquea etapas y renglones de
+            // `programa_cortes`, no la fila del programa, de modo que una
+            // captura de corte sin confirmar queda fuera de la foto.
             $fila = ProgramaSemanal::whereKey($programa->id)->lockForUpdate()->firstOrFail();
 
             $foto = $planes->acordar($fila, Auth::id());
