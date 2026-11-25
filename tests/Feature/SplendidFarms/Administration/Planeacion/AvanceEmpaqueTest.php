@@ -7,6 +7,7 @@ use App\Models\Planeacion\Presentacion;
 use App\Models\Planeacion\ProgramaNecesidad;
 use App\Models\Planeacion\ProgramaSemanal;
 use App\Models\ProduccionEmpaque;
+use App\Models\Temporada;
 use App\Models\Variedad;
 use App\Services\Planeacion\ProgramaSemanalService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -506,5 +507,46 @@ class AvanceEmpaqueTest extends TestCase
         $this->assertSame([0, 0, 0, 0, 0, 0, 25], $fila['real']);
         $this->assertSame(40, $d['totales']['programado']);
         $this->assertSame(25, $d['totales']['real']);
+    }
+
+    private function temporadaDePrueba(string $nombre, string $locacion, string $folio): Temporada
+    {
+        return Temporada::create([
+            'cultivo_id' => $this->cultivo->id,
+            'nombre' => $nombre,
+            'locacion' => $locacion,
+            'folio_temporada' => $this->cultivo->id.'-'.$folio,
+            'año_inicio' => 2026,
+            'año_fin' => 2026,
+            'fecha_inicio' => '2026-11-04',
+            'fecha_fin' => '2026-12-04',
+            'estado' => 'abierta',
+            'user_id' => $this->autor->id,
+        ]);
+    }
+
+    public function test_los_pallets_de_temporadas_de_prueba_no_cuentan_en_el_real(): void
+    {
+        $p = $this->programa();
+        $this->necesidad($p, 'Texas', 'Walmart', 'Bulk', ['Amarillo'], 'RPC', [100, 0, 0, 0, 0, 0, 0]);
+        $receta = $this->receta('Bulk', 'RPC');
+        $porNombre = $this->temporadaDePrueba('Elote Dulce Prueba 2026', 'Los Mochis', '090');
+        $porLocacion = $this->temporadaDePrueba('Elote Dulce Ensayo', 'PRUEBA', '091');
+
+        $this->pallet('2026-11-23', $receta, 60, 'Amarillo');
+        $this->pallet('2026-11-23', $receta, 40, 'Amarillo', ['temporada_id' => $porNombre->id]);
+        $this->pallet('2026-11-24', $receta, 15, 'Amarillo', ['temporada_id' => $porLocacion->id]);
+        // Sin clasificar y sin programa también se ignoran si son de prueba.
+        $this->pallet('2026-11-23', $this->recetaEmpaque('Sin combinacion'), 40, 'Amarillo', ['temporada_id' => $porNombre->id]);
+        $this->pallet('2026-11-24', $this->receta('Tray', 'Cartón'), 35, 'Blanco', ['temporada_id' => $porLocacion->id]);
+
+        $d = $this->datos();
+
+        $fila = $this->fila($d['renglones'], 'Bulk', $this->ab(), 'RPC');
+        $this->assertSame([60, 0, 0, 0, 0, 0, 0], $fila['real']);
+        $this->assertSame([], $d['sin_programa']);
+        $this->assertSame([0, 0, 0, 0, 0, 0, 0], $d['sin_clasificar']['cajas']);
+        $this->assertSame(0, $d['sin_clasificar']['pallets']);
+        $this->assertSame(60, $d['totales']['real']);
     }
 }

@@ -84,6 +84,18 @@ class Temporada extends Model
     }
 
     /**
+     * Temporadas de prueba: su nombre o su locación dicen «prueba» (sin
+     * distinguir mayúsculas). No hay campo propio; basta con nombrarlas así.
+     * Incluye las borradas (una temporada de prueba borrada sigue siendo de prueba).
+     */
+    public function scopeDePrueba($query)
+    {
+        return $query->withTrashed()->where(fn ($q) => $q
+            ->whereRaw("LOWER(nombre) LIKE '%prueba%'")
+            ->orWhereRaw("LOWER(COALESCE(locacion, '')) LIKE '%prueba%'"));
+    }
+
+    /**
      * Relación con Cultivo
      */
     public function cultivo()
