@@ -750,6 +750,8 @@ class ProcesoEmpaqueController extends Controller
             $reglas['rezagas_bins'] = 'nullable|array|max:10';
             $reglas['rezagas_bins.*.tipo_carga_id'] = 'required|integer';
             $reglas['rezagas_bins.*.bins'] = 'required|integer|min:1';
+            // Tipo de rezaga elegido aparte del bin; en el cierre no hay cuarto frío.
+            $reglas['rezagas_bins.*.clase_rezaga'] = 'nullable|in:hoja,fresco';
         }
 
         $validated = $request->validate($reglas);
@@ -776,6 +778,7 @@ class ProcesoEmpaqueController extends Controller
                             (int) $renglon['tipo_carga_id'],
                             (int) $renglon['bins'],
                             ['hoja', 'fresco'],
+                            $renglon['clase_rezaga'] ?? null,
                         );
                     } catch (ValidationException $e) {
                         $errores = [];

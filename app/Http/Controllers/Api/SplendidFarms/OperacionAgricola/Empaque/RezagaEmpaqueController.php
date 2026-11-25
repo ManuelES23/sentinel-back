@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\RezagaEmpaque;
 use App\Models\ProcesoEmpaque;
 use App\Models\Temporada;
+use App\Models\TipoCarga;
 use App\Services\Empaque\RezagaEnBins;
 use Illuminate\Validation\ValidationException;
 use Illuminate\Http\JsonResponse;
@@ -232,6 +233,9 @@ class RezagaEmpaqueController extends Controller
             'fecha' => 'required|date',
             'tipo_carga_id' => 'required|integer',
             'cantidad_bins' => 'required|integer|min:1',
+            // Tipo de rezaga elegido aparte del bin (fresco = «Producto» en pantalla).
+            // Sin él se usa la clase propia del bin (bins de rezaga dedicados).
+            'clase_rezaga' => 'nullable|in:hoja,fresco,cuarto_frio',
             // 'tarima' = captura bin por bin de la pestaña Tarimas; solo cambia cómo se lista y se imprime.
             'modo_registro' => 'nullable|in:general,tarima',
             'motivo' => 'nullable|string',
@@ -246,7 +250,10 @@ class RezagaEmpaqueController extends Controller
             $temporada,
             (int) $validated['tipo_carga_id'],
             (int) $validated['cantidad_bins'],
+            TipoCarga::CLASES_REZAGA,
+            $validated['clase_rezaga'] ?? null,
         ));
+        unset($datos['clase_rezaga']);
 
         // RezagaEnBins::atributos devuelve 'general'; la captura por tarima lo conserva.
         $datos['modo_registro'] = $validated['modo_registro'] ?? 'general';
@@ -277,6 +284,7 @@ class RezagaEmpaqueController extends Controller
             'fecha' => 'sometimes|date',
             'tipo_carga_id' => 'sometimes|integer',
             'cantidad_bins' => 'sometimes|integer|min:1',
+            'clase_rezaga' => 'sometimes|nullable|in:hoja,fresco,cuarto_frio',
             'motivo' => 'nullable|string',
             'status' => 'nullable|in:pendiente,vendida,destruida',
             'observaciones' => 'nullable|string',
@@ -289,20 +297,38 @@ class RezagaEmpaqueController extends Controller
         $bins = (int) ($validated['cantidad_bins'] ?? $rezaga->cantidad_bins);
         $tipoCargaId = (int) ($validated['tipo_carga_id'] ?? $rezaga->tipo_carga_id);
 
+        // Clase de rezaga: la que mande el cliente (se elige aparte del bin) o,
+        // si no manda ninguna y el bin del registro no cambia ni trae clase propia,
+        // la que ya tiene el registro. En cualquier otro caso sin clase explícita
+        // rige el camino legado (la clase del propio bin manda).
+        $claseActual = $rezaga->claseRezagaEfectiva();
+        $claseEnviada = $validated['clase_rezaga'] ?? null;
+        $claseCambia = $claseEnviada !== null && $claseEnviada !== $claseActual;
+        $clase = $claseEnviada;
+        if ($clase === null && $tipoCargaId === (int) $rezaga->tipo_carga_id) {
+            $tipoTieneClase = TipoCarga::query()->whereKey($tipoCargaId)->whereNotNull('clase_rezaga')->exists();
+            $clase = $tipoTieneClase ? null : $claseActual;
+        }
+        unset($validated['clase_rezaga']);
+
         // Solo se recalcula cuando de verdad cambia algo: reenviar los mismos
         // valores (el formulario manda todo) no debe mover los kg guardados si
         // el peso del bin cambió después en el catálogo.
-        if ($bins !== (int) $rezaga->cantidad_bins || $tipoCargaId !== (int) $rezaga->tipo_carga_id) {
+        $cambianBinsOTipo = $bins !== (int) $rezaga->cantidad_bins || $tipoCargaId !== (int) $rezaga->tipo_carga_id;
+
+        if ($cambianBinsOTipo || $claseCambia) {
             if ($rezaga->ventaDetalles()->exists()) {
-                throw ValidationException::withMessages([
-                    'cantidad_bins' => 'Esta rezaga ya tiene ventas; no se pueden cambiar sus bins.',
-                ]);
+                throw ValidationException::withMessages($cambianBinsOTipo
+                    ? ['cantidad_bins' => 'Esta rezaga ya tiene ventas; no se pueden cambiar sus bins.']
+                    : ['clase_rezaga' => 'Esta rezaga ya tiene ventas; no se puede cambiar su tipo de rezaga.']);
             }
 
             $validated = array_merge($validated, RezagaEnBins::atributos(
                 Temporada::findOrFail($rezaga->temporada_id),
                 $tipoCargaId,
                 $bins,
+                TipoCarga::CLASES_REZAGA,
+                $clase,
             ));
         } else {
             unset($validated['cantidad_bins'], $validated['tipo_carga_id']);
