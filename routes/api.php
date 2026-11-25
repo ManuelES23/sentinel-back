@@ -292,6 +292,8 @@ Route::middleware('auth:sanctum')->group(function () {
                 // Ciclos Agrícolas
                 Route::apiResource('ciclos-agricolas', App\Http\Controllers\Api\SplendidFarms\AgricultureCycleController::class);
                 // Temporadas
+                // Opciones de empaque del formulario (antes del apiResource para no chocar con {temporada})
+                Route::get('temporadas/empaques-opciones', [App\Http\Controllers\Api\SplendidFarms\TemporadaController::class, 'empaquesOpciones']);
                 Route::apiResource('temporadas', App\Http\Controllers\Api\SplendidFarms\TemporadaController::class);
                 Route::post('temporadas/{id}/cerrar', [App\Http\Controllers\Api\SplendidFarms\TemporadaController::class, 'cerrar']);
                 Route::get('temporadas/{id}/resumen', [App\Http\Controllers\Api\SplendidFarms\TemporadaController::class, 'resumen']);
