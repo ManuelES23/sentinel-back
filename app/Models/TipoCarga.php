@@ -70,7 +70,17 @@ class TipoCarga extends Model
      */
     public function mapeoRezaga(): ?array
     {
-        return match ($this->clase_rezaga) {
+        return static::mapeoDeClase($this->clase_rezaga);
+    }
+
+    /**
+     * Tipo y subtipo de rezaga de una clase (hoja|fresco|cuarto_frio), o null
+     * si la clase es desconocida. La usan tanto la clase propia del tipo de
+     * carga como la clase elegida aparte en la captura.
+     */
+    public static function mapeoDeClase(?string $clase): ?array
+    {
+        return match ($clase) {
             'hoja' => ['tipo_rezaga' => 'produccion', 'subtipo_rezaga' => 'hoja'],
             'fresco' => ['tipo_rezaga' => 'produccion', 'subtipo_rezaga' => 'producto'],
             'cuarto_frio' => ['tipo_rezaga' => 'cuarto_frio', 'subtipo_rezaga' => 'producto'],

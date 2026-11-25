@@ -191,13 +191,15 @@ class VentaRezagaBinsTest extends TestCase
         $this->assertSame(0, SalidaRezagaEmpaqueDetalle::count());
     }
 
-    public function test_rezaga_sin_clase_o_bin_de_campo_no_se_vende(): void
+    public function test_rezaga_sin_bin_ligado_no_se_vende(): void
     {
+        // La clase ya no depende de que el bin tenga clase propia (ver
+        // ClaseRezagaIndependienteTest: un bin de campo con la rezaga ya clasificada
+        // sí se vende); una rezaga sin ningún bin ligado sigue sin poder venderse.
         $proceso = $this->crearProcesoBins(10);
-        $campo = $this->crearRezagaBins($proceso, ['tipo_carga_id' => $this->binCampo->id]);
         $sinTipo = $this->crearRezagaBins($proceso, ['tipo_carga_id' => null]);
 
-        foreach ([$campo, $sinTipo] as $rezaga) {
+        foreach ([$sinTipo] as $rezaga) {
             $this->postJson(self::URL, $this->cuerpoVenta([
                 'detalles' => [['rezaga_id' => $rezaga->id, 'bins' => 1]],
             ]))->assertStatus(422)->assertJsonValidationErrors(['detalles']);
