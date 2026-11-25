@@ -58,6 +58,33 @@ class RezagaEnBinsTest extends TestCase
         $this->assertStringStartsWith('REZ-', $rezaga->folio_rezaga);
     }
 
+    public function test_store_en_bins_como_tarima_conserva_el_modo_y_calcula_kg(): void
+    {
+        $this->postJson(self::BASE.'/rezaga', $this->cuerpoBins([
+            'cantidad_bins' => 1,
+            'modo_registro' => 'tarima',
+        ]))
+            ->assertCreated()
+            ->assertJsonPath('data.modo_registro', 'tarima')
+            ->assertJsonPath('data.cantidad_bins', 1)
+            ->assertJsonPath('data.subtipo_rezaga', 'hoja');
+
+        $rezaga = RezagaEmpaque::firstOrFail();
+        $this->assertSame('tarima', $rezaga->modo_registro);
+        $this->assertSame(150.0, (float) $rezaga->cantidad_kg);
+        $this->assertNull($rezaga->total_cajas);
+        $this->assertNull($rezaga->peso_bascula_kg);
+    }
+
+    public function test_store_en_bins_rechaza_un_modo_registro_desconocido(): void
+    {
+        $this->postJson(self::BASE.'/rezaga', $this->cuerpoBins(['modo_registro' => 'otro']))
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['modo_registro']);
+
+        $this->assertSame(0, RezagaEmpaque::count());
+    }
+
     public function test_store_en_bins_mapea_cuarto_frio_y_fresco(): void
     {
         $this->postJson(self::BASE.'/rezaga', $this->cuerpoBins([
