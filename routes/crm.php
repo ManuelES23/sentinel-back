@@ -224,6 +224,9 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('cotizaciones/{cotizacion}', [
         App\Http\Controllers\Api\CRM\CotizacionController::class, 'show'
     ]);
+    Route::get('cotizaciones/{cotizacion}/versiones', [
+        App\Http\Controllers\Api\CRM\CotizacionController::class, 'versiones'
+    ]);
     Route::put('cotizaciones/{cotizacion}', [
         App\Http\Controllers\Api\CRM\CotizacionController::class, 'update'
     ]);
