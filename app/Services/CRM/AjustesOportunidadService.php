@@ -286,7 +286,7 @@ class AjustesOportunidadService
      *
      * @return array<string, int|float>
      */
-    private function cifras(int $vendido, int $rechazado, int $precio, int $cajasVendidas, int $cajasRechazadas): array
+    public function cifras(int $vendido, int $rechazado, int $precio, int $cajasVendidas, int $cajasRechazadas): array
     {
         return [
             'vendido' => $vendido / 100,
@@ -358,7 +358,13 @@ class AjustesOportunidadService
     /** Factor del descuento global de la venta en diezmilésimas: 10 % → 9000. */
     private function factor(CrmOportunidadVenta $venta): int
     {
-        return 10000 - (int) round((float) $venta->descuento_global_pct * 100);
+        return $this->factorDe($venta->descuento_global_pct);
+    }
+
+    /** Lo mismo para un porcentaje suelto (VentaMetaService lo usa al agregar). */
+    public function factorDe(mixed $descuentoPct): int
+    {
+        return 10000 - (int) round((float) $descuentoPct * 100);
     }
 
     private function centavos(mixed $monto): int
@@ -475,7 +481,7 @@ class AjustesOportunidadService
     }
 
     /** f(bruto) = bruto × factor / 10000 redondeado al centavo (half-up, bruto ≥ 0); igual que VentaOportunidadService::calcularMonto. */
-    private function neto(int $bruto, int $factor): int
+    public function neto(int $bruto, int $factor): int
     {
         return intdiv($bruto * $factor + 5000, 10000);
     }

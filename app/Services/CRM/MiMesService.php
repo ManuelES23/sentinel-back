@@ -27,7 +27,7 @@ class MiMesService
             ->where('anio', $rango->inicio->year)
             ->exists();
 
-        return [
+        $mes = [
             'mes' => $rango->inicio->month,
             'anio' => $rango->inicio->year,
             'meta' => $tieneMeta ? $metas['metaMonto'] : null,
@@ -35,5 +35,12 @@ class MiMesService
             'pronostico' => $metas['pronostico'],
             'embudo' => $this->embudos->conversion($empresaId, $vendedor->id, $rango),
         ];
+
+        // Cascada vendido → rechazado → en firme del mes, solo SBP; es la misma que la del dashboard.
+        if (isset($metas['venta'])) {
+            $mes['venta'] = $metas['venta'];
+        }
+
+        return $mes;
     }
 }

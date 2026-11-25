@@ -99,7 +99,9 @@ class DashboardResumenService
         $montoReal = $this->ventas($empresaId, $vendedorId, $rango->inicio, $rango->fin);
         $terminado = ! $rango->enCurso();
 
-        return [
+        $venta = app(VentaMetaService::class)->para($empresaId, $vendedorId, $rango->inicio, $rango->fin);
+
+        $cumplimiento = [
             'metaMonto' => (float) ($metas->meta_monto ?? 0),
             'metaClientes' => (int) ($metas->meta_clientes ?? 0),
             'metaActividades' => (int) ($metas->meta_actividades ?? 0),
@@ -112,6 +114,13 @@ class DashboardResumenService
             'pronostico' => $terminado ? $montoReal : round($montoReal + $this->ponderadoPorCerrar($empresaId, $vendedorId, $rango), 2),
             'periodoTerminado' => $terminado,
         ];
+
+        // Solo SBP: sin cotización por caja la respuesta no cambia (spec 2026-11-25 §8).
+        if ($venta !== null) {
+            $cumplimiento['venta'] = $venta;
+        }
+
+        return $cumplimiento;
     }
 
     public function cotizaciones(int $empresaId, ?int $vendedorId, RangoDashboard $rango, bool $comparar): array
