@@ -232,6 +232,8 @@ class RezagaEmpaqueController extends Controller
             'fecha' => 'required|date',
             'tipo_carga_id' => 'required|integer',
             'cantidad_bins' => 'required|integer|min:1',
+            // 'tarima' = captura bin por bin de la pestaña Tarimas; solo cambia cómo se lista y se imprime.
+            'modo_registro' => 'nullable|in:general,tarima',
             'motivo' => 'nullable|string',
             'observaciones' => 'nullable|string',
         ]);
@@ -246,6 +248,8 @@ class RezagaEmpaqueController extends Controller
             (int) $validated['cantidad_bins'],
         ));
 
+        // RezagaEnBins::atributos devuelve 'general'; la captura por tarima lo conserva.
+        $datos['modo_registro'] = $validated['modo_registro'] ?? 'general';
         $datos['status'] = 'pendiente';
         $datos['created_by'] = $request->user()->id;
         $datos['folio_rezaga'] = $this->generarFolio($datos);
