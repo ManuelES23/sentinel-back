@@ -4,7 +4,10 @@ namespace Tests\Feature\SplendidFarms\Administration\Planeacion;
 
 use App\Models\Application;
 use App\Models\Branch;
+use App\Models\CierreCosecha;
+use App\Models\Consignatario;
 use App\Models\Cultivo;
+use App\Models\EmbarqueEmpaque;
 use App\Models\Enterprise;
 use App\Models\Entity;
 use App\Models\EntityType;
@@ -14,6 +17,7 @@ use App\Models\Planeacion\BodegaDestino;
 use App\Models\Planeacion\GrupoBalance;
 use App\Models\Planeacion\Presentacion;
 use App\Models\Planeacion\ProgramaCorte;
+use App\Models\Planeacion\ProgramaEmbarque;
 use App\Models\Planeacion\ProgramaNecesidad;
 use App\Models\Planeacion\ProgramaSemanal;
 use App\Models\Planeacion\ProgramaSobrante;
@@ -24,6 +28,7 @@ use App\Models\ProduccionEmpaque;
 use App\Models\ProduccionEmpaqueDetalle;
 use App\Models\Productor;
 use App\Models\Recipe;
+use App\Models\SalidaCampoCosecha;
 use App\Models\Temporada;
 use App\Models\User;
 use App\Models\Variedad;
@@ -59,6 +64,10 @@ trait ConstruyePrograma
     private ?int $plantaEmpaqueId = null;
 
     private int $contadorPlantas = 0;
+
+    private int $contadorEmbarques = 0;
+
+    private int $contadorTemporadas = 0;
 
     private function correrMigracion(string $archivo): void
     {
@@ -200,6 +209,14 @@ trait ConstruyePrograma
         $tableroId = DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'tablero-semanal')->value('id');
         if (! DB::table('submodule_permission_types')->where('submodule_id', $tableroId)->where('slug', 'enviar')->exists()) {
             $this->correrMigracion('2026_11_21_100000_add_enviar_permission_to_tablero_semanal.php');
+        }
+
+        // «Avance de cosecha» y «Avance de embarques» salen de una migración; `acordar`, de otra.
+        if (! DB::table('submodules')->where('module_id', $moduloId)->where('slug', 'avance-cosecha')->exists()) {
+            $this->correrMigracion('2026_11_25_110000_add_avance_cosecha_y_embarques_submodulos.php');
+        }
+        if (! DB::table('submodule_permission_types')->where('submodule_id', $tableroId)->where('slug', 'acordar')->exists()) {
+            $this->correrMigracion('2026_11_25_120000_add_acordar_permission_to_tablero_semanal.php');
         }
 
         $usuario = User::factory()->create();
@@ -412,6 +429,106 @@ trait ConstruyePrograma
             'variedad_id' => $this->variedades[$variedad]->id,
             'dia' => $dia,
             'hectareas' => $hectareas,
+        ]);
+    }
+
+    /**
+     * Cierre de cosecha de una etapa (o sin etapa) con sus hectáreas cosechadas.
+     * Temporada del elote y estado `cerrado` salvo que `$extra` diga otra cosa.
+     */
+    protected function cierre(?Etapa $etapa, string $fecha, float $ha, array $extra = []): CierreCosecha
+    {
+        return CierreCosecha::create(array_merge([
+            'temporada_id' => $this->temporada->id,
+            'etapa_id' => $etapa?->id,
+            'lote_id' => $etapa?->lote_id,
+            'fecha_inicio' => $fecha,
+            'fecha_cierre' => $fecha,
+            'superficie_cosechada' => $ha,
+            'status' => 'cerrado',
+        ], $extra));
+    }
+
+    /**
+     * Salida de campo (kilos cosechados ese día) de una etapa o sin etapa. Lleva
+     * lo obligatorio del esquema actual (temporada, fecha y cantidad); no está eliminada.
+     */
+    protected function salidaCampo(?Etapa $etapa, string $fecha, float $kg, array $extra = []): SalidaCampoCosecha
+    {
+        return SalidaCampoCosecha::create(array_merge([
+            'temporada_id' => $this->temporada->id,
+            'etapa_id' => $etapa?->id,
+            'lote_id' => $etapa?->lote_id,
+            'variedad_id' => $etapa?->variedad_id,
+            'fecha' => $fecha,
+            'cantidad' => 1,
+            'peso_neto_kg' => $kg,
+            'status' => 'registrada',
+            'eliminado' => false,
+        ], $extra));
+    }
+
+    /** Otro cultivo con su temporada abierta (1 nov 2026 – 31 may 2027), para probar el aislamiento por cultivo. */
+    protected function otroCultivo(string $nombre = 'Tomate'): Temporada
+    {
+        $this->contadorTemporadas++;
+        $autor = $this->autor ?? User::factory()->create();
+        $cultivo = Cultivo::create(['nombre' => $nombre]);
+
+        return Temporada::create([
+            'cultivo_id' => $cultivo->id,
+            'nombre' => "{$nombre} 2026-2027",
+            'locacion' => 'Culiacán',
+            'folio_temporada' => $cultivo->id.'-'.str_pad((string) (100 + $this->contadorTemporadas), 3, '0', STR_PAD_LEFT),
+            'año_inicio' => 2026,
+            'año_fin' => 2027,
+            'fecha_inicio' => '2026-11-01',
+            'fecha_fin' => '2027-05-31',
+            'estado' => 'abierta',
+            'user_id' => $autor->id,
+        ]);
+    }
+
+    /** Celda de embarque programado: `$cargas` cargas del tipo (`full`|`sencillo`) hacia la bodega el día `$dia` (0 = lunes). */
+    protected function cargaPlan(ProgramaSemanal $p, string $bodega, string $tipo, int $dia, int $cargas): ProgramaEmbarque
+    {
+        return ProgramaEmbarque::create([
+            'programa_id' => $p->id,
+            'cultivo_id' => $this->cultivo->id,
+            'bodega_id' => $this->bodega($bodega)->id,
+            'tipo' => $tipo,
+            'dia' => $dia,
+            'cargas' => $cargas,
+        ]);
+    }
+
+    /**
+     * Embarque real de la planta de pruebas (propia), con folio único y 1000 cajas
+     * salvo que `$extra` diga otra cosa. `$destino` es el texto libre del destino.
+     */
+    protected function embarqueReal(string $fecha, string $status, ?string $destino, array $extra = []): EmbarqueEmpaque
+    {
+        $this->contadorEmbarques++;
+
+        return EmbarqueEmpaque::create(array_merge([
+            'temporada_id' => $this->temporada->id,
+            'entity_id' => $this->plantaEmpaqueId(),
+            'folio_embarque' => "EMB-PLAN-{$this->contadorEmbarques}",
+            'tipo_venta' => 'exportacion',
+            'fecha_embarque' => $fecha,
+            'status' => $status,
+            'destino' => $destino,
+            'total_cajas' => 1000,
+        ], $extra));
+    }
+
+    /** Consignatario de Splendid Farms (catálogo de destinos de los embarques), con su bodega. */
+    protected function consignatario(string $nombre, ?string $bodega): Consignatario
+    {
+        return Consignatario::create([
+            'enterprise_id' => $this->empresaSfId(),
+            'nombre' => $nombre,
+            'bodega' => $bodega,
         ]);
     }
 
