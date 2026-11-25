@@ -152,6 +152,71 @@ class VersionesCotizacionTest extends TestCase
         $this->assertEquals(3840.0, (float) $this->oportunidad->fresh()->monto_esperado);
     }
 
+    public function test_una_enviada_sin_versiones_guarda_su_contenido_previo_como_version_1(): void
+    {
+        $this->sbp();
+        // Enviada antes del despliegue: se crea directo, sin pasar por enviar().
+        $c = $this->crear(7.5);
+        $c->update(['estado' => 'enviado']);
+        $this->assertSame(0, $c->versiones()->count());
+
+        $this->editar($c, 8.0, 'El cliente pidió mejor precio')->assertOk();
+
+        $versiones = $c->versiones()->orderBy('numero')->get();
+        $this->assertCount(2, $versiones);
+        $v1 = $versiones[0];
+        $this->assertSame(1, $v1->numero);
+        $this->assertNull($v1->motivo);
+        $this->assertNull($v1->user_id);
+        $this->assertEquals(7.5, $v1->renglones[0]['precio_unitario']);
+        $this->assertEquals(3600.0, (float) $v1->total);
+        $v2 = $versiones[1];
+        $this->assertSame(2, $v2->numero);
+        $this->assertSame('El cliente pidió mejor precio', $v2->motivo);
+        $this->assertSame($this->actingUser->id, $v2->user_id);
+        $this->assertEquals(8.0, $v2->renglones[0]['precio_unitario']);
+        $this->assertEquals(3840.0, (float) $v2->total);
+
+        // El endpoint de versiones tolera motivo y usuario nulos.
+        $res = $this->withHeaders($this->crmHeaders())->getJson("/api/crm/cotizaciones/{$c->id}/versiones")->assertOk();
+        $this->assertNull($res->json('data.1.motivo'));
+        $this->assertNull($res->json('data.1.usuario'));
+        $this->assertSame(2, $res->json('data.0.numero'));
+    }
+
+    public function test_una_enviada_con_versiones_solo_agrega_una_version_al_editar(): void
+    {
+        $this->sbp();
+        $c = $this->enviada(7.5);
+        $this->assertSame(1, $c->versiones()->count());
+
+        $this->editar($c, 8.0, 'Primer cambio')->assertOk();
+        $this->assertSame(2, $c->versiones()->count());
+        $this->editar($c, 8.5, 'Segundo cambio')->assertOk();
+
+        $versiones = $c->versiones()->orderBy('numero')->get();
+        $this->assertSame([1, 2, 3], $versiones->pluck('numero')->all());
+        $this->assertSame($this->actingUser->id, $versiones[0]->user_id);
+        $this->assertEquals(7.5, $versiones[0]->renglones[0]['precio_unitario']);
+    }
+
+    public function test_rechazar_una_cotizacion_que_ya_no_esta_enviada_da_422_y_no_cambia_el_estado(): void
+    {
+        $this->sbp();
+        $c = $this->enviada();
+        $c->update(['estado' => 'aprobado']);
+        CrmOportunidadVenta::create([
+            'empresa_id' => $this->enterprise->id, 'oportunidad_id' => $this->oportunidad->id,
+            'cotizacion_id' => $c->id, 'vigente' => true, 'descuento_global_pct' => 0,
+            'registrada_por' => $this->actingUser->id,
+        ]);
+
+        $this->withHeaders($this->crmHeaders())->patchJson("/api/crm/cotizaciones/{$c->id}/rechazar")
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Solo una cotización enviada se puede rechazar.');
+        $this->assertSame('aprobado', $c->fresh()->estado);
+    }
+
     public function test_no_se_edita_una_cotizacion_con_venta_registrada(): void
     {
         $this->sbp();

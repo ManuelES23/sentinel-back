@@ -82,7 +82,7 @@ return new class extends Migration
                 $table->foreignId('user_id')->nullable()->constrained('users')->nullOnDelete();
                 $table->timestamp('anulado_at')->nullable();
                 $table->foreignId('anulado_por')->nullable()->constrained('users')->nullOnDelete();
-                $table->string('motivo_anulacion', 500)->nullable();
+                $table->text('motivo_anulacion')->nullable();
                 $table->timestamps();
                 $table->index(['oportunidad_id', 'anulado_at'], 'crm_oportunidad_ajustes_oportunidad_anulado_index');
             });

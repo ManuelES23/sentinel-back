@@ -583,6 +583,20 @@ class AjustesVentaTest extends TestCase
         $this->assertEquals(0.0, $this->monto());
     }
 
+    public function test_anular_con_un_motivo_largo_lo_guarda_completo(): void
+    {
+        $this->venderElNueve();
+        $this->ajustar($this->rechazo(1000))->assertCreated();
+        $ultimo = CrmOportunidadAjuste::orderByDesc('id')->firstOrFail();
+        $motivo = str_repeat('Motivo largo ', 70); // 910 caracteres
+        $motivo = rtrim(substr($motivo, 0, 899)).'.'; // 900, sin espacios al final
+
+        $this->anular($ultimo, ['motivo' => $motivo])->assertOk();
+
+        $this->assertSame(900, mb_strlen($ultimo->fresh()->motivo_anulacion));
+        $this->assertSame($motivo, $ultimo->fresh()->motivo_anulacion);
+    }
+
     public function test_anular_uno_que_no_es_el_ultimo_da_422(): void
     {
         $this->venderElNueve();

@@ -209,7 +209,10 @@ class VentaOportunidadService
             [$i, $r] = $porLinea[$linea->id];
             $clave = "renglones.$i";
 
-            $vendido = filter_var($r['vendido'] ?? null, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+            // `vendido` es obligatorio: ausente o null no cuenta como «no vendido».
+            $vendido = array_key_exists('vendido', $r) && $r['vendido'] !== null
+                ? filter_var($r['vendido'], FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE)
+                : null;
             if ($vendido === null) {
                 $errores["$clave.vendido"] = self::MENSAJE_VENDIDO;
 
@@ -254,15 +257,16 @@ class VentaOportunidadService
             ];
 
             if ($vendido) {
-                // Sin cantidad o precio se toma lo cotizado (prellenado de la pantalla).
-                $cantidad = ($r['cantidad'] ?? null) === null
+                // Con la clave AUSENTE se toma lo cotizado (prellenado de la pantalla);
+                // un null explícito es un dato inválido, no un «usa lo cotizado».
+                $cantidad = ! array_key_exists('cantidad', $r)
                     ? $this->entero($linea->cantidad)
                     : $this->entero($r['cantidad']);
                 if ($cantidad === null || $cantidad < 1 || $cantidad > self::CAJAS_MAXIMAS) {
                     $errores["$clave.cantidad"] = self::MENSAJE_CAJAS;
                 }
 
-                $precio = ($r['precio'] ?? null) === null ? (float) $linea->precio_unitario : $this->precio($r['precio']);
+                $precio = ! array_key_exists('precio', $r) ? (float) $linea->precio_unitario : $this->precio($r['precio']);
                 if ($precio === null) {
                     $errores["$clave.precio"] = self::MENSAJE_PRECIO;
                 }

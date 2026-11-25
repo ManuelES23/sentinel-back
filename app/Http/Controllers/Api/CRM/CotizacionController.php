@@ -274,6 +274,13 @@ class CotizacionController extends CrmBaseController
                 if ($mensaje !== null || $actual->estado !== $cotizacion->estado) {
                     return $mensaje ?? self::MENSAJE_SOLO_BORRADOR;
                 }
+
+                // Una enviada de antes de las versiones no tiene ninguna: se guarda
+                // su contenido previo (sin motivo ni usuario) como versión 1 ANTES
+                // de editarla, para no perder lo que tenía.
+                if ($conVersion && ! $actual->versiones()->exists()) {
+                    $this->versiones->registrar($actual, null, null);
+                }
             }
 
             $datos = collect($validated)->except(['lineas', 'descuento_global_pct', 'motivo_cambio'])->all();
@@ -381,17 +388,29 @@ class CotizacionController extends CrmBaseController
             return $this->jsonError('Solo una cotización enviada se puede rechazar.', 422);
         }
 
-        $oportunidad = DB::transaction(function () use ($cotizacion) {
+        $resultado = DB::transaction(function () use ($cotizacion) {
             // Bloquea la oportunidad (si sigue existiendo) antes de tocar su monto.
             $oportunidad = CrmOportunidad::whereKey($cotizacion->oportunidad_id)->lockForUpdate()->first();
+
+            // El estado se revisa de nuevo con el bloqueo: una venta o un cambio
+            // concurrentes no pueden quedar pisados con «rechazado».
+            $actual = CrmCotizacion::whereKey($cotizacion->id)->lockForUpdate()->firstOrFail();
+            if ($actual->estado !== 'enviado') {
+                return null;
+            }
 
             $cotizacion->update(['estado' => 'rechazado']);
             if ($oportunidad) {
                 $this->monto->alRechazar($oportunidad);
             }
 
-            return $oportunidad;
+            return [$oportunidad];
         });
+
+        if ($resultado === null) {
+            return $this->jsonError('Solo una cotización enviada se puede rechazar.', 422);
+        }
+        [$oportunidad] = $resultado;
 
         $this->difundirMontoSiCambio($oportunidad);
         $this->difundir(new CotizacionUpdated('updated', $cotizacion->toArray()));

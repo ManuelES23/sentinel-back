@@ -215,6 +215,56 @@ class RegistrarVentaTest extends TestCase
         $this->assertEquals(62000.00, (float) $this->oportunidad->fresh()->monto_esperado);
     }
 
+    public function test_un_null_explicito_en_cantidad_o_precio_de_un_vendido_da_422(): void
+    {
+        $c = $this->enviada();
+
+        $this->registrar($c, $this->soloElNueve($c, ['cantidad' => null]))
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['renglones.1.cantidad']);
+        $this->registrar($c, $this->soloElNueve($c, ['precio' => null]))
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['renglones.1.precio']);
+
+        $this->assertSame(0, CrmOportunidadVenta::count());
+        $this->assertSame('enviado', $c->fresh()->estado);
+    }
+
+    public function test_vendido_ausente_o_null_da_422_en_ese_renglon(): void
+    {
+        $c = $this->enviada();
+        $id = $this->ids($c);
+
+        foreach ([false, true] as $conNull) {
+            $sinVendido = ['linea_id' => $id[9], 'cantidad' => 5000, 'precio' => 28.50];
+            if ($conNull) {
+                $sinVendido['vendido'] = null;
+            }
+            $this->registrar($c, ['renglones' => [
+                ['linea_id' => $id[8], 'vendido' => false, 'motivo_rechazo_id' => $this->motivoPrecio->id],
+                $sinVendido,
+                ['linea_id' => $id[10], 'vendido' => false, 'motivo_rechazo_id' => $this->motivoMadurez->id],
+            ]])->assertStatus(422)->assertJsonValidationErrors(['renglones.1.vendido']);
+        }
+
+        $this->assertSame(0, CrmOportunidadVenta::count());
+        $this->assertSame('negociacion', $this->oportunidad->fresh()->etapa);
+    }
+
+    public function test_un_no_vendido_acepta_cantidad_y_precio_nulos_o_ausentes(): void
+    {
+        $c = $this->enviada();
+        $id = $this->ids($c);
+
+        $this->registrar($c, ['renglones' => [
+            ['linea_id' => $id[8], 'vendido' => false, 'cantidad' => null, 'precio' => null, 'motivo_rechazo_id' => $this->motivoPrecio->id],
+            ['linea_id' => $id[9], 'vendido' => true, 'cantidad' => 5000, 'precio' => 28.50],
+            ['linea_id' => $id[10], 'vendido' => false, 'motivo_rechazo_id' => $this->motivoMadurez->id],
+        ]])->assertOk();
+
+        $this->assertEquals(142500.00, (float) $this->oportunidad->fresh()->monto_esperado);
+    }
+
     public function test_ningun_renglon_vendido_pierde_la_oportunidad(): void
     {
         $c = $this->enviada();
