@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque;
 
 use App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\Concerns\AlternativasDeConsumo;
 use App\Http\Controllers\Controller;
+use App\Models\DestinoEmbarque;
 use App\Models\EmbarqueEmpaque;
 use App\Models\PreEmbarqueEmpaque;
 use App\Models\ProduccionEmpaque;
@@ -153,6 +154,8 @@ class EmbarqueEmpaqueController extends Controller
             'cliente' => 'nullable|string|max:200',
             'destino' => 'nullable|string|max:200',
             'destino_consignatario_id' => 'nullable|exists:consignatarios,id',
+            // Destino del catálogo (obligatorio en las altas): su nombre se copia a `destino`.
+            'destino_embarque_id' => 'required|integer',
 
             // Transporte
             'transportista' => 'nullable|string|max:150',
@@ -177,8 +180,11 @@ class EmbarqueEmpaqueController extends Controller
             'pallets' => 'required|array|min:1',
             'pallets.*.id' => 'required|exists:produccion_empaque,id',
             'pallets.*.posicion_carga' => 'nullable|integer|min:1',
+        ], [
+            'destino_embarque_id.required' => 'Elige el destino del embarque.',
         ]);
 
+        $validated['destino'] = $this->destinoActivo((int) $validated['destino_embarque_id'])->nombre;
         $validated['status'] = $validated['status'] ?? 'programado';
         $validated['created_by'] = $request->user()->id;
 
@@ -349,6 +355,71 @@ class EmbarqueEmpaqueController extends Controller
             'message' => 'Embarque actualizado',
             'data' => $embarque,
         ]);
+    }
+
+    /**
+     * Asigna o corrige el destino de un embarque (también los capturados antes del
+     * catálogo). Copia el nombre a `destino` para el PDF, la búsqueda y el Excel.
+     */
+    public function cambiarDestino(Request $request, EmbarqueEmpaque $embarque): JsonResponse
+    {
+        $validated = $request->validate([
+            'destino_embarque_id' => 'required|integer',
+        ], [
+            'destino_embarque_id.required' => 'Elige el destino del embarque.',
+        ]);
+
+        $destino = $this->destinoActivo((int) $validated['destino_embarque_id']);
+        $embarque->update(['destino_embarque_id' => $destino->id, 'destino' => $destino->nombre]);
+
+        return $this->respuestaCorta($embarque, 'Destino actualizado');
+    }
+
+    /**
+     * Avanza (o regresa) el estado del embarque. «Cancelado» no se elige aquí: para
+     * cancelar se elimina el embarque, que regresa sus tarimas a un pre-embarque.
+     */
+    public function cambiarEstado(Request $request, EmbarqueEmpaque $embarque): JsonResponse
+    {
+        $validated = $request->validate([
+            'status' => 'required|in:'.implode(',', EmbarqueEmpaque::ESTADOS_EDITABLES),
+        ], [
+            'status.required' => 'Elige el estado del embarque.',
+            'status.in' => 'Ese estado no se puede elegir. Para cancelar un embarque, elimínalo.',
+        ]);
+
+        $embarque->update(['status' => $validated['status']]);
+
+        return $this->respuestaCorta($embarque, 'Estado actualizado');
+    }
+
+    private function respuestaCorta(EmbarqueEmpaque $embarque, string $mensaje): JsonResponse
+    {
+        $embarque->refresh();
+
+        return response()->json([
+            'success' => true,
+            'message' => $mensaje,
+            'data' => [
+                'id' => $embarque->id,
+                'status' => $embarque->status,
+                'destino' => $embarque->destino,
+                'destino_embarque_id' => $embarque->destino_embarque_id,
+            ],
+        ]);
+    }
+
+    /** Destino activo del catálogo o 422 bajo `destino_embarque_id`. */
+    private function destinoActivo(int $id): DestinoEmbarque
+    {
+        $destino = DestinoEmbarque::find($id);
+        if (! $destino || ! $destino->is_active) {
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'destino_embarque_id' => $destino ? 'Ese destino está desactivado.' : 'Ese destino no existe.',
+            ]);
+        }
+
+        return $destino;
     }
 
     public function destroy(Request $request, EmbarqueEmpaque $embarque): JsonResponse

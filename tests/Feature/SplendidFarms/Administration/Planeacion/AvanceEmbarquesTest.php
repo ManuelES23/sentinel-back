@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\SplendidFarms\Administration\Planeacion;
 
+use App\Models\DestinoEmbarque;
 use App\Models\Planeacion\ProgramaSemanal;
 use App\Services\Planeacion\PlantasAvance;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -153,6 +154,54 @@ class AvanceEmbarquesTest extends TestCase
         $this->assertSame([2, 2, 1, 0, 0, 0, 0], $this->fila($d['renglones'], 'Texas')['real']);
         $this->assertSame([], $d['sin_programa']);
         $this->assertSame([0, 0, 0, 0, 0, 0, 0], $d['sin_destino']['cargas']);
+    }
+
+    private function destinoCatalogo(string $nombre, ?string $bodegaPlaneacion = null, bool $activo = true): DestinoEmbarque
+    {
+        return DestinoEmbarque::create([
+            'enterprise_id' => $this->empresaSfId(),
+            'nombre' => $nombre,
+            'plan_bodega_destino_id' => $bodegaPlaneacion ? $this->bodega($bodegaPlaneacion)->id : null,
+            'is_active' => $activo,
+        ]);
+    }
+
+    public function test_destino_del_catalogo_ligado_cuenta_en_su_bodega_aunque_el_nombre_no_coincida(): void
+    {
+        $p = $this->programa();
+        $this->cargaPlan($p, 'Texas', 'full', 0, 2);
+        $mcallen = $this->destinoCatalogo('McAllen', 'Texas');
+        // Desactivado después: sigue contando (el embarque ya salió a ese destino).
+        $pharr = $this->destinoCatalogo('Pharr', 'Texas', false);
+
+        $this->embarqueReal('2026-11-23', 'entregado', 'McAllen', ['destino_embarque_id' => $mcallen->id, 'total_cajas' => 900]);
+        $this->embarqueReal('2026-11-23', 'en_transito', 'Pharr', ['destino_embarque_id' => $pharr->id, 'total_cajas' => 800]);
+
+        $d = $this->datos();
+
+        $texas = $this->fila($d['renglones'], 'Texas');
+        $this->assertSame([2, 0, 0, 0, 0, 0, 0], $texas['real']);
+        $this->assertSame([1700, 0, 0, 0, 0, 0, 0], $texas['cajas']);
+        $this->assertSame([0, 0, 0, 0, 0, 0, 0], $d['sin_destino']['cargas']);
+    }
+
+    public function test_destino_del_catalogo_sin_liga_empata_por_su_nombre_o_cae_en_sin_destino(): void
+    {
+        $p = $this->programa();
+        $this->cargaPlan($p, 'Texas', 'full', 0, 1);
+        $nogales = $this->destinoCatalogo('Nogales');
+        $chicago = $this->destinoCatalogo('Chicago');
+
+        // El nombre del catálogo manda sobre el texto guardado.
+        $this->embarqueReal('2026-11-24', 'entregado', 'otro', ['destino_embarque_id' => $nogales->id]);
+        $this->embarqueReal('2026-11-25', 'cargando', 'Texas', ['destino_embarque_id' => $chicago->id]);
+
+        $d = $this->datos();
+
+        $this->assertSame([0, 0, 0, 0, 0, 0, 0], $this->fila($d['renglones'], 'Texas')['real']);
+        $this->assertSame([0, 1, 0, 0, 0, 0, 0], $this->fila($d['sin_programa'], 'Nogales')['real']);
+        $this->assertSame([0, 0, 1, 0, 0, 0, 0], $d['sin_destino']['cargas']);
+        $this->assertSame([['destino' => 'Chicago', 'cargas' => 1]], $d['sin_destino']['destinos']);
     }
 
     public function test_destino_reconocido_sin_plan_va_a_sin_programa(): void

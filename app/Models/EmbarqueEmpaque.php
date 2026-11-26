@@ -13,6 +13,9 @@ class EmbarqueEmpaque extends Model
 
     protected $table = 'embarques_empaque';
 
+    /** Estados que se eligen desde la acción «Estado» de la lista (cancelar = eliminar el embarque). */
+    public const ESTADOS_EDITABLES = ['programado', 'cargando', 'en_transito', 'entregado'];
+
     protected $fillable = [
         'temporada_id', 'entity_id', 'folio_embarque', 'manifiesto', 'genera_manifiesto',
         // Datos empresa (snapshot)
@@ -25,7 +28,7 @@ class EmbarqueEmpaque extends Model
         'consigne_direccion', 'consigne_ciudad', 'consigne_pais',
         'consigne_agente_aduana_eua', 'consigne_bodega',
         // Base
-        'tipo_venta', 'cliente', 'destino', 'destino_consignatario_id',
+        'tipo_venta', 'cliente', 'destino', 'destino_consignatario_id', 'destino_embarque_id',
         'fecha_embarque', 'total_pallets', 'total_cajas', 'peso_total_kg', 'peso_bascula_total_kg',
         'codigo_rastreo', 'espacios_caja',
         // Transporte
@@ -45,6 +48,7 @@ class EmbarqueEmpaque extends Model
         'fecha_embarque' => 'date:Y-m-d',
         'genera_manifiesto' => 'boolean',
         'espacios_caja' => 'integer',
+        'destino_embarque_id' => 'integer',
     ];
 
     public function temporada() { return $this->belongsTo(Temporada::class); }
@@ -57,6 +61,7 @@ class EmbarqueEmpaque extends Model
     }
     public function consignatario() { return $this->belongsTo(Consignatario::class); }
     public function destinoConsignatario() { return $this->belongsTo(Consignatario::class, 'destino_consignatario_id'); }
+    public function destinoEmbarque() { return $this->belongsTo(DestinoEmbarque::class, 'destino_embarque_id'); }
 
     public function scopeByTemporada($query, $id) { return $query->where('temporada_id', $id); }
     public function scopeByStatus($query, $s) { return $query->where('status', $s); }

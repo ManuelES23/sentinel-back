@@ -9,6 +9,7 @@ use App\Models\ProduccionEmpaqueConsumo;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Testing\TestResponse;
 use Laravel\Sanctum\Sanctum;
+use Tests\Concerns\CreatesDestinoEmbarque;
 use Tests\Concerns\CreatesProduccionEmpaqueFixtures;
 use Tests\TestCase;
 
@@ -18,7 +19,7 @@ use Tests\TestCase;
  */
 class EmbarqueColaConsumoTest extends TestCase
 {
-    use RefreshDatabase, CreatesProduccionEmpaqueFixtures;
+    use RefreshDatabase, CreatesProduccionEmpaqueFixtures, CreatesDestinoEmbarque;
 
     private const PRODUCCION = '/api/splendidfarms/operacion-agricola/empaque/produccion';
     private const EMBARQUES = '/api/splendidfarms/operacion-agricola/empaque/embarques';
@@ -92,6 +93,7 @@ class EmbarqueColaConsumoTest extends TestCase
             'entity_id' => $this->entity->id,
             'tipo_venta' => 'nacional',
             'fecha_embarque' => '2026-02-10',
+            'destino_embarque_id' => $this->destinoEmbarqueId(),
             'pallets' => array_map(fn (ProduccionEmpaque $p, int $i) => ['id' => $p->id, 'posicion_carga' => $i + 1],
                 $pallets, array_keys($pallets)),
         ]);
