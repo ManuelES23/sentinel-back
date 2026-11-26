@@ -78,6 +78,8 @@ class DashboardCosechaController extends Controller
                 'sin_etapa' => [
                     'kg' => number_format($cortes['sinEtapaKg'], 2, '.', ''),
                     'cajas' => $empaque['sinEtapaCajas'],
+                    'cajas_exportacion' => $empaque['sinEtapaEmbarcado']['cajas_exportacion'],
+                    'cajas_nacional' => $empaque['sinEtapaEmbarcado']['cajas_nacional'],
                     ...($enBins ? ['bins' => $cortes['sinEtapaBins']] : []),
                 ],
                 'avisos' => $avisos,
@@ -184,6 +186,30 @@ class DashboardCosechaController extends Controller
     }
 
     /**
+     * Cajas embarcadas por pallet y tipo de venta de una temporada, para las
+     * tarjetas de rendimiento (pestañas anteriores del dashboard): el front las
+     * reparte entre lote, productor y variedad con el desglose de cada pallet.
+     * Respuesta: `data` = [{produccion_id, tipo_venta, cajas}].
+     */
+    public function embarcado(Request $request): JsonResponse
+    {
+        $datos = $request->validate([
+            'temporada_id' => 'required|integer|exists:temporadas,id',
+        ]);
+
+        $filas = $this->embarcadoPorPallet((int) $datos['temporada_id'])
+            ->map(fn ($e) => [
+                'produccion_id' => (int) $e->produccion_id,
+                'tipo_venta' => $e->tipo_venta === 'exportacion' ? 'exportacion' : 'nacional',
+                'cajas' => (int) $e->cajas,
+            ])
+            ->filter(fn ($e) => $e['cajas'] > 0)
+            ->values();
+
+        return response()->json(['success' => true, 'data' => $filas]);
+    }
+
+    /**
      * Empaque por etapa y cajas embarcadas por destino. Mismo criterio que los
      * reportes de empaque: un pallet sin desglose va a la etapa de su proceso y un
      * pallet con desglose (mixto) se reparte por sus filas de
@@ -192,12 +218,13 @@ class DashboardCosechaController extends Controller
      * lista, se cuentan aparte.
      *
      * @param  array<int, int>  $enLista  Ids de las etapas de la respuesta (como llaves).
-     * @return array{porEtapa: array<int, array>, sinEtapaCajas: int}
+     * @return array{porEtapa: array<int, array>, sinEtapaCajas: int, sinEtapaEmbarcado: array{cajas_exportacion: int, cajas_nacional: int}}
      */
     private function empaquePorEtapa(int $temporadaId, array $enLista): array
     {
         $porEtapa = [];
         $sinEtapaCajas = 0;
+        $sinEtapaEmbarcado = ['cajas_exportacion' => 0, 'cajas_nacional' => 0];
         $etapaValida = fn ($etapaId) => $etapaId !== null && isset($enLista[(int) $etapaId]);
         $fila = function (int $etapaId) use (&$porEtapa) {
             $porEtapa[$etapaId] ??= ['cajas' => 0, 'kg' => 0.0, 'cajas_exportacion' => 0, 'cajas_nacional' => 0];
@@ -222,16 +249,7 @@ class DashboardCosechaController extends Controller
         }
 
         // Cajas embarcadas por pallet y destino, repartidas entre las partes del pallet.
-        $embarcadas = DB::table('embarque_empaque_detalles as d')
-            ->join('embarques_empaque as e', 'e.id', '=', 'd.embarque_id')
-            ->join('produccion_empaque as p', 'p.id', '=', 'd.produccion_id')
-            ->where('p.temporada_id', $temporadaId)
-            ->whereNull('e.deleted_at')
-            ->whereNull('p.deleted_at')
-            ->selectRaw('d.produccion_id, e.tipo_venta, COALESCE(SUM(d.cajas), 0) AS cajas')
-            ->groupBy('d.produccion_id', 'e.tipo_venta')
-            ->get();
-        foreach ($embarcadas as $e) {
+        foreach ($this->embarcadoPorPallet($temporadaId) as $e) {
             $pallet = $pallets[$e->produccion_id] ?? null;
             if ($pallet === null) {
                 continue; // pallet de un proceso borrado
@@ -239,14 +257,43 @@ class DashboardCosechaController extends Controller
             $campo = $e->tipo_venta === 'exportacion' ? 'cajas_exportacion' : 'cajas_nacional';
             $reparto = $this->repartir((int) $e->cajas, $pallet['total'], array_column($pallet['partes'], 1));
             foreach ($pallet['partes'] as $i => [$etapaId]) {
-                if ($reparto[$i] > 0 && $etapaValida($etapaId)) {
-                    $fila((int) $etapaId);
-                    $porEtapa[(int) $etapaId][$campo] += $reparto[$i];
+                if ($reparto[$i] <= 0) {
+                    continue;
                 }
+                if (! $etapaValida($etapaId)) {
+                    // Lo embarcado de cajas sin etapa también tiene destino: sin esto
+                    // contaban en el total pero salían como «por embarcar».
+                    $sinEtapaEmbarcado[$campo] += $reparto[$i];
+
+                    continue;
+                }
+                $fila((int) $etapaId);
+                $porEtapa[(int) $etapaId][$campo] += $reparto[$i];
             }
         }
 
-        return ['porEtapa' => $porEtapa, 'sinEtapaCajas' => $sinEtapaCajas];
+        return ['porEtapa' => $porEtapa, 'sinEtapaCajas' => $sinEtapaCajas, 'sinEtapaEmbarcado' => $sinEtapaEmbarcado];
+    }
+
+    /**
+     * Cajas embarcadas de cada pallet de la temporada por tipo de venta. El destino
+     * (exportación o nacional) lo decide el embarque, no el pallet. No cuentan los
+     * embarques borrados ni los cancelados, ni los pallets borrados.
+     */
+    private function embarcadoPorPallet(int $temporadaId): Collection
+    {
+        return DB::table('embarque_empaque_detalles as d')
+            ->join('embarques_empaque as e', 'e.id', '=', 'd.embarque_id')
+            ->join('produccion_empaque as p', 'p.id', '=', 'd.produccion_id')
+            ->where('p.temporada_id', $temporadaId)
+            ->whereNull('e.deleted_at')
+            ->whereNull('p.deleted_at')
+            ->where(fn ($q) => $q->whereNull('e.status')->orWhere('e.status', '!=', 'cancelado'))
+            ->selectRaw('d.produccion_id, e.tipo_venta, COALESCE(SUM(d.cajas), 0) AS cajas')
+            ->groupBy('d.produccion_id', 'e.tipo_venta')
+            ->orderBy('d.produccion_id')
+            ->orderBy('e.tipo_venta')
+            ->get();
     }
 
     /**
