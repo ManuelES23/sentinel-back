@@ -691,6 +691,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
                 // Dashboard ejecutivo: plan, cortes, venta nacional y empaque por etapa
                 Route::get('dashboard/ejecutivo', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Cosecha\DashboardCosechaController::class, 'ejecutivo']);
+                Route::get('dashboard/embarcado', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Cosecha\DashboardCosechaController::class, 'embarcado']);
 
                 // Salidas de Campo
                 Route::post('salidas-campo/{salida}/asignar-precio', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Cosecha\SalidaCampoCosechaController::class, 'asignarPrecio']);

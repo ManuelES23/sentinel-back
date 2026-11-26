@@ -289,10 +289,13 @@ class DashboardCosechaEjecutivoTest extends TestCase
     {
         $this->crearEtapa();
         $this->crearSalida(null, '2026-03-10', 900);
-        $this->crearProduccion(null, 'A', 10, 100);
+        $fila = $this->crearProduccion(null, 'A', 10, 100);
+        // Lo embarcado de un pallet sin etapa también tiene destino.
+        $this->crearEmbarque('exportacion', 'EMB-1', $fila['produccion'], 6);
+        $this->crearEmbarque('nacional', 'EMB-2', $fila['produccion'], 3);
 
         $this->consultar()->assertOk()
-            ->assertJsonPath('data.sin_etapa', ['kg' => '900.00', 'cajas' => 10]);
+            ->assertJsonPath('data.sin_etapa', ['kg' => '900.00', 'cajas' => 10, 'cajas_exportacion' => 6, 'cajas_nacional' => 3]);
     }
 
     public function test_pallet_mixto_se_reparte_por_su_desglose(): void
@@ -337,7 +340,7 @@ class DashboardCosechaEjecutivoTest extends TestCase
             ['cajas' => 41, 'kg' => '580.94', 'cajas_exportacion' => 21, 'cajas_nacional' => 0],
             $filas[$b->id]['empaque']
         );
-        $r->assertJsonPath('data.sin_etapa', ['kg' => '0.00', 'cajas' => 0]);
+        $r->assertJsonPath('data.sin_etapa', ['kg' => '0.00', 'cajas' => 0, 'cajas_exportacion' => 0, 'cajas_nacional' => 0]);
     }
 
     public function test_pallet_mixto_embarcado_en_parte_reparte_sin_perder_cajas(): void
@@ -427,7 +430,45 @@ class DashboardCosechaEjecutivoTest extends TestCase
 
         $r->assertJsonCount(1, 'data.etapas')
             ->assertJsonPath('data.etapas.0.id', $viva->id)
-            ->assertJsonPath('data.sin_etapa', ['kg' => '8990.00', 'cajas' => 22]);
+            ->assertJsonPath('data.sin_etapa', ['kg' => '8990.00', 'cajas' => 22, 'cajas_exportacion' => 0, 'cajas_nacional' => 0]);
+    }
+
+    public function test_embarque_cancelado_no_cuenta_en_el_destino(): void
+    {
+        $etapa = $this->crearEtapa();
+        $fila = $this->crearProduccion($etapa, 'A', 100, 1800);
+        $this->crearEmbarque('exportacion', 'EMB-1', $fila['produccion'], 40)->update(['status' => 'cancelado']);
+        $this->crearEmbarque('nacional', 'EMB-2', $fila['produccion'], 25);
+
+        $this->consultar()->assertOk()
+            ->assertJsonPath('data.etapas.0.empaque.cajas_exportacion', 0)
+            ->assertJsonPath('data.etapas.0.empaque.cajas_nacional', 25);
+    }
+
+    public function test_embarcado_por_pallet_y_tipo_de_venta(): void
+    {
+        $etapa = $this->crearEtapa();
+        $a = $this->crearProduccion($etapa, 'A', 100, 1800);
+        $b = $this->crearProduccion($etapa, 'B', 50, 900);
+        $this->crearEmbarque('exportacion', 'EMB-1', $a['produccion'], 60);
+        $this->crearEmbarque('exportacion', 'EMB-2', $a['produccion'], 10);
+        $this->crearEmbarque('nacional', 'EMB-3', $a['produccion'], 20);
+        $this->crearEmbarque('nacional', 'EMB-4', $b['produccion'], 15);
+        $this->crearEmbarque('exportacion', 'EMB-5', $b['produccion'], 30)->update(['status' => 'cancelado']);
+        $this->crearEmbarque('exportacion', 'EMB-6', $b['produccion'], 5)->delete();
+
+        $url = '/api/splendidfarms/operacion-agricola/cosecha/dashboard/embarcado?temporada_id='.$this->temporada->id;
+        $datos = $this->getJson($url)->assertOk()->json('data');
+
+        $this->assertEqualsCanonicalizing([
+            ['produccion_id' => $a['produccion']->id, 'tipo_venta' => 'exportacion', 'cajas' => 70],
+            ['produccion_id' => $a['produccion']->id, 'tipo_venta' => 'nacional', 'cajas' => 20],
+            ['produccion_id' => $b['produccion']->id, 'tipo_venta' => 'nacional', 'cajas' => 15],
+        ], $datos);
+
+        $this->getJson('/api/splendidfarms/operacion-agricola/cosecha/dashboard/embarcado')
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('temporada_id');
     }
 
     public function test_valida_temporada(): void
