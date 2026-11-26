@@ -21,6 +21,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Testing\TestResponse;
 use Laravel\Sanctum\Sanctum;
+use Tests\Concerns\CreatesDestinoEmbarque;
 use Tests\Concerns\CreatesProduccionEmpaqueFixtures;
 use Tests\TestCase;
 
@@ -31,7 +32,7 @@ use Tests\TestCase;
  */
 class RevisionFinalConsumoTest extends TestCase
 {
-    use RefreshDatabase, CreatesProduccionEmpaqueFixtures;
+    use RefreshDatabase, CreatesProduccionEmpaqueFixtures, CreatesDestinoEmbarque;
 
     private const URL = '/api/splendidfarms/operacion-agricola/empaque/produccion';
     private const EMBARQUES = '/api/splendidfarms/operacion-agricola/empaque/embarques';
@@ -376,6 +377,7 @@ class RevisionFinalConsumoTest extends TestCase
             'entity_id' => $this->entity->id,
             'tipo_venta' => 'nacional',
             'fecha_embarque' => '2026-02-10',
+            'destino_embarque_id' => $this->destinoEmbarqueId(),
             'pallets' => [['id' => $cola->id, 'posicion_carga' => 1]],
         ])->assertCreated();
 

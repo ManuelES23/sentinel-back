@@ -3,6 +3,7 @@
 namespace App\Services\Planeacion;
 
 use App\Models\Consignatario;
+use App\Models\DestinoEmbarque;
 use App\Models\EmbarqueEmpaque;
 use App\Models\Planeacion\BodegaDestino;
 use App\Models\Planeacion\ProgramaEmbarque;
@@ -26,9 +27,12 @@ use Illuminate\Support\Collection;
  * es una carga; sus cajas son `total_cajas`. El cultivo de un embarque es el de
  * su temporada.
  *
- * Destino real: la bodega del consignatario de destino si la tiene (no vacía);
- * si no, el texto `destino`. Se compara con las bodegas de Planeación (todas,
- * activas o no) por `ClientesPlaneacion::clave()`. Con plan (vigente o
+ * Destino real: si el embarque trae destino del catálogo (`destino_embarque_id`)
+ * ligado con una bodega de Planeación, esa bodega (aunque el nombre no coincida).
+ * Si no, se compara por `ClientesPlaneacion::clave()` contra las bodegas de
+ * Planeación (todas, activas o no) el nombre del destino del catálogo; sin
+ * catálogo, la bodega del consignatario de destino si la tiene (no vacía) y si
+ * no, el texto `destino`. Con plan (vigente o
  * acordado) va a `renglones`; reconocido sin plan, a `sin_programa`; sin
  * reconocer (o sin destino), a `sin_destino`, agrupado por destino.
  *
@@ -199,7 +203,12 @@ final class AvanceEmbarques
                     Temporada::withTrashed()->where('cultivo_id', $cultivoId)->select('id'),
                 ))
                 ->orderBy('id')
-                ->get(['id', 'fecha_embarque', 'destino', 'destino_consignatario_id', 'total_cajas']);
+                ->get(['id', 'fecha_embarque', 'destino', 'destino_consignatario_id', 'destino_embarque_id', 'total_cajas']);
+
+        $destinoIds = $embarques->pluck('destino_embarque_id')->filter()->unique()->values()->all();
+        $destinosCatalogo = $destinoIds
+            ? DestinoEmbarque::whereIn('id', $destinoIds)->get(['id', 'nombre', 'plan_bodega_destino_id'])->keyBy('id')
+            : collect();
 
         $consignatarioIds = $embarques->pluck('destino_consignatario_id')->filter()->unique()->values()->all();
         $bodegaDeConsignatario = $consignatarioIds
@@ -219,10 +228,16 @@ final class AvanceEmbarques
             }
             $total = (int) $e->total_cajas;
 
-            $bodegaConsignatario = trim((string) $bodegaDeConsignatario->get($e->destino_consignatario_id, ''));
-            $texto = trim($bodegaConsignatario !== '' ? $bodegaConsignatario : (string) $e->destino);
+            $catalogo = $e->destino_embarque_id ? $destinosCatalogo->get($e->destino_embarque_id) : null;
+            if ($catalogo) {
+                $texto = trim((string) $catalogo->nombre);
+            } else {
+                $bodegaConsignatario = trim((string) $bodegaDeConsignatario->get($e->destino_consignatario_id, ''));
+                $texto = trim($bodegaConsignatario !== '' ? $bodegaConsignatario : (string) $e->destino);
+            }
             $clave = ClientesPlaneacion::clave($texto);
-            $bodegaId = $porClave[$clave] ?? null;
+            $ligada = $catalogo?->plan_bodega_destino_id;
+            $bodegaId = $ligada !== null && $bodegas->has($ligada) ? (int) $ligada : ($porClave[$clave] ?? null);
 
             if ($bodegaId !== null) {
                 $real[$bodegaId] ??= $ceros;

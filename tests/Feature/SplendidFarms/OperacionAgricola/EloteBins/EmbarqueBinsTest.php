@@ -6,6 +6,7 @@ use App\Models\EmbarqueEmpaque;
 use App\Models\ProduccionEmpaque;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
+use Tests\Concerns\CreatesDestinoEmbarque;
 use Tests\Concerns\CreatesEloteBinsFixtures;
 use Tests\TestCase;
 
@@ -18,6 +19,7 @@ use Tests\TestCase;
 class EmbarqueBinsTest extends TestCase
 {
     use CreatesEloteBinsFixtures;
+    use CreatesDestinoEmbarque;
     use RefreshDatabase;
 
     private const EMBARQUES = '/api/splendidfarms/operacion-agricola/empaque/embarques';
@@ -37,6 +39,7 @@ class EmbarqueBinsTest extends TestCase
             'entity_id' => $this->entity->id,
             'tipo_venta' => 'nacional',
             'fecha_embarque' => '2026-02-10',
+            'destino_embarque_id' => $this->destinoEmbarqueId(),
             'pallets' => array_map(
                 fn (ProduccionEmpaque $p, int $i) => ['id' => $p->id, 'posicion_carga' => $i + 1],
                 $pallets,

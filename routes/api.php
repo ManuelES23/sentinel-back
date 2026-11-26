@@ -785,6 +785,14 @@ Route::middleware('auth:sanctum')->group(function () {
 
                 // Embarques
                 Route::get('embarques/pallets-disponibles', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\EmbarqueEmpaqueController::class, 'palletsDisponibles']);
+                Route::patch('embarques/{embarque}/destino', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\EmbarqueEmpaqueController::class, 'cambiarDestino']);
+                Route::patch('embarques/{embarque}/estado', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\EmbarqueEmpaqueController::class, 'cambiarEstado']);
+
+                // Destinos de los embarques (catálogo; liga opcional con Planeación)
+                Route::get('destinos-embarque/bodegas-planeacion', [App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\DestinoEmbarqueController::class, 'bodegasPlaneacion']);
+                Route::apiResource('destinos-embarque', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\DestinoEmbarqueController::class)
+                    ->parameters(['destinos-embarque' => 'destino'])
+                    ->only(['index', 'store', 'update']);
                 Route::apiResource('embarques', App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Empaque\EmbarqueEmpaqueController::class)
                     ->parameters(['embarques' => 'embarque']);
 
