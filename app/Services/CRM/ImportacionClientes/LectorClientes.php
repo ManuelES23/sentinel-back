@@ -9,7 +9,10 @@ use RuntimeException;
 use Throwable;
 
 /**
- * Lee el Excel de clientes (Clave, Razón Social, RFC, E-Mail, Vendedor). Solo lee:
+ * Lee el Excel de clientes: el de CanAgro (Clave, Razón Social, RFC, E-Mail, Vendedor)
+ * o el de Splendid by Porvenir (Customer Code, Company Name, Contact, Phone, Fax,
+ * Address, City, State, Country, BB Rating); cada columna es opcional salvo Clave y
+ * Razón Social y se reconoce por su encabezado, en español o inglés. Solo lee:
  * todo sale como texto recortado (claves numéricas incluidas, tal como se ven en
  * Excel) y la decisión de qué hacer con cada renglón es de PlanImportacionClientes.
  */
@@ -19,15 +22,23 @@ class LectorClientes
 
     /** Campo => alias de encabezado ya normalizados (minúsculas, sin acentos ni signos). */
     private const COLUMNAS = [
-        'clave' => ['clave', 'clave cliente', 'cve', 'codigo', 'numero de cliente'],
-        'nombre' => ['razon social', 'nombre', 'cliente', 'nombre del cliente'],
+        'clave' => ['clave', 'clave cliente', 'cve', 'codigo', 'numero de cliente', 'customer code', 'customer id'],
+        'nombre' => ['razon social', 'nombre', 'cliente', 'nombre del cliente', 'company name', 'company'],
         'rfc' => ['rfc'],
         'correos' => ['e mail', 'email', 'correo', 'correos', 'correo electronico'],
         'vendedor' => ['vendedor', 'agente', 'vendedor asignado'],
+        'contacto' => ['contacto', 'contact', 'contacto principal', 'contact name'],
+        'telefono' => ['telefono', 'tel', 'phone', 'phone number'],
+        'fax' => ['fax'],
+        'direccion' => ['direccion', 'domicilio', 'address'],
+        'ciudad' => ['ciudad', 'city'],
+        'estado' => ['estado', 'state'],
+        'pais' => ['pais', 'country'],
+        'calificacion' => ['bb rating', 'blue book', 'blue book rating', 'calificacion'],
     ];
 
     /**
-     * @return list<array{fila: int, clave: string, nombre: string, rfc: string, correos: string, vendedor: string}>
+     * @return list<array{fila: int, clave: string, nombre: string, rfc: string, correos: string, vendedor: string, contacto: string, telefono: string, fax: string, direccion: string, ciudad: string, estado: string, pais: string, calificacion: string}>
      *
      * @throws RuntimeException con un mensaje para el usuario si el archivo no sirve.
      */
@@ -52,7 +63,7 @@ class LectorClientes
         {
             public function readCell($columnAddress, $row, $worksheetName = ''): bool
             {
-                return strlen($columnAddress) === 1; // A..Z: sobra para las 5 columnas y algunas extra
+                return strlen($columnAddress) === 1; // A..Z: sobra para las columnas conocidas y algunas extra
             }
         });
         $hoja = $lector->load($ruta)->getSheet(0);
@@ -62,7 +73,8 @@ class LectorClientes
         foreach ($hoja->getRowIterator() as $fila) {
             $valores = [];
             foreach ($fila->getCellIterator() as $celda) {
-                $valores[$celda->getColumn()] = trim((string) $celda->getFormattedValue());
+                // Excel guarda los saltos de línea de Windows como «_x000D_»: se quitan.
+                $valores[$celda->getColumn()] = trim(str_replace('_x000D_', '', (string) $celda->getFormattedValue()));
             }
 
             if ($columnas === null) {

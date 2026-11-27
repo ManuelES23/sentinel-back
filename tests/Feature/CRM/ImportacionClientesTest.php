@@ -3,6 +3,7 @@
 namespace Tests\Feature\CRM;
 
 use App\Models\CRM\CrmCliente;
+use App\Models\CRM\CrmContacto;
 use App\Models\CRM\CrmVendedor;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -424,5 +425,79 @@ class ImportacionClientesTest extends TestCase
 
         $this->withHeaders($this->crmHeaders())->getJson('/api/crm/clientes?vendedor_id=sin')
             ->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('data.0.nombre', 'Pendiente');
+    }
+
+    private const ENCABEZADOS_SBP = ['Customer Code', 'Company Name', 'Contact', 'Phone', 'Fax', 'Address', 'City', 'State', 'Country', 'Type', 'BB Rating'];
+
+    private function filasSbp(): array
+    {
+        return [
+            ['LAPARCELA', ' LA PARCELA PRODUCE, LLC', 'Klariss Henry AP/AR', '952-232 9890', null, " 9231 PENN AVE S SUITE 4", 'Bloomington', 'MN', 'USA', '0', 'XXX'],
+            ['ALDAY', "Alday's Produce Inc", 'Alma', '213-802-2069', '213-802-2069', "1601 E Olympic Blvd\r\nDoor 504", 'Los Angeles', 'CA', 'USA', '0', '300MXXXB'],
+            ['AF', 'A and F Distributing Corp', null, '323-225 8321 x3-1', null, '1457 N Main St.', 'Los Angeles', 'CA', 'USA', '0', 'NA'],
+            ['CASTILLO', "Castillo's Produce, Inc.", ' Sasha Nuñez - No Longer', '214-881 3168', null, '119 Regal Row Ste D', 'Dallas', 'TX', 'USA', '0', 'N/A'],
+        ];
+    }
+
+    public function test_formato_sbp_crea_la_empresa_y_su_contacto(): void
+    {
+        $res = $this->revisar($this->archivo($this->filasSbp(), self::ENCABEZADOS_SBP));
+        $res->assertOk()
+            ->assertJsonPath('data.resumen.nuevos', 4)
+            ->assertJsonPath('data.resumen.contactos', 2)
+            ->assertJsonPath('data.resumen.pendientes', 4)
+            ->assertJsonPath('data.resumen.con_problema', 0);
+        $this->assertSame(0, CrmContacto::count(), 'revisar no escribe');
+
+        $this->importar($res->json('data.token'))->assertOk()->assertJsonPath('data.contactos', 2);
+
+        $parcela = CrmCliente::where('clave', 'LAPARCELA')->firstOrFail();
+        $this->assertSame('LA PARCELA PRODUCE, LLC', $parcela->nombre);
+        $this->assertSame('952-232 9890', $parcela->telefono);
+        $this->assertSame('Bloomington', $parcela->ciudad);
+        $this->assertSame('MN', $parcela->estado);
+        $this->assertNull($parcela->vendedor_id);
+        $this->assertSame("Dirección: 9231 PENN AVE S SUITE 4\nPaís: USA\nBlue Book: XXX", $parcela->notas);
+        $contacto = $parcela->contactos()->sole();
+        $this->assertSame('Klariss Henry AP/AR', $contacto->nombre);
+        $this->assertSame('952-232 9890', $contacto->telefono);
+        $this->assertTrue($contacto->es_principal);
+        $this->assertSame($this->enterprise->id, $contacto->empresa_id);
+
+        $alday = CrmCliente::where('clave', 'ALDAY')->firstOrFail();
+        $this->assertSame("Dirección: 1601 E Olympic Blvd, Door 504\nPaís: USA\nFax: 213-802-2069\nBlue Book: 300MXXXB", $alday->notas);
+
+        $af = CrmCliente::where('clave', 'AF')->firstOrFail();
+        $this->assertSame(0, $af->contactos()->count(), 'sin contacto en el Excel');
+        $this->assertSame("Dirección: 1457 N Main St.\nPaís: USA", $af->notas, 'NA no es calificación');
+
+        $castillo = CrmCliente::where('clave', 'CASTILLO')->firstOrFail();
+        $this->assertSame(0, $castillo->contactos()->count(), 'el que ya no está no se crea');
+        $this->assertStringContainsString('Contacto anterior (ya no está): Sasha Nuñez - No Longer', $castillo->notas);
+    }
+
+    public function test_formato_sbp_reimportar_no_duplica_y_completa_lo_vacio(): void
+    {
+        $existente = CrmCliente::create(['empresa_id' => $this->enterprise->id, 'nombre' => "Alday's Produce Inc", 'notas' => 'Mis notas']);
+        $existente->contactos()->create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Rosa', 'es_principal' => true]);
+
+        $token = $this->revisar($this->archivo($this->filasSbp(), self::ENCABEZADOS_SBP))->json('data.token');
+        $this->importar($token)->assertOk()->assertJsonPath('data.nuevos', 3)->assertJsonPath('data.actualizados', 1);
+
+        $existente->refresh();
+        $this->assertSame('ALDAY', $existente->clave, 'se liga por nombre y toma la clave');
+        $this->assertSame('213-802-2069', $existente->telefono);
+        $this->assertSame('Los Angeles', $existente->ciudad);
+        $this->assertSame('Mis notas', $existente->notas, 'las notas de un existente no se tocan');
+        $alma = $existente->contactos()->where('nombre', 'Alma')->sole();
+        $this->assertFalse($alma->es_principal, 'ya tenía principal');
+
+        $res = $this->revisar($this->archivo($this->filasSbp(), self::ENCABEZADOS_SBP));
+        $res->assertJsonPath('data.resumen.nuevos', 0)
+            ->assertJsonPath('data.resumen.actualizados', 0)
+            ->assertJsonPath('data.resumen.sin_cambio', 4)
+            ->assertJsonPath('data.resumen.contactos', 0);
+        $this->importar($res->json('data.token'))->assertOk();
+        $this->assertSame(3, CrmContacto::count());
     }
 }
