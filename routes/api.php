@@ -222,9 +222,12 @@ Route::middleware('auth:sanctum')->group(function () {
                 Route::get('programa/exportar', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\ExportarProgramaController::class, 'exportar']);
                 // Enviar el programa por correo (tablero-semanal.enviar): rutas fijas, antes de cualquier programa/{programa}.
                 Route::get('programa/envio/opciones', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\EnviarProgramaController::class, 'opciones']);
-                Route::post('programa/envio', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\EnviarProgramaController::class, 'enviar'])->middleware('throttle:5,1');
+                Route::post('programa/envio', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\EnviarProgramaController::class, 'enviar'])->middleware('throttle:5,1,planeacion-envio');
                 // Vista previa del correo: mismas reglas que enviar, pero no envía ni deja bitácora.
-                Route::post('programa/envio/vista-previa', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\EnviarProgramaController::class, 'vistaPrevia'])->middleware('throttle:20,1');
+                Route::post('programa/envio/vista-previa', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\EnviarProgramaController::class, 'vistaPrevia'])->middleware('throttle:20,1,planeacion-vista-previa');
+                // «Ver resumen» del Tablero (tablero-semanal.view): las imágenes del correo, sin enviar nada.
+                Route::get('programa/imagenes/semanas', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\EnviarProgramaController::class, 'semanasResumen']);
+                Route::post('programa/imagenes', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\EnviarProgramaController::class, 'resumen'])->middleware('throttle:30,1,planeacion-imagenes');
                 // Avance de empaque: programado contra real (avance-empaque.view); no crea el programa.
                 Route::get('programa/avance', [App\Http\Controllers\Api\SplendidFarms\Administration\Planeacion\AvanceEmpaqueController::class, 'show']);
                 // Avance de cosecha: plan de corte contra cierres (avance-cosecha.view); no crea el programa.
