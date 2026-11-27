@@ -438,6 +438,7 @@ class ConfiguracionPlaneacionController extends Controller
             'filas.*.variedad_id' => ['required', 'integer', 'distinct', Rule::exists('variedades', 'id')],
             'filas.*.minimo' => ['required', 'numeric', 'gt:0', 'max:999999.99'],
             'filas.*.maximo' => ['required', 'numeric', 'max:999999.99'],
+            'filas.*.bins_por_hectarea' => ['sometimes', 'nullable', 'numeric', 'gt:0', 'max:999999.99'],
         ]);
 
         foreach ($datos['filas'] as $i => $fila) {
@@ -458,7 +459,9 @@ class ConfiguracionPlaneacionController extends Controller
             foreach ($datos['filas'] as $fila) {
                 RendimientoVariedad::updateOrCreate(
                     ['temporada_id' => $temporada->id, 'variedad_id' => $fila['variedad_id']],
-                    ['minimo' => $fila['minimo'], 'maximo' => $fila['maximo']],
+                    // Sin la llave (front anterior) los bins capturados se conservan; null los borra.
+                    ['minimo' => $fila['minimo'], 'maximo' => $fila['maximo']]
+                        + (array_key_exists('bins_por_hectarea', $fila) ? ['bins_por_hectarea' => $fila['bins_por_hectarea']] : []),
                 );
             }
         });
@@ -491,7 +494,7 @@ class ConfiguracionPlaneacionController extends Controller
             foreach ($origen as $fila) {
                 RendimientoVariedad::updateOrCreate(
                     ['temporada_id' => $destino->id, 'variedad_id' => $fila->variedad_id],
-                    ['minimo' => $fila->minimo, 'maximo' => $fila->maximo],
+                    ['minimo' => $fila->minimo, 'maximo' => $fila->maximo, 'bins_por_hectarea' => $fila->bins_por_hectarea],
                 );
             }
         });
@@ -914,6 +917,7 @@ class ConfiguracionPlaneacionController extends Controller
                 'variedad_id' => $r->variedad_id,
                 'minimo' => (float) $r->minimo,
                 'maximo' => (float) $r->maximo,
+                'bins_por_hectarea' => $r->bins_por_hectarea !== null ? (float) $r->bins_por_hectarea : null,
             ])->all();
     }
 }

@@ -422,6 +422,7 @@ class ProgramaSemanalService
                 'modo' => $eleccion?->modo ?? 'medio',
                 'valor_exacto' => $eleccion?->valor_exacto !== null ? (float) $eleccion->valor_exacto : null,
                 'valor_usado' => $plan->valorUsado($temporadaId, $variedadId),
+                'bins_por_hectarea' => $this->catalogo->binsPorHectarea($temporadaId, $variedadId),
             ];
         }
 
