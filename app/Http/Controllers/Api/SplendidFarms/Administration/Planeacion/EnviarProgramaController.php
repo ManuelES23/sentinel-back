@@ -30,7 +30,8 @@ use Throwable;
  * correo con una hoja resumen en PNG por semana (con el viernes y el sábado de
  * la semana anterior) y, salvo `incluir_excel: false`, el Excel de una hoja por
  * semana; en `to` el remitente del sistema y los destinatarios de la lista
- * guardada en copia oculta.
+ * guardada en copia oculta. Esas mismas imágenes se pueden solo ver desde el
+ * Tablero (`resumen`, tablero-semanal.view), sin destinatarios ni envío.
  *
  * Enviar nunca crea un programa: solo semanas que ya existen. Los servicios se
  * inyectan por método (guardan cálculos en memoria: una instancia por petición).
@@ -52,16 +53,64 @@ class EnviarProgramaController extends Controller
     {
         $this->exigirPermiso('tablero-semanal', 'enviar');
 
-        $semanas = ProgramaSemanal::orderByDesc('lunes')->limit(self::SEMANAS_OFRECIDAS)->get(['id', 'lunes'])
+        return response()->json(['success' => true, 'data' => [
+            'semanas' => $this->semanasOfrecidas(),
+            'destinatarios' => $destinatarios->todos(),
+        ]]);
+    }
+
+    /**
+     * Las semanas que se pueden ver en «Ver resumen» (tablero-semanal.view): las
+     * mismas del envío, sin la lista de correos.
+     */
+    public function semanasResumen(): JsonResponse
+    {
+        $this->exigirPermiso('tablero-semanal', 'view');
+
+        return response()->json(['success' => true, 'data' => ['semanas' => $this->semanasOfrecidas()]]);
+    }
+
+    /**
+     * Las imágenes resumen de las semanas elegidas, para verlas antes de decidir
+     * (tablero-semanal.view): las mismas que irían en el correo. No envía, no
+     * deja bitácora, no pide destinatarios ni crea programas.
+     */
+    public function resumen(
+        Request $request,
+        ProgramaSemanalService $servicio,
+        ExportadorProgramaExcel $exportador,
+        ResumenProgramaSemanal $resumidor,
+        ImagenResumenPrograma $dibujante,
+    ): JsonResponse {
+        $this->exigirPermiso('tablero-semanal', 'view');
+
+        $request->merge(['lunes' => $this->sinRepetidos($request->input('lunes'), fn ($v) => $v)]);
+        $datos = $request->validate($this->reglasSemanas(), $this->mensajesSemanas('a la vez'));
+        $armado = $this->armarImagenes($datos, $servicio, $exportador, $resumidor, $dibujante);
+        if ($armado instanceof JsonResponse) {
+            return $armado;
+        }
+
+        return response()->json(['success' => true, 'data' => [
+            'cultivo' => $armado['cultivo'],
+            'imagenes' => array_map(fn (array $i, array $semana) => [
+                'lunes' => $semana['programa']['lunes'],
+                'etiqueta' => $this->etiqueta($semana['programa']),
+                'nombre' => $i['nombre'],
+                'ancho' => $i['ancho'],
+                'imagen' => 'data:image/png;base64,'.base64_encode($i['png']),
+            ], $armado['imagenes'], $armado['semanas']),
+        ]]);
+    }
+
+    /** @return list<array{lunes: string, semana_iso: int}> los programas más recientes, el más nuevo primero */
+    private function semanasOfrecidas(): array
+    {
+        return ProgramaSemanal::orderByDesc('lunes')->limit(self::SEMANAS_OFRECIDAS)->get(['id', 'lunes'])
             ->map(fn (ProgramaSemanal $p) => [
                 'lunes' => $p->lunes->format('Y-m-d'),
                 'semana_iso' => (int) $p->lunes->isoWeek(),
             ])->values()->all();
-
-        return response()->json(['success' => true, 'data' => [
-            'semanas' => $semanas,
-            'destinatarios' => $destinatarios->todos(),
-        ]]);
     }
 
     public function enviar(
@@ -168,23 +217,12 @@ class EnviarProgramaController extends Controller
             'destinatarios' => $this->sinRepetidos($request->input('destinatarios'), fn ($v) => mb_strtolower(trim($v))),
         ]);
 
-        return $request->validate([
-            'lunes' => ['required', 'array', 'max:'.self::MAXIMO_SEMANAS],
-            'lunes.*' => ['bail', 'required', 'string', 'date_format:Y-m-d', $this->esLunes(), $this->conPrograma()],
-            'cultivo_id' => ['nullable', 'integer', 'exists:cultivos,id'],
+        return $request->validate($this->reglasSemanas() + [
             'destinatarios' => ['required', 'array', 'max:'.DestinatariosPrograma::MAXIMO],
             'destinatarios.*' => ['bail', 'required', 'string', Rule::in(array_keys($nombres))],
             'nota' => ['nullable', 'string', 'max:500'],
             'incluir_excel' => ['sometimes', 'boolean'],
-        ], [
-            'lunes.required' => 'Elige al menos una semana.',
-            'lunes.array' => 'Elige al menos una semana.',
-            'lunes.max' => 'Máximo '.self::MAXIMO_SEMANAS.' semanas por envío.',
-            'lunes.*.required' => 'La semana se identifica por su lunes (AAAA-MM-DD).',
-            'lunes.*.string' => 'La semana se identifica por su lunes (AAAA-MM-DD).',
-            'lunes.*.date_format' => 'La semana se identifica por su lunes (AAAA-MM-DD).',
-            'cultivo_id.integer' => 'Ese cultivo no existe.',
-            'cultivo_id.exists' => 'Ese cultivo no existe.',
+        ], $this->mensajesSemanas('por envío') + [
             'destinatarios.required' => 'Elige al menos un destinatario.',
             'destinatarios.array' => 'Elige al menos un destinatario.',
             'destinatarios.max' => 'Máximo '.DestinatariosPrograma::MAXIMO.' destinatarios.',
@@ -195,6 +233,30 @@ class EnviarProgramaController extends Controller
             'nota.max' => 'La nota admite hasta 500 caracteres.',
             'incluir_excel.boolean' => 'Indica si se adjunta el Excel (sí o no).',
         ]);
+    }
+
+    private function reglasSemanas(): array
+    {
+        return [
+            'lunes' => ['required', 'array', 'max:'.self::MAXIMO_SEMANAS],
+            'lunes.*' => ['bail', 'required', 'string', 'date_format:Y-m-d', $this->esLunes(), $this->conPrograma()],
+            'cultivo_id' => ['nullable', 'integer', 'exists:cultivos,id'],
+        ];
+    }
+
+    /** @param  string  $tope  cómo se dice el máximo: «por envío» o «a la vez». */
+    private function mensajesSemanas(string $tope): array
+    {
+        return [
+            'lunes.required' => 'Elige al menos una semana.',
+            'lunes.array' => 'Elige al menos una semana.',
+            'lunes.max' => 'Máximo '.self::MAXIMO_SEMANAS." semanas {$tope}.",
+            'lunes.*.required' => 'La semana se identifica por su lunes (AAAA-MM-DD).',
+            'lunes.*.string' => 'La semana se identifica por su lunes (AAAA-MM-DD).',
+            'lunes.*.date_format' => 'La semana se identifica por su lunes (AAAA-MM-DD).',
+            'cultivo_id.integer' => 'Ese cultivo no existe.',
+            'cultivo_id.exists' => 'Ese cultivo no existe.',
+        ];
     }
 
     /**
@@ -212,9 +274,56 @@ class EnviarProgramaController extends Controller
         ResumenProgramaSemanal $resumidor,
         ImagenResumenPrograma $dibujante,
     ): JsonResponse|array {
+        $incluirExcel = (bool) ($datos['incluir_excel'] ?? true);
+        $armado = $this->armarImagenes($datos, $servicio, $exportador, $resumidor, $dibujante);
+        if ($armado instanceof JsonResponse) {
+            return $armado;
+        }
+        ['lunes' => $lunes, 'semanas' => $semanas, 'cultivo_id' => $cultivoId, 'cultivo' => $cultivoNombre, 'imagenes' => $imagenes] = $armado;
+
+        $contenido = null;
+        if ($incluirExcel && $generarExcel) {
+            $ruta = $exportador->generarVarias($semanas, $cultivoId, $cultivoNombre);
+            try {
+                $contenido = file_get_contents($ruta);
+            } finally {
+                @unlink($ruta);
+            }
+            if ($contenido === false) {
+                throw new RuntimeException('No se pudo leer el Excel del programa.');
+            }
+        }
+
+        $numeros = array_map(fn ($s) => (int) $s['programa']['semana_iso'], $semanas);
+        $correo = new ProgramaSemanalMail(
+            contenidoExcel: $contenido,
+            nombreArchivo: $incluirExcel ? $this->nombreArchivo($semanas, $exportador, $lunes, $numeros) : null,
+            asunto: 'Programa semanal '.$this->semanasDelAsunto($lunes, $numeros).($cultivoNombre ? ' · '.$cultivoNombre : ''),
+            semanas: array_map(fn ($s) => $this->etiqueta($s['programa']), $semanas),
+            cultivo: $cultivoNombre,
+            nota: isset($datos['nota']) && trim($datos['nota']) !== '' ? trim($datos['nota']) : null,
+            remitente: (string) Auth::user()->name,
+            imagenes: $imagenes,
+        );
+
+        return ['correo' => $correo, 'lunes' => $lunes, 'semanas' => $semanas, 'cultivo_id' => $cultivoId, 'cultivo' => $cultivoNombre, 'excel' => $incluirExcel];
+    }
+
+    /**
+     * Una hoja resumen en PNG por semana elegida, en orden de fecha. Si una no
+     * se puede dibujar devuelve el 422.
+     *
+     * @return JsonResponse|array{lunes: list<string>, semanas: list<array>, cultivo_id: ?int, cultivo: ?string, imagenes: list<array>}
+     */
+    private function armarImagenes(
+        array $datos,
+        ProgramaSemanalService $servicio,
+        ExportadorProgramaExcel $exportador,
+        ResumenProgramaSemanal $resumidor,
+        ImagenResumenPrograma $dibujante,
+    ): JsonResponse|array {
         $lunes = $datos['lunes'];
         sort($lunes);
-        $incluirExcel = (bool) ($datos['incluir_excel'] ?? true);
 
         // Cada semana con su propio cálculo: olvidar() entre una y otra para no mezclar lo guardado en memoria.
         // La semana anterior de cada una (su viernes y sábado van en la imagen) se calcula igual, si tiene programa.
@@ -254,32 +363,7 @@ class EnviarProgramaController extends Controller
             ];
         }
 
-        $contenido = null;
-        if ($incluirExcel && $generarExcel) {
-            $ruta = $exportador->generarVarias($semanas, $cultivoId, $cultivoNombre);
-            try {
-                $contenido = file_get_contents($ruta);
-            } finally {
-                @unlink($ruta);
-            }
-            if ($contenido === false) {
-                throw new RuntimeException('No se pudo leer el Excel del programa.');
-            }
-        }
-
-        $numeros = array_map(fn ($s) => (int) $s['programa']['semana_iso'], $semanas);
-        $correo = new ProgramaSemanalMail(
-            contenidoExcel: $contenido,
-            nombreArchivo: $incluirExcel ? $this->nombreArchivo($semanas, $exportador, $lunes, $numeros) : null,
-            asunto: 'Programa semanal '.$this->semanasDelAsunto($lunes, $numeros).($cultivoNombre ? ' · '.$cultivoNombre : ''),
-            semanas: array_map(fn ($s) => $this->etiqueta($s['programa']), $semanas),
-            cultivo: $cultivoNombre,
-            nota: isset($datos['nota']) && trim($datos['nota']) !== '' ? trim($datos['nota']) : null,
-            remitente: (string) Auth::user()->name,
-            imagenes: $imagenes,
-        );
-
-        return ['correo' => $correo, 'lunes' => $lunes, 'semanas' => $semanas, 'cultivo_id' => $cultivoId, 'cultivo' => $cultivoNombre, 'excel' => $incluirExcel];
+        return ['lunes' => $lunes, 'semanas' => $semanas, 'cultivo_id' => $cultivoId, 'cultivo' => $cultivoNombre, 'imagenes' => $imagenes];
     }
 
     /**
