@@ -106,6 +106,7 @@ class CrmPermisosEnforcementTest extends TestCase
             ['PUT', "/api/crm/clientes/{$cli}", ['nombre' => 'Cambiado']],
             ['DELETE', "/api/crm/clientes/{$cli}", []],
             ['PATCH', "/api/crm/clientes/{$cli}/asignar-vendedor", ['vendedor_id' => $this->vendedor->id]],
+            ['PATCH', '/api/crm/clientes/asignar-vendedor', ['cliente_ids' => [$cli], 'vendedor_id' => $this->vendedor->id]],
 
             ['POST', '/api/crm/prospectos', ['nombre' => 'Nuevo']],
             ['PUT', "/api/crm/prospectos/{$pro}", ['nombre' => 'Cambiado']],

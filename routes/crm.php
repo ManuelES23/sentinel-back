@@ -155,6 +155,14 @@ Route::middleware('auth:sanctum')->prefix('crm')->group(function () {
     Route::get('clientes/{cliente}/resumen', [
         App\Http\Controllers\Api\CRM\ClienteController::class, 'resumen'
     ]);
+    // Asignación en lote de los pendientes (antes del apiResource: si no,
+    // «pendientes-asignar» se toma como {cliente}).
+    Route::get('clientes/pendientes-asignar', [
+        App\Http\Controllers\Api\CRM\ClienteController::class, 'pendientesAsignar'
+    ]);
+    Route::patch('clientes/asignar-vendedor', [
+        App\Http\Controllers\Api\CRM\ClienteController::class, 'asignarVendedorLote'
+    ]);
     Route::patch('clientes/{cliente}/asignar-vendedor', [
         App\Http\Controllers\Api\CRM\ClienteController::class, 'asignarVendedor'
     ]);
