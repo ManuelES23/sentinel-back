@@ -15,6 +15,10 @@ use Illuminate\Support\Facades\DB;
  * cosechado de una etapa se topa a su superficie descontando la venta nacional;
  * las cajas son las empacadas de sus procesos.
  *
+ * A diferencia del Dashboard, solo cuentan las etapas con hectáreas cosechadas
+ * cerradas: las cajas y bins de una etapa sin cierre entrarían sin hectáreas e
+ * inflarían el cociente a media cosecha. Esas etapas solo se avisan (`sin_cierre`).
+ *
  * Los bins son los de las salidas de campo: en una temporada que opera en bins,
  * todas; en las demás, solo las de un tipo de carga «Bin» que no sea de rezaga.
  *
@@ -26,8 +30,10 @@ class RendimientoReal
 
     /**
      * @param  int[]  $temporadaIds
-     * @return list<array{temporada_id: int, variedad_id: int, ha: float, cajas: int|null, bins: int}>
-     *                                                                                                  Solo las variedades con hectáreas, cajas o bins. `cajas` es null si la temporada opera en bins.
+     * @return list<array{temporada_id: int, variedad_id: int, ha: float, cajas: int|null, bins: int, sin_cierre: bool}>
+     *                                                                                                                    Solo las variedades con hectáreas o con datos por contar. `cajas` es null si la
+     *                                                                                                                    temporada opera en bins; `sin_cierre` dice que hay etapas con cajas o bins que
+     *                                                                                                                    aún no cuentan por no tener cosecha cerrada.
      */
     public function de(array $temporadaIds): array
     {
@@ -51,24 +57,31 @@ class RendimientoReal
                 $nacional = min($hectareas[$llave]['nacional'] ?? 0.0, $superficie);
                 $cosechada = max(0.0, min($hectareas[$llave]['normal'] ?? 0.0, $superficie - $nacional));
 
-                $v = $porVariedad[$etapa->variedad_id] ?? ['ha' => 0.0, 'cajas' => 0, 'bins' => 0];
-                $v['ha'] += $cosechada;
-                $v['cajas'] += $cajas[$llave] ?? 0;
-                $v['bins'] += $bins[$llave] ?? 0;
+                $susCajas = $enBins ? 0 : ($cajas[$llave] ?? 0);
+                $susBins = $bins[$llave] ?? 0;
+
+                $v = $porVariedad[$etapa->variedad_id] ?? ['ha' => 0.0, 'cajas' => 0, 'bins' => 0, 'sin_cierre' => false];
+                if (round($cosechada, 4) > 0) {
+                    $v['ha'] += $cosechada;
+                    $v['cajas'] += $susCajas;
+                    $v['bins'] += $susBins;
+                } elseif ($susCajas > 0 || $susBins > 0) {
+                    $v['sin_cierre'] = true;
+                }
                 $porVariedad[$etapa->variedad_id] = $v;
             }
             ksort($porVariedad);
 
             foreach ($porVariedad as $variedadId => $v) {
                 $ha = round($v['ha'], 4);
-                $cajasVariedad = $enBins ? null : $v['cajas'];
-                if ($ha > 0 || $cajasVariedad > 0 || $v['bins'] > 0) {
+                if ($ha > 0 || $v['sin_cierre']) {
                     $salida[] = [
                         'temporada_id' => (int) $temporada->id,
                         'variedad_id' => (int) $variedadId,
                         'ha' => $ha,
-                        'cajas' => $cajasVariedad,
+                        'cajas' => $enBins ? null : $v['cajas'],
                         'bins' => $v['bins'],
+                        'sin_cierre' => $v['sin_cierre'],
                     ];
                 }
             }
