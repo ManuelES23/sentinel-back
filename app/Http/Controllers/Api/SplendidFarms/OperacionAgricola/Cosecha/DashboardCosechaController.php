@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\SplendidFarms\OperacionAgricola\Cosecha;
 use App\Http\Controllers\Controller;
 use App\Models\Etapa;
 use App\Models\Temporada;
+use App\Services\Cosecha\ConsultasCosecha;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -23,8 +24,7 @@ class DashboardCosechaController extends Controller
         't' => 1000, 'ton' => 1000, 'tons' => 1000, 'tonelada' => 1000, 'toneladas' => 1000,
     ];
 
-    /** Una venta cancelada no cuenta como venta nacional. */
-    private const VENTA_VIVA = "ventas_cosecha.deleted_at IS NULL AND ventas_cosecha.status <> 'cancelada'";
+    public function __construct(private readonly ConsultasCosecha $consultas) {}
 
     public function ejecutivo(Request $request): JsonResponse
     {
@@ -111,25 +111,7 @@ class DashboardCosechaController extends Controller
         };
 
         // Cierres por día, separando los que tienen alguna venta no cancelada.
-        // La bandera se calcula en una subconsulta (cada cierre una sola vez, aunque tenga
-        // varias ventas) y se agrupa por columnas simples: válido con only_full_group_by.
-        $cierresConVenta = DB::table('ventas_cosecha')
-            ->whereRaw(self::VENTA_VIVA)
-            ->select('cierre_cosecha_id')
-            ->distinct();
-        $cierresMarcados = DB::table('cierres_cosecha')
-            ->leftJoinSub($cierresConVenta, 'cv', 'cv.cierre_cosecha_id', '=', 'cierres_cosecha.id')
-            ->where('cierres_cosecha.temporada_id', $temporadaId)
-            ->whereNull('cierres_cosecha.deleted_at')
-            ->whereNotNull('cierres_cosecha.etapa_id')
-            ->selectRaw('cierres_cosecha.etapa_id AS etapa_id, cierres_cosecha.fecha_inicio AS fecha_inicio, '
-                .'cierres_cosecha.superficie_cosechada AS ha, '
-                .'CASE WHEN cv.cierre_cosecha_id IS NULL THEN 0 ELSE 1 END AS con_venta');
-        $cierres = DB::query()
-            ->fromSub($cierresMarcados, 'c')
-            ->selectRaw('c.etapa_id, c.fecha_inicio, c.con_venta, COALESCE(SUM(c.ha), 0) AS ha')
-            ->groupBy('c.etapa_id', 'c.fecha_inicio', 'c.con_venta')
-            ->get();
+        $cierres = $this->consultas->cierresPorDia([$temporadaId])->get();
         foreach ($cierres as $c) {
             $sumar((int) $c->etapa_id, $c->fecha_inicio, (bool) $c->con_venta, (float) $c->ha, 0.0);
         }
@@ -160,7 +142,7 @@ class DashboardCosechaController extends Controller
             ->where('cierres_cosecha.temporada_id', $temporadaId)
             ->whereNull('cierres_cosecha.deleted_at')
             ->whereNotNull('cierres_cosecha.etapa_id')
-            ->whereRaw(self::VENTA_VIVA)
+            ->whereRaw(ConsultasCosecha::VENTA_VIVA)
             ->orderBy('ventas_cosecha.id')
             ->get([
                 'ventas_cosecha.id', 'ventas_cosecha.cantidad', 'ventas_cosecha.unidad_medida',
@@ -232,7 +214,7 @@ class DashboardCosechaController extends Controller
 
         // Partes de cada pallet: [produccion_id => ['total' => cajas del pallet, 'partes' => [[etapa_id, cajas], …]]]
         $pallets = [];
-        foreach ($this->partesDeProduccion($temporadaId) as $parte) {
+        foreach ($this->consultas->partesDeProduccion([$temporadaId])->get() as $parte) {
             $cajas = (int) $parte->cajas;
             $pallets[$parte->produccion_id]['total'] = (int) $parte->total_pallet;
             $pallets[$parte->produccion_id]['partes'][] = [$parte->etapa_id, $cajas];
@@ -294,42 +276,6 @@ class DashboardCosechaController extends Controller
             ->orderBy('d.produccion_id')
             ->orderBy('e.tipo_venta')
             ->get();
-    }
-
-    /**
-     * Una fila por pallet sin desglose y una por renglón de desglose de un pallet
-     * mixto, con la etapa de su proceso (`null` si no hay proceso o no trae etapa).
-     * Los procesos borrados se excluyen.
-     */
-    private function partesDeProduccion(int $temporadaId): Collection
-    {
-        $simples = DB::table('produccion_empaque as p')
-            ->leftJoin('proceso_empaque as pr', 'pr.id', '=', 'p.proceso_id')
-            ->where('p.temporada_id', $temporadaId)
-            ->whereNull('p.deleted_at')
-            ->whereNull('pr.deleted_at')
-            ->whereNotExists(function ($sub) {
-                $sub->selectRaw('1')
-                    ->from('produccion_empaque_detalles as dd')
-                    ->whereColumn('dd.produccion_id', 'p.id');
-            })
-            ->select([
-                'p.id as produccion_id', 'pr.etapa_id', 'p.total_cajas as cajas',
-                'p.peso_neto_kg as kg', 'p.total_cajas as total_pallet',
-            ]);
-
-        $mixtos = DB::table('produccion_empaque as p')
-            ->join('produccion_empaque_detalles as d', 'd.produccion_id', '=', 'p.id')
-            ->leftJoin('proceso_empaque as pr', 'pr.id', '=', 'd.proceso_id')
-            ->where('p.temporada_id', $temporadaId)
-            ->whereNull('p.deleted_at')
-            ->whereNull('pr.deleted_at')
-            ->select([
-                'p.id as produccion_id', 'pr.etapa_id', 'd.total_cajas as cajas',
-                'd.peso_neto_kg as kg', 'p.total_cajas as total_pallet',
-            ]);
-
-        return $simples->unionAll($mixtos)->get();
     }
 
     /**

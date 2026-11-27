@@ -410,8 +410,13 @@ class ProgramaSemanalService
             $pares[$c->temporada_id.'-'.$c->variedad_id] ??= [$c->temporada_id, $c->variedad_id];
         }
 
+        // El real (cosecha y empaque acumulados) solo acompaña al estimado.
+        $reales = collect((new RendimientoReal)->de(array_column($pares, 0)))
+            ->keyBy(fn (array $r) => $r['temporada_id'].'-'.$r['variedad_id']);
+
         $salida = [];
         foreach ($pares as [$temporadaId, $variedadId]) {
+            $real = $reales->get($temporadaId.'-'.$variedadId);
             $rango = $this->catalogo->rango($temporadaId, $variedadId);
             $eleccion = $plan->eleccion($temporadaId, $variedadId);
             $salida[] = [
@@ -423,6 +428,7 @@ class ProgramaSemanalService
                 'valor_exacto' => $eleccion?->valor_exacto !== null ? (float) $eleccion->valor_exacto : null,
                 'valor_usado' => $plan->valorUsado($temporadaId, $variedadId),
                 'bins_por_hectarea' => $this->catalogo->binsPorHectarea($temporadaId, $variedadId),
+                'real' => $real === null ? null : ['ha' => $real['ha'], 'cajas' => $real['cajas'], 'bins' => $real['bins']],
             ];
         }
 

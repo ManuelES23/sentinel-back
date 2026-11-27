@@ -553,6 +553,16 @@ class ProgramaSemanalTest extends TestCase
         $this->assertEquals(700, $rend['valor_usado']);
         $this->assertSame(700, $cajas);
         $this->assertNull($rend['bins_por_hectarea']);
+        $this->assertNull($rend['real']); // sin cosecha ni empaque
+
+        // El real acompaña al estimado sin cambiarlo.
+        $etapa = $this->crearEtapa('Blanco', 5);
+        $this->temporada->lotes()->syncWithoutDetaching([$this->lote->id => ['cultivo_id' => $this->cultivo->id, 'is_active' => true]]);
+        $this->cierre($etapa, '2026-11-02', 1.5);
+        [$rend, $cajas] = $leer();
+        $this->assertEquals(['ha' => 1.5, 'cajas' => 0, 'bins' => 0], $rend['real']);
+        $this->assertEquals(700, $rend['valor_usado']);
+        $this->assertSame(700, $cajas);
 
         // Los bins son informativos: no cambian las cajas.
         RendimientoVariedad::where('variedad_id', $blancoId)->update(['bins_por_hectarea' => 42.5]);

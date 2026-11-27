@@ -24,6 +24,7 @@ use App\Services\Planeacion\DestinatariosPrograma;
 use App\Services\Planeacion\PlantasAvance;
 use App\Services\Planeacion\ProgramaSemanalService;
 use App\Services\Planeacion\RegistroCambiosPrograma;
+use App\Services\Planeacion\RendimientoReal;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
@@ -133,6 +134,8 @@ class ConfiguracionPlaneacionController extends Controller
                     ->map(fn ($r) => ['id' => $r->id, 'name' => $r->name])
                     ->all(),
                 'rendimientos' => $this->rendimientos(),
+                // Real acumulado (cosecha y empaque) para verlo junto a los estimados.
+                'rendimientos_reales' => (new RendimientoReal)->de($temporadas->pluck('id')->all()),
                 'cajas_por_carga' => (int) ConfiguracionPlaneacion::valor('cajas_por_carga', 1040),
                 'avance_plantas' => $plantas->paraConfiguracion(),
                 'correos_programa' => $destinatarios->todos(),
