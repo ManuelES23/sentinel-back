@@ -3,6 +3,7 @@
 namespace App\Services\CRM\ImportacionClientes;
 
 use App\Models\CRM\CrmCliente;
+use App\Models\CRM\CrmContacto;
 use App\Models\CRM\CrmVendedor;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -20,6 +21,12 @@ use Illuminate\Support\Str;
  *   por nombre. Sin pareja, el cliente queda pendiente.
  * - Los correos de dominios internos (los de la propia empresa) no se guardan: el
  *   primero del cliente va a Correo y los demás a Notas (solo al crear).
+ * - La empresa es el registro principal y la columna Contacto, su contacto: al crear
+ *   se guardan teléfono, ciudad y estado en el cliente y dirección, país, fax y
+ *   calificación de Blue Book en Notas; el contacto se crea con el mismo teléfono.
+ *   Al actualizar solo se llenan teléfono, ciudad y estado vacíos, y el contacto se
+ *   agrega si el cliente no tiene ya uno con ese nombre (reimportar no lo duplica).
+ *   Un contacto marcado «No longer» / «ya no está» no se crea: va a Notas.
  */
 class PlanImportacionClientes
 {
@@ -35,6 +42,12 @@ class PlanImportacionClientes
     ];
 
     private const MAX_DOMINIOS = 12;
+
+    /** Contacto que ya no trabaja ahí («Sasha Nuñez - No Longer», «Nuvia- ya no esta…»). */
+    private const CONTACTO_YA_NO = '/\b(no\s+longer|ya\s+no\s+est)/iu';
+
+    /** Calificación de Blue Book que en realidad dice «sin dato». */
+    private const SIN_CALIFICACION = ['NA', 'N/A', '-', '.'];
 
     /**
      * @param  list<array{fila:int, clave:string, nombre:string, rfc:string, correos:string, vendedor:string}>  $filas
@@ -59,7 +72,14 @@ class PlanImportacionClientes
 
         // Con los eliminados: un cliente que borraron a propósito no se vuelve a crear.
         $existentes = CrmCliente::withTrashed()->where('empresa_id', $empresaId)
-            ->get(['id', 'clave', 'nombre', 'rfc', 'email', 'vendedor_id', 'deleted_at']);
+            ->get(['id', 'empresa_id', 'clave', 'nombre', 'rfc', 'email', 'telefono', 'ciudad', 'estado', 'vendedor_id', 'deleted_at']);
+        // Nombres (normalizados) de los contactos de cada cliente, para no duplicarlos.
+        $contactosPorCliente = [];
+        CrmContacto::query()->where('empresa_id', $empresaId)->where('entidad_type', CrmCliente::class)
+            ->get(['entidad_id', 'nombre'])
+            ->each(function ($c) use (&$contactosPorCliente) {
+                $contactosPorCliente[(int) $c->entidad_id][$this->nombreClave($c->nombre)] = true;
+            });
         $porClave = [];
         $porRfc = [];
         $porNombre = [];
@@ -90,7 +110,7 @@ class PlanImportacionClientes
 
         $resumen = [
             'nuevos' => 0, 'actualizados' => 0, 'sin_cambio' => 0, 'con_problema' => 0,
-            'con_vendedor' => 0, 'pendientes' => 0, 'sin_correo' => 0, 'problemas' => [],
+            'con_vendedor' => 0, 'pendientes' => 0, 'sin_correo' => 0, 'contactos' => 0, 'problemas' => [],
         ];
         $operaciones = [];
         $clavesVistas = [];
@@ -166,11 +186,15 @@ class PlanImportacionClientes
             $otros = array_values(array_diff($externos, [$email]));
             $vendedorId = $this->vendedorDeFila($fila['vendedor'], $vendedores, $mapeo);
             $textoVendedor = trim($fila['vendedor']);
+            $extra = $this->datosDeEmpresa($fila);
+            $contacto = $this->contactoDeFila($fila, $extra['telefono']);
 
             if ($existente === null) {
                 $notas = array_filter([
                     $otros !== [] ? 'Otros correos: '.implode(', ', $otros) : null,
                     $rfcDeRelleno ? 'RFC del Excel: '.$rfc : null,
+                    ...$extra['notas'],
+                    $contacto['nota'],
                 ]);
                 $operaciones[] = ['accion' => 'crear', 'datos' => [
                     'empresa_id' => $empresaId,
@@ -181,7 +205,13 @@ class PlanImportacionClientes
                     'notas' => $notas !== [] ? implode("\n", $notas) : null,
                     'vendedor_id' => $vendedorId,
                     'estatus' => 'activo',
-                ]];
+                    'telefono' => $extra['telefono'],
+                    'ciudad' => $extra['ciudad'],
+                    'estado' => $extra['estado'],
+                ], 'contacto' => $contacto['datos']];
+                if ($contacto['datos'] !== null) {
+                    $resumen['contactos']++;
+                }
                 if ($email !== null) {
                     $correosUsados[$email] = 'fila '.$fila['fila'];
                 }
@@ -199,7 +229,19 @@ class PlanImportacionClientes
                     'rfc' => $rfcValido !== '' && $existente->rfc !== $rfcValido ? $rfcValido : null,
                     'email' => $email !== null && $existente->email !== $email ? $email : null,
                     'vendedor_id' => $existente->vendedor_id === null ? $vendedorId : null,
+                    'telefono' => $this->vacio($existente->telefono) ? $extra['telefono'] : null,
+                    'ciudad' => $this->vacio($existente->ciudad) ? $extra['ciudad'] : null,
+                    'estado' => $this->vacio($existente->estado) ? $extra['estado'] : null,
                 ], fn ($valor) => $valor !== null);
+                $contactoNuevo = $contacto['datos'];
+                if ($contactoNuevo !== null && isset($contactosPorCliente[$existente->id][$this->nombreClave($contactoNuevo['nombre'])])) {
+                    $contactoNuevo = null;
+                }
+                if ($contactoNuevo !== null) {
+                    $contactoNuevo['es_principal'] = ! isset($contactosPorCliente[$existente->id]);
+                    $contactosPorCliente[$existente->id][$this->nombreClave($contactoNuevo['nombre'])] = true;
+                    $resumen['contactos']++;
+                }
                 if (isset($cambios['email'])) {
                     $correosUsados[$email] = $existente->id;
                 }
@@ -207,10 +249,10 @@ class PlanImportacionClientes
                     $vendedores[$textoVendedor]['afectados']++;
                 }
 
-                if ($cambios === []) {
+                if ($cambios === [] && $contactoNuevo === null) {
                     $resumen['sin_cambio']++;
                 } else {
-                    $operaciones[] = ['accion' => 'actualizar', 'cliente' => $existente, 'datos' => $cambios];
+                    $operaciones[] = ['accion' => 'actualizar', 'cliente' => $existente, 'datos' => $cambios, 'contacto' => $contactoNuevo];
                     $resumen['actualizados']++;
                 }
                 $vendedorFinal = $existente->vendedor_id ?? $vendedorId;
@@ -241,15 +283,21 @@ class PlanImportacionClientes
         DB::transaction(function () use ($plan) {
             foreach ($plan['operaciones'] as $operacion) {
                 if ($operacion['accion'] === 'crear') {
-                    CrmCliente::create($operacion['datos']);
+                    $cliente = CrmCliente::create($operacion['datos']);
                 } else {
-                    $operacion['cliente']->update($operacion['datos']);
+                    $cliente = $operacion['cliente'];
+                    if ($operacion['datos'] !== []) {
+                        $cliente->update($operacion['datos']);
+                    }
+                }
+                if (($operacion['contacto'] ?? null) !== null) {
+                    $cliente->contactos()->create($operacion['contacto'] + ['empresa_id' => $cliente->empresa_id]);
                 }
             }
         });
 
         return array_intersect_key($plan['resumen'], array_flip([
-            'nuevos', 'actualizados', 'sin_cambio', 'con_problema', 'con_vendedor', 'pendientes', 'sin_correo',
+            'nuevos', 'actualizados', 'sin_cambio', 'con_problema', 'con_vendedor', 'pendientes', 'sin_correo', 'contactos',
         ]));
     }
 
@@ -428,6 +476,96 @@ class PlanImportacionClientes
             explode(' ', $normal),
             fn ($p) => strlen($p) >= 3 && ! in_array($p, ['del', 'las', 'los'], true),
         )));
+    }
+
+    /**
+     * Teléfono, ciudad y estado del cliente (recortados a su columna) y las notas con
+     * lo que el cliente no tiene campo: dirección, país, fax y calificación de Blue Book.
+     *
+     * @return array{telefono: ?string, ciudad: ?string, estado: ?string, notas: list<string>}
+     */
+    private function datosDeEmpresa(array $fila): array
+    {
+        $direccion = $this->unaLinea($fila['direccion'] ?? '', ', ');
+        $pais = $this->unaLinea($fila['pais'] ?? '');
+        $fax = $this->unaLinea($fila['fax'] ?? '');
+        $calificacion = $this->unaLinea($fila['calificacion'] ?? '');
+        if (in_array(Str::upper($calificacion), self::SIN_CALIFICACION, true)) {
+            $calificacion = '';
+        }
+
+        $notas = [];
+        if ($direccion !== '' && $direccion !== '.') {
+            $notas[] = 'Dirección: '.$direccion;
+        }
+        if ($pais !== '') {
+            $notas[] = 'País: '.$pais;
+        }
+        $telefono = $this->campo($fila['telefono'] ?? '', 50);
+        if ($telefono === null && $this->unaLinea($fila['telefono'] ?? '') !== '') {
+            $notas[] = 'Teléfono: '.$this->unaLinea($fila['telefono']);
+        }
+        if ($fax !== '') {
+            $notas[] = 'Fax: '.$fax;
+        }
+        if ($calificacion !== '') {
+            $notas[] = 'Blue Book: '.$calificacion;
+        }
+
+        return [
+            'telefono' => $telefono,
+            'ciudad' => $this->campo($fila['ciudad'] ?? '', 100),
+            'estado' => $this->campo($fila['estado'] ?? '', 100),
+            'notas' => $notas,
+        ];
+    }
+
+    /**
+     * El contacto de la empresa tal como viene (el Excel mezcla nombre y puesto, p. ej.
+     * «Klariss Henry AP/AR»), con el teléfono de la empresa. Uno que ya no trabaja ahí
+     * no se crea: queda como nota del cliente.
+     *
+     * @return array{datos: ?array{nombre: string, telefono: ?string, es_principal: bool}, nota: ?string}
+     */
+    private function contactoDeFila(array $fila, ?string $telefono): array
+    {
+        $nombre = $this->unaLinea($fila['contacto'] ?? '');
+        if ($nombre === '') {
+            return ['datos' => null, 'nota' => null];
+        }
+        if (preg_match(self::CONTACTO_YA_NO, $nombre)) {
+            return ['datos' => null, 'nota' => 'Contacto anterior (ya no está): '.$nombre];
+        }
+
+        return ['datos' => [
+            'nombre' => mb_substr($nombre, 0, 255),
+            'telefono' => $telefono,
+            'es_principal' => true,
+        ], 'nota' => null];
+    }
+
+    /** Texto en una línea, sin espacios repetidos; los saltos de línea se vuelven `$separador`. */
+    private function unaLinea(string $texto, string $separador = ' '): string
+    {
+        $partes = array_filter(array_map(
+            fn ($p) => trim(preg_replace('/\s+/u', ' ', $p)),
+            preg_split('/\R/u', $texto),
+        ), fn ($p) => $p !== '');
+
+        return trim(implode($separador, $partes), ' ,');
+    }
+
+    /** Valor para una columna de hasta `$max` caracteres; vacío o más largo → null. */
+    private function campo(string $texto, int $max): ?string
+    {
+        $valor = $this->unaLinea($texto);
+
+        return $valor === '' || mb_strlen($valor) > $max ? null : $valor;
+    }
+
+    private function vacio(?string $valor): bool
+    {
+        return $valor === null || trim($valor) === '';
     }
 
     private function nombreClave(?string $texto): string
