@@ -28,8 +28,8 @@ class CatalogoPlaneacion
     /** @var array<int, int>|null variedad_id => grupo_id */
     private ?array $grupoPorVariedad = null;
 
-    /** @var array<string, array{0: float, 1: float}>|null "temporada-variedad" => [mínimo, máximo] */
-    private ?array $rangos = null;
+    /** @var array<string, RendimientoVariedad>|null "temporada-variedad" => lo capturado en Configuración */
+    private ?array $capturados = null;
 
     /** @var array<string, array{id: int, nombre: string}>|null "presentación-empaque-variedad" => receta */
     private ?array $recetas = null;
@@ -46,7 +46,7 @@ class CatalogoPlaneacion
         $this->variedades = null;
         $this->grupos = null;
         $this->grupoPorVariedad = null;
-        $this->rangos = null;
+        $this->capturados = null;
         $this->recetas = null;
         $this->temporadasAbiertas = null;
         $this->antelaciones = null;
@@ -175,14 +175,31 @@ class CatalogoPlaneacion
             return null;
         }
 
-        if ($this->rangos === null) {
-            $this->rangos = [];
-            foreach (RendimientoVariedad::get(['temporada_id', 'variedad_id', 'minimo', 'maximo']) as $r) {
-                $this->rangos[$r->temporada_id.'-'.$r->variedad_id] = [(float) $r->minimo, (float) $r->maximo];
-            }
+        $r = $this->rendimientoCapturado($temporadaId, $variedadId);
+
+        return $r === null ? null : [(float) $r->minimo, (float) $r->maximo];
+    }
+
+    /** Bins por hectárea capturados (solo informativos); null sin captura. */
+    public function binsPorHectarea(?int $temporadaId, int $variedadId): ?float
+    {
+        if ($temporadaId === null) {
+            return null;
         }
 
-        return $this->rangos[$temporadaId.'-'.$variedadId] ?? null;
+        $bins = $this->rendimientoCapturado($temporadaId, $variedadId)?->bins_por_hectarea;
+
+        return $bins !== null ? (float) $bins : null;
+    }
+
+    private function rendimientoCapturado(int $temporadaId, int $variedadId): ?RendimientoVariedad
+    {
+        // Sin lista de columnas: el GET del programa sigue respondiendo entre el pull y la migración de los bins.
+        $this->capturados ??= RendimientoVariedad::get()
+            ->keyBy(fn (RendimientoVariedad $r) => $r->temporada_id.'-'.$r->variedad_id)
+            ->all();
+
+        return $this->capturados[$temporadaId.'-'.$variedadId] ?? null;
     }
 
     /**
