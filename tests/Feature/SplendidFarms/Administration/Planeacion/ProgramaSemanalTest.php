@@ -563,6 +563,9 @@ class ProgramaSemanalTest extends TestCase
         $this->assertEquals(['ha' => 1.5, 'cajas' => 0, 'bins' => 0], $rend['real']);
         $this->assertEquals(700, $rend['valor_usado']);
         $this->assertSame(700, $cajas);
+        // El Excel y el correo no lo muestran: no se calcula.
+        $sinReal = app(ProgramaSemanalService::class)->semana($p, [], conReal: false);
+        $this->assertSame([null], collect($sinReal['rendimientos'])->pluck('real')->unique()->values()->all());
 
         // Los bins son informativos: no cambian las cajas.
         RendimientoVariedad::where('variedad_id', $blancoId)->update(['bins_por_hectarea' => 42.5]);

@@ -32,7 +32,7 @@ class ExportarProgramaController extends Controller
 
         // Igual que el Tablero: abrir una semana nueva crea su programa; 422 si no es lunes.
         $programa = $servicio->programaDe($datos['lunes']);
-        $semana = $servicio->semana($programa, []);
+        $semana = $servicio->semana($programa, [], conReal: false);
 
         $cultivoId = isset($datos['cultivo_id']) ? (int) $datos['cultivo_id'] : $exportador->cultivoPorDefecto($semana);
         $cultivoNombre = $cultivoId !== null ? Cultivo::whereKey($cultivoId)->value('nombre') : null;

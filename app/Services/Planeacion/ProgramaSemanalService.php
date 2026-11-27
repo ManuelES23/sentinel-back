@@ -131,8 +131,10 @@ class ProgramaSemanalService
      * Payload completo de la semana (contrato de `GET planeacion/programa`).
      *
      * @param  array<string, array<string, bool>>  $permisos  Forma `permisos` del contrato.
+     * @param  bool  $conReal  false en el Excel y el correo, que no muestran el rendimiento real:
+     *                         así no se consulta la cosecha ni el empaque (`real` va null).
      */
-    public function semana(ProgramaSemanal $programa, array $permisos): array
+    public function semana(ProgramaSemanal $programa, array $permisos, bool $conReal = true): array
     {
         ['plan' => $plan, 'balance' => $balance] = $this->calcular($programa);
 
@@ -172,7 +174,7 @@ class ProgramaSemanalService
                 ])->values()->all(),
             'grupos' => array_map(fn ($g) => array_diff_key($g, ['clave' => true]), $grupos),
             'catalogos' => $this->catalogos(),
-            'rendimientos' => $this->rendimientos($plan, $temporadas),
+            'rendimientos' => $this->rendimientos($plan, $temporadas, $conReal),
             'etapas' => $this->etapas->paraSemana($temporadas, $lunes),
             'cortes' => $plan->cortes->map(fn ($c) => [
                 'id' => $c->id,
@@ -396,7 +398,7 @@ class ProgramaSemanalService
      * Un renglón por (temporada abierta, variedad de su cultivo), más los pares
      * que citan cortes de otra temporada.
      */
-    private function rendimientos(PlanSemana $plan, Collection $temporadas): array
+    private function rendimientos(PlanSemana $plan, Collection $temporadas, bool $conReal): array
     {
         $pares = [];
         foreach ($temporadas as $t) {
@@ -411,7 +413,7 @@ class ProgramaSemanalService
         }
 
         // El real (cosecha y empaque acumulados) solo acompaña al estimado.
-        $reales = collect((new RendimientoReal)->de(array_column($pares, 0)))
+        $reales = collect($conReal ? (new RendimientoReal)->de(array_column($pares, 0)) : [])
             ->keyBy(fn (array $r) => $r['temporada_id'].'-'.$r['variedad_id']);
 
         $salida = [];

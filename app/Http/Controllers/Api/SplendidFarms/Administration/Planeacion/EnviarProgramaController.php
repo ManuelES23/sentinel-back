@@ -222,7 +222,7 @@ class EnviarProgramaController extends Controller
         $payloadDe = function (string $l) use (&$payloads, $servicio): ?array {
             if (! array_key_exists($l, $payloads)) {
                 $programa = ProgramaSemanal::whereDate('lunes', $l)->first();
-                $payloads[$l] = $programa ? $servicio->semana($programa, []) : null;
+                $payloads[$l] = $programa ? $servicio->semana($programa, [], conReal: false) : null;
                 $servicio->olvidar();
             }
 
