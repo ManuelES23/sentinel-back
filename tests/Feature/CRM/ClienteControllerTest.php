@@ -184,4 +184,74 @@ class ClienteControllerTest extends TestCase
             ->assertJsonPath('data.metricas.oportunidades', 0)
             ->assertJsonPath('data.metricas.valor_pipeline', 0);
     }
+
+    public function test_pendientes_asignar_lista_solo_los_sin_vendedor_de_la_empresa(): void
+    {
+        $otraEmpresa = $this->crearOtraEmpresa();
+        CrmCliente::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Zeta Produce', 'clave' => 'ZETA', 'ciudad' => 'Dallas', 'estado' => 'TX']);
+        CrmCliente::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Alfa Fresh']);
+        CrmCliente::create($this->validPayload(['empresa_id' => $this->enterprise->id, 'nombre' => 'Ya asignado']));
+        CrmCliente::create(['empresa_id' => $otraEmpresa->id, 'nombre' => 'De otra empresa']);
+
+        $response = $this->withHeaders($this->crmHeaders())->getJson(self::BASE_URL.'/pendientes-asignar');
+
+        $response->assertOk()
+            ->assertJsonCount(2, 'data')
+            ->assertJsonPath('data.0.nombre', 'Alfa Fresh')
+            ->assertJsonPath('data.1.clave', 'ZETA')
+            ->assertJsonPath('data.1.ciudad', 'Dallas')
+            ->assertJsonPath('data.1.estado', 'TX');
+    }
+
+    public function test_asigna_vendedor_en_lote_solo_a_los_pendientes(): void
+    {
+        \Illuminate\Support\Facades\Event::fake([\App\Events\CRM\VendedorAsignado::class]);
+        $otraEmpresa = $this->crearOtraEmpresa();
+        $otroVendedor = \App\Models\CRM\CrmVendedor::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Otro', 'activo' => true]);
+        $a = CrmCliente::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'A']);
+        $b = CrmCliente::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'B']);
+        $yaTenia = CrmCliente::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'C', 'vendedor_id' => $otroVendedor->id]);
+        $ajeno = CrmCliente::create(['empresa_id' => $otraEmpresa->id, 'nombre' => 'D']);
+
+        $response = $this->withHeaders($this->crmHeaders())->patchJson(self::BASE_URL.'/asignar-vendedor', [
+            'cliente_ids' => [$a->id, $b->id, $yaTenia->id, $ajeno->id],
+            'vendedor_id' => $this->vendedor->id,
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('data.asignados', 2)
+            ->assertJsonPath('data.omitidos', 2)
+            ->assertJsonPath('data.vendedor.id', $this->vendedor->id);
+        $this->assertSame($this->vendedor->id, $a->fresh()->vendedor_id);
+        $this->assertSame($this->vendedor->id, $b->fresh()->vendedor_id);
+        $this->assertSame($otroVendedor->id, $yaTenia->fresh()->vendedor_id, 'no reasigna al que ya tenía vendedor');
+        $this->assertNull($ajeno->fresh()->vendedor_id, 'no toca clientes de otra empresa');
+
+        foreach ([$a, $b] as $cliente) {
+            $this->assertDatabaseHas('crm_actividades', [
+                'entidad_type' => CrmCliente::class,
+                'entidad_id' => $cliente->id,
+                'descripcion' => "Vendedor asignado: {$this->vendedor->nombre}",
+            ]);
+        }
+        $this->assertDatabaseMissing('crm_actividades', ['entidad_id' => $yaTenia->id, 'entidad_type' => CrmCliente::class]);
+        \Illuminate\Support\Facades\Event::assertDispatchedTimes(\App\Events\CRM\VendedorAsignado::class, 1);
+    }
+
+    public function test_el_lote_rechaza_un_vendedor_inactivo_o_de_otra_empresa(): void
+    {
+        $cliente = CrmCliente::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'A']);
+        $inactivo = \App\Models\CRM\CrmVendedor::create(['empresa_id' => $this->enterprise->id, 'nombre' => 'Baja', 'activo' => false]);
+        $ajeno = \App\Models\CRM\CrmVendedor::create(['empresa_id' => $this->crearOtraEmpresa()->id, 'nombre' => 'Ajeno', 'activo' => true]);
+
+        foreach ([$inactivo, $ajeno] as $vendedor) {
+            $this->withHeaders($this->crmHeaders())
+                ->patchJson(self::BASE_URL.'/asignar-vendedor', ['cliente_ids' => [$cliente->id], 'vendedor_id' => $vendedor->id])
+                ->assertStatus(422)->assertJsonValidationErrors(['vendedor_id']);
+        }
+        $this->withHeaders($this->crmHeaders())
+            ->patchJson(self::BASE_URL.'/asignar-vendedor', ['cliente_ids' => [], 'vendedor_id' => $this->vendedor->id])
+            ->assertStatus(422)->assertJsonValidationErrors(['cliente_ids']);
+        $this->assertNull($cliente->fresh()->vendedor_id);
+    }
 }
