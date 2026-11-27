@@ -261,7 +261,7 @@ class ConfiguracionTest extends TestCase
 
         $this->assertCount(1, $datos['rendimientos_reales']);
         $this->assertEquals(
-            ['temporada_id' => $this->temporada->id, 'variedad_id' => $this->variedades['Amarillo']->id, 'ha' => 2, 'cajas' => 0, 'bins' => 0],
+            ['temporada_id' => $this->temporada->id, 'variedad_id' => $this->variedades['Amarillo']->id, 'ha' => 2, 'cajas' => 0, 'bins' => 0, 'sin_cierre' => false],
             $datos['rendimientos_reales'][0],
         );
         $this->assertCount(3, $datos['rendimientos']); // los estimados siguen igual
