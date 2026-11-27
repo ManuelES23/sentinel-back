@@ -162,6 +162,18 @@ class ExportarProgramaTest extends TestCase
         }
     }
 
+    public function test_produccion_estimada_anota_los_bins_por_hectarea_de_cada_color(): void
+    {
+        $this->wk48();
+        \App\Models\Planeacion\RendimientoVariedad::where('variedad_id', $this->variedades['Amarillo']->id)->update(['bins_por_hectarea' => 45.5]);
+        $hoja = $this->libroDe($this->descargar()->assertOk())->getSheetByName('WK48');
+
+        $produccion = $this->fila($hoja, 'PRODUCCIÓN ESTIMADA (CAJAS)', 1, ['B']);
+        $this->assertSame('45.5 bins/ha', $hoja->getCell('D'.$this->fila($hoja, 'Amarillo', $produccion, ['C']))->getValue());
+        $this->assertNull($hoja->getCell('D'.$this->fila($hoja, 'Bicolor', $produccion, ['C']))->getValue());
+        $this->assertEquals([3850, 2750, 2750, 0, 1650, 550, 0, 11550], $this->dias($hoja, $this->fila($hoja, 'Amarillo', $produccion, ['C'])));
+    }
+
     public function test_las_cifras_del_archivo_son_las_del_tablero(): void
     {
         $this->wk48();

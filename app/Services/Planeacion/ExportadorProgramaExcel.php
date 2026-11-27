@@ -263,7 +263,7 @@ class ExportadorProgramaExcel
         $this->fila += 2;
     }
 
-    /** 2. PRODUCCIÓN ESTIMADA — cajas por color y día. */
+    /** 2. PRODUCCIÓN ESTIMADA — cajas por color y día; junto al color, sus bins por hectárea (informativo). */
     private function escribirProduccion(array $semana, array $variedades): void
     {
         $this->titulo(self::SECCIONES['produccion']);
@@ -277,6 +277,10 @@ class ExportadorProgramaExcel
                 }
             }
             $this->texto('C'.$this->fila, $v['nombre']);
+            $bins = $this->binsDe($semana, $v['id']);
+            if ($bins !== null) {
+                $this->texto('D'.$this->fila, $bins);
+            }
             $this->filaDeDias($cajas);
             foreach ($cajas as $d => $valor) {
                 $totalDia[$d] += $valor;
@@ -582,6 +586,31 @@ class ExportadorProgramaExcel
             0 => null,
             1 => array_values($valores)[0],
             default => 'varios',
+        };
+    }
+
+    /** «45.5 bins/ha» de la variedad en las temporadas de sus cortes; «bins/ha varios» si difieren; null sin captura. */
+    private function binsDe(array $semana, int $variedadId): ?string
+    {
+        $conCortes = [];
+        foreach ($semana['cortes'] as $c) {
+            if ((int) $c['variedad_id'] === $variedadId) {
+                $conCortes[(int) $c['temporada_id']] = true;
+            }
+        }
+
+        $valores = [];
+        foreach ($semana['rendimientos'] as $r) {
+            if ((int) $r['variedad_id'] === $variedadId && ($r['bins_por_hectarea'] ?? null) !== null && ($conCortes === [] || isset($conCortes[(int) $r['temporada_id']]))) {
+                $texto = rtrim(rtrim(number_format($r['bins_por_hectarea'], 2), '0'), '.');
+                $valores[$texto] = $texto;
+            }
+        }
+
+        return match (count($valores)) {
+            0 => null,
+            1 => reset($valores).' bins/ha',
+            default => 'bins/ha varios',
         };
     }
 

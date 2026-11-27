@@ -98,7 +98,7 @@ class ConfiguracionTest extends TestCase
 
         $this->assertCount(3, $datos['rendimientos']);
         $this->assertEqualsCanonicalizing(
-            ['temporada_id', 'variedad_id', 'minimo', 'maximo'],
+            ['temporada_id', 'variedad_id', 'minimo', 'maximo', 'bins_por_hectarea'],
             array_keys($datos['rendimientos'][0]),
         );
         $this->assertSame(1100, $datos['cajas_por_carga']);
@@ -283,6 +283,42 @@ class ConfiguracionTest extends TestCase
         $this->assertSame(3, RendimientoVariedad::count());
     }
 
+    public function test_guarda_conserva_y_borra_los_bins_por_hectarea(): void
+    {
+        $this->conPermisos();
+        $am = $this->variedades['Amarillo']->id;
+        $guardar = fn (array $extra) => $this->putJson(self::URL.'/configuracion/rendimientos', [
+            'temporada_id' => $this->temporada->id,
+            'filas' => [['variedad_id' => $am, 'minimo' => 500, 'maximo' => 600] + $extra],
+        ]);
+        $bins = fn () => RendimientoVariedad::where('temporada_id', $this->temporada->id)->where('variedad_id', $am)->value('bins_por_hectarea');
+
+        $r = $guardar(['bins_por_hectarea' => 45.5])->assertOk();
+        $this->assertEquals(45.5, $bins());
+        $this->assertEquals(45.5, collect($r->json('data'))->firstWhere('variedad_id', $am)['bins_por_hectarea']);
+
+        // Un front anterior no manda la llave: el dato se conserva.
+        $guardar([])->assertOk();
+        $this->assertEquals(45.5, $bins());
+
+        $guardar(['bins_por_hectarea' => null])->assertOk();
+        $this->assertNull($bins());
+    }
+
+    public function test_bins_por_hectarea_invalidos_son_422(): void
+    {
+        $this->conPermisos();
+        $am = $this->variedades['Amarillo']->id;
+
+        foreach ([0, -1, 'muchos', 1000000] as $malo) {
+            $this->putJson(self::URL.'/configuracion/rendimientos', [
+                'temporada_id' => $this->temporada->id,
+                'filas' => [['variedad_id' => $am, 'minimo' => 500, 'maximo' => 600, 'bins_por_hectarea' => $malo]],
+            ])->assertStatus(422)->assertJsonValidationErrors('filas.0.bins_por_hectarea');
+        }
+        $this->assertNull(RendimientoVariedad::where('variedad_id', $am)->value('bins_por_hectarea'));
+    }
+
     public function test_copiar_rendimientos_entre_temporadas(): void
     {
         $this->conPermisos();
@@ -299,6 +335,8 @@ class ConfiguracionTest extends TestCase
             'user_id' => $this->autor->id,
         ]);
 
+        RendimientoVariedad::where('temporada_id', $this->temporada->id)->where('variedad_id', $this->variedades['Bicolor']->id)->update(['bins_por_hectarea' => 38]);
+
         $this->postJson(self::URL.'/configuracion/rendimientos/copiar', [
             'desde_temporada_id' => $this->temporada->id,
             'hacia_temporada_id' => $destino->id,
@@ -308,6 +346,7 @@ class ConfiguracionTest extends TestCase
         $this->assertCount(3, $copiados);
         $this->assertEquals(600, $copiados[$this->variedades['Bicolor']->id]->minimo);
         $this->assertEquals(700, $copiados[$this->variedades['Bicolor']->id]->maximo);
+        $this->assertEquals(38, $copiados[$this->variedades['Bicolor']->id]->bins_por_hectarea);
         // El origen sigue igual.
         $this->assertSame(3, RendimientoVariedad::where('temporada_id', $this->temporada->id)->count());
 

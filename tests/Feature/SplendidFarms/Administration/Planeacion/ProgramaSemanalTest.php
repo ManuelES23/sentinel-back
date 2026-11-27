@@ -552,6 +552,13 @@ class ProgramaSemanalTest extends TestCase
         $this->assertEquals(750, $rend['maximo']);
         $this->assertEquals(700, $rend['valor_usado']);
         $this->assertSame(700, $cajas);
+        $this->assertNull($rend['bins_por_hectarea']);
+
+        // Los bins son informativos: no cambian las cajas.
+        RendimientoVariedad::where('variedad_id', $blancoId)->update(['bins_por_hectarea' => 42.5]);
+        [$rend, $cajas] = $leer();
+        $this->assertEquals(42.5, $rend['bins_por_hectarea']);
+        $this->assertSame(700, $cajas);
 
         $eleccion = ProgramaRendimiento::create(['programa_id' => $p->id, 'temporada_id' => $this->temporada->id, 'variedad_id' => $blancoId, 'modo' => 'minimo']);
         [$rend, $cajas] = $leer();
@@ -573,6 +580,7 @@ class ProgramaSemanalTest extends TestCase
         [$rend, $cajas] = $leer();
         $this->assertNull($rend['minimo']);
         $this->assertNull($rend['valor_usado']);
+        $this->assertNull($rend['bins_por_hectarea']);
         $this->assertSame(0, $cajas);
     }
 
