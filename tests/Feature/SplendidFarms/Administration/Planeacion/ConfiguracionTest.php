@@ -250,6 +250,23 @@ class ConfiguracionTest extends TestCase
         ])->assertStatus(422);
     }
 
+    public function test_configuracion_trae_el_rendimiento_real_junto_a_los_estimados(): void
+    {
+        $this->conPermisos(['configuracion' => ['view']]);
+        $etapa = $this->crearEtapa('Amarillo', 5);
+        $this->temporada->lotes()->syncWithoutDetaching([$this->lote->id => ['cultivo_id' => $this->cultivo->id, 'is_active' => true]]);
+        $this->cierre($etapa, '2026-11-02', 2);
+
+        $datos = $this->getJson(self::URL.'/configuracion')->assertOk()->json('data');
+
+        $this->assertCount(1, $datos['rendimientos_reales']);
+        $this->assertEquals(
+            ['temporada_id' => $this->temporada->id, 'variedad_id' => $this->variedades['Amarillo']->id, 'ha' => 2, 'cajas' => 0, 'bins' => 0],
+            $datos['rendimientos_reales'][0],
+        );
+        $this->assertCount(3, $datos['rendimientos']); // los estimados siguen igual
+    }
+
     public function test_rendimiento_minimo_mayor_que_maximo_es_422(): void
     {
         $this->conPermisos();
