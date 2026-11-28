@@ -196,18 +196,17 @@ class RendimientoRealTest extends TestCase
         $this->assertSame($cerradas->sum('empaque.cajas'), $this->real()[$this->variedad->id]['cajas']);
     }
 
-    public function test_temporada_en_bins_cuenta_todas_las_salidas_y_no_reporta_cajas(): void
+    public function test_temporada_en_bins_cuenta_todas_las_salidas_y_tambien_las_cajas(): void
     {
         $this->escenario();
         $this->temporada->forceFill(['opera_en_bins' => true])->save();
 
-        $fila = $this->real()[$this->variedad->id];
+        $real = $this->real();
+        $fila = $real[$this->variedad->id];
 
-        $this->assertNull($fila['cajas']);
+        $this->assertSame(400, $fila['cajas']); // en bins la producción se sigue contando en cajas
         $this->assertSame(557, $fila['bins']); // 40 + 10 + 500 + 7: en bins toda salida son bins
-
-        // En bins las cajas no avisan: la etapa sin cierre solo tiene cajas empacadas.
-        $this->assertArrayNotHasKey($this->otraVariedad->id, $this->real());
+        $this->assertTrue($real[$this->otraVariedad->id]['sin_cierre']);
     }
 
     public function test_lote_inactivo_en_la_temporada_no_cuenta_y_sin_datos_no_hay_filas(): void
