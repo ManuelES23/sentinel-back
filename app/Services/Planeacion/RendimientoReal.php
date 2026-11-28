@@ -21,6 +21,7 @@ use Illuminate\Support\Facades\DB;
  *
  * Los bins son los de las salidas de campo: en una temporada que opera en bins,
  * todas; en las demás, solo las de un tipo de carga «Bin» que no sea de rezaga.
+ * Las cajas cuentan siempre: en bins la producción también se empaca en cajas.
  *
  * Devuelve totales (no cocientes) para poder juntar temporadas sin redondeos.
  */
@@ -30,10 +31,9 @@ class RendimientoReal
 
     /**
      * @param  int[]  $temporadaIds
-     * @return list<array{temporada_id: int, variedad_id: int, ha: float, cajas: int|null, bins: int, sin_cierre: bool}>
-     *                                                                                                                    Solo las variedades con hectáreas o con datos por contar. `cajas` es null si la
-     *                                                                                                                    temporada opera en bins; `sin_cierre` dice que hay etapas con cajas o bins que
-     *                                                                                                                    aún no cuentan por no tener cosecha cerrada.
+     * @return list<array{temporada_id: int, variedad_id: int, ha: float, cajas: int, bins: int, sin_cierre: bool}>
+     *                                                                                                               Solo las variedades con hectáreas o con datos por contar. `sin_cierre` dice
+     *                                                                                                               que hay etapas con cajas o bins que aún no cuentan por no tener cosecha cerrada.
      */
     public function de(array $temporadaIds): array
     {
@@ -49,7 +49,6 @@ class RendimientoReal
 
         $salida = [];
         foreach ($temporadas as $temporada) {
-            $enBins = (bool) $temporada->opera_en_bins;
             $porVariedad = [];
             foreach ($this->etapasDe($temporada) as $etapa) {
                 $llave = $temporada->id.'-'.$etapa->id;
@@ -57,7 +56,7 @@ class RendimientoReal
                 $nacional = min($hectareas[$llave]['nacional'] ?? 0.0, $superficie);
                 $cosechada = max(0.0, min($hectareas[$llave]['normal'] ?? 0.0, $superficie - $nacional));
 
-                $susCajas = $enBins ? 0 : ($cajas[$llave] ?? 0);
+                $susCajas = $cajas[$llave] ?? 0;
                 $susBins = $bins[$llave] ?? 0;
 
                 $v = $porVariedad[$etapa->variedad_id] ?? ['ha' => 0.0, 'cajas' => 0, 'bins' => 0, 'sin_cierre' => false];
@@ -79,7 +78,7 @@ class RendimientoReal
                         'temporada_id' => (int) $temporada->id,
                         'variedad_id' => (int) $variedadId,
                         'ha' => $ha,
-                        'cajas' => $enBins ? null : $v['cajas'],
+                        'cajas' => $v['cajas'],
                         'bins' => $v['bins'],
                         'sin_cierre' => $v['sin_cierre'],
                     ];
