@@ -18,7 +18,8 @@ use Tests\TestCase;
 /**
  * Rendimiento real por temporada y variedad para Planeación: hectáreas
  * cosechadas (mismo tope que el Dashboard de cosecha), cajas empacadas y bins
- * salidos de campo, contando solo las etapas que ya tienen cosecha cerrada.
+ * salidos de campo de TODA la variedad (como la tarjeta por variedad del
+ * Ejecutivo del Dashboard de cosecha), no de un lote o una etapa.
  */
 class RendimientoRealTest extends TestCase
 {
@@ -158,14 +159,14 @@ class RendimientoRealTest extends TestCase
             ['temporada_id' => $this->temporada->id, 'variedad_id' => $this->variedad->id, 'ha' => 5.0, 'cajas' => 400, 'bins' => 50, 'sin_cierre' => false],
             $real[$this->variedad->id],
         );
-        // Empacada sin cierre vivo: no cuenta, solo se avisa que hay datos esperando cierre.
+        // Empacada sin cierre vivo: sus cajas cuentan, pero sin hectáreas no hay cociente.
         $this->assertSame(
-            ['temporada_id' => $this->temporada->id, 'variedad_id' => $this->otraVariedad->id, 'ha' => 0.0, 'cajas' => 0, 'bins' => 0, 'sin_cierre' => true],
+            ['temporada_id' => $this->temporada->id, 'variedad_id' => $this->otraVariedad->id, 'ha' => 0.0, 'cajas' => 70, 'bins' => 0, 'sin_cierre' => true],
             $real[$this->otraVariedad->id],
         );
     }
 
-    public function test_una_etapa_sin_cierre_no_infla_el_real_de_su_variedad(): void
+    public function test_toda_la_variedad_cuenta_aunque_una_etapa_siga_sin_cierre(): void
     {
         $this->escenario();
         $abierta = $this->etapa($this->variedad, 3);
@@ -174,7 +175,8 @@ class RendimientoRealTest extends TestCase
 
         $fila = $this->real()[$this->variedad->id];
 
-        $this->assertSame([5.0, 400, 50, true], [$fila['ha'], $fila['cajas'], $fila['bins'], $fila['sin_cierre']]);
+        // Cajas y bins de toda la variedad entre sus hectáreas cosechadas (las de cierres).
+        $this->assertSame([5.0, 1300, 170, true], [$fila['ha'], $fila['cajas'], $fila['bins'], $fila['sin_cierre']]);
 
         // Al cerrar su cosecha entra completa.
         $this->cierre($abierta, '2026-02-06', 3);
@@ -183,17 +185,18 @@ class RendimientoRealTest extends TestCase
         $this->assertSame([8.0, 1300, 170, false], [$fila['ha'], $fila['cajas'], $fila['bins'], $fila['sin_cierre']]);
     }
 
-    public function test_las_cajas_son_las_del_dashboard_en_las_etapas_con_cierre(): void
+    public function test_las_cajas_son_las_de_la_variedad_en_el_dashboard_de_cosecha(): void
     {
-        [$a, $b] = $this->escenario();
-        $this->empacar($this->etapa($this->variedad, 3), 'D', 900); // sin cierre: el Dashboard la suma, el real no
+        $this->escenario();
+        $this->empacar($this->etapa($this->variedad, 3), 'D', 900); // sin cierre: cuenta en las dos pantallas
 
         $etapas = $this->getJson('/api/splendidfarms/operacion-agricola/cosecha/dashboard/ejecutivo?temporada_id='.$this->temporada->id)
             ->assertOk()->json('data.etapas');
-        $cerradas = collect($etapas)->whereIn('id', [$a->id, $b->id]);
+        $delDashboard = collect($etapas)->groupBy('variedad.id')->map(fn ($g) => $g->sum('empaque.cajas'))->all();
 
-        $this->assertCount(2, $cerradas);
-        $this->assertSame($cerradas->sum('empaque.cajas'), $this->real()[$this->variedad->id]['cajas']);
+        foreach ($this->real() as $variedadId => $fila) {
+            $this->assertSame($delDashboard[$variedadId], $fila['cajas']);
+        }
     }
 
     public function test_temporada_en_bins_cuenta_todas_las_salidas_y_tambien_las_cajas(): void
